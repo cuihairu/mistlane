@@ -26,7 +26,7 @@ Boost.Charconv 等间接依赖由 Boost.MySQL 的 port 和 CMake target 自动�
 3. 用干净构建目录配置，检查实际解析结果与间接依赖。
 4. 执行网络 / Lua 集成验证和可用时的临时数据库验证，再更新验证记录。
 
-使用现有 vcpkg 安装时，建议建立 baseline 对应的独立 checkout，避免其当前版本数据库早于 baseline。不要只修改 builtin-baseline 而保留无法解析新版本的旧 ports 工作树。CI 建立固定 commit 的独立 vcpkg checkout。
+使用现有 vcpkg 安装时，建议建立 baseline 对应的独立 checkout，避免其当前版本数据库早于 baseline。不要只修改 builtin-baseline 而保留无法解析新版本的旧 ports 工作树。CI 完整克隆 vcpkg 后检出固定 commit；浅克隆可能缺少版本化 port 引用的历史目录。
 
 依据：[vcpkg baseline 源码](https://github.com/microsoft/vcpkg/tree/a5f736224e85b32e25a8ffc52562333180396642)、[Boost 稳定版](https://www.boost.org/releases/latest/)、[Lua 下载](https://www.lua.org/ftp/)、[OpenSSL 下载](https://www.openssl-library.org/source/)、[Boost.MySQL 连接池教程](https://www.boost.org/latest/libs/mysql/doc/html/mysql/tutorial_connection_pool.html)。
 

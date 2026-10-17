@@ -10,10 +10,9 @@ jobs:
       - uses: actions/checkout@v7
       - name: Bootstrap pinned vcpkg checkout
         run: |
-          git init "$VCPKG_ROOT"
-          git -C "$VCPKG_ROOT" remote add origin https://github.com/microsoft/vcpkg.git
-          git -C "$VCPKG_ROOT" fetch --depth 1 origin a5f736224e85b32e25a8ffc52562333180396642
-          git -C "$VCPKG_ROOT" checkout --detach FETCH_HEAD
+          # Versioned ports may reference older trees: keep the registry history.
+          git clone https://github.com/microsoft/vcpkg.git "$VCPKG_ROOT"
+          git -C "$VCPKG_ROOT" checkout --detach a5f736224e85b32e25a8ffc52562333180396642
           "$VCPKG_ROOT/bootstrap-vcpkg.sh" -disableMetrics
       - run: cmake --preset linux-debug
       - run: cmake --build --preset linux-debug

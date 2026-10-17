@@ -36,4 +36,4 @@ The optional database check is also registered as mistlane_mysql_integration whe
 
 During dependency setup, the environment's temporary filesystem refused a large OpenSSL archive. Rebuilding the vcpkg working tree on the regular disk resolved it. No port source patches or dependency downgrades were introduced for this environment issue.
 
-Not validated: the original game cluster and business behavior, production load capacity, soak stability, other platforms, full game migration, Oracle MySQL versions, and GitHub-hosted CI execution. These results support research and learning; they do not establish production readiness.
+Not validated: the original game cluster and business behavior, production load capacity, soak stability, other platforms, full game migration, Oracle MySQL versions. Hosted CI status is available in [GitHub Actions](https://github.com/cuihairu/mistlane/actions). These results support research and learning; they do not establish production readiness.
