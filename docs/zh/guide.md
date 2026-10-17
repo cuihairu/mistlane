@@ -4,7 +4,7 @@
 
 ## 环境要求
 
-Linux x64、C++20 编译器、CMake 3.25+、Ninja、Git、curl、zip/unzip、tar、pkg-config、Perl、Python 3.9+ 和 OpenSSL 命令行工具。文档另需 Node.js 20+ 和 npm。
+Linux x64、C++20 编译器、CMake 3.25+、Ninja、Git、curl、zip/unzip、tar、pkg-config、Perl、Python 3.9+ 和 OpenSSL 命令行工具。文档另需 Node.js 20+ 和 package.json 固定版本的 pnpm；使用 Corepack shim 时请先启用。
 
 ## 准备 vcpkg
 
@@ -34,9 +34,9 @@ Release 使用 linux-release。首次配置由 vcpkg 安装依赖，之后复用
 在仓库根目录的三个终端分别运行：
 
 ```bash
-./build/debug/mistlane-node --role worker --listen 127.0.0.1:7102 --script examples/echo.lua
-./build/debug/mistlane-node --role router --listen 127.0.0.1:7101 --upstream 127.0.0.1:7102
-./build/debug/mistlane-node --role gateway --listen 127.0.0.1:7100 --upstream 127.0.0.1:7101
+./build/debug/mistlane --role worker --listen 127.0.0.1:7102 --script examples/echo.lua
+./build/debug/mistlane --role router --listen 127.0.0.1:7101 --upstream 127.0.0.1:7102
+./build/debug/mistlane --role gateway --listen 127.0.0.1:7100 --upstream 127.0.0.1:7101
 ```
 
 发送请求：
@@ -52,7 +52,7 @@ python3 tools/client.py 'hello mistlane'
 网关增加 --transport ws 即可接收 WebSocket 消息。一条 WS 消息对应一个 payload，无须添加内部 TCP 长度头。
 
 ```bash
-./build/debug/mistlane-node --role gateway --listen 127.0.0.1:7443 \
+./build/debug/mistlane --role gateway --listen 127.0.0.1:7443 \
   --transport wss --cert /path/to/fullchain.pem --key /path/to/private-key.pem \
   --upstream 127.0.0.1:7101
 ```
@@ -94,10 +94,10 @@ python3 tools/mysql_integration.py ./build/debug/mistlane-mysql-probe
 ## 文档站
 
 ```bash
-npm ci
-npm run docs:dev
-npm run docs:build
-npm run docs:preview
+pnpm install --frozen-lockfile
+pnpm docs:dev
+pnpm docs:build
+pnpm docs:preview
 ```
 
 文档提供中英文导航、本地搜索和成对页面。默认 base 为 /mistlane/；部署到域名根目录时可设置 DOCS_BASE=/。构建会检查内部链接并生成 docs/.vitepress/dist，以上命令不执行托管发布。

@@ -11,7 +11,9 @@
 | boost-mysql | 1.92.0 | `Boost::mysql`，成熟异步连接池 |
 | lua | 5.5.1 | CMake FindLua 提供 include 与 libraries |
 | openssl | 3.6.5#2 | `OpenSSL::SSL` / `OpenSSL::Crypto` |
-| VitePress | 1.6.4 | npm 固定直接版本与 package-lock.json |
+| VitePress | 1.6.4 | pnpm 固定直接版本与 pnpm-lock.yaml |
+| Vite | 6.4.4 | workspace override 使用已修复的开发工具链 |
+| pnpm | 10.33.0 | packageManager 固定版本 |
 
 Boost.Charconv 等间接依赖由 Boost.MySQL 的 port 和 CMake target 自动传递，避免手工列库遗漏符号。manifest 显式请求 Asio 的 ssl feature；其他必要 feature 的最终解析由 ports 决定。
 
@@ -30,4 +32,6 @@ Boost.Charconv 等间接依赖由 Boost.MySQL 的 port 和 CMake target 自动�
 
 依据：[vcpkg baseline 源码](https://github.com/microsoft/vcpkg/tree/a5f736224e85b32e25a8ffc52562333180396642)、[Boost 稳定版](https://www.boost.org/releases/latest/)、[Lua 下载](https://www.lua.org/ftp/)、[OpenSSL 下载](https://www.openssl-library.org/source/)、[Boost.MySQL 连接池教程](https://www.boost.org/latest/libs/mysql/doc/html/mysql/tutorial_connection_pool.html)。
 
-文档使用 npm 稳定版 VitePress 1.6.4，未使用 2.x alpha。升级时应同步更新固定版本与 package-lock.json，并执行 npm ci 和文档构建。
+文档使用 npm 稳定版 VitePress 1.6.4，未使用 2.x alpha。升级时应同步更新固定版本与 pnpm-lock.yaml，并执行 pnpm install --frozen-lockfile 和文档构建。
+
+VitePress 1.6.4 默认依赖较旧的 Vite 5；本项目通过 workspace override 使用 Vite 6.4.4，处理已报告的 Vite/esbuild 依赖告警，并保持稳定版 VitePress 与 plugin-vue 5 的兼容性。通过文档构建和依赖审计验证该覆盖。package.json 固定包管理器版本，CI 读取该版本。

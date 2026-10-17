@@ -15,7 +15,8 @@
 | 数据库池 | 池上限为一，连续三次获取 / 查询 / 自动归还通过 |
 | 参数与 TLS | 引号 / 反斜线参数绑定、CA 和主机名校验通过 |
 | 数据库认证错误 | 在配置的获取期限内失败 |
-| 文档站 | VitePress 1.6.4 构建两种语言；10 个页面的语言、导航与仓库链接检查通过 |
+| 文档站 | 使用 pnpm 10.33.0、VitePress 1.6.4 与修复版 Vite 6.4.4 构建两种语言；10 个页面的语言、导航与仓库链接检查通过 |
+| 文档依赖审计 | Vite 覆盖更新后，pnpm audit 返回零告警 |
 | 源码包 | 白名单与 SHA256 检查通过，无原游戏目录或 Git 历史 |
 
 数据库检查使用临时 **MariaDB 11.8.6**。这验证了适配器在 MariaDB 下的行为，不等于覆盖 Oracle MySQL 各版本。脚本自行创建临时数据目录、随机凭据、端口和证书，结束后清理。
@@ -27,8 +28,8 @@ cmake --preset linux-debug -DMISTLANE_TEST_LOCAL_DATABASE=ON
 cmake --build --preset linux-debug
 ctest --preset linux-debug -R '^mistlane_integration$'
 python3 tools/mysql_integration.py ./build/debug/mistlane-mysql-probe
-npm ci
-npm run docs:build
+pnpm install --frozen-lockfile
+pnpm docs:build
 python3 tools/export.py
 ```
 

@@ -25,7 +25,7 @@ int main(int argc, char** argv) {
         for (int i = 1; i < argc; ++i) {
             std::string key = argv[i];
             if (key == "--help") {
-                std::cout << "mistlane-node --role worker|router|gateway --listen IP:PORT\n"
+                std::cout << "mistlane --role worker|router|gateway --listen IP:PORT\n"
                              "  worker: --script FILE\n"
                              "  router/gateway: --upstream IP:PORT (repeat for session round robin)\n"
                              "  --transport tcp|ws|wss (wss requires --cert FILE --key FILE)\n"

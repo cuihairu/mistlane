@@ -1,0 +1,9 @@
+packages:
+  - '.'
+
+# Keep VitePress stable while using the patched Vite 6 line supported by plugin-vue.
+overrides:
+  vite: 6.4.4
+
+allowBuilds:
+  esbuild: true

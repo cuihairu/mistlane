@@ -4,7 +4,7 @@ This guide runs the extracted framework for research and learning. It does not d
 
 ## Requirements
 
-Linux x64, a C++20 compiler, CMake 3.25+, Ninja, Git, curl, zip/unzip, tar, pkg-config, Perl, Python 3.9+, and the OpenSSL command-line tool. Documentation also requires Node.js 20+ and npm.
+Linux x64, a C++20 compiler, CMake 3.25+, Ninja, Git, curl, zip/unzip, tar, pkg-config, Perl, Python 3.9+, and the OpenSSL command-line tool. Documentation also requires Node.js 20+ and the pnpm version pinned by package.json. Enable Corepack when using its pnpm shim.
 
 ## Prepare vcpkg
 
@@ -34,9 +34,9 @@ Use `linux-release` for a Release build. Initial configuration installs the mani
 Open three terminals in the repository root:
 
 ```bash
-./build/debug/mistlane-node --role worker --listen 127.0.0.1:7102 --script examples/echo.lua
-./build/debug/mistlane-node --role router --listen 127.0.0.1:7101 --upstream 127.0.0.1:7102
-./build/debug/mistlane-node --role gateway --listen 127.0.0.1:7100 --upstream 127.0.0.1:7101
+./build/debug/mistlane --role worker --listen 127.0.0.1:7102 --script examples/echo.lua
+./build/debug/mistlane --role router --listen 127.0.0.1:7101 --upstream 127.0.0.1:7102
+./build/debug/mistlane --role gateway --listen 127.0.0.1:7100 --upstream 127.0.0.1:7101
 ```
 
 Then send a request:
@@ -52,7 +52,7 @@ Repeat `--upstream IP:PORT` to distribute new sessions across several workers. A
 Add `--transport ws` to a gateway to accept WebSocket messages. Each WS message is a payload; do not prepend the internal TCP length header.
 
 ```bash
-./build/debug/mistlane-node --role gateway --listen 127.0.0.1:7443 \
+./build/debug/mistlane --role gateway --listen 127.0.0.1:7443 \
   --transport wss --cert /path/to/fullchain.pem --key /path/to/private-key.pem \
   --upstream 127.0.0.1:7101
 ```
@@ -94,10 +94,10 @@ The pool adapter is not yet wired to Lua message callbacks. Do not execute block
 ## Documentation
 
 ```bash
-npm ci
-npm run docs:dev
-npm run docs:build
-npm run docs:preview
+pnpm install --frozen-lockfile
+pnpm docs:dev
+pnpm docs:build
+pnpm docs:preview
 ```
 
 The site contains English and Chinese navigation, local search, and matching pages. Its default base is `/mistlane/`; set `DOCS_BASE=/` when building for a domain root. The build produces `docs/.vitepress/dist` and checks internal links. No hosting deployment is performed by these commands.

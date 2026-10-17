@@ -45,9 +45,9 @@ Use linux-release for Release. The baseline supplies Boost 1.92.0, Lua 5.5.1, an
 Start these in three terminals from the repository root:
 
 ```bash
-./build/debug/mistlane-node --role worker --listen 127.0.0.1:7102 --script examples/echo.lua
-./build/debug/mistlane-node --role router --listen 127.0.0.1:7101 --upstream 127.0.0.1:7102
-./build/debug/mistlane-node --role gateway --listen 127.0.0.1:7100 --upstream 127.0.0.1:7101
+./build/debug/mistlane --role worker --listen 127.0.0.1:7102 --script examples/echo.lua
+./build/debug/mistlane --role router --listen 127.0.0.1:7101 --upstream 127.0.0.1:7102
+./build/debug/mistlane --role gateway --listen 127.0.0.1:7100 --upstream 127.0.0.1:7101
 ```
 
 ```bash
@@ -58,13 +58,13 @@ Use --transport ws for WS; WSS also requires --transport wss --cert FILE --key F
 
 ## Bilingual documentation
 
-With Node.js 20+ and npm:
+With Node.js 20+ and the pnpm version pinned in package.json (enable Corepack if needed):
 
 ```bash
-npm ci
-npm run docs:dev
-npm run docs:build
-npm run docs:preview
+pnpm install --frozen-lockfile
+pnpm docs:dev
+pnpm docs:build
+pnpm docs:preview
 ```
 
 English pages live at docs/, Chinese pages at docs/zh/. The VitePress language menu switches between them. Default base: /mistlane/; override with DOCS_BASE for another deployment path. Building does not publish the site.

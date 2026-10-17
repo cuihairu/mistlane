@@ -15,7 +15,8 @@ Validated on 2026-10-17, using Linux x64, GCC 15.2.0, CMake 4.2.3, and the pinne
 | Database pool | Passed three acquire/query/return cycles with a pool of size one |
 | Query values and TLS | Passed quote/backslash binding and CA/hostname-verified TLS |
 | Database authentication error | Passed failure within the configured acquisition deadline |
-| Documentation | VitePress 1.6.4 built both locales; all 10 pages have the expected language/navigation/repository links |
+| Documentation | VitePress 1.6.4 with patched Vite 6.4.4 built both locales using pnpm 10.33.0; all 10 pages have the expected language/navigation/repository links |
+| Documentation dependency audit | pnpm audit reported zero advisories after the Vite override |
 | Source package | Allowlist and SHA256 checksum verification passed; no original game directories or Git history |
 
 The database check used a disposable **MariaDB 11.8.6** instance. This verifies the adapter against MariaDB; it is not an Oracle MySQL server compatibility matrix. The test created its own temporary data directory, random credentials, port, and certificate, and cleaned them up after completion.
@@ -27,8 +28,8 @@ cmake --preset linux-debug -DMISTLANE_TEST_LOCAL_DATABASE=ON
 cmake --build --preset linux-debug
 ctest --preset linux-debug -R '^mistlane_integration$'
 python3 tools/mysql_integration.py ./build/debug/mistlane-mysql-probe
-npm ci
-npm run docs:build
+pnpm install --frozen-lockfile
+pnpm docs:build
 python3 tools/export.py
 ```
 

@@ -27,8 +27,9 @@ include/mistlane/token_bucket.hpp
 include/mistlane/transport.hpp
 licenses/Apache-2.0.txt
 lua/mistlane/min_heap.lua
-package-lock.json
 package.json
+pnpm-lock.yaml
+pnpm-workspace.yaml
 release-files.txt
 src/lua_service.cpp
 src/main.cpp

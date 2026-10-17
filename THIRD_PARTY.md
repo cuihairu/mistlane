@@ -8,6 +8,8 @@ source code or binary is included in this package.
 | Boost and its modules | Boost Software License 1.0 | https://www.boost.org/ |
 | Lua | MIT | https://www.lua.org/license.html |
 | OpenSSL 3.x | Apache-2.0 | https://www.openssl-library.org/ |
+| VitePress / Vite | MIT | https://vitepress.dev/ / https://vite.dev/ |
+| pnpm | MIT | https://pnpm.io/ |
 
 vcpkg installs each port's license/copyright and software bill of materials under
 `vcpkg_installed/<triplet>/share/<port>/`. Preserve the applicable license and

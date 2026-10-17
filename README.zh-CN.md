@@ -56,9 +56,9 @@ baseline 内 Boost 为 1.92.0，Lua 为 5.5.1，OpenSSL 为 3.6.5#2。OpenSSL �
 在本目录的三个终端分别运行：
 
 ```bash
-./build/debug/mistlane-node --role worker --listen 127.0.0.1:7102 --script examples/echo.lua
-./build/debug/mistlane-node --role router --listen 127.0.0.1:7101 --upstream 127.0.0.1:7102
-./build/debug/mistlane-node --role gateway --listen 127.0.0.1:7100 --upstream 127.0.0.1:7101
+./build/debug/mistlane --role worker --listen 127.0.0.1:7102 --script examples/echo.lua
+./build/debug/mistlane --role router --listen 127.0.0.1:7101 --upstream 127.0.0.1:7102
+./build/debug/mistlane --role gateway --listen 127.0.0.1:7100 --upstream 127.0.0.1:7101
 ```
 
 ```bash
@@ -70,7 +70,7 @@ python3 tools/client.py 'hello mistlane'
 WSS 示例（使用你自己的证书链与私钥）：
 
 ```bash
-./build/debug/mistlane-node --role gateway --listen 127.0.0.1:7443 \
+./build/debug/mistlane --role gateway --listen 127.0.0.1:7443 \
   --transport wss --cert /path/to/fullchain.pem --key /path/to/private-key.pem \
   --upstream 127.0.0.1:7101
 ```
@@ -119,13 +119,13 @@ python3 tools/export.py
 
 ## 中英文文档站
 
-文档使用 VitePress，提供中英文成对页面、语言切换、本地搜索和独立导航。安装 Node.js 20+ 后运行：
+文档使用 VitePress，提供中英文成对页面、语言切换、本地搜索和独立导航。安装 Node.js 20+ 和 package.json 固定版本的 pnpm 后运行（需要时启用 Corepack）：
 
 ```bash
-npm ci
-npm run docs:dev
-npm run docs:build
-npm run docs:preview
+pnpm install --frozen-lockfile
+pnpm docs:dev
+pnpm docs:build
+pnpm docs:preview
 ```
 
 中文入口为 [docs/zh/index.md](docs/zh/index.md)，英文入口为 [docs/index.md](docs/index.md)。默认站点路径 /mistlane/，可用 DOCS_BASE 调整。构建不会自动发布站点。

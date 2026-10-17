@@ -11,7 +11,9 @@ Pinned baseline: `a5f736224e85b32e25a8ffc52562333180396642`, checked on 2026-10-
 | boost-mysql | 1.92.0 | Boost::mysql, asynchronous connection_pool |
 | lua | 5.5.1 | CMake FindLua include/library variables |
 | openssl | 3.6.5#2 | OpenSSL::SSL and OpenSSL::Crypto |
-| VitePress | 1.6.4 | npm exact direct version and package-lock.json |
+| VitePress | 1.6.4 | pnpm exact direct version and pnpm-lock.yaml |
+| Vite | 6.4.4 | Explicit workspace override for patched development tooling |
+| pnpm | 10.33.0 | packageManager pin |
 
 Boost.Charconv and other transitive requirements are supplied by the Boost.MySQL port and imported targets. Asio explicitly requests TLS support; transitive ports determine the final resolved feature set.
 
@@ -25,8 +27,10 @@ The original project's log4cxx, Poco, Pion, jemalloc, custom MySQL/Redis/Lua ext
 2. Review versions and upstream changes; update minimum version constraints in the manifest and CMake when needed.
 3. Configure a clean build directory and inspect resolved direct and transitive versions.
 4. Run network/Lua checks and disposable database checks when available, then update the validation record.
-5. For docs, update the exact VitePress version and npm lockfile together, then run npm ci and the documentation build.
+5. For docs, update the exact VitePress version and pnpm lockfile together, then run pnpm install --frozen-lockfile and the documentation build.
 
 Use a vcpkg checkout containing the pinned commit and matching version database. An older working tree can fail to resolve versions even when the baseline commit is fetched. CI uses a full vcpkg clone and checks out the pinned commit. A shallow clone can lack historical trees referenced by versioned ports.
 
 Sources: [vcpkg baseline](https://github.com/microsoft/vcpkg/tree/a5f736224e85b32e25a8ffc52562333180396642), [Boost stable release](https://www.boost.org/releases/latest/), [Lua downloads](https://www.lua.org/ftp/), [OpenSSL downloads](https://www.openssl-library.org/source/), [Boost.MySQL pool tutorial](https://www.boost.org/latest/libs/mysql/doc/html/mysql/tutorial_connection_pool.html), [VitePress](https://vitepress.dev/).
+
+VitePress 1.6.4 defaults to the older Vite 5 line. The workspace overrides it with Vite 6.4.4 to address reported Vite/esbuild dependency advisories while keeping the stable VitePress release and plugin-vue 5 compatibility. Documentation builds and a dependency audit validate this override. The package manager version is pinned in package.json; CI reads that pin.
