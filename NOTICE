@@ -1,0 +1,20 @@
+Mistlane
+
+New code follows the MIT license already selected for cuihairu/mistlane.
+Derived source material from the FOGS backend retains Apache-2.0 markings;
+the corresponding license text is in licenses/Apache-2.0.txt. Existing author
+attribution is preserved in derived source material.
+The meaning and origin of the original FOGS project name have not been confirmed.
+
+Source provenance:
+- lua/mistlane/min_heap.lua: extracted from game/Util/MinHeap.lua; the global
+  table is now module-local and explicitly returned. Algorithm retained.
+- include/mistlane/token_bucket.hpp: modernized from the design of
+  d_common/net/TokenBucket.hpp and d_common/net/src/TokenBucket.cpp; now uses
+  a monotonic clock and accumulates replenished tokens.
+- The node topology and Lua lifecycle take inspiration from the original
+  FogsProcess, gateway, world, hegel and LuaCallHandler. The implementation
+  and public interfaces have been rewritten and are not wire/API compatible.
+
+The release package does not contain the original game, third-party SDKs,
+production configuration, compiled artifacts or repository history.

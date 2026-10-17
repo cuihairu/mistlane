@@ -66,3 +66,15 @@ vcpkg_installed/
 # test output & cache
 Testing/
 .cache/
+
+# Mistlane build and release artifacts
+/build*/
+/dist/
+__pycache__/
+*.log
+/.vcpkg/
+/vcpkg_installed/
+/CMakeUserPresets.json
+/node_modules/
+/docs/.vitepress/cache/
+/docs/.vitepress/dist/

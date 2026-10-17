@@ -1,0 +1,27 @@
+name: mistlane
+on: [push, pull_request]
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    env:
+      VCPKG_ROOT: ${{ github.workspace }}/.vcpkg
+      VCPKG_DISABLE_METRICS: '1'
+    steps:
+      - uses: actions/checkout@v7
+      - name: Bootstrap pinned vcpkg checkout
+        run: |
+          git init "$VCPKG_ROOT"
+          git -C "$VCPKG_ROOT" remote add origin https://github.com/microsoft/vcpkg.git
+          git -C "$VCPKG_ROOT" fetch --depth 1 origin a5f736224e85b32e25a8ffc52562333180396642
+          git -C "$VCPKG_ROOT" checkout --detach FETCH_HEAD
+          "$VCPKG_ROOT/bootstrap-vcpkg.sh" -disableMetrics
+      - run: cmake --preset linux-debug
+      - run: cmake --build --preset linux-debug
+      - run: ctest --preset linux-debug
+      - run: python3 tools/export.py
+  docs:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - run: npm ci
+      - run: npm run docs:build
