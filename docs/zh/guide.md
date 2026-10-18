@@ -55,17 +55,88 @@ python3 tools/client.py 'hello mistlane'
 
 --upstream IP:PORT 可重复指定，以连接为单位轮询分配。同一会话固定到同一上游，尚不按账号或玩家 ID 路由。
 
-## WebSocket 与 TLS
+## 游戏客户端使用 WS / WSS
 
-网关增加 --transport ws 即可接收 WebSocket 消息。一条 WS 消息对应一个 payload，无须添加内部 TCP 长度头。
+游戏客户端可以直接连接 Mistlane 的 WebSocket 服务。WS/WSS 由 Drogon 监听，升级握手完成后传递持续连接上的游戏消息，Lua 入口为 `message(payload)`。HTTP API 使用 `http(request)`；`POST /message` 是另一种 HTTP 消息适配入口。选择 WS/WSS 时不调用 HTTP Lua handler。
+
+| 用途 | 角色与参数 | 客户端地址 | Lua 入口 |
+|---|---|---|---|
+| 游戏长连接，经网关转发 | `gateway --transport ws/wss --upstream IP:PORT` | `ws://host:port/ws` 或 `wss://host:port/ws` | TCP worker 的 `message` |
+| 单进程游戏消息服务 | `worker --transport ws/wss --script FILE` | 同上 | 当前 worker 的 `message` |
+| HTTP API | `worker --transport http/https --script FILE` | `http://host:port/path` 或 HTTPS | `http` 及请求钩子 |
+
+### WS 网关连接 TCP 游戏 worker
+
+在两个终端分别运行；这里网关直接连接 worker，也可以在中间保留 TCP router：
 
 ```bash
-./build/debug/mistlane --role gateway --listen 127.0.0.1:7443 \
-  --transport wss --cert /path/to/fullchain.pem --key /path/to/private-key.pem \
-  --upstream 127.0.0.1:7101
+./build/debug/mistlane --role worker --listen 127.0.0.1:7102 --script examples/echo.lua
+./build/debug/mistlane --role gateway --listen 0.0.0.0:8080 \
+  --transport ws --upstream 127.0.0.1:7102
 ```
 
-使用自己的证书链和私钥，保存在源码仓库之外。协议细节由 Drogon 处理，WSS 最低 TLS 1.2。响应为二进制 WS 消息。内部 TCP 使用四字节网络序长度头加 payload，上限 1 MiB。
+游戏客户端连接 `ws://127.0.0.1:8080/ws`。远程客户端将 `127.0.0.1` 换成服务器域名或 IP；`0.0.0.0` 是服务端绑定地址，不是客户端连接地址。`/` 和 `/ws` 都支持 WebSocket 升级。
+
+```mermaid
+flowchart LR
+  Client[游戏客户端] -->|WS / WSS| Gateway[Drogon 游戏网关]
+  Gateway -->|内部 TCP| Worker[Asio / Lua worker]
+  Worker --> Message[message payload]
+  Api[HTTP API 客户端] -->|HTTP / HTTPS| Http[独立 HTTP worker]
+  Http --> Handler[http request]
+```
+
+一条完整 WS 消息对应一个 payload；客户端不加内部 TCP 的四字节长度头。网关负责转换为内部 TCP 帧。`--upstream` 填 `IP:PORT`，连接的是 TCP 服务，不填 WS URL。同一客户端连接固定到选定的上游。
+
+### WSS 游戏网关
+
+将游戏网关改为以下命令，内部 worker 仍使用上面的 TCP 配置：
+
+```bash
+./build/debug/mistlane --role gateway --listen 0.0.0.0:7443 \
+  --transport wss --cert /path/to/fullchain.pem --key /path/to/private-key.pem \
+  --upstream 127.0.0.1:7102
+```
+
+客户端连接 `wss://game.example.com:7443/ws`，域名必须匹配证书且证书链受客户端信任。证书和私钥保存在源码仓库之外。WSS 最低 TLS 1.2；HTTPS 网页中的游戏客户端应连接 WSS。
+
+### 单进程直接处理游戏 WS / WSS
+
+开发或小型消息服务可以让 worker 自己监听 WS，无须额外网关或上游：
+
+```bash
+./build/debug/mistlane --role worker --listen 0.0.0.0:8081 \
+  --transport ws --script examples/echo.lua
+```
+
+连接 `ws://127.0.0.1:8081/ws`。启用 WSS 时改为 `--transport wss`，并添加 `--cert FILE --key FILE`；Lua 仍实现 `message(payload) -> string`。
+
+### 游戏客户端示例与当前限制
+
+在浏览器开发者工具中发送一条二进制游戏消息：
+
+```js
+const socket = new WebSocket('ws://127.0.0.1:8080/ws')
+socket.binaryType = 'arraybuffer'
+socket.onmessage = ({ data }) => console.log(new TextDecoder().decode(data))
+socket.onopen = () => socket.send(new TextEncoder().encode('hello mistlane'))
+```
+
+原生客户端同样使用标准 WS/WSS 库。服务端接受 text/binary 消息，响应统一为 binary，单消息最大 1 MiB。应用自己定义 payload 编码和消息 ID，当前示例只原样回显。
+
+当前通道是串行请求/响应模型：收到上一响应后才能发下一条应用消息，超前发送会关闭连接；尚无 Lua 主动推送、广播或按会话发送 API。它适合验证游戏连接和消息链路，高频全双工游戏所需的有界收发队列、会话生命周期和主动推送仍需补齐。
+
+每个进程当前只监听一种 transport。需要同时提供 TCP、WS、WSS 和 HTTP 时，分别启动不同实例、使用不同端口；HTTP worker 与游戏网关可共享同一套内部业务服务设计。
+
+### 初始化模板中的配置
+
+`mistlane init` 会生成可选的 `gateway-ws.env` 和 `gateway-wss.env`，默认集群仍启动 TCP 网关。WS 示例监听 `127.0.0.1:8080`；远程接入时修改对应文件中的 `LISTEN`。
+
+```bash
+MISTLANE_BIN=/path/to/mistlane ./ops/cluster.sh start worker router gateway-ws
+```
+
+WSS 在 `config/instances/gateway-wss.env` 中设置 `CERT` 和 `KEY`，可填绝对路径或相对项目根目录的路径，然后启动 `gateway-wss`。脚本会检查证书文件并传给 `--cert`/`--key`；不会生成或提交私钥。systemd 对应实例为 `mistlane@gateway-wss.service`。
 
 ## HTTP worker
 

@@ -31,7 +31,6 @@ export default defineConfig({
           { text: 'Architecture', link: '/architecture' },
           { text: 'Legacy and modern comparison', link: '/architecture-comparison' },
           { text: 'Migration status', link: '/migration-status' },
-          { text: 'GitHub', link: 'https://github.com/cuihairu/mistlane' }
         ],
         outline: { label: 'On this page' },
         docFooter: { prev: 'Previous page', next: 'Next page' },
@@ -48,7 +47,6 @@ export default defineConfig({
           { text: '架构说明', link: '/zh/architecture' },
           { text: '老架构与现代架构对比', link: '/zh/architecture-comparison' },
           { text: '迁移状态', link: '/zh/migration-status' },
-          { text: 'GitHub', link: 'https://github.com/cuihairu/mistlane' }
         ],
         outline: { label: '本页目录' },
         docFooter: { prev: '上一页', next: '下一页' },

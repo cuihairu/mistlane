@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "mistlane/node.hpp"
+#include "mistlane/cli.hpp"
 #include "mistlane/scaffold.hpp"
 #include <charconv>
 #include <iostream>
@@ -24,6 +25,8 @@ mistlane::Endpoint endpoint(std::string_view text) {
 int main(int argc, char** argv) {
     try {
         if (argc > 1) {
+            if (std::string_view(argv[1]) == "test") return mistlane::run_tests(argc, argv);
+            if (std::string_view(argv[1]) == "bot") return mistlane::run_bot(argc, argv);
             const int scaffold_result = mistlane::run_scaffold(argv[1], argc, argv);
             if (scaffold_result >= 0) return scaffold_result;
         }
@@ -33,6 +36,8 @@ int main(int argc, char** argv) {
             if (key == "--help") {
                 std::cout << "mistlane --role worker|router|gateway|cross|shard --listen IP:PORT\n"
                              "mistlane init [DIRECTORY]  Create a multi-role starter project\n"
+                             "mistlane test [--list|--suite NAME|--case NAME]  Run native C++ cases\n"
+                             "mistlane bot --url URL [--clients N --count N]  Simulate game requests\n"
                              "  worker: --script FILE\n"
                              "  router/gateway: --upstream IP:PORT (repeat for session round robin)\n"
                              "  --transport tcp|ws|wss|http|https (wss/https require --cert FILE --key FILE)\n"

@@ -82,7 +82,16 @@ Start these in three terminals from the repository root:
 python3 tools/client.py 'hello mistlane'
 ```
 
-Drogon handles WS and WSS; WSS requires --transport wss --cert FILE --key FILE. For HTTP/HTTPS, run a worker with --transport http/https and examples/http.lua. The Lua handler accepts method/path/query/headers/body and returns status/headers/body. Its before_request, http, after_request, on_error, init, start, tick, stop and shutdown hooks are documented in the [lifecycle guide](docs/lua.md). The [getting started guide](docs/guide.md) covers TCP, TLS, reload and MySQL.
+Game clients can connect through a WS gateway while the router and worker keep using TCP:
+
+```bash
+./build/debug/mistlane --role gateway --listen 0.0.0.0:8080 \
+  --transport ws --upstream 127.0.0.1:7101
+```
+
+Connect to `ws://server:8080/ws`; game messages reach Lua `message(payload)`. Each WS message is one payload with no TCP length header; responses are binary. For WSS select `--transport wss --cert FILE --key FILE` and connect to `wss://certificate-hostname:port/ws`. A worker can also listen directly with `--transport ws/wss --script FILE`. Current channels require waiting for each reply; Lua server push and broadcast are not implemented. See the [game connection guide](docs/guide.md) for both topologies, browser code and template certificate configuration.
+
+For HTTP/HTTPS, run a worker with --transport http/https and examples/http.lua. The Lua handler accepts method/path/query/headers/body and returns status/headers/body. Its before_request, http, after_request, on_error, init, start, tick, stop and shutdown hooks are documented in the [lifecycle guide](docs/lua.md).
 
 Generate a starter project with `./build/debug/mistlane init ./my-service`. It includes per-instance shell configuration, Lua entrypoints, local process operations and a systemd unit template. See [legacy and modern architecture comparison](docs/architecture-comparison.md) for the configuration and deployment analysis. The generated files are starter tooling; the runtime still receives command-line options and does not parse a native config format.
 

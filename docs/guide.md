@@ -55,17 +55,88 @@ python3 tools/client.py 'hello mistlane'
 
 Repeat `--upstream IP:PORT` to distribute new sessions across several workers. A session stays with its selected upstream. This is not routing by account or player ID.
 
-## WebSocket and TLS
+## Game clients over WS / WSS
 
-Add `--transport ws` to a gateway to accept WebSocket messages. Each WS message is a payload; do not prepend the internal TCP length header.
+Game clients can connect directly to Mistlane's WebSocket listener. Drogon handles the upgrade and WebSocket protocol; subsequent game messages reach Lua `message(payload)` over a persistent connection. HTTP APIs call `http(request)`; `POST /message` is a separate HTTP payload adapter. Selecting WS/WSS does not invoke the HTTP Lua handler.
+
+| Purpose | Role and options | Client URL | Lua entrypoint |
+|---|---|---|---|
+| Persistent game connections through a gateway | `gateway --transport ws/wss --upstream IP:PORT` | `ws://host:port/ws` or `wss://host:port/ws` | TCP worker's `message` |
+| One-process game message service | `worker --transport ws/wss --script FILE` | Same URLs | Local worker's `message` |
+| HTTP API | `worker --transport http/https --script FILE` | `http://host:port/path` or HTTPS | `http` and request hooks |
+
+### WS gateway to a TCP game worker
+
+Run these in separate terminals. This gateway connects straight to the worker; a TCP router can also sit between them:
 
 ```bash
-./build/debug/mistlane --role gateway --listen 127.0.0.1:7443 \
-  --transport wss --cert /path/to/fullchain.pem --key /path/to/private-key.pem \
-  --upstream 127.0.0.1:7101
+./build/debug/mistlane --role worker --listen 127.0.0.1:7102 --script examples/echo.lua
+./build/debug/mistlane --role gateway --listen 0.0.0.0:8080 \
+  --transport ws --upstream 127.0.0.1:7102
 ```
 
-Use your own certificate and private key, kept outside source control. Drogon handles protocol details. WSS requires TLS 1.2 or newer. Responses are binary WS messages. Internal TCP frames use a four-byte big-endian length and a payload, up to 1 MiB.
+Connect to `ws://127.0.0.1:8080/ws`. Remote clients replace `127.0.0.1` with the server address; `0.0.0.0` is a bind address, not a client destination. Both `/` and `/ws` accept WebSocket upgrades.
+
+```mermaid
+flowchart LR
+  Client[Game client] -->|WS / WSS| Gateway[Drogon game gateway]
+  Gateway -->|Internal TCP| Worker[Asio / Lua worker]
+  Worker --> Message[message payload]
+  Api[HTTP API client] -->|HTTP / HTTPS| Http[Separate HTTP worker]
+  Http --> Handler[http request]
+```
+
+Each complete WS message is one payload. Clients omit the four-byte TCP length prefix; the gateway supplies internal framing. `--upstream` accepts the TCP service's `IP:PORT`, not a WS URL. Each client connection stays with its selected upstream.
+
+### WSS game gateway
+
+Use this gateway command while keeping the TCP worker above:
+
+```bash
+./build/debug/mistlane --role gateway --listen 0.0.0.0:7443 \
+  --transport wss --cert /path/to/fullchain.pem --key /path/to/private-key.pem \
+  --upstream 127.0.0.1:7102
+```
+
+Connect to `wss://game.example.com:7443/ws` with a matching hostname and a certificate chain trusted by the client. Keep certificates and private keys outside source control. WSS requires TLS 1.2 or newer; game clients on HTTPS pages should use WSS.
+
+### Direct WS / WSS game worker
+
+For development or a small message service, let a worker listen directly without a gateway or upstream:
+
+```bash
+./build/debug/mistlane --role worker --listen 0.0.0.0:8081 \
+  --transport ws --script examples/echo.lua
+```
+
+Connect to `ws://127.0.0.1:8081/ws`. For WSS select `--transport wss` and add `--cert FILE --key FILE`; Lua still implements `message(payload) -> string`.
+
+### Client example and current limits
+
+Send one binary game message from browser developer tools:
+
+```js
+const socket = new WebSocket('ws://127.0.0.1:8080/ws')
+socket.binaryType = 'arraybuffer'
+socket.onmessage = ({ data }) => console.log(new TextDecoder().decode(data))
+socket.onopen = () => socket.send(new TextEncoder().encode('hello mistlane'))
+```
+
+Native clients use any standard WS/WSS library. The server accepts text/binary messages, replies with binary messages, and limits each payload to 1 MiB. The application defines payload encoding and message IDs; this example only echoes bytes.
+
+The current channel uses serial request/response: wait for the previous response before sending the next application message; sending ahead closes the connection. Lua APIs for unsolicited server push, broadcast and sending to a session are absent. This validates game connections and message flow; high-frequency full-duplex games still need bounded receive/send queues, session lifecycle and server push.
+
+Each process currently listens using one transport. To expose TCP, WS, WSS and HTTP together, run separate instances on distinct ports. HTTP workers and game gateways can form part of the same application deployment.
+
+### Generated project configuration
+
+`mistlane init` generates optional `gateway-ws.env` and `gateway-wss.env` instances; the default cluster still starts a TCP gateway. The WS sample binds `127.0.0.1:8080`; change `LISTEN` in its instance file for remote access.
+
+```bash
+MISTLANE_BIN=/path/to/mistlane ./ops/cluster.sh start worker router gateway-ws
+```
+
+For WSS, set `CERT` and `KEY` in `config/instances/gateway-wss.env` to absolute paths or paths relative to the project root, then start `gateway-wss`. The launcher checks both files and forwards them as `--cert`/`--key`; it does not generate or commit a private key. The systemd instance is `mistlane@gateway-wss.service`.
 
 ## HTTP worker
 

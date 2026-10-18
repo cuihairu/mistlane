@@ -89,7 +89,14 @@ baseline 内 Boost 为 1.92.0，Lua 为 5.5.1，OpenSSL 为 3.6.5#2。OpenSSL �
 python3 tools/client.py 'hello mistlane'
 ```
 
-`--upstream` 可重复指定多个 worker，按连接轮询。使用 WS 网关时增加 `--transport ws`；浏览器发送一条 WebSocket 消息即对应一个 payload，不需要额外的 TCP 长度头。
+`--upstream` 可重复指定多个 worker，按连接轮询。游戏客户端使用 WS 时，启动独立游戏网关，内部 router/worker 保持 TCP：
+
+```bash
+./build/debug/mistlane --role gateway --listen 0.0.0.0:8080 \
+  --transport ws --upstream 127.0.0.1:7101
+```
+
+客户端连接 `ws://服务器地址:8080/ws`，消息进入 worker 的 Lua `message(payload)`。一条 WS 消息就是一个 payload，无须额外 TCP 长度头。单进程也可使用 `worker --transport ws --script examples/echo.lua` 直接监听；它与 HTTP worker 的 `http(request)` 是两种入口。
 
 WSS 示例（使用你自己的证书链与私钥）：
 
@@ -100,6 +107,8 @@ WSS 示例（使用你自己的证书链与私钥）：
 ```
 
 证书和私钥不进入源码包。WS/WSS 的实现直接使用 Drogon；内部 TCP payload 为四字节网络序长度加数据，最大 1 MiB，允许空消息和二进制内容。
+
+WSS 客户端连接 `wss://证书对应域名:7443/ws`，远程接入时将上述 WSS 监听地址改为合适的服务端网卡地址。响应是 binary WS 消息；当前必须等待上一响应再发送下一条应用消息，Lua 主动推送/广播尚未实现。浏览器代码、网关/直接 worker 两种拓扑及初始化模板的 `CERT`/`KEY` 配置见[游戏接入指南](docs/zh/guide.md)。
 
 ## Lua 扩展
 

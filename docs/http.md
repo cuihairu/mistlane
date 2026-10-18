@@ -2,6 +2,8 @@
 
 The legacy World HTTP server used Poco. Mistlane uses Drogon for HTTP/HTTPS and WS/WSS, while internal TCP remains on Boost.Asio. Drogon uses the independent Trantor network library, not Boost. The choice provides a complete web framework; it is not an unmeasured performance ranking.
 
+Game clients connect to `/ws` using `gateway --transport ws/wss --upstream IP:PORT`, with payloads handled by a TCP worker's Lua `message(payload)`. Alternatively, `worker --transport ws/wss --script FILE` handles them directly. Game messages after the WebSocket upgrade do not invoke Lua HTTP handlers. See the [game WS/WSS guide](./guide.md) for launch commands, client code and instance configuration. The HTTP examples below use a separate listener instance.
+
 ## Server
 
 ```sh

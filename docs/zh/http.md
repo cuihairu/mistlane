@@ -2,6 +2,8 @@
 
 旧 World HTTP 服务端用了 Poco。Mistlane 使用 Drogon 处理 HTTP/HTTPS、WS/WSS 及协议解析；TCP 核心仍用 Boost.Asio。Drogon 基于独立的 Trantor 网络库，并非基于 Boost。选型理由是直接使用完整 Web 框架能力，不是未经验证的性能排名。
 
+游戏客户端通过 `gateway --transport ws/wss --upstream IP:PORT` 连接 `/ws`，消息由 TCP worker 的 Lua `message(payload)` 处理；也可通过 `worker --transport ws/wss --script FILE` 直接处理。WebSocket 升级后的游戏消息不会调用 Lua HTTP handler。完整启动命令、客户端示例与模板配置见[游戏 WS/WSS 接入指南](./guide.md)。本页下面的 HTTP 示例使用独立的 HTTP 监听实例。
+
 ## 服务端
 
 ```sh

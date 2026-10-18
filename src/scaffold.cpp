@@ -51,6 +51,18 @@ MISTLANE_BIN=/path/to/mistlane ./ops/cluster.sh start
 
 The default set starts worker → router → gateway, two shards → cross, and an HTTP worker. Run the TCP client against `127.0.0.1:7100`; the cross ingress listens on `127.0.0.1:7300`; HTTP listens on `127.0.0.1:7400`.
 
+## Game clients over WebSocket
+
+The optional `gateway-ws` and `gateway-wss` instances connect game clients to the same TCP router/worker. They are not started by the default cluster command. Each WS message calls the worker's Lua `message` callback; HTTP workers use a separate `http` callback.
+
+```sh
+MISTLANE_BIN=/path/to/mistlane ./ops/cluster.sh start worker router gateway-ws
+```
+
+Connect to `ws://127.0.0.1:8080/ws`. Both `/` and `/ws` accept upgrades. To use WSS, set `CERT` and `KEY` in `config/instances/gateway-wss.env`, then start `gateway-wss` and connect to `wss://your-certificate-hostname:7443/ws`. Certificate paths are absolute or relative to this project root, including when launched through systemd. Private keys are supplied by the deployment; the initializer does not create them. Change `LISTEN` from loopback to the appropriate server interface for remote clients.
+
+Clients send payloads without the internal TCP length prefix and receive binary WS messages. Wait for each reply before sending the next application message. Lua server push, broadcast and session-addressed sends are not implemented yet.
+
 ## systemd user services
 
 After installing the project at `/opt/mistlane`, create a dedicated `mistlane` system account, copy `ops/systemd/mistlane@.service` to `/etc/systemd/system/`, adjust the project and binary paths, then run:
@@ -126,6 +138,23 @@ TRANSPORT=tcp
 UPSTREAMS=127.0.0.1:7101
 ROUTE_EPOCH=
 )ENV"},
+    TemplateFile{"config/instances/gateway-ws.env", R"ENV(ROLE=gateway
+LISTEN=127.0.0.1:8080
+SCRIPT=
+TRANSPORT=ws
+UPSTREAMS=127.0.0.1:7101
+ROUTE_EPOCH=
+)ENV"},
+    TemplateFile{"config/instances/gateway-wss.env", R"ENV(ROLE=gateway
+LISTEN=127.0.0.1:7443
+SCRIPT=
+TRANSPORT=wss
+UPSTREAMS=127.0.0.1:7101
+ROUTE_EPOCH=
+# Supply your deployment certificate chain and key; no private key is generated.
+CERT=certs/fullchain.pem
+KEY=certs/private-key.pem
+)ENV"},
     TemplateFile{"config/instances/shard-a.env", R"ENV(ROLE=shard
 LISTEN=127.0.0.1:7201
 SCRIPT=scripts/cross.lua
@@ -172,6 +201,19 @@ if [ -n "$SCRIPT" ]; then
   set -- "$@" --script "$script"
 fi
 [ "$TRANSPORT" = tcp ] || set -- "$@" --transport "$TRANSPORT"
+case "$TRANSPORT" in
+  wss|https)
+    [ -n "${CERT:-}" ] && [ -n "${KEY:-}" ] || {
+      echo "$TRANSPORT requires CERT and KEY in $config" >&2; exit 2;
+    }
+    case "$CERT" in /*) cert=$CERT;; *) cert=$root/$CERT;; esac
+    case "$KEY" in /*) key=$KEY;; *) key=$root/$KEY;; esac
+    [ -r "$cert" ] && [ -r "$key" ] || {
+      echo "unreadable TLS certificate or private key for $instance" >&2; exit 2;
+    }
+    set -- "$@" --cert "$cert" --key "$key"
+    ;;
+esac
 if [ -n "$UPSTREAMS" ]; then
   old_ifs=$IFS; IFS=,
   for endpoint in $UPSTREAMS; do set -- "$@" --upstream "$endpoint"; done

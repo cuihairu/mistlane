@@ -1,0 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+#pragma once
+#include <string_view>
+namespace mistlane::test {
+inline constexpr std::string_view heap_lua = R"mlheap(@MISTLANE_HEAP_SOURCE@)mlheap";
+}

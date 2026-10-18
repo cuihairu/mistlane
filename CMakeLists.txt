@@ -25,8 +25,12 @@ target_compile_options(mistlane_core PRIVATE -Wall -Wextra -Wpedantic)
 add_library(mistlane_net src/node.cpp src/web.cpp)
 target_link_libraries(mistlane_net PUBLIC mistlane_core Drogon::Drogon)
 target_compile_options(mistlane_net PRIVATE -Wall -Wextra -Wpedantic)
-add_executable(mistlane src/main.cpp src/scaffold.cpp)
-target_link_libraries(mistlane PRIVATE mistlane_net)
+file(READ "${CMAKE_CURRENT_SOURCE_DIR}/lua/mistlane/min_heap.lua" MISTLANE_HEAP_SOURCE)
+configure_file(src/test_resources.hpp.in generated/test_resources.hpp @ONLY)
+add_executable(mistlane src/main.cpp src/scaffold.cpp src/cli_client.cpp src/bot.cpp
+  src/selftest.cpp src/test_cases.cpp src/test_databases.cpp src/lua_tests.cpp)
+target_include_directories(mistlane PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/generated")
+target_link_libraries(mistlane PRIVATE mistlane_net mistlane_http Boost::mysql)
 target_compile_options(mistlane PRIVATE -Wall -Wextra -Wpedantic)
 add_library(mistlane::core ALIAS mistlane_core)
 add_library(mistlane::net ALIAS mistlane_net)
@@ -38,35 +42,28 @@ add_executable(mistlane-mysql-probe examples/mysql_probe.cpp)
 target_link_libraries(mistlane-mysql-probe PRIVATE mistlane_mysql)
 include(CTest)
 if(BUILD_TESTING)
-  find_package(Python3 REQUIRED COMPONENTS Interpreter)
-  add_test(NAME mistlane_integration COMMAND ${Python3_EXECUTABLE}
-    ${CMAKE_CURRENT_SOURCE_DIR}/tests/integration.py $<TARGET_FILE:mistlane>
-    ${CMAKE_CURRENT_SOURCE_DIR})
-  set_tests_properties(mistlane_integration PROPERTIES TIMEOUT 60)
-  add_test(NAME mistlane_scaffold COMMAND ${Python3_EXECUTABLE}
-    ${CMAKE_CURRENT_SOURCE_DIR}/tests/scaffold.py $<TARGET_FILE:mistlane>)
-  set_tests_properties(mistlane_scaffold PROPERTIES TIMEOUT 10)
+  foreach(test_case IN ITEMS core.contracts transport.tcp transport.websocket transport.http
+      lua.lifecycle lua.http lua.script cross.admission scaffold.init cli.bot)
+    string(REPLACE "." "_" test_name "${test_case}")
+    add_test(NAME mistlane_${test_name} COMMAND mistlane test --case "${test_case}")
+    set_tests_properties(mistlane_${test_name} PROPERTIES TIMEOUT 60)
+  endforeach()
   if(EXISTS "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/tools/crashpad_handler")
-    add_test(NAME mistlane_crashpad_startup COMMAND ${Python3_EXECUTABLE}
-      ${CMAKE_CURRENT_SOURCE_DIR}/tests/crashpad_startup.py $<TARGET_FILE:mistlane>
-      "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/tools/crashpad_handler"
-      ${CMAKE_CURRENT_SOURCE_DIR}/examples/echo.lua)
+    add_test(NAME mistlane_crashpad_startup COMMAND mistlane test --suite crashpad
+      --crashpad-handler "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/tools/crashpad_handler")
     set_tests_properties(mistlane_crashpad_startup PROPERTIES TIMEOUT 15)
   endif()
 endif()
 
 option(MISTLANE_TEST_LOCAL_DATABASE "Test against a disposable local MariaDB (requires installed tools)" OFF)
 if(BUILD_TESTING AND MISTLANE_TEST_LOCAL_DATABASE)
-  add_test(NAME mistlane_mysql_integration COMMAND ${Python3_EXECUTABLE}
-    ${CMAKE_CURRENT_SOURCE_DIR}/tests/mysql_integration.py $<TARGET_FILE:mistlane-mysql-probe>)
+  add_test(NAME mistlane_mysql_integration COMMAND mistlane test --suite mysql)
   set_tests_properties(mistlane_mysql_integration PROPERTIES TIMEOUT 60)
 endif()
 
 option(MISTLANE_TEST_LOCAL_REDIS "Test against a disposable local Redis server" OFF)
 if(BUILD_TESTING AND MISTLANE_TEST_LOCAL_REDIS)
-  add_test(NAME mistlane_redis_integration COMMAND ${Python3_EXECUTABLE}
-    ${CMAKE_CURRENT_SOURCE_DIR}/tests/redis_integration.py $<TARGET_FILE:mistlane>
-    ${CMAKE_CURRENT_SOURCE_DIR})
+  add_test(NAME mistlane_redis_integration COMMAND mistlane test --suite redis)
   set_tests_properties(mistlane_redis_integration PROPERTIES TIMEOUT 60)
 endif()
 

@@ -66,12 +66,12 @@ def wait_log(log, text):
     raise AssertionError(f'log missing: {text}')
 
 
-def websocket_connect(port, context=None):
+def websocket_connect(port, context=None, path='/'):
     sock = connect(port)
     if context:
         sock = context.wrap_socket(sock, server_hostname='localhost')
     key = base64.b64encode(os.urandom(16)).decode()
-    sock.sendall((f'GET / HTTP/1.1\r\nHost: localhost:{port}\r\n'
+    sock.sendall((f'GET {path} HTTP/1.1\r\nHost: localhost:{port}\r\n'
                   f'Upgrade: websocket\r\nConnection: Upgrade\r\n'
                   f'Sec-WebSocket-Key: {key}\r\nSec-WebSocket-Version: 13\r\n\r\n').encode())
     response = bytearray()
@@ -192,6 +192,22 @@ try:
             ws_send(sock, b'tls-verified')
             assert ws_message(sock) == b'tls-verified'
         print('PASS: Drogon WS/WSS handshake, masking, fragmentation, ping/pong, trusted TLS echo')
+
+        # Game messages can also reach Lua directly on a WS/WSS worker at /ws.
+        for transport in ('ws', 'wss'):
+            direct_port = port()
+            options = ['--transport', transport, '--script', str(script)]
+            if transport == 'wss':
+                options += ['--cert', str(cert), '--key', str(key)]
+            start('worker', direct_port, *options)
+            with websocket_connect(direct_port, context if transport == 'wss' else None, '/ws') as sock:
+                ws_send(sock, b'game-message\x00\xff')
+                assert ws_message(sock) == b'game-message\x00\xff'
+            gateway_port = ws_port if transport == 'ws' else wss_port
+            with websocket_connect(gateway_port, context if transport == 'wss' else None, '/ws') as sock:
+                ws_send(sock, b'game-gateway\x00\xff')
+                assert ws_message(sock) == b'game-gateway\x00\xff'
+        print('PASS: game /ws route on WS/WSS gateways and direct Lua workers')
 
         # HTTP adapters and libcurl execute real requests, including TLS verification and size limits.
         probe = str(Path(binary).with_name('mistlane-http-probe'))
