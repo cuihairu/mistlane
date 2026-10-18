@@ -57,11 +57,11 @@ The CMake targets are `mistlane::core` for Lua, `mistlane::net` for nodes, and `
 
 ## Execution and connection model
 
-Each node owns one Asio thread for internal TCP, timers, signals and Lua. Web nodes additionally use Drogon/Trantor event loops for HTTP/TLS/WS, with at most one submitted payload per session. Lua is only entered on Asio. WS clients must wait for each response before submitting another request; pipelining closes the session.
+Each node owns one Asio thread for internal TCP, timers, signals and Lua. Web nodes additionally use Drogon/Trantor event loops for HTTP/TLS/WS, with at most one submitted payload per session. Lua is only entered on Asio. Sessions are full duplex: client frames arrive independently of replies, a handler may send nothing, and unsolicited upstream frames reach the client without a matching request.
 
 Gateway is the forwarding role in this version. Each new session selects an upstream in round-robin order. One downstream session owns one upstream TCP connection and stays with that upstream. A new client connection may select another gameServer; this does not provide player-ID affinity.
 
-A session reads one request, obtains one response, writes it, and then reads the next request. There is no unbounded application send queue. Drogon assembles WS/WSS messages and adapts them to internal TCP frames.
+A session reads frames as they arrive and keeps one frame in flight toward each peer, so a slow downstream applies back pressure to upstream instead of buffering indefinitely. Writes are queued per channel and bounded: internal frames accept about 2 MiB of backlog and refuse beyond it, while the Drogon side of a WS session is capped by the Trantor 2 MiB high-water mark. Drogon assembles WS/WSS messages and adapts them to internal TCP frames.
 
 TCP frames use a four-byte big-endian payload length. A WS message is one payload without that header. Empty and binary payloads are supported, with a 1 MiB limit. WS responses are binary. There is no business message ID, account ID, or registration schema in this protocol.
 
@@ -70,8 +70,8 @@ TCP frames use a four-byte big-endian payload length. A WS message is one payloa
 | Connections | Minimum of --max-connections and conservative memory admission; default effective cap 42 |
 | Message rate | Per-session bucket: capacity 200, refill 100 messages/second |
 | Handshake | 10-second deadline |
-| Waiting for request | 60 seconds to read the next complete request |
-| Request/response | 10 seconds from a complete request through forwarding and response |
+| Waiting for request | 60 seconds idle in either direction; 10 seconds for the cross join verdict |
+| Output backlog | About 2 MiB per session; Lua pushes refuse with `session backlogged`, relayed frames close the session |
 | Protocol/timeout/callback/upstream failure | Close the affected session; do not automatically replay a potentially executed request |
 | SIGTERM / SIGINT | Close listener, cancel sessions, invoke current shutdown callback, drain cancellation handlers |
 | SIGHUP | Load and initialize another VM; replace only on success; reset module state |

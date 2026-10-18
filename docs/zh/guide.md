@@ -108,7 +108,7 @@ flowchart LR
   --transport ws --script examples/echo.lua
 ```
 
-连接 `ws://127.0.0.1:8081/ws`。启用 WSS 时改为 `--transport wss`，并添加 `--cert FILE --key FILE`；Lua 仍实现 `message(payload) -> string`。
+连接 `ws://127.0.0.1:8081/ws`。启用 WSS 时改为 `--transport wss`，并添加 `--cert FILE --key FILE`；Lua 仍实现 `message(payload) -> string 或 nil`。
 
 ### 游戏客户端示例与当前限制
 
@@ -123,7 +123,7 @@ socket.onopen = () => socket.send(new TextEncoder().encode('hello mistlane'))
 
 原生客户端同样使用标准 WS/WSS 库。服务端接受 text/binary 消息，响应统一为 binary，单消息最大 1 MiB。应用自己定义 payload 编码和消息 ID，当前示例只原样回显。
 
-当前通道是串行请求/响应模型：收到上一响应后才能发下一条应用消息，超前发送会关闭连接；尚无面向游戏会话的 Lua 主动推送、广播或按会话发送 API（脚本角色 HTTP 监听上的 WebSocket 升级有独立的推送 API，见[多监听章节](./http.md#多监听与-websocket-生命周期)）。它适合验证游戏连接和消息链路，高频全双工游戏所需的有界收发队列、会话生命周期和主动推送仍需补齐。
+会话是全双工的：客户端帧不依赖响应到达，可以流水发送多条请求；handler 返回 nil 时该请求没有响应帧。响应与服务端推送共用同一条有界通道——每个会话最多积压约 2 MiB 输出，越界时 Lua 收到明确的拒绝而非 handler 报错。游戏会话的主动推送、广播与按会话发送通过 `mistlane.session.send` 与 `mistlane.session.broadcast` 提供；帧率令牌桶与输出上限共同约束吞吐。当前适合验证游戏连接、消息链路与推送路径；玩家鉴权、账号绑定与按玩家路由仍缺失。
 
 一个进程也可以同时服务多种协议：`--transport` 仍为单一选择、作用于主监听；每个 `--listener PROTO://IP:PORT` 追加一个独立监听（明文与 TLS 可并存；`wss`/`https` 条目可追加 `?cert=FILE&key=FILE` 绑定自己的证书）。WS/WSS 监听照旧承载游戏会话，同一个 gameServer 可以在不同端口同时暴露原生客户端的帧式 TCP 和浏览器用的 WS/WSS。HTTP 侧见[HTTP 多监听与 WebSocket 生命周期](./http.md#多监听与-websocket-生命周期)。
 
@@ -190,7 +190,7 @@ HTTPS 需另加 `--cert` 和 `--key`。传给 Lua 的请求表包含 method、pa
 
 ## Lua 服务
 
-脚本返回 table，必须提供 message(payload) -> string，可选 init()、tick() 和 shutdown()。tick 间隔 100ms。所有回调在节点的单个事件循环线程上执行，应快速返回。
+脚本返回 table，必须提供 message(payload) -> string 或 nil，可选 init()、tick() 和 shutdown()。tick 间隔 100ms。所有回调在节点的单个事件循环线程上执行，应快速返回。
 
 SIGHUP 先构造并初始化新 VM，失败保留旧 VM，成功替换并重置模块状态。目前不进行状态迁移。SIGTERM/SIGINT 停止监听、取消会话并调用当前模块的 shutdown。
 

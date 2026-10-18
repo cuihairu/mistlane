@@ -41,6 +41,8 @@
 - [x] 整理目标进程职责及实际实现边界：docs/process-roles.md 与 docs/zh/process-roles.md；首页和架构图移除 router 必经层假设。
 - [ ] 按目标职责迁移运行角色（禁止只改名字冒充实现）：gateway、login、coordinator、gameServer、crossServer、data、可选 apiServer；保持单二进制方案可用，目录/target/CLI 一次性迁移并清理别名。
   - [ ] 定义服务身份、会话身份、请求关联和有界双向消息；替换强制一问一答路径，补推送/广播及服务连接复用。
+    - 已代决（2026-10-19，第一切片）：会话身份=帧式会话数字 id（Session::start attach，message context.session 可见）；双向消息=全双工双泵（pump_client/pump_upstream 各自在途一帧，写完成幂等重挂，网关在 connect 即开始收上游，主动推送无需请求）；有界=每通道 ~2 MiB 写积压，Lua `mistlane.session.send` 同步拒绝（`session backlogged`/`unknown session id`/`payload exceeds 1 MiB`）、`mistlane.session.broadcast` 返回接受数；handler 返回 nil 不回帧且会话继续（WebChannel 桥接槽位改在 deliver 归还）；期限改为首帧 10s、双向空闲 60s、cross join 判定 10s；join 判定帧（MLC1 OK）照常回给客户端。测试 `transport.push`（16/16 绿）；docs guide/http/architecture/lua/validation/process-roles/cross-server 及 zh 同步。
+    - 仍留待后续切片：服务身份握手（服务间认证）、服务连接复用/多路复用、按请求关联 ID 的请求-响应匹配（当前同会话按序）。
   - [ ] 实现 coordinator 的进程注册/就绪/负载、角色与场景归属、迁移状态；区服与跨服组明确作用域，router 不直接改名顶替该能力。
   - [ ] 明确 gameServer 的角色、场景模板/实例、计时、同步和释放；从旧代码逐项评估通用能力，排除原游戏玩法和配置。
   - [ ] 实现 crossServer 的参与者来源、场景与返回上下文；长期变更回传归属侧 data；先确定回传与持久化确认协议及唯一写入权，再实现移交/结算/重试/离线/回服故障恢复。

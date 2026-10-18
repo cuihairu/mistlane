@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
+#include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <lua.hpp>
@@ -26,6 +28,15 @@ public:
     // Returns "" on success or a short machine-readable reason for Lua.
     virtual std::string websocket_send(std::uint64_t id, std::string_view payload) = 0;
 };
+// Push adapter for framed game sessions, addressed by session id.
+class GameSessionSink {
+public:
+    virtual ~GameSessionSink() = default;
+    // Returns "" on success or a short machine-readable reason for Lua.
+    virtual std::string session_send(std::uint64_t id, std::string_view payload) = 0;
+    // Queues the payload for every live session; returns how many accepted it.
+    virtual std::size_t session_broadcast(std::string_view payload) = 0;
+};
 class RedisRuntime {
 public:
     RedisRuntime(boost::asio::io_context& io, std::string host, std::uint16_t port);
@@ -45,11 +56,12 @@ class LuaService {
 public:
     struct AsyncContext { lua_State* state = nullptr; };
     explicit LuaService(const std::string& path, ServiceContext context = {}, std::shared_ptr<RedisRuntime> redis = {},
-                        WebsocketSink* websocket_sink = nullptr);
+                        WebsocketSink* websocket_sink = nullptr, GameSessionSink* session_sink = nullptr);
     ~LuaService();
     LuaService(const LuaService&) = delete;
     LuaService& operator=(const LuaService&) = delete;
-    std::string message(std::string_view payload, const CrossContext* context = nullptr);
+    // Returns the handler's reply, or nothing when the handler returns nil.
+    std::optional<std::string> message(std::string_view payload, const CrossContext* context = nullptr);
     void validate_http();
     WebResponse http(const WebRequest& request);
     // Lua websocket lifecycle (optional callbacks; failures close the session).
@@ -67,8 +79,11 @@ private:
     static int stream_ack(lua_State*);
     static int stream_claim(lua_State*);
     static int websocket_send(lua_State*);
+    static int session_send(lua_State*);
+    static int session_broadcast(lua_State*);
     static void push_stream_api(lua_State*, LuaService*);
     static void push_websocket_api(lua_State*, LuaService*);
+    static void push_session_api(lua_State*, LuaService*);
     void websocket_callback(const char* name, std::uint64_t id, std::string_view payload, const std::string& path);
     static int leaderboard_add(lua_State*);
     static int leaderboard_get(lua_State*);
@@ -80,6 +95,7 @@ private:
     int module_ = LUA_NOREF;
     ServiceContext context_;
     WebsocketSink* websocket_sink_ = nullptr;
+    GameSessionSink* session_sink_ = nullptr;
     bool started_ = false, stopped_ = false, shutdown_ = false;
     std::shared_ptr<AsyncContext> async_context_;
     std::shared_ptr<RedisRuntime> redis_;

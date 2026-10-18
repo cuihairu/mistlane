@@ -36,7 +36,7 @@ stateDiagram-v2
 | 顶层脚本 | 无 / 模块 table | 启动与每次重载执行；必须返回符合传输类型的模块 |
 | init | context / 忽略返回 | VM 创建并验证后一次；context 含 role、transport、epoch |
 | start | 无 / 忽略返回 | 监听就绪、正式发布 ready 前一次；失败则启动失败或拒绝重载 |
-| message | payload、context / string | 非 HTTP 完整消息；context 在 crossServer 中含 realm/group/room/epoch，普通 gameServer 为 nil |
+| message | payload、context / string 或 nil | 非 HTTP 完整消息；context 在帧式监听上携带数字会话身份，crossServer 加入后另含 realm/group/room/epoch；返回 nil 表示本请求没有响应帧 |
 | before_request | req / nil 或响应 table | HTTP 前置处理；nil 继续 http，响应 table 短路主 handler |
 | http | req / 响应 table | HTTP/HTTPS apiServer 的主请求处理器 |
 | after_request | req、response / nil 或响应 table | 主处理器或前置短路成功后执行；可直接修改 response，或返回替换 table |
@@ -49,6 +49,8 @@ stateDiagram-v2
 | websocket_close | id / 忽略返回 | 断连或进程退出 |
 
 `mistlane.websocket.send(id, payload)` 向一个 WebSocket 会话定向推送，成功返回 true，失败返回 false 与原因。详见[多监听与 WebSocket 生命周期](./http.md#多监听与-websocket-生命周期)。
+
+帧式游戏会话在监听组合含 tcp/ws/wss 时暴露 `mistlane.session.send(id, payload)` 与 `mistlane.session.broadcast(payload)`。`send` 成功返回 true，失败返回 false 与原因（`unknown session id`、`payload exceeds 1 MiB`、会话输出约 2 MiB 上限打满时的 `session backlogged`）；`broadcast` 向所有存活帧式会话投递并返回被接受的会话数。`id` 即 message context 中的会话身份。不回复的 handler（返回 nil）与推送可自由组合：写请求按通道排队，推送先于响应到达，顺序保持。
 
 除监听组合要求的 message/http 外均可选；nil 表示缺省。字段存在但不是函数会在调用时失败。没有 on_connect/on_disconnect 玩家登录钩子；连接生命周期不等同于业务登录。原游戏全局 Timer、SQLService、C_* 和协议没有直接迁入。
 
@@ -127,7 +129,7 @@ sequenceDiagram
 
 ## 错误与资源边界
 
-message 失败或返回非 string 关闭该会话；tick 错误记录后继续调度。长回调会延迟网络、其他房间和超时，定时器不能抢占同步 C++ 调用。
+message 失败关闭该会话；返回 nil 表示本请求没有响应帧。tick 错误记录后继续调度。长回调会延迟网络、其他房间和超时，定时器不能抢占同步 C++ 调用。
 
 每次受保护调用设置约 100 万条 Lua 指令的计数钩子，用于捕获常见死循环。仅打开 base/string/table/math，不打开 package/io/os/debug；base 仍提供 load/dofile，因此脚本必须可信，**这不是沙箱**。没有 Lua 内存配额，也不保证 CPU 预算不可绕过。生产还需进程/cgroup 隔离、受控绑定和压测。
 

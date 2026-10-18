@@ -64,7 +64,7 @@ coordinator 负责承载决策和注册状态；进程启动、重启与资源�
 
 | 当前 CLI 角色 | 已实现的运行能力 | 尚缺能力 |
 |---|---|---|
-| `gateway` | TCP/WS/WSS 转发，按连接选择上游；`--routing cross` 开启静态跨服路由/准入 | 玩家身份、动态承载路由、双向推送、迁移接线 |
+| `gateway` | TCP/WS/WSS 转发，按连接选择上游，主动推送照常转发；`--routing cross` 开启静态跨服路由/准入 | 玩家身份、动态承载路由、迁移接线 |
 | `gameServer` | Lua message 执行，生命周期与重载，直接 TCP/WS/WSS；也保留已有 HTTP 适配 | 完整角色、场景、副本与持久化链路 |
 | `crossServer` | TCP 跨服上下文与 Lua 执行、最终连接准入 | 跨服角色迁移、场景与回传保存 |
 | `apiServer` | Lua HTTP/HTTPS 请求钩子；不带 transport 时默认 HTTP；可选 WS/WSS message | 平台回调业务、可靠内部调用及多监听 |

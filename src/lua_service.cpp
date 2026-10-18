@@ -129,9 +129,10 @@ void LuaService::check(int status) {
         throw std::runtime_error(text ? text : "Lua error");
     }
 }
- LuaService::LuaService(const std::string& path, ServiceContext context, std::shared_ptr<RedisRuntime> redis, WebsocketSink* sink)
-  : state_(luaL_newstate()), context_(std::move(context)), async_context_(std::make_shared<AsyncContext>()),
-    websocket_sink_(sink), redis_(std::move(redis)) {
+ LuaService::LuaService(const std::string& path, ServiceContext context, std::shared_ptr<RedisRuntime> redis,
+                        WebsocketSink* sink, GameSessionSink* sessions)
+  : state_(luaL_newstate()), context_(std::move(context)), websocket_sink_(sink), session_sink_(sessions),
+    async_context_(std::make_shared<AsyncContext>()), redis_(std::move(redis)) {
     if (!state_) throw std::runtime_error("cannot create Lua state");
     async_context_->state = state_;
     try {
@@ -142,6 +143,7 @@ void LuaService::check(int status) {
         luaL_requiref(state_, LUA_MATHLIBNAME, luaopen_math, 1); lua_pop(state_, 1);
         push_stream_api(state_, this);
         push_websocket_api(state_, this);
+        push_session_api(state_, this);
         lua_pushcfunction(state_, traceback);
         check(luaL_loadfile(state_, path.c_str()));
         check(protected_call(state_, 0, 1, 1));
@@ -196,22 +198,30 @@ void RedisRuntime::start() {
 void RedisRuntime::stop() { if (connection_) connection_->cancel(); }
 bool RedisRuntime::acquire_request() { if (outstanding_ >= 256) return false; ++outstanding_; return true; }
 void RedisRuntime::release_request() { if (outstanding_) --outstanding_; }
-std::string LuaService::message(std::string_view payload, const CrossContext* context) {
+std::optional<std::string> LuaService::message(std::string_view payload, const CrossContext* context) {
     StackGuard guard(state_);
     lua_pushcfunction(state_, traceback);
     lua_rawgeti(state_, LUA_REGISTRYINDEX, module_);
     lua_getfield(state_, -1, "message");
     if (!lua_isfunction(state_, -1)) throw std::runtime_error("service.message is required");
     lua_pushlstring(state_, payload.data(), payload.size());
+    // Game sessions carry their identity; cross sessions add their routing fields.
+    lua_createtable(state_, 0, 5);
     if (context) {
-        lua_createtable(state_, 0, 4);
-        lua_pushlstring(state_, context->realm.data(), context->realm.size()); lua_setfield(state_, -2, "realm");
-        lua_pushlstring(state_, context->group.data(), context->group.size()); lua_setfield(state_, -2, "group");
-        lua_pushlstring(state_, context->room.data(), context->room.size()); lua_setfield(state_, -2, "room");
-        lua_pushinteger(state_, context->epoch); lua_setfield(state_, -2, "epoch");
-    } else lua_pushnil(state_);
+        if (context->session) {
+            lua_pushinteger(state_, static_cast<lua_Integer>(context->session));
+            lua_setfield(state_, -2, "session");
+        }
+        if (!context->realm.empty()) {
+            lua_pushlstring(state_, context->realm.data(), context->realm.size()); lua_setfield(state_, -2, "realm");
+            lua_pushlstring(state_, context->group.data(), context->group.size()); lua_setfield(state_, -2, "group");
+            lua_pushlstring(state_, context->room.data(), context->room.size()); lua_setfield(state_, -2, "room");
+            lua_pushinteger(state_, context->epoch); lua_setfield(state_, -2, "epoch");
+        }
+    }
     check(protected_call(state_, 2, 1, guard.top+1));
-    if (lua_type(state_, -1) != LUA_TSTRING) throw std::runtime_error("message must return a string");
+    if (lua_isnil(state_, -1)) return std::nullopt; // bounded push instead of a reply
+    if (lua_type(state_, -1) != LUA_TSTRING) throw std::runtime_error("message must return a string or nil");
     size_t len = 0;
     const char* data = lua_tolstring(state_, -1, &len);
     return std::string(data, len);
@@ -264,6 +274,15 @@ void LuaService::push_websocket_api(lua_State* l, LuaService* service) {
     lua_newtable(l);
     lua_pushlightuserdata(l, service); lua_pushcclosure(l, websocket_send, 1); lua_setfield(l, -2, "send");
     lua_setfield(l, -2, "websocket"); lua_setglobal(l, "mistlane");
+}
+void LuaService::push_session_api(lua_State* l, LuaService* service) {
+    if (!service->session_sink_) return; // no framed game sessions on this node
+    lua_getglobal(l, "mistlane");
+    if (!lua_istable(l, -1)) { lua_pop(l, 1); lua_newtable(l); }
+    lua_newtable(l);
+    lua_pushlightuserdata(l, service); lua_pushcclosure(l, session_send, 1); lua_setfield(l, -2, "send");
+    lua_pushlightuserdata(l, service); lua_pushcclosure(l, session_broadcast, 1); lua_setfield(l, -2, "broadcast");
+    lua_setfield(l, -2, "session"); lua_setglobal(l, "mistlane");
 }
 void LuaService::websocket_callback(const char* name, std::uint64_t id, std::string_view payload, const std::string& path) {
     StackGuard guard(state_);
@@ -336,6 +355,46 @@ int LuaService::websocket_send(lua_State* l) {
         lua_pushboolean(l, 0);
         lua_pushlstring(l, reason.data(), reason.size());
         return 2;
+    } catch (const std::exception& e) { return lua_error(l, e); }
+}
+// mistlane.session.send(id, payload) -> true | false, reason
+int LuaService::session_send(lua_State* l) {
+    auto* self = stream_service(l);
+    try {
+        if (!self->session_sink_) throw std::runtime_error("game sessions are not enabled for this node");
+        if (!lua_isinteger(l, 1) || lua_tointeger(l, 1) <= 0)
+            throw std::runtime_error("session id must be a positive integer");
+        const auto id = static_cast<std::uint64_t>(lua_tointeger(l, 1));
+        if (lua_type(l, 2) != LUA_TSTRING) throw std::runtime_error("session payload must be a string");
+        std::size_t size = 0;
+        const char* data = lua_tolstring(l, 2, &size);
+        if (size > max_frame) {
+            lua_pushboolean(l, 0);
+            lua_pushstring(l, "payload exceeds 1 MiB");
+            return 2;
+        }
+        const std::string reason = self->session_sink_->session_send(id, {data, size});
+        if (reason.empty()) { lua_pushboolean(l, 1); return 1; }
+        lua_pushboolean(l, 0);
+        lua_pushlstring(l, reason.data(), reason.size());
+        return 2;
+    } catch (const std::exception& e) { return lua_error(l, e); }
+}
+// mistlane.session.broadcast(payload) -> sent | 0, reason
+int LuaService::session_broadcast(lua_State* l) {
+    auto* self = stream_service(l);
+    try {
+        if (!self->session_sink_) throw std::runtime_error("game sessions are not enabled for this node");
+        if (lua_type(l, 1) != LUA_TSTRING) throw std::runtime_error("session payload must be a string");
+        std::size_t size = 0;
+        const char* data = lua_tolstring(l, 1, &size);
+        if (size > max_frame) {
+            lua_pushinteger(l, 0);
+            lua_pushstring(l, "payload exceeds 1 MiB");
+            return 2;
+        }
+        lua_pushinteger(l, static_cast<lua_Integer>(self->session_sink_->session_broadcast({data, size})));
+        return 1;
     } catch (const std::exception& e) { return lua_error(l, e); }
 }
 int LuaService::stream_create_group(lua_State* l) {

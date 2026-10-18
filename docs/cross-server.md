@@ -25,7 +25,7 @@ flowchart LR
   S1 --> Y["Independent rooms"]
 ```
 
-Cross-routing gateway and crossServer are native mistlane roles over internal framed TCP. The same group/room maps to the same crossServer across realms using fixed 64-bit FNV-1a modulo the ordered upstream list. A session owns one upstream connection with serial request/response; no shared-connection multiplexing, unbounded application send queue or automatic replay is introduced. A full stateful room is rejected rather than silently split.
+Cross-routing gateway and crossServer are native mistlane roles over internal framed TCP. The same group/room maps to the same crossServer across realms using fixed 64-bit FNV-1a modulo the ordered upstream list. A session owns one upstream connection and is full duplex in both directions under the per-session output bound; no shared-connection multiplexing, unbounded application send queue or automatic replay is introduced. A full stateful room is rejected rather than silently split.
 
 ```sh
 build/debug/mistlane --role crossServer --listen 127.0.0.1:7201 --script examples/cross.lua --route-epoch 1 --max-room-sessions 16

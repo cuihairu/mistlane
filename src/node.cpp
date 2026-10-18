@@ -14,6 +14,7 @@
 #include <functional>
 #include <iomanip>
 #include <iostream>
+#include <deque>
 #include <map>
 #include <memory>
 #include <set>
@@ -33,6 +34,11 @@ asio::ip::address parse_address(const std::string& text) {
     return asio::ip::make_address(text);
 }
 // Replaces the old mixed TCP/WebSocket framing. Wire format: u32 BE + payload.
+// Writes from independent callbacks (replies and Lua pushes) must not
+// interleave, so every frame queues; the backlog bound turns a stalled reader
+// into a refusal instead of unbounded growth. Both refusal paths report
+// message_size synchronously before returning.
+constexpr std::size_t write_backlog = 2*max_frame;
 class TcpChannel : public Channel, public std::enable_shared_from_this<TcpChannel> {
 public:
     explicit TcpChannel(tcp::socket socket) : socket_(std::move(socket)) {}
@@ -57,13 +63,14 @@ public:
     }
     void write(std::string payload, std::function<void(Error)> callback) {
         if (payload.size() > max_frame) return callback(asio::error::message_size);
+        if (backlog_ + payload.size() + 4 > write_backlog) return callback(asio::error::message_size);
         auto frame = std::make_shared<std::string>(4, '\0');
         auto n = static_cast<std::uint32_t>(payload.size());
         for (int i = 3; i >= 0; --i) { (*frame)[i] = static_cast<char>(n & 255); n >>= 8; }
-        frame->append(payload);
-        auto self = shared_from_this();
-        asio::async_write(socket_, asio::buffer(*frame),
-          [self, frame, callback=std::move(callback)](Error ec, std::size_t) { callback(ec); });
+        frame->append(std::move(payload));
+        backlog_ += frame->size();
+        pending_.push_back({std::move(frame), std::move(callback)});
+        pump();
     }
     void close() {
         Error ignored;
@@ -72,8 +79,28 @@ public:
         socket_.close(ignored);
     }
 private:
+    void pump() {
+        if (sending_ || pending_.empty()) return;
+        sending_ = true;
+        auto frame = std::move(pending_.front().frame);
+        auto callback = std::move(pending_.front().callback);
+        pending_.pop_front();
+        backlog_ -= frame->size();
+        const auto buffer = asio::buffer(*frame); // built before the capture moves the owner
+        asio::async_write(socket_, buffer,
+          [self=shared_from_this(), frame=std::move(frame), callback=std::move(callback)]
+          (Error ec, std::size_t) mutable {
+            self->sending_ = false;
+            callback(ec);
+            self->pump(); // queue may have grown while the callback ran
+          });
+    }
+    struct Pending { std::shared_ptr<std::string> frame; std::function<void(Error)> callback; };
     tcp::socket socket_;
     std::array<unsigned char, 4> header_{};
+    std::deque<Pending> pending_;
+    std::size_t backlog_ = 0;
+    bool sending_ = false;
 };
 // Internal probe protocol: one request line per connection, answered inline on
 // the event loop, so a timely reply doubles as liveness evidence. It never
@@ -218,25 +245,80 @@ private:
     Answer answer_;
     std::set<std::shared_ptr<Peer>> peers_;
 };
+// Framed game sessions of a script role, addressable by Lua through
+// mistlane.session. Single-threaded like every other node component; session
+// ids are assigned per node and unrelated to websocket lifecycle ids.
+class GameSessions : public GameSessionSink {
+public:
+    using Failure = std::function<void()>;
+    std::uint64_t attach(std::shared_ptr<Channel> channel, Failure fail) {
+        const auto id = next_id_++;
+        sessions_.emplace(id, Entry{std::move(channel), std::move(fail)});
+        return id;
+    }
+    void detach(std::uint64_t id) { sessions_.erase(id); }
+private:
+    struct Entry { std::shared_ptr<Channel> channel; Failure fail; };
+    std::string session_send(std::uint64_t id, std::string_view payload) override {
+        if (payload.size() > max_frame) return "payload exceeds 1 MiB";
+        const auto found = sessions_.find(id);
+        if (found == sessions_.end()) return "unknown session id";
+        // Refusals report synchronously before write() returns, so the stack
+        // `reason` is safe; a write that dies later only retires the session.
+        auto fail = found->second.fail;
+        std::string reason;
+        found->second.channel->write(std::string(payload), [&reason, fail](Error ec) {
+            if (!ec) return;
+            if (ec == asio::error::message_size) { reason = "session backlogged"; return; }
+            if (ec == asio::error::operation_aborted) { reason = "unknown session id"; return; }
+            fail();
+        });
+        return reason;
+    }
+    std::size_t session_broadcast(std::string_view payload) override {
+        // Both channel types refuse synchronously; success completes
+        // asynchronously on TCP and synchronously on the websocket bridge, so
+        // "accepted" means "not refused by the time write() returned".
+        std::size_t queued = 0;
+        for (const auto& [id, entry] : sessions_) {
+            (void)id;
+            auto accepted = std::make_shared<bool>(true);
+            entry.channel->write(std::string(payload), [accepted, fail = entry.fail](Error ec) {
+                if (!ec) return;
+                if (ec == asio::error::message_size) { *accepted = false; return; }
+                fail(); // a dead connection retires its session
+            });
+            if (*accepted) ++queued;
+        }
+        return queued;
+    }
+    std::map<std::uint64_t, Entry> sessions_;
+    std::uint64_t next_id_ = 1;
+};
 class Session : public std::enable_shared_from_this<Session> {
 public:
     Session(std::shared_ptr<Channel> client, std::shared_ptr<LuaService>& service,
             const Endpoint* upstream, const Config& config, CrossAdmission& admission,
-            Diagnostics& diagnostics,
+            Diagnostics& diagnostics, GameSessions* registry,
             std::function<void(Session*)> on_close)
       : client_(std::move(client)), service_(service),
         timer_(client_->executor()), config_(config), admission_(admission), diagnostics_(diagnostics),
-        on_close_(std::move(on_close)) {
+        registry_(registry), on_close_(std::move(on_close)) {
         if (upstream) {
             endpoint_ = tcp::endpoint(parse_address(upstream->address), upstream->port);
             upstream_ = std::make_shared<TcpChannel>(tcp::socket(client_->executor()));
         }
     }
     void start() {
-        deadline(10);
         client_->start([self=shared_from_this()](Error ec) {
             if (self->closed_) return;
-            if (ec) self->stop(); else self->next();
+            if (ec) return self->stop();
+            // Identity exists before the first frame so Lua can push to the
+            // session at any time.
+            if (self->registry_)
+                self->context_.session = self->registry_->attach(self->client_,
+                    [self] { if (!self->closed_) self->stop(); });
+            self->pump_client(10);
         });
     }
     void stop() {
@@ -245,6 +327,7 @@ public:
         timer_.cancel();
         client_->close();
         if (upstream_) upstream_->close();
+        if (registry_ && context_.session) registry_->detach(context_.session);
         on_close_(this);
     }
 private:
@@ -258,58 +341,68 @@ private:
             }
         });
     }
-    void next() {
-        if (closed_) return;
-        deadline(60);
+    // Client leg: frames arrive independently of replies, so pipelining is
+    // allowed and the frame rate stays the only request-side bound. One frame
+    // read at a time; writers re-arm it through this idempotent pump.
+    void pump_client(int deadline_seconds = 60) {
+        if (closed_ || client_reading_) return;
+        client_reading_ = true;
+        deadline(deadline_seconds);
         client_->read([self=shared_from_this()](Error ec, std::string payload) {
+            self->client_reading_ = false;
             if (self->closed_) return;
             if (ec || !self->bucket_.consume()) return self->stop();
             self->diagnostics_.add_message("rx");
             self->diagnostics_.add_payload_bytes("rx", payload.size());
             self->request_started_ = std::chrono::steady_clock::now();
-            self->deadline(10);
-            if ((self->config_.is_cross_gateway() || self->config_.role == "crossServer") && !self->joined_) {
-                try {
-                    self->context_ = cross_context(payload);
-                    if (self->context_.epoch != self->config_.route_epoch) return self->reject("EPOCH");
-                    auto index = self->config_.is_cross_gateway()
-                        ? cross_shard(self->context_, self->config_.upstreams.size()) : 0;
-                    auto error = self->admission_.acquire(self.get(), self->context_, index);
-                    if (!error.empty()) return self->reject(error);
-                    self->joined_ = true;
-                    self->awaiting_join_ = self->config_.is_cross_gateway();
-                    if (self->config_.role == "crossServer")
-                        return self->reply("MLC1 OK " + std::to_string(self->config_.route_epoch));
-                    const auto& endpoint = self->config_.upstreams[index];
-                    self->endpoint_ = tcp::endpoint(parse_address(endpoint.address), endpoint.port);
-                    self->probe_port_ = endpoint.probe_port;
-                    self->upstream_ = std::make_shared<TcpChannel>(tcp::socket(self->client_->executor()));
-                } catch (const std::exception&) { return self->reject("INVALID"); }
-            }
-            if (!self->upstream_) {
-                try {
-                    const auto started = std::chrono::steady_clock::now();
-                    auto response = self->service_->message(payload, self->joined_ ? &self->context_ : nullptr);
-                    self->diagnostics_.observe_lua_callback("message", std::chrono::steady_clock::now() - started);
-                    self->reply(std::move(response));
-                }
-                catch (const std::exception& e) {
-                    std::cerr << "callback failed: " << e.what() << '\n';
-                    self->stop();
-                }
-                return;
-            }
-            if (self->upstream_->socket().is_open()) self->forward(std::move(payload));
-            else if (self->probe_port_ && !self->probed_) self->probe(std::move(payload));
-            else {
-                self->upstream_->socket().async_connect(self->endpoint_,
-                  [self, payload=std::move(payload)](Error error) mutable {
-                    if (self->closed_) return;
-                    if (error) { self->diagnostics_.upstream_error(); return self->stop(); }
-                    self->forward(std::move(payload));
-                  });
-            }
+            self->route(std::move(payload));
         });
+    }
+    void route(std::string payload) {
+        if ((config_.is_cross_gateway() || config_.role == "crossServer") && !joined_) {
+            try {
+                context_ = cross_context(payload);
+                if (context_.epoch != config_.route_epoch) return reject("EPOCH");
+                auto index = config_.is_cross_gateway()
+                    ? cross_shard(context_, config_.upstreams.size()) : 0;
+                auto error = admission_.acquire(this, context_, index);
+                if (!error.empty()) return reject(error);
+                joined_ = true;
+                awaiting_join_ = config_.is_cross_gateway();
+                if (config_.role == "crossServer")
+                    return reply("MLC1 OK " + std::to_string(config_.route_epoch));
+                const auto& endpoint = config_.upstreams[index];
+                endpoint_ = tcp::endpoint(parse_address(endpoint.address), endpoint.port);
+                probe_port_ = endpoint.probe_port;
+                upstream_ = std::make_shared<TcpChannel>(tcp::socket(client_->executor()));
+            } catch (const std::exception&) { return reject("INVALID"); }
+        }
+        if (!upstream_) return serve_local(std::move(payload));
+        if (awaiting_join_) deadline(10); // the join verdict is bounded, not the session
+        if (upstream_->socket().is_open()) return forward_upstream(std::move(payload));
+        if (probe_port_ && !probed_) return probe(std::move(payload));
+        upstream_->socket().async_connect(endpoint_,
+          [self=shared_from_this(), payload=std::move(payload)](Error error) mutable {
+            if (self->closed_) return;
+            if (error) { self->diagnostics_.upstream_error(); return self->stop(); }
+            self->pump_upstream(); // pushes may arrive before any reply
+            self->forward_upstream(std::move(payload));
+          });
+    }
+    // Local script path: one Lua call per frame; a handler that returns nil
+    // sends nothing and the session keeps reading.
+    void serve_local(std::string payload) {
+        try {
+            const auto started = std::chrono::steady_clock::now();
+            auto response = service_->message(payload, &context_);
+            diagnostics_.observe_lua_callback("message", std::chrono::steady_clock::now() - started);
+            if (response) return reply(std::move(*response));
+            pump_client();
+        }
+        catch (const std::exception& e) {
+            std::cerr << "callback failed: " << e.what() << '\n';
+            stop();
+        }
     }
     void reject(const std::string& reason) {
         std::cerr << "cross admission rejected: " << reason << '\n';
@@ -352,7 +445,8 @@ private:
               [self, payload=std::move(payload)](Error error) mutable {
                 if (self->closed_) return;
                 if (error) { self->diagnostics_.upstream_error(); return self->stop(); }
-                self->forward(std::move(payload));
+                self->pump_upstream(); // pushes may arrive before any reply
+                self->forward_upstream(std::move(payload));
               });
         };
         timer->expires_after(std::chrono::seconds(1));
@@ -384,23 +478,59 @@ private:
             });
         });
     }
-    void forward(std::string payload) {
+    // Upstream leg: one frame in flight per direction, so a slow consumer
+    // applies back pressure instead of growing the relay. Unsolicited frames
+    // reach the client as they arrive; a handler that pushes never needs a
+    // matching request. Re-armed by client-write completions.
+    void pump_upstream() {
+        if (closed_ || !upstream_ || !upstream_->socket().is_open() || upstream_reading_) return;
+        upstream_reading_ = true;
+        upstream_->read([self=shared_from_this()](Error ec, std::string frame) {
+            self->upstream_reading_ = false;
+            if (self->closed_) return;
+            if (ec) { self->diagnostics_.upstream_error(); return self->stop(); }
+            self->deadline(60);
+            if (self->awaiting_join_) {
+                self->awaiting_join_ = false;
+                return self->handle_join(std::move(frame));
+            }
+            self->forward_to_client(std::move(frame));
+        });
+    }
+    // The join verdict is the first upstream frame of a cross gateway session;
+    // it relays to the client like any other frame and settles the session.
+    void handle_join(std::string response) {
+        if (response != "MLC1 OK " + std::to_string(config_.route_epoch)) {
+            diagnostics_.upstream_error();
+            if (!response.starts_with("MLC1 ERR ")) return reject("UPSTREAM");
+            return client_->write(std::move(response), [self=shared_from_this()](Error) { self->stop(); });
+        }
+        deadline(60);
+        diagnostics_.add_message("tx");
+        diagnostics_.add_payload_bytes("tx", response.size());
+        client_->write(std::move(response), [self=shared_from_this()](Error ec) {
+            if (self->closed_) return;
+            if (ec) return self->stop();
+            self->pump_upstream();
+            self->pump_client();
+        });
+    }
+    void forward_to_client(std::string frame) {
+        diagnostics_.add_message("tx");
+        diagnostics_.add_payload_bytes("tx", frame.size());
+        client_->write(std::move(frame), [self=shared_from_this()](Error ec) {
+            if (self->closed_) return;
+            if (ec) return self->stop();
+            self->pump_upstream();
+            self->pump_client();
+        });
+    }
+    void forward_upstream(std::string payload) {
         upstream_->write(std::move(payload), [self=shared_from_this()](Error ec) {
             if (self->closed_) return;
             if (ec) { self->diagnostics_.upstream_error(); return self->stop(); }
-            self->upstream_->read([self](Error error, std::string response) {
-                if (self->closed_) return;
-                if (error) { self->diagnostics_.upstream_error(); return self->stop(); }
-                if (self->awaiting_join_) {
-                    self->awaiting_join_ = false;
-                    if (response != "MLC1 OK " + std::to_string(self->config_.route_epoch)) {
-                        self->diagnostics_.upstream_error();
-                        if (!response.starts_with("MLC1 ERR ")) return self->reject("UPSTREAM");
-                        return self->client_->write(std::move(response), [self](Error) { self->stop(); });
-                    }
-                }
-                self->reply(std::move(response));
-            });
+            self->pump_upstream();
+            self->pump_client();
         });
     }
     void reply(std::string payload) {
@@ -409,8 +539,8 @@ private:
         diagnostics_.observe_request(std::chrono::steady_clock::now() - request_started_);
         client_->write(std::move(payload), [self=shared_from_this()](Error ec) {
             if (self->closed_) return;
-            if (ec) self->stop();
-            else self->next();
+            if (ec) return self->stop();
+            self->pump_client();
         });
     }
     std::shared_ptr<Channel> client_;
@@ -421,10 +551,12 @@ private:
     const Config& config_;
     CrossAdmission& admission_;
     Diagnostics& diagnostics_;
+    GameSessions* registry_;
     CrossContext context_;
     std::chrono::steady_clock::time_point request_started_{};
     std::uint16_t probe_port_ = 0;
     bool probed_ = false, joined_ = false, awaiting_join_ = false;
+    bool client_reading_ = false, upstream_reading_ = false;
     std::function<void(Session*)> on_close_;
     TokenBucket bucket_;
     std::uint64_t generation_ = 0;
@@ -566,8 +698,11 @@ public:
             websockets_ = std::make_shared<WebsocketService>(service_,
                 [this] { return !stopping_ && active_sessions() < config_.max_connections; },
                 [this] { publish_active(); });
+        if (script_role && game_sessions)
+            game_sessions_ = std::make_shared<GameSessions>();
         if (script_role)
-            service_ = std::make_shared<LuaService>(config_.script, service_context_, redis_, websockets_.get());
+            service_ = std::make_shared<LuaService>(config_.script, service_context_, redis_,
+                websockets_.get(), game_sessions_.get());
         for (const auto& e : config_.upstreams) (void)parse_address(e.address);
         for (const auto& item : config_.listeners) {
             if (item.protocol != "tcp") continue;
@@ -642,6 +777,7 @@ private:
         const Endpoint* upstream = config_.upstreams.empty() || config_.is_cross_gateway() ? nullptr
             : &config_.upstreams[cursor_++ % config_.upstreams.size()];
         auto session = std::make_shared<Session>(std::move(client), service_, upstream, config_, admission_, *diagnostics_,
+            game_sessions_.get(),
             [this](Session* ptr) {
                 admission_.release(ptr);
                 for (auto i = sessions_.begin(); i != sessions_.end(); ++i)
@@ -676,7 +812,8 @@ private:
             if (value == SIGHUP) {
                 if (service_) {
                     try {
-                        auto replacement = std::make_shared<LuaService>(config_.script, service_context_, redis_, websockets_.get());
+                        auto replacement = std::make_shared<LuaService>(config_.script, service_context_, redis_,
+                            websockets_.get(), game_sessions_.get());
                         replacement->start();
                         service_.swap(replacement);
                         std::cout << "script reloaded; module state reset" << std::endl;
@@ -758,6 +895,7 @@ private:
     asio::steady_timer tick_;
     std::shared_ptr<LuaService> service_;
     std::shared_ptr<WebsocketService> websockets_;
+    std::shared_ptr<GameSessions> game_sessions_;
     ServiceContext service_context_;
     std::shared_ptr<RedisRuntime> redis_;
     std::set<std::shared_ptr<Session>> sessions_;

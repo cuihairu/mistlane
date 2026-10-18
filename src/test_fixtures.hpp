@@ -114,6 +114,7 @@ function M.websocket_open(id, path)
   print('WSHOOK open '..id..' '..path)
 end
 function M.websocket_message(id, payload)
+  if payload == 'noreply' then return end -- no send: the bridge must still take the next message
   if payload == 'state' then
     local n, m = 0, 0
     for _ in pairs(open) do n = n + 1 end
@@ -155,6 +156,46 @@ function M.http(r)
   end
   if r.path == '/echo' then return {status = 201, body = r.body} end
   return {status = 404, body = 'missing'}
+end
+return M
+)fixture";
+// Framed game sessions with a server-side identity: Lua reads the session id
+// from the message context and pushes with mistlane.session.send/broadcast.
+inline constexpr std::string_view push_lua = R"fixture(
+local M = {}
+function M.message(payload, context)
+  if type(context) ~= 'table' then error('session context missing') end
+  if type(context.session) ~= 'number' or context.session < 1 then
+    error('session identity missing')
+  end
+  if payload == 'self' then
+    return 'session='..context.session
+  elseif payload == 'silent' then
+    return nil
+  elseif payload == 'push' then
+    assert(mistlane.session.send(context.session, 'pushed'))
+    return 'done'
+  elseif payload:sub(1, 6) == 'burst ' then
+    local n = tonumber(payload:match('%d+')) or 0
+    local queued, refused = 0, 0
+    for _ = 1, n do
+      local ok, err = mistlane.session.send(context.session, string.rep('B', 64*1024))
+      if ok then queued = queued + 1
+      else
+        refused = refused + 1
+        assert(err == 'session backlogged', 'push refusal: '..tostring(err))
+      end
+    end
+    local ok, err = mistlane.session.send(999999, 'x')
+    assert(ok == false and err == 'unknown session id', 'unknown id: '..tostring(err))
+    local big, big_err = mistlane.session.send(context.session, string.rep('x', 1024*1024+1))
+    assert(big == false and big_err == 'payload exceeds 1 MiB', 'oversize: '..tostring(big_err))
+    return 'burst='..queued..':'..refused
+  elseif payload == 'bcast' then
+    local sent = mistlane.session.broadcast('bc:'..context.session)
+    return 'bcast='..sent
+  end
+  return payload
 end
 return M
 )fixture";

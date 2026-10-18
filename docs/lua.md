@@ -36,7 +36,7 @@ stateDiagram-v2
 | Script top level | None / module table | Startup and reload; validate required handler for the transport |
 | init | context / ignored | Once after validation; context has role, transport, epoch |
 | start | None / ignored | Listener ready, before ready is published; failure aborts startup/reload |
-| message | payload, context / string | Non-HTTP messages; crossServer context has realm/group/room/epoch, the gameServer base context has nil |
+| message | payload, context / string or nil | Non-HTTP messages; context carries the numeric session identity on framed listeners, and crossServer joins add realm/group/room/epoch; a nil return sends no reply frame |
 | before_request | req / nil or response | Before HTTP handler; a response short-circuits http |
 | http | req / response table | Main HTTP handler |
 | after_request | req, response / nil or response | After successful handler or short circuit; mutate response or return a replacement |
@@ -49,6 +49,8 @@ stateDiagram-v2
 | websocket_close | id / ignored | Disconnect or node shutdown |
 
 `mistlane.websocket.send(id, payload)` pushes to one websocket session and returns true, or false plus a reason. See [HTTP listeners and the WebSocket lifecycle](./http.md#multiple-listeners-and-websocket-lifecycle).
+
+Framed game sessions expose `mistlane.session.send(id, payload)` and `mistlane.session.broadcast(payload)` when the listener mix carries tcp/ws/wss. `send` returns true, or false plus a reason (`unknown session id`, `payload exceeds 1 MiB`, `session backlogged` when the session's ~2 MiB output bound is full); `broadcast` queues the payload for every live framed session and returns how many accepted it. The `id` is the session identity passed in the message context. A reply-less handler (nil return) and a handler that pushes compose freely: writes queue per channel, so reply order after pushes is preserved.
 
 All hooks except the message/http a listener mix requires are optional. Nil means absent; other non-function fields fail when called. There are no player connect/disconnect hooks. Legacy Timer, SQLService, C_* globals and gameplay protocols are not migrated.
 
@@ -120,7 +122,7 @@ Reload resets module state. It does not migrate rooms, export state or roll back
 
 ## Errors and resource boundaries
 
-message errors/non-string results close that session. Tick errors are logged and subsequent ticks continue. Long callbacks delay networking, other rooms and deadlines; timers cannot preempt synchronous native calls.
+message errors close that session; a nil result sends no reply frame. Tick errors are logged and subsequent ticks continue. Long callbacks delay networking, other rooms and deadlines; timers cannot preempt synchronous native calls.
 
 Protected calls install an instruction-count hook at about one million Lua instructions to catch common runaway loops. Only base/string/table/math are opened; package/io/os/debug are absent. Base still exposes load/dofile, so scripts must be trusted: this is **not a sandbox**. No Lua memory quota or unbypassable CPU isolation is provided. Process/cgroup isolation, controlled bindings and load tests remain necessary.
 

@@ -48,7 +48,7 @@ flowchart LR
   X --> S[crossServer Lua 房间]
 ```
 
-gateway 通过新连接轮询上游；每条会话固定到一个上游并串行请求 / 响应。Drogon/Trantor 负责 HTTP、HTTPS、WS、WSS，Asio 线程运行内部 TCP 与 Lua；有界桥接隔离两个事件循环。apiServer 使用 Lua handler 和请求钩子。gameServer 使用 `--redis IP:PORT` 可启用 Redis Streams Lua API，支持发布、消费组、ACK 和 pending 恢复；请求数有界，凭据可从环境变量读取。原生 gateway cross routing/crossServer 对 group/room 固定路由并执行连接数硬准入，不包含旧游戏玩法。gameServer 可用 `--metrics-listen IP:PORT` 开启私有 Prometheus 端点、用 `--probe-listen IP:PORT` 开启内部存活/就绪探测；cross 上游可写 `IP:PORT[:PROBE]`，按 crossServer 就绪状态挡住新加入（见[跨服设计](docs/zh/cross-server.md)）。Boost.MySQL 与 libcurl 是 C++ 扩展，尚未绑定 Lua。
+gateway 通过新连接轮询上游；每条会话固定到一个上游，全双工转发（请求可流水，推送可主动下发）。Drogon/Trantor 负责 HTTP、HTTPS、WS、WSS，Asio 线程运行内部 TCP 与 Lua；有界桥接隔离两个事件循环。apiServer 使用 Lua handler 和请求钩子。gameServer 使用 `--redis IP:PORT` 可启用 Redis Streams Lua API，支持发布、消费组、ACK 和 pending 恢复；请求数有界，凭据可从环境变量读取。原生 gateway cross routing/crossServer 对 group/room 固定路由并执行连接数硬准入，不包含旧游戏玩法。gameServer 可用 `--metrics-listen IP:PORT` 开启私有 Prometheus 端点、用 `--probe-listen IP:PORT` 开启内部存活/就绪探测；cross 上游可写 `IP:PORT[:PROBE]`，按 crossServer 就绪状态挡住新加入（见[跨服设计](docs/zh/cross-server.md)）。Boost.MySQL 与 libcurl 是 C++ 扩展，尚未绑定 Lua。
 
 ## 构建
 
@@ -109,7 +109,7 @@ WSS 示例（使用你自己的证书链与私钥）：
 
 证书和私钥不进入源码包。WS/WSS 的实现直接使用 Drogon；内部 TCP payload 为四字节网络序长度加数据，最大 1 MiB，允许空消息和二进制内容。
 
-WSS 客户端连接 `wss://证书对应域名:7443/ws`，远程接入时将上述 WSS 监听地址改为合适的服务端网卡地址。响应是 binary WS 消息；当前必须等待上一响应再发送下一条应用消息，面向游戏会话的 Lua 主动推送/广播尚未实现（脚本角色 HTTP 监听另有独立的 WebSocket 推送 API）。浏览器代码、网关/直接 gameServer 两种拓扑及初始化模板的 `CERT`/`KEY` 配置见[游戏接入指南](docs/zh/guide.md)。
+WSS 客户端连接 `wss://证书对应域名:7443/ws`，远程接入时将上述 WSS 监听地址改为合适的服务端网卡地址。响应是 binary WS 消息；会话全双工，客户端可流水发送，Lua 通过 `mistlane.session.send`/`mistlane.session.broadcast` 向单个或全部游戏会话主动推送（每会话输出积压有界），脚本角色 HTTP 监听另有独立的 WebSocket 推送 API。浏览器代码、网关/直接 gameServer 两种拓扑及初始化模板的 `CERT`/`KEY` 配置见[游戏接入指南](docs/zh/guide.md)。
 
 ## Lua 扩展
 

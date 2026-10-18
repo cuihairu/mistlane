@@ -8,7 +8,7 @@
 #include <string_view>
 #include <vector>
 namespace mistlane {
-struct CrossContext { std::string realm, group, room; unsigned epoch = 0; };
+struct CrossContext { std::string realm, group, room; unsigned epoch = 0; std::uint64_t session = 0; };
 inline CrossContext cross_context(std::string_view payload) {
     if (payload.size() > 256) throw std::invalid_argument("INVALID");
     std::istringstream in{std::string(payload)};

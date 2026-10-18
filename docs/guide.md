@@ -108,7 +108,7 @@ For development or a small message service, let a gameServer listen directly wit
   --transport ws --script examples/echo.lua
 ```
 
-Connect to `ws://127.0.0.1:8081/ws`. For WSS select `--transport wss` and add `--cert FILE --key FILE`; Lua still implements `message(payload) -> string`.
+Connect to `ws://127.0.0.1:8081/ws`. For WSS select `--transport wss` and add `--cert FILE --key FILE`; Lua still implements `message(payload) -> string or nil`.
 
 ### Client example and current limits
 
@@ -123,7 +123,7 @@ socket.onopen = () => socket.send(new TextEncoder().encode('hello mistlane'))
 
 Native clients use any standard WS/WSS library. The server accepts text/binary messages, replies with binary messages, and limits each payload to 1 MiB. The application defines payload encoding and message IDs; this example only echoes bytes.
 
-The current channel uses serial request/response: wait for the previous response before sending the next application message; sending ahead closes the connection. Lua APIs for unsolicited server push, broadcast and sending to a session are absent. This validates game connections and message flow; high-frequency full-duplex games still need bounded receive/send queues, session lifecycle and server push.
+A session is full duplex: client frames arrive independently of replies, so you may pipeline several requests, and each one may get no reply at all when the handler returns nil. Replies and server pushes travel through the same bounded channel — each session accepts up to about 2 MiB of queued output, and Lua reports the refusal instead of failing the handler. Server push, broadcast and send-to-session exist for game sessions as `mistlane.session.send` and `mistlane.session.broadcast`; the frame rate bucket and the output bound are the throughput limits. This validates game connections, message flow and push paths; player authentication, account binding and per-player routing are still absent.
 
 A process can also serve several protocols at once: `--transport` stays single-select for the primary listener, and each `--listener PROTO://IP:PORT` flag adds an independent extra listener (plaintext and TLS side by side; `wss`/`https` entries may append `?cert=FILE&key=FILE` to bind their own certificate). WS/WSS listeners carry game sessions like before, so the same gameServer can expose framed TCP for native clients and WS/WSS for browsers on other ports. See [HTTP listeners and the WebSocket lifecycle](./http.md#multiple-listeners-and-websocket-lifecycle) for the HTTP side.
 
@@ -190,7 +190,7 @@ For HTTPS add `--cert` and `--key`. The request table passed to Lua exposes meth
 
 ## Lua services
 
-A script returns a table with `message(payload) -> string`. Optional callbacks are `init()`, `tick()`, and `shutdown()`. Tick runs every 100ms. All callbacks execute on the node's single event-loop thread and should return quickly.
+A script returns a table with `message(payload) -> string or nil`. Optional callbacks are `init()`, `tick()`, and `shutdown()`. Tick runs every 100ms. All callbacks execute on the node's single event-loop thread and should return quickly.
 
 SIGHUP constructs and initializes a replacement VM first. A failed load retains the previous VM; a successful load resets module state. No state migration is performed. SIGTERM and SIGINT stop listeners, cancel sessions, and invoke the current module's shutdown callback.
 

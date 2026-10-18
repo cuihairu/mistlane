@@ -13,6 +13,7 @@
 #include <future>
 #include <sstream>
 #include <netinet/in.h>
+#include <sys/ioctl.h>
 
 namespace mistlane::test {
 namespace {
@@ -68,6 +69,11 @@ public:
         char ch;
         auto n = ::recv(fd_, &ch, 1, 0);
         return n == 0 || (n < 0 && errno == ECONNRESET);
+    }
+    // True when at least one byte has arrived without blocking.
+    bool pending() {
+        int bytes = 0;
+        return ::ioctl(fd_, FIONREAD, &bytes) == 0 && bytes > 0;
     }
 private:
     int fd_;
@@ -429,6 +435,10 @@ void transport_listeners() {
         const auto state = ws.read_text();
         require(state.starts_with("open=1 closed=0 "), "websocket registry state wrong: "+state);
         lifecycle_id = state.substr(state.rfind('=')+1);
+        // A lifecycle message that sends nothing must not wedge the bridge.
+        ws.text("noreply");
+        ws.text("state");
+        require(ws.read_text().starts_with("open=1 closed=0 "), "reply-less message broke the bridge");
         ws.text("oversize");
         equal(ws.read_text(), "guarded");
         ws.text("unknown");
@@ -508,6 +518,87 @@ void transport_listeners() {
         c.node("gameServer", port(), {"--script", c.path("echo.lua").string(),
             "--listener", "tcp://127.0.0.1:"+std::to_string(reused),
             "--listener", "ws://127.0.0.1:"+std::to_string(reused)}); });
+}
+// Framed game sessions carry a session identity and accept Lua pushes:
+// mistlane.session.send/broadcast deliver frames without a matching request,
+// a handler may answer nothing, and outbound pushes stay bounded per session.
+void transport_push() {
+    Context c;
+    write(c.path("push.lua"), push_lua);
+    const auto gameServer = port(), gateway = port(), ws_port = port();
+    auto& node = c.spawn({self().string(), "--role", "gameServer", "--listen", endpoint(gameServer),
+        "--script", c.path("push.lua").string(),
+        "--listener", "ws://127.0.0.1:"+std::to_string(ws_port)});
+    c.node("gateway", gateway, {"--upstream", endpoint(gameServer)});
+    const auto send_frame = [](RawSocket& raw, std::string_view payload) {
+        std::string frame(4, '\0');
+        auto length = static_cast<std::uint32_t>(payload.size());
+        for (int i = 3; i >= 0; --i) { frame[i] = static_cast<char>(length & 255); length >>= 8; }
+        raw.send(frame+std::string(payload));
+    };
+    const auto read_frame = [](RawSocket& raw) {
+        const auto header = raw.receive(4);
+        std::size_t length = 0;
+        for (unsigned char ch : header) length = (length << 8) | ch;
+        return raw.receive(length);
+    };
+    RawSocket first(gameServer);
+    send_frame(first, "self");
+    equal(read_frame(first), "session=1");
+    // A handler may answer nothing; the session must stay usable afterwards.
+    send_frame(first, "silent");
+    std::this_thread::sleep_for(300ms);
+    require(!first.pending(), "nil handler reply produced a frame");
+    send_frame(first, "self");
+    equal(read_frame(first), "session=1");
+    // Lua push reaches the client without a request; the reply follows the pushes.
+    send_frame(first, "push");
+    equal(read_frame(first), "pushed");
+    equal(read_frame(first), "done");
+    // Broadcast reaches every session; each client sees the initiator's id.
+    RawSocket second(gameServer);
+    send_frame(second, "self");
+    equal(read_frame(second), "session=2");
+    send_frame(first, "bcast");
+    equal(read_frame(second), "bc:1");
+    equal(read_frame(first), "bc:1");
+    equal(read_frame(first), "bcast=2");
+    // Push bounds: per-frame cap, unknown ids and the backlog report, not close.
+    send_frame(first, "burst 64");
+    std::string burst;
+    std::size_t pushed = 0;
+    for (;;) {
+        burst = read_frame(first);
+        if (burst.starts_with("burst=")) break;
+        require(burst.size() == 64*1024 && burst.find_first_not_of('B') == std::string::npos,
+            "pushed frame corrupted");
+        ++pushed;
+        require(pushed <= 64, "more push frames queued than attempts");
+    }
+    const auto colon = burst.find(':');
+    const auto queued = std::stoul(burst.substr(6, colon-6));
+    const auto refused = std::stoul(burst.substr(colon+1));
+    require(queued == pushed && refused > 0 && queued+refused == 64, "push bounds not enforced: "+burst);
+    // The same contract through a gateway: pushes relay unsolicited.
+    RawSocket via(gateway);
+    send_frame(via, "self");
+    equal(read_frame(via), "session=3");
+    send_frame(via, "push");
+    equal(read_frame(via), "pushed");
+    equal(read_frame(via), "done");
+    // Pushes and broadcast also work on the ws game-session leg.
+    {
+        WsRaw over(ws_port);
+        over.text("self");
+        equal(over.read_text(), "session=4");
+        over.text("push");
+        equal(over.read_text(), "pushed");
+        equal(over.read_text(), "done");
+        over.text("bcast");
+        equal(over.read_text(), "bc:4");
+        equal(over.read_text(), "bcast=4");
+    }
+    require(node.output().find("callback failed") == std::string::npos, "push path logged Lua failures");
 }
 void lua_lifecycle() {
     Context c; const auto script = c.path("service.lua"); write(script, echo);

@@ -20,9 +20,9 @@ curl --data-binary 'hello' http://127.0.0.1:8080/message
 
 gateway 的 HTTP/HTTPS 模式暴露 POST /message，body 作为 Lua payload，成功返回 200 与 application/octet-stream 正文；会话或上游失败返回 503，未知路径为 404，非允许方法由 Drogon 拒绝。HTTPS 使用 --transport https --cert FILE --key FILE。WS/WSS 支持 / 和 /ws；HTTP 与 WebSocket 也可同进程共存，见[多监听章节](#多监听与-websocket-生命周期)。
 
-HTTP 每个请求创建独立内部会话，不提供按用户固定上游的保证。WS 连接保持同一上游，必须等上一响应再发下一请求；超前发送会关闭连接。Drogon 解析请求，在有界通道中递交至 Asio，Asio 执行业务并返回结果。没有把 curl 或 Lua 放在 Trantor 线程直接执行。
+HTTP 每个请求创建独立内部会话，不提供按用户固定上游的保证。WS 游戏会话保持同一上游且全双工：请求可以流水发送，上游的主动帧（含 Lua 推送）按序到达客户端。每个方向一次只在途一帧，慢消费者因此对上游形成背压而不是无限缓冲。Drogon 解析请求，在有界通道中递交至 Asio，Asio 执行业务并返回结果。没有把 curl 或 Lua 放在 Trantor 线程直接执行。
 
-正文与 WS 消息最大 1 MiB，HTTP pipeline 配置上限为 1；Trantor 发送积压越过 2 MiB 高水位时关闭连接。高水位是越界后回调，不是严格内存分配器配额。另有连接准入和请求期限；TLS/HTTP 握手的前置阶段由 Drogon 管理，不能把内部会话的 10 秒处理超时当成所有网络阶段的总期限。上线前需对慢头部、慢正文与慢读进行压测，并按部署配置反向代理期限。
+正文与 WS 消息最大 1 MiB，HTTP pipeline 配置上限为 1；Trantor 发送积压越过 2 MiB 高水位时关闭连接。高水位是越界后回调，不是严格内存分配器配额。另有连接准入与空闲期限；TLS/HTTP 握手的前置阶段由 Drogon 管理，不能把内部会话的 10 秒首帧与 60 秒空闲期限当成所有网络阶段的总期限。上线前需对慢头部、慢正文与慢读进行压测，并按部署配置反向代理期限。
 
 这是通用消息适配器；没有迁入旧运营 HTTP API，也不提供管理认证或跨域策略。需要在应用自己的 Drogon controller/filter 中显式定义路由、认证和权限。
 

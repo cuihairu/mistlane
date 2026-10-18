@@ -64,8 +64,8 @@ The old `requesthegel2hegel` transfer passes through Gate to change the route an
 
 | Current CLI role | Implemented runtime | Remaining work |
 |---|---|---|
-| `gateway` | TCP/WS/WSS forwarding, upstream per connection; `--routing cross` selects static cross-region routing/admission | Player identity, dynamic host routes, bidirectional push and transfer integration |
-| `gameServer` | Lua message execution, lifecycle/reload, direct TCP/WS/WSS; existing HTTP adapter retained | Character/scene/instance hosting and persistence chain |
+| `gateway` | TCP/WS/WSS forwarding, upstream per connection, unsolicited push relaying; `--routing cross` selects static cross-region routing/admission | Player identity, dynamic host routes and transfer integration |
+| `gameServer` | Lua message execution, lifecycle/reload, direct TCP/WS/WSS with bounded session push/broadcast; existing HTTP adapter retained | Character/scene/instance hosting and persistence chain |
 | `crossServer` | TCP cross context, Lua execution and final connection admission | Character transfer, cross-region scenes and home-data updates |
 | `apiServer` | Lua HTTP/HTTPS hooks, HTTP by default, optional WS/WSS message transport | Platform business callbacks, reliable internal calls and multiple listeners |
 | `login`, `coordinator`, `data` | Names/responsibilities registered; CLI explicitly rejects startup as not implemented | Authentication, placement/ownership, home-data services and integration |

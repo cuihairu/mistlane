@@ -30,7 +30,6 @@ public:
         if (data.size() > max_frame) return cb(asio::error::message_size);
         sender_(std::move(data));
         finished_ = once_;
-        credit_ = true;
         cb({});
     }
     void close() override {
@@ -52,6 +51,10 @@ public:
     }
 private:
     void deliver(std::string data) {
+        // The bridge slot frees once the payload is dispatched, so a message
+        // that produces no reply (nil handler result, lifecycle message
+        // without websocket.send) still admits the next one.
+        credit_ = true;
         if (!reader_) { incoming_ = std::move(data); return; }
         auto cb = std::move(reader_); cb({}, std::move(data));
     }
