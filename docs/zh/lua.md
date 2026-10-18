@@ -153,6 +153,8 @@ end)
 
 `read` 非阻塞地拉取最多 100 条新消息，避免阻塞共享 Redis 连接；可从 `tick` 钩子轮询。`claim(stream, group, consumer, min_idle_ms, start_id, count, callback)` 使用 `XAUTOCLAIM`（Redis 6.2+）认领消费者异常退出后遗留的 pending 消息；后续分页使用上次返回的 `next` 游标。消息处理持久化成功后再调用 `ack`。这是至少一次投递，业务处理必须能容忍重复；`create_group` 可重复调用。每条消息最多 64 KiB、最多 64 组字段和值；每次 read/claim 最多 100 条。
 
+**幂等、保留、重试与死信。** 投递为至少一次：消费方在自己的处理落库之后、`ack` 之前，以 `stream + entry.id` 做去重；框架不注入自己的幂等键。框架不自动裁剪：`publish` 使用不带 `MAXLEN` 的普通 `XADD`，stream 会一直增长，直到应用自行决定——裁剪到消费组 pending 范围以下会把消息困死，因此只在 `ack` 之后裁剪，将来即便提供 `MAXLEN` 选项也必须显式给出容量依据才可开启。重试保持由应用通过 `claim` 扫描驱动（`min_idle_ms` 加游标分页），框架不做自动重试循环。不提供内置死信队列：重试耗尽后，应用把该条消息重新发布到自命名的死信 stream（例如 `mistlane:stream:<name>.dead`），该发布成功后才 `ack` 原消息。
+
 未开启 `MISTLANE_REDIS_TLS=on` 时 Redis 为明文 TCP，仅限可信内网；TLS 模式始终校验证书链和所拨地址，不提供跳过校验的选项。Boost.MySQL 与阻塞式 libcurl 尚无 Lua 绑定。跨服 context 是路由元数据，不是身份凭证。参阅[HTTP 接入](./http)和[跨服设计](./cross-server)。
 
 ## Redis 排行榜 API

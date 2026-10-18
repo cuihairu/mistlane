@@ -155,7 +155,7 @@
 - [x] 为 Streams 与排行榜 API 增加可重复执行的本地 Redis 集成验证：发布/读取字段、claim 接管 pending、ACK、排行榜增分/查询/分页/删除。证据：`tests/redis_integration.py`，通过 `MISTLANE_TEST_LOCAL_REDIS=ON` 启用。
 - [x] 扩展 Redis 集成验证，覆盖消费组重复创建、断线重连和热重载期间旧 Lua 回调失效。证据：2026-10-18 `src/test_databases.cpp`/`src/test_fixtures.hpp` 扩展 redis.lua 用例——SIGSTOP 冻结 Redis 后挂起 stream 回调、SIGHUP 换 VM、SIGCONT 后旧回调被丢弃且新 VM 状态保持纯净；SIGKILL 后同端口重启 Redis，worker 自动重连并可继续收发；`mistlane test --case redis.lua` 5/5 通过，完整 ctest 12/12 绿，双语 validation.md 更新，docs:build 通过。
 - [x] 增加 Redis TLS 与 CA/主机名校验配置；在实现前仅使用可信内网 Redis，并确保文档保持此限制说明。证据：2026-10-18 `RedisRuntime` 构造自管 `asio::ssl::context`——`MISTLANE_REDIS_TLS=on` 启用 TLS，强制 `verify_peer|verify_fail_if_no_peer_cert`，按所拨名称做证书链+主机名/IP SAN 校验（无跳过校验选项；Boost.Redis 自身不做任何证书校验，故校验由适配层持有），`MISTLANE_REDIS_CA=FILE` 指定信任锚；新增 `redis.tls` 用例（同名+IP SAN 通过、错误 CA 拒绝、缺 IP SAN 的主机名不匹配拒绝），5/5 稳定，完整 ctest 12/12 绿；明文默认仍限可信内网，双语 lua.md/migration-status.md/validation.md 更新，docs:build 通过。
-- [ ] 评估 Stream 消息幂等键、保留/裁剪策略、失败重试与死信队列配置；确认默认值前不自动裁剪或 ACK。
+- [x] 评估 Stream 消息幂等键、保留/裁剪策略、失败重试与死信队列配置；确认默认值前不自动裁剪或 ACK。证据：2026-10-18 决策写入双语 docs/lua.md Streams 契约段——幂等由消费方以 `stream + entry.id` 在处理落库后、ack 前去重，框架不注入幂等键；保留/裁剪默认不自动 `XTRIM`/`MAXLEN`（裁到 pending 以下会困死消息，只在 ack 后由应用裁剪，未来 MAXLEN 选项须显式开启）；重试保持 claim 扫描（min_idle_ms+游标），无自动重试循环；无内置死信队列，应用重试耗尽后自发布到死信 stream 并在发布成功后才 ack。未改任何行为，docs:build 通过。
 - [ ] 为日志功能确定最小需求：结构化字段、级别、并发写入、轮转和采集边界；优先评估 Boost.Log 作为跨角色统一设施。
 - [ ] 对旧监控/系统信息 API 的调用方做只读盘点，决定是否需要 Prometheus/OpenTelemetry 适配。
 - [ ] 逐个筛查候选 Lua 通用工具的全局依赖、游戏术语、外部库和来源授权，再决定提取或排除。
