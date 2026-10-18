@@ -19,6 +19,7 @@ Validated on 2026-10-17; Redis additions and the HTTP/HTTPS, Lua HTTP worker and
 | Query values and TLS | Passed quote/backslash binding and CA/hostname-verified TLS |
 | Database authentication error | Passed failure within the configured acquisition deadline |
 | Redis Streams and leaderboard | Passed local Redis end-to-end Lua checks for idempotent consumer groups, publish/read, pending claim + ACK, score increment, rank/get, top page and removal |
+| Crash drill (minidump) | `mistlane-crash-sample` performs a controlled null dereference through the same local-only pipeline: the crashpad database receives a real minidump (over 4 KiB starting with the `MDMP` magic), the sample exits from `SIGSEGV`, and no handler process is left behind (`mistlane test --case crashpad.minidump`, four consecutive passes) |
 | Documentation | VitePress 1.6.4 with patched Vite 6.4.4 built both locales using pnpm 10.33.0; all 10 pages have the expected language/navigation/repository links |
 | Documentation dependency audit | pnpm audit reported zero advisories after the Vite override |
 | Source package | Allowlist and SHA256 checksum verification passed; no original game directories or Git history |

@@ -136,6 +136,9 @@ public:
     // Launcher-style children deliberately leave descendants (daemons) behind;
     // opt out of the group kill for those.
     void reap_descendants(bool enabled) { reap_ = enabled; }
+    // Process group of the spawned child, 0 once reaped; tests use it to clean
+    // up descendants that deliberately outlive their leader.
+    pid_t group() const { return group_; }
 private:
     pid_t pid_ = 0, group_ = 0; bool reap_ = true;
     std::optional<int> result_;

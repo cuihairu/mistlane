@@ -174,7 +174,7 @@
 - [x] 在创建网络与 Lua 服务前初始化 Crashpad；annotation 仅含 role 和产品名。
 - [x] Crashpad 不传入上传 URL，并显式关闭数据库上传设置；目录权限、磁盘配额、轮转/清理策略和运维提取方式仍待定义。
 - [x] 为 Linux Crashpad handler 增加部署复制/安装规则，并检查静态链接、运行库和容器 ptrace/seccomp 限制。证据：2026-10-18 CMakeLists 增加 GNUInstallDirs 安装规则——`cmake --install` 把 `mistlane` 与 vcpkg `crashpad_handler` 并排装进 `PREFIX/bin`；实测两者仅依赖 glibc/libstdc++/libgcc_s/libm（第三方全静态）；安装的 handler 配合服务端通过 `mistlane test --suite crashpad`；双语 guide 新增 Crashpad 部署约定（同目录+本地数据库+上传关闭+按保留策略定容），migration-status 崩溃报告行与双语 validation 记录冒烟结果；容器限制记录为 ptrace 必需（Docker 默认 profile 在受支持内核放行，加固/无特权/自定义 AppArmor|seccomp 可能拒绝——被拒时节点照常服务但不写 minidump，依赖 dump 前须先做受控崩溃演练）。
-- [ ] 增加独立崩溃样例程序，在隔离临时目录触发可控 native crash，断言 Crashpad 生成可识别 minidump 后清理文件。
+- [x] 增加独立崩溃样例程序，在隔离临时目录触发可控 native crash，断言 Crashpad 生成可识别 minidump 后清理文件。证据：2026-10-18 新增 `examples/crash_sample.cpp`（同款本地管线：本地数据库+上传关闭+StartHandler，随后解引用空指针）与 `mistlane-crash-sample` 目标（随 `mistlane` 一起安装到 `bin/`）；原生 `crashpad.minidump` 用例在隔离临时目录断言数据库递归出现大于 4 KiB 且以 `MDMP` 魔数开头的真实 minidump、样例进程以 128+SIGSEGV 退出、handler 组显式清理无残留（test_support Child 增加 `group()` 访问器并关组清理）；`mistlane test --suite crashpad` 2/2、单用例连续四次通过，完整 ctest 12/12 绿；双语 guide/validation/migration-status 更新，docs:build 通过。
 - [ ] 为 release 与调试构建归档匹配的未剥离符号/Build ID，记录用 minidump_stackwalk 符号化的复现步骤。
 - [x] 实现 Prometheus Registry 与 role 低基数标签，不使用玩家、房间、会话 ID 作为 label。
 - [x] 添加可配置 metrics 监听地址和端口，默认禁用；单独监听，不复用玩家协议端口。

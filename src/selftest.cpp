@@ -16,6 +16,7 @@ void cross_admission();
 void scaffold_init();
 void cli_bot();
 void crashpad_startup(const fs::path&);
+void crashpad_minidump(const fs::path&);
 void redis_lua_api();
 void redis_tls();
 void mysql_pool();
@@ -74,6 +75,7 @@ int run_tests(int argc, char** argv) {
         {"scaffold.init","scaffold",test::scaffold_init},
         {"cli.bot","cli",test::cli_bot},
         {"crashpad.startup","crashpad",[&] {test::crashpad_startup(handler);},true},
+        {"crashpad.minidump","crashpad",[&] {test::crashpad_minidump(handler);},true},
         {"redis.lua","redis",test::redis_lua_api,true},
         {"redis.tls","redis",test::redis_tls,true},
         {"mysql.pool","mysql",test::mysql_pool,true},

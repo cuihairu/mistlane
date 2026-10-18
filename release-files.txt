@@ -29,6 +29,7 @@ docs/zh/http.md
 docs/zh/index.md
 docs/zh/lua.md
 docs/zh/validation.md
+examples/crash_sample.cpp
 examples/cross.lua
 examples/echo.lua
 examples/http.lua
