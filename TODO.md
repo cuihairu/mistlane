@@ -145,7 +145,7 @@
 - [x] 若存在阻塞任务需求，先评估 `boost::asio::thread_pool`；只为其补充任务准入上限、拒绝策略、取消和关闭适配，不另造线程调度器。证据：2026-10-18 评估结论为当前无阻塞任务需求（src 下无 asio::thread_pool 实例化；curl 适配器仅 cli_client 同步 CLI 调用并在契约中禁止入事件循环；MySQL/Redis 全异步），thread_pool 保持指定载体不落地，出现需求时按准入上限/拒绝策略/取消/关闭四项补充适配；migration-status.md 行已记录，docs:build 通过。
 - [x] 比较旧 Lua Timer/TimerQueue 的接口与候选 tick 钩子，确定是否需要 cancellable timeout/interval API。证据：2026-10-18 核对 `game/Util/Timer.lua`（setTimeout/setInterval/remove/内建堆+近期数组、TIMER_LIMIT=100000、MAX_DELAY=5000、xpcall、`xx1` 哨兵自删）与 `TimerQueue.lua`（TimerHeap/TimerArr 双结构、墙钟驱动）；决策为不加 cancellable timeout/interval API：框架内部无消费者且旧需求属应用域，日后确需时按 steady_timer 薄适配+显式契约实现；双语 migration-status.md 行已更新，docs:build 通过。
 - [x] 若增加 Lua 定时器 API，为单次、周期、取消、回调异常和重载行为分别定义契约。证据：2026-10-18 前置条件已由上一条决策否定（暂不增加 Lua 定时器 API），契约工作随之搁置；migration-status.md 定时器行已写明日后实现时的四项先行契约（句柄/取消/错误策略/重载销毁+有界），docs:build 通过。
-- [ ] 对旧 UDP API 的实际调用点做只读盘点；若仍需要，使用 Boost.Asio UDP socket 实现最薄的协议适配。
+- [x] 对旧 UDP API 的实际调用点做只读盘点；若仍需要，使用 Boost.Asio UDP socket 实现最薄的协议适配。证据：2026-10-18 盘点 `WorldServer.cpp:355`/`CAPI.cpp:147`（唯一服务端实例化 `C_openUdpServer`）、`game/Common/CService/Server/WorldService.lua:99-100`（唯一 Lua 调用点已注释）、`UdpClient`/`L_onUdpClientMsg`/`L_onUdpServerMsg` net 层外零调用方；结论为旧 UDP 属死代码、无需薄适配，保留"用例确认后再加公开 API"；双语 migration-status.md 行已更新，docs:build 通过。
 - [x] 对旧 Redis C/Lua API 的调用点做只读盘点，并基于 Boost.Redis 的 RESP3、断线重连和 Sentinel 能力确定集成边界。证据：Redis 适配集中在 Asio worker，Drogon Redis 未启用。
 - [x] 检查当前 vcpkg baseline 是否提供所需 Boost.Redis port/feature，并记录解析出的精确版本。证据：`boost-redis` 1.92.0 已配置并由 vcpkg 成功安装。
 - [x] 比较 Boost.Redis 与 Drogon Redis 在 worker 线程归属、连接生命周期和配置方式上的差异，选定一个默认实现，避免重复集成。决策：选 Boost.Redis，与现有 Asio/Lua 线程归属一致。
