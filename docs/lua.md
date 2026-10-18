@@ -1,13 +1,13 @@
 # Lua services and the complete lifecycle
 
-C++ owns networking/scheduling; Lua owns application logic. Each worker/shard has one VM, invoked serially on its Asio thread. Drogon/Trantor parses HTTP/TLS/WS and submits bounded work without entering Lua concurrently.
+C++ owns networking/scheduling; Lua owns application logic. Each gameServer/crossServer has one VM, invoked serially on its Asio thread. Drogon/Trantor parses HTTP/TLS/WS and submits bounded work without entering Lua concurrently.
 
 ## Module contract
 
 Return a table from the script. TCP/WS/WSS workers and shards require message; HTTP/HTTPS workers require http and may omit message. Hooks are plain functions without an implicit self argument: use dot definitions rather than colon methods.
 
 ```sh
-build/debug/mistlane --role worker --listen 127.0.0.1:8080 --transport http --script examples/http.lua
+build/debug/mistlane --role apiServer --listen 127.0.0.1:8080 --transport http --script examples/http.lua
 curl http://127.0.0.1:8080/healthz
 curl --data-binary 'hello' http://127.0.0.1:8080/echo
 ```
@@ -36,7 +36,7 @@ stateDiagram-v2
 | Script top level | None / module table | Startup and reload; validate required handler for the transport |
 | init | context / ignored | Once after validation; context has role, transport, epoch |
 | start | None / ignored | Listener ready, before ready is published; failure aborts startup/reload |
-| message | payload, context / string | Non-HTTP messages; shard context has realm/group/room/epoch, ordinary workers receive nil |
+| message | payload, context / string | Non-HTTP messages; crossServer context has realm/group/room/epoch, ordinary workers receive nil |
 | before_request | req / nil or response | Before HTTP handler; a response short-circuits http |
 | http | req / response table | Main HTTP handler |
 | after_request | req, response / nil or response | After successful handler or short circuit; mutate response or return a replacement |
@@ -88,7 +88,7 @@ Responses have status (integer 200–599, default 200), body (string, default em
 
 Flow: before_request → http unless short-circuited → after_request → response. Short circuits still run after_request. Any callback/validation error jumps to on_error without another after_request call. Missing/failing/invalid on_error produces a generic 500 without traceback disclosure; details go to logs. Transport/admission failures can occur before Lua runs.
 
-Lua HTTP workers receive generic paths and select routes in http, explicitly returning 404/405 as needed. GET/POST/PUT/DELETE/PATCH/OPTIONS/HEAD are forwarded; HEAD body handling belongs to HTTP. Raw sockets, streaming, coroutine yields and WebSocket upgrades are not exposed. HTTP gateway/router mode remains a POST /message body-forwarding adapter; use an HTTP worker directly or extend the gateway protocol for full HTTP semantics.
+Lua HTTP workers receive generic paths and select routes in http, explicitly returning 404/405 as needed. GET/POST/PUT/DELETE/PATCH/OPTIONS/HEAD are forwarded; HEAD body handling belongs to HTTP. Raw sockets, streaming, coroutine yields and WebSocket upgrades are not exposed. HTTP gateway mode remains a POST /message body-forwarding adapter; use an apiServer directly or extend the gateway protocol for full HTTP semantics.
 
 ## SIGHUP replacement
 
@@ -121,7 +121,7 @@ Protected calls install an instruction-count hook at about one million Lua instr
 
 ## Redis Streams queue API
 
-Start a worker with `--redis 127.0.0.1:6379` to enable the asynchronous `mistlane.stream` Lua API. Optional ACL credentials come from `MISTLANE_REDIS_USERNAME` and `MISTLANE_REDIS_PASSWORD`; do not put passwords on the command line. Set `MISTLANE_REDIS_TLS=on` to connect over TLS; the server certificate chain and the dialed name (DNS name or IP) are always verified. `MISTLANE_REDIS_CA=FILE` pins the trust anchor (falls back to system default verify paths when unset). Without `MISTLANE_REDIS_TLS=on` the connection is plaintext Redis TCP and must stay on a trusted private network. Stream keys are isolated under `mistlane:stream:<name>`. Redis requests and callbacks run on the node's Asio thread, so a callback can safely use the same Lua VM. These calls do not block or yield the current Lua handler.
+Start a gameServer with `--redis 127.0.0.1:6379` to enable the asynchronous `mistlane.stream` Lua API. Optional ACL credentials come from `MISTLANE_REDIS_USERNAME` and `MISTLANE_REDIS_PASSWORD`; do not put passwords on the command line. Set `MISTLANE_REDIS_TLS=on` to connect over TLS; the server certificate chain and the dialed name (DNS name or IP) are always verified. `MISTLANE_REDIS_CA=FILE` pins the trust anchor (falls back to system default verify paths when unset). Without `MISTLANE_REDIS_TLS=on` the connection is plaintext Redis TCP and must stay on a trusted private network. Stream keys are isolated under `mistlane:stream:<name>`. Redis requests and callbacks run on the node's Asio thread, so a callback can safely use the same Lua VM. These calls do not block or yield the current Lua handler.
 
 ```lua
 mistlane.stream.create_group("mail", "workers", function(err)
@@ -133,7 +133,7 @@ mistlane.stream.publish("mail", { kind = "reward", player = "p-17" }, function(e
   print("published", id)
 end)
 
-mistlane.stream.read("mail", "workers", "worker-1", 20, function(err, entries)
+mistlane.stream.read("mail", "workers", "gameServer-1", 20, function(err, entries)
   if err then return print(err) end
   for _, entry in ipairs(entries) do
     print(entry.id, entry.fields.kind, entry.fields.player)

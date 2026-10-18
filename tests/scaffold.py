@@ -15,11 +15,11 @@ with tempfile.TemporaryDirectory() as temp:
     expected = {
         "README.md", "scripts/echo.lua", "scripts/http.lua", "scripts/cross.lua",
         "run-local.sh", "run-cross-local.sh", "ops/run-instance.sh", "ops/cluster.sh",
-        "ops/systemd/mistlane@.service", "config/instances/worker.env",
-        "config/instances/router.env", "config/instances/gateway.env",
+        "ops/systemd/mistlane@.service", "config/instances/gameServer.env",
+        "config/instances/gateway.env",
         "config/instances/gateway-ws.env", "config/instances/gateway-wss.env",
-        "config/instances/shard-a.env", "config/instances/shard-b.env",
-        "config/instances/cross.env", "config/instances/http.env",
+        "config/instances/crossServer-a.env", "config/instances/crossServer-b.env",
+        "config/instances/gateway-cross.env", "config/instances/apiServer.env",
     }
     actual = {p.relative_to(root).as_posix() for p in root.rglob("*") if p.is_file()}
     assert actual == expected, actual
@@ -60,9 +60,9 @@ with tempfile.TemporaryDirectory() as temp:
     assert args[args.index("--cert") + 1] == str(cert)
     assert args[args.index("--key") + 1] == str(key)
     assert args[args.index("--transport") + 1] == "wss"
-    assert args[args.index("--upstream") + 1] == "127.0.0.1:7101"
+    assert args[args.index("--upstream") + 1] == "127.0.0.1:7102"
 
-    # Run the generated worker configuration with the just-built binary and
+    # Run the generated gameServer configuration with the just-built binary and
     # verify the project-relative Lua script path is resolved correctly.
     import os
     import socket
@@ -71,7 +71,7 @@ with tempfile.TemporaryDirectory() as temp:
     env = os.environ.copy()
     env["MISTLANE_BIN"] = binary
     manager = [str(root / "ops/cluster.sh")]
-    subprocess.run(manager + ["start", "worker"], cwd=root, env=env,
+    subprocess.run(manager + ["start", "gameServer"], cwd=root, env=env,
                    check=True, capture_output=True, text=True)
     try:
         deadline = time.monotonic() + 5
@@ -80,10 +80,10 @@ with tempfile.TemporaryDirectory() as temp:
                 sock = socket.create_connection(("127.0.0.1", 7102), timeout=.2)
                 break
             except OSError:
-                status = subprocess.run(manager + ["status", "worker"], cwd=root, env=env,
+                status = subprocess.run(manager + ["status", "gameServer"], cwd=root, env=env,
                                         capture_output=True, text=True)
-                if "worker stopped" in status.stdout or time.monotonic() >= deadline:
-                    raise AssertionError("generated worker did not start")
+                if "gameServer stopped" in status.stdout or time.monotonic() >= deadline:
+                    raise AssertionError("generated gameServer did not start")
                 time.sleep(.05)
         with sock:
             payload = b"template-path-check"
@@ -91,7 +91,7 @@ with tempfile.TemporaryDirectory() as temp:
             assert sock.recv(4) == struct.pack("!I", len(payload))
             assert sock.recv(len(payload)) == payload
     finally:
-        subprocess.run(manager + ["stop", "worker"], cwd=root, env=env,
+        subprocess.run(manager + ["stop", "gameServer"], cwd=root, env=env,
                        check=True, capture_output=True, text=True)
 
     sentinel = root / "keep.txt"

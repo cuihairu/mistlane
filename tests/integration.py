@@ -52,6 +52,10 @@ def start(role, listen, *args):
     raise AssertionError('startup timeout')
 
 
+def start_cross_gateway(listen, *args):
+    return start('gateway', listen, '--routing', 'cross', *args)
+
+
 def connect(p):
     return socket.create_connection(('127.0.0.1', p), timeout=5)
 
@@ -122,8 +126,8 @@ try:
         script = Path(temp) / 'service.lua'
         script.write_text('return {message = function(p) return p end}')
         worker, router, gateway, metrics = port(), port(), port(), port()
-        wp, wl = start('worker', worker, '--script', str(script), '--metrics-listen', f'127.0.0.1:{metrics}')
-        start('router', router, '--upstream', f'127.0.0.1:{worker}')
+        wp, wl = start('gameServer', worker, '--script', str(script), '--metrics-listen', f'127.0.0.1:{metrics}')
+        start('gateway', router, '--upstream', f'127.0.0.1:{worker}')
         start('gateway', gateway, '--upstream', f'127.0.0.1:{router}')
         client = http.client.HTTPConnection('127.0.0.1', metrics, timeout=5)
         try:
@@ -131,7 +135,7 @@ try:
             response = client.getresponse()
             metrics_body = response.read().decode()
             assert response.status == 200
-            assert 'mistlane_ready{role="worker"} 1' in metrics_body
+            assert 'mistlane_ready{role="gameServer"} 1' in metrics_body
         finally:
             client.close()
         with connect(gateway) as sock:
@@ -151,9 +155,9 @@ try:
             try:
                 client.request('GET', '/metrics')
                 metrics_body = client.getresponse().read().decode()
-                active = re.search(r'mistlane_active_sessions\{role="worker"\} ([\d.]+)', metrics_body)
+                active = re.search(r'mistlane_active_sessions\{role="gameServer"\} ([\d.]+)', metrics_body)
                 assert active and float(active.group(1)) >= 1
-                callback_count = re.search(r'mistlane_lua_callback_seconds_count\{role="worker"\} (\d+)', metrics_body)
+                callback_count = re.search(r'mistlane_lua_callback_seconds_count\{role="gameServer"\} (\d+)', metrics_body)
                 assert callback_count and int(callback_count.group(1)) > 0
             finally:
                 client.close()
@@ -199,7 +203,7 @@ try:
             options = ['--transport', transport, '--script', str(script)]
             if transport == 'wss':
                 options += ['--cert', str(cert), '--key', str(key)]
-            start('worker', direct_port, *options)
+            start('gameServer', direct_port, *options)
             with websocket_connect(direct_port, context if transport == 'wss' else None, '/ws') as sock:
                 ws_send(sock, b'game-message\x00\xff')
                 assert ws_message(sock) == b'game-message\x00\xff'
@@ -239,7 +243,7 @@ try:
         web_script = Path(temp)/'http.lua'
         web_script.write_text("""
 local M = {}
-function M.init(c) assert(c.role=='worker' and c.transport=='http'); print('HOOK init v1') end
+function M.init(c) assert(c.role=='apiServer' and c.transport=='http'); print('HOOK init v1') end
 function M.start() print('HOOK start v1') end
 function M.before_request(r)
   r.verified = true
@@ -269,7 +273,7 @@ function M.shutdown() print('HOOK shutdown v1') end
 return M
 """)
         lua_http_port = port()
-        web_process, web_log = start('worker', lua_http_port, '--transport', 'http', '--script', str(web_script))
+        web_process, web_log = start('apiServer', lua_http_port, '--transport', 'http', '--script', str(web_script))
         def lua_http(path, payload=None, headers=None):
             conn = http.client.HTTPConnection('127.0.0.1', lua_http_port, timeout=5)
             conn.request('POST' if payload is not None else 'GET', path, body=payload, headers=headers or {})
@@ -307,11 +311,11 @@ return M
         cross_script = Path(temp)/'cross.lua'
         cross_script.write_text('return {message=function(p,c) return c.realm..":"..c.group.."/"..c.room..":"..p end}')
         s0, s1, cp, cp2 = port(), port(), port(), port()
-        shard0, _ = start('shard', s0, '--script', str(cross_script), '--max-room-sessions', '2')
-        start('shard', s1, '--script', str(cross_script), '--max-room-sessions', '2')
+        shard0, _ = start('crossServer', s0, '--script', str(cross_script), '--max-room-sessions', '2')
+        start('crossServer', s1, '--script', str(cross_script), '--max-room-sessions', '2')
         upstreams = ['--upstream', f'127.0.0.1:{s0}', '--upstream', f'127.0.0.1:{s1}']
-        start('cross', cp, *upstreams, '--max-room-sessions', '2')
-        start('cross', cp2, *upstreams, '--max-room-sessions', '2')
+        start_cross_gateway( cp, *upstreams, '--max-room-sessions', '2')
+        start_cross_gateway( cp2, *upstreams, '--max-room-sessions', '2')
         def shard_index(room):
             h = 14695981039346656037
             for ch in ('g/'+room).encode(): h = ((h ^ ch)*1099511628211) & ((1<<64)-1)
@@ -375,7 +379,7 @@ return M
         bad.write_text('return {message=function(p) if p=="error" then error("bad") end '
                        'if p=="loop" then while true do end end return p end}')
         bad_port = port()
-        start('worker', bad_port, '--script', str(bad))
+        start('gameServer', bad_port, '--script', str(bad))
         for value in (b'error', b'loop'):
             with connect(bad_port) as s:
                 s.sendall(struct.pack('!I', len(value)) + value)
@@ -391,7 +395,7 @@ return M
                         'assert(h:pop()==1 and h:pop()==2 and h:pop()==3)\n'
                         'return {message=function(p) return p end}')
         hp = port()
-        start('worker', hp, '--script', str(heap))
+        start('gameServer', hp, '--script', str(heap))
         with connect(hp) as s:
             assert request(s, b'heap') == b'heap'
         # Session affinity: requests on one session stay at the selected worker.
@@ -400,9 +404,9 @@ return M
         a.write_text('return {message=function(p) return "a" end}')
         b.write_text('return {message=function(p) return "b" end}')
         ap, bp, rp = port(), port(), port()
-        start('worker', ap, '--script', str(a))
-        start('worker', bp, '--script', str(b))
-        start('router', rp, '--upstream', f'127.0.0.1:{ap}', '--upstream', f'127.0.0.1:{bp}')
+        start('gameServer', ap, '--script', str(a))
+        start('gameServer', bp, '--script', str(b))
+        start('gateway', rp, '--upstream', f'127.0.0.1:{ap}', '--upstream', f'127.0.0.1:{bp}')
         with connect(rp) as s:
             assert request(s, b'x') == b'a'
             assert request(s, b'x') == b'a'
@@ -416,10 +420,10 @@ return M
             assert s.recv(1) == b''
         # CLI validation must fail before starting a process.
         for args in (['--role', 'invalid'], ['--listen', '127.0.0.1:65536'],
-                     ['--role', 'worker'], ['--role', 'gateway'], ['--max-connections', '0']):
+                     ['--role', 'gameServer'], ['--role', 'gateway'], ['--max-connections', '0']):
             assert subprocess.run([binary, *args], capture_output=True, timeout=3).returncode != 0
         limited = port()
-        start('worker', limited, '--script', str(root/'examples/echo.lua'), '--max-connections', '1')
+        start('gameServer', limited, '--script', str(root/'examples/echo.lua'), '--max-connections', '1')
         with connect(limited) as first:
             assert request(first, b'first') == b'first'
             with connect(limited) as extra:

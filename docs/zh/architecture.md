@@ -1,24 +1,42 @@
-# 架构与迁移边界
+# 架构与实现边界
 
-## 总体架构
+## 目标游戏服务架构
+
+以下是职责设计，**尚未完整实现**。每个方框表示服务职责；具体可用一个二进制按角色启动。实线表示目标消息/数据路径，虚线表示分配和路由信息；各边不代表具体事务已实现。完整边界见[进程职责与命名](./process-roles.md)。coordinator 分别服务区服或跨服组，不是所有游戏消息的中转站。
 
 ```mermaid
-flowchart LR
-  client["客户端 / Client"] -->|TCP| gateway["gateway / router"]
-  web["浏览器 / Web client"] -->|HTTP · HTTPS · WS · WSS| dg["Drogon / Trantor"]
-  dg -->|有界消息 / Bounded messages| node["Asio 节点循环 / Node loop"]
-  gateway -->|内部 TCP / Internal TCP| node
-  node --> lua["Lua VM · 单线程 / Single thread"]
-  node --> db["Boost.MySQL connection_pool"]
-  node --> redis["Boost.Redis · 有界异步请求"]
-  lua --> data["Streams 队列 / 排行榜"]
-  data --> redis
-  redis --> store[(Redis)]
-  app["应用工作线程 / Application executor"] --> curl["libcurl HTTP client"]
-  curl --> remote["外部 HTTP 服务 / Remote service"]
+flowchart TB
+  client["客户端"] <--> gate["gateway · 连接与消息转发"]
+  gate <--> login["login · 认证与角色选择"]
+  gate <--> game["gameServer · 本服角色与场景"]
+  gate <--> cross["crossServer · 跨服角色与场景"]
+  coord["coordinator · 分配、归属与切换协调"] -. "路由信息" .-> gate
+  login -. "请求分配" .-> coord
+  coord -. "承载分配" .-> game
+  coord -. "承载分配" .-> cross
+  game <--> data["data · 加载、缓存与持久化"]
+  cross <--> data
 ```
 
-MySQL 与 curl 仍为 C++ 应用扩展。Redis 为可选能力，worker Lua 可调用有界异步 Streams 队列和 sorted-set 排行榜 API。
+data 表示按角色数据归属寻址的服务职责，不是一台所有区服共享的数据库。crossServer 的长期变更回传原区服 data；具体协议与确认语义待实现，图中的访问边不授予双写权限。apiServer 是可选外部系统接入职责，完整回调链见[HTTP 与 WebSocket](./http.md)。
+
+## 当前可运行原型
+
+当前提供通用转发、Lua 执行和 gateway cross routing/crossServer 路由实验，未完整抽取老游戏的 World 协调、角色与场景运行能力。现有跨服静态路由不等于 World 协调能力。
+
+```mermaid
+flowchart TB
+  tcp["TCP 客户端"] --> forward["gateway · 转发"]
+  ws["WS / WSS 客户端"] --> forward
+  forward -->|内部 TCP| adapters
+  direct["直连 TCP / WS / WSS 客户端"] --> adapters
+  subgraph runtime["gameServer 执行进程内部"]
+    adapters["Asio TCP / Drogon Web 适配"] -->|有界递交| owner["Asio 所属线程"]
+    owner --> lua["Lua message 或 http"]
+  end
+```
+
+图中单列执行进程内部的库、线程和回调，避免把 Drogon 当成独立游戏服务。直接连接 gameServer 与经过 gateway 均可；当前每进程只能选择一个 --transport，图中的协议是可选项，不是并行监听。gameServer 的 HTTP 模式走 Lua http，WS/WSS 游戏消息走 Lua message；HTTP/HTTPS 与 WS/WSS 共存仍待实现。MySQL、curl 目前是 C++ 接口；Redis Lua API 已提供部分有界异步能力。
 
 ## 代码组织
 
@@ -41,7 +59,7 @@ MySQL 与 curl 仍为 C++ 应用扩展。Redis 为可选能力，worker Lua 可�
 
 每个节点有一个 Asio 线程，执行内部 TCP、计时、信号和 Lua 回调。Web 接入另由 Drogon/Trantor 事件循环处理 HTTP/TLS/WS；每会话最多递交一条待处理消息至 Asio，禁止两套循环并发访问 Lua VM。WS 请求必须逐条等待响应，抢发请求会关闭会话。
 
-gateway 与 router 的差别是部署角色及拓扑位置，当前运行机制相同：新连接按 upstream 列表轮询；一个下游会话对应一个上游 TCP 连接。每次完整请求获得完整响应后才继续读取下一个请求，因此没有无限发送队列。WS/WSS 由 Drogon 解析完整消息再转为内部 TCP 帧。连接固定到某个上游；重新连接可能选到另一上游，不具备按玩家 ID 路由的保证。
+gateway 的当前运行机制为：新连接按 upstream 列表轮询；一个下游会话对应一个上游 TCP 连接。每次完整请求获得完整响应后才继续读取下一个请求，因此没有无限发送队列。WS/WSS 由 Drogon 解析完整消息再转为内部 TCP 帧。连接固定到某个上游；重新连接可能选到另一上游，不具备按玩家 ID 路由的保证。
 
 TCP：`u32 big-endian length | payload`。WS：一条消息即一个 payload，允许二进制与文本输入，输出为二进制消息。payload 上限为 1 MiB。请求 / 响应顺序一致，协议里没有业务消息 ID、账号 ID 或服务注册数据。
 
@@ -61,7 +79,7 @@ TCP：`u32 big-endian length | payload`。WS：一条消息即一个 payload，�
 | FogsProcess / FogsServer / LuaCallHandler | 保留进程职责和生命周期设计，重新实现为 Node / LuaService |
 | TcpConn / SendBuffer / WebSocket / WebSocketSecure | 新 TCP 帧；WS/WSS 全部交由 Drogon；旧协议不兼容 |
 | ServerConnBase | 当前为会话级上游连接；未迁移共享连接、注册握手或自动重连 |
-| d_gateway / d_world / d_hegel | 通用 gateway / router / worker 三角色；剥离玩家、场景和全局业务 |
+| d_gateway / d_world / d_hegel | 只实现通用转发与执行；World 协调和 Hegel 角色/场景能力没有完整迁入；目标职责见进程职责页 |
 | TokenBucket | 重写为单调时钟累积令牌，修正旧实现覆盖已有令牌等问题 |
 | game/Util/MinHeap.lua | 保留排序算法，改为模块导出；满容量时保留较大元素的原语义不变 |
 | SQL / 手工连接管理 | 用 Boost.MySQL 的连接池与参数绑定替代；未迁移旧表结构或脏写逻辑 |
@@ -85,4 +103,7 @@ Lua 脚本属于可信应用代码；指令 hook 仅辅助定位典型死循环�
 
 ## 专题文档
 
-[Lua 生命周期](./lua)描述钩子和重载；[跨服与过载保护](./cross-server)描述原生 cross/shard、固定房间路由与硬准入；[HTTP 接入](./http)描述 Drogon 与 libcurl。
+[Lua 生命周期](./lua)描述钩子和重载；[跨服与过载保护](./cross-server)描述原生 gateway cross routing/crossServer、固定房间路由与硬准入；[HTTP 接入](./http)描述 Drogon 与 libcurl。
+
+
+角色转移、归属保存与地图加载边界见[玩家、场景与跨服模型](./player-scene-model.md)。

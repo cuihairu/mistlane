@@ -17,7 +17,7 @@ void redis_lua_api() {
         try { auto connection=tcp(redis_port); return true; } catch (const std::exception&) { return false; }
     });
     write(c.path("redis.lua"),redis_lua);
-    auto& node=c.node("worker",worker,{"--script",c.path("redis.lua").string(),"--redis",endpoint(redis_port)});
+    auto& node=c.node("gameServer",worker,{"--script",c.path("redis.lua").string(),"--redis",endpoint(redis_port)});
     auto client=tcp(worker);
     auto fields=[](const std::string& value) {
         std::vector<std::string> result; std::istringstream in(value); std::string item;
@@ -86,7 +86,7 @@ void redis_tls() {
     write(c.path("redis.lua"),redis_lua);
     auto worker=[&](unsigned redis_listen, const std::string& host) {
         const unsigned own=port();
-        auto& child=c.node("worker",own,{"--script",c.path("redis.lua").string(),
+        auto& child=c.node("gameServer",own,{"--script",c.path("redis.lua").string(),
             "--redis",host+":"+std::to_string(redis_listen)});
         return std::pair<Child&,unsigned>{child,own};
     };

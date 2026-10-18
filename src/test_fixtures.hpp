@@ -74,7 +74,7 @@ return {
 )fixture";
 inline constexpr std::string_view http_lua = R"fixture(
 local M = {}
-function M.init(c) assert(c.role=='worker' and c.transport=='http'); print('HOOK init v1') end
+function M.init(c) assert(c.role=='apiServer' and c.transport=='http'); print('HOOK init v1') end
 function M.start() print('HOOK start v1') end
 function M.before_request(r)
   r.verified = true
@@ -101,6 +101,61 @@ end
 function M.tick() end
 function M.stop() print('HOOK stop v1') end
 function M.shutdown() print('HOOK shutdown v1') end
+return M
+)fixture";
+// One process serving both Lua HTTP and the websocket lifecycle: /state and
+// /echo stay with the HTTP service, everything else exercises the websocket
+// contract (echo, push bounds, registry bookkeeping, lua failure handling).
+inline constexpr std::string_view websocket_lua = R"fixture(
+local open, closed = {}, {}
+local M = {}
+function M.websocket_open(id, path)
+  open[id] = path
+  print('WSHOOK open '..id..' '..path)
+end
+function M.websocket_message(id, payload)
+  if payload == 'state' then
+    local n, m = 0, 0
+    for _ in pairs(open) do n = n + 1 end
+    for _ in pairs(closed) do m = m + 1 end
+    assert(mistlane.websocket.send(id, 'open='..n..' closed='..m..' id='..id))
+  elseif payload:sub(1, 5) == 'flood' then
+    -- N MiB against a reader that stopped reading: past the send bound and
+    -- whatever the kernel buffers absorb. N rides on the payload because the
+    -- test computes it from the host's socket buffer limits.
+    local n = tonumber(payload:match('%d+')) or 16
+    for _ = 1, n do assert(mistlane.websocket.send(id, string.rep('F', 1024*1024))) end
+  elseif payload == 'oversize' then
+    local ok, err = mistlane.websocket.send(id, string.rep('x', 1024*1024 + 1))
+    assert(ok == false and err == 'payload exceeds 1 MiB', 'oversize guard missing')
+    assert(mistlane.websocket.send(id, 'guarded'))
+  elseif payload == 'unknown' then
+    local ok, err = mistlane.websocket.send(99999, 'x')
+    assert(ok == false and err == 'unknown websocket id', 'unknown id not reported')
+    assert(mistlane.websocket.send(id, 'guarded'))
+  elseif payload == 'boom' then
+    error('message boom')
+  else
+    assert(mistlane.websocket.send(id, 'echo:'..payload))
+  end
+end
+function M.websocket_close(id)
+  closed[id] = true
+  print('WSHOOK close '..id)
+end
+-- ws/wss listeners keep framed game sessions: the message callback is still
+-- required whenever any listener is tcp/ws/wss.
+function M.message(payload) return payload end
+function M.http(r)
+  if r.path == '/state' then
+    local n, m = 0, 0
+    for _ in pairs(open) do n = n + 1 end
+    for _ in pairs(closed) do m = m + 1 end
+    return {status = 200, body = 'open='..n..' closed='..m}
+  end
+  if r.path == '/echo' then return {status = 201, body = r.body} end
+  return {status = 404, body = 'missing'}
+end
 return M
 )fixture";
 }

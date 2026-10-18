@@ -4,6 +4,9 @@
 
 | 老框架能力 | Mistlane 状态 | 当前边界 / 后续决策 |
 |---|---|---|
+| 角色承载、Session/Avatar 与迁移 | 未完整抽取 | 旧角色在 Hegel/CrossHegel 间转移，原 Gate 保持连接；当前缺少通用 Avatar 生命周期、唯一写入权与可靠移交，见[模型说明](./player-scene-model.md)。 |
+| 地图模板、空间数据与场景实例 | 未迁移 | 旧 SceneManager/Scene 主要为 Lua；C++ 导航调用已注释，不能认定流式加载、空间 AOI 或无缝已实现。静态资源共享与可变实例需分别设计。 |
+| 跨服变更回归属区服保存 | 未迁移 | 旧 set/setDirty 经 CrossWorld 和归属 World 发 Data/Cache；目标保留数据归属，回传、持久化确认、幂等和故障恢复待实现。 |
 | 进程启动、监听器、信号和退出 | 重新实现 | 新生命周期由 `Node` 管理，逐项核对见[旧生命周期核对](#旧生命周期核对)；不保留旧进程 API 或二进制兼容。 |
 | 异步 TCP 传输 | 重新实现 | 使用新的四字节长度头协议，并有会话限制和期限；不支持旧分帧及客户端协议。 |
 | WebSocket / 安全 WebSocket | 替换 | WS/WSS 由 Drogon/Trantor 处理，不迁移手写握手、掩码或控制帧解析。 |
@@ -11,8 +14,8 @@
 | HTTP 客户端 | 替换 | 为 C++ 调用者提供有界同步 libcurl 适配器；不得在事件循环回调中阻塞调用。 |
 | Lua VM 与回调 | 重新实现 | 用模块 table 及明确的 init/start/message/http/tick/stop/shutdown 钩子替代旧全局回调，逐项映射见[Lua 回调核对](#旧-lua-回调核对)；单 VM 单线程执行。 |
 | Lua 死循环检测 | 部分替换 | 指令计数 hook 能发现常见失控脚本，但不是硬 CPU 配额或内存沙箱。 |
-| gateway / router / worker 拓扑 | 重新实现 | 有通用 TCP 转发和 worker 执行；没有账号身份、玩家亲和路由或旧服务注册协议。 |
-| 跨服房间路由 | 新的最小实现 | `cross`/`shard` 提供 group/room 固定路由、epoch 检查和本地硬准入；不提供全局配额、服务发现或玩家状态迁移。 |
+| Gate / World / Hegel 职责 | 部分抽取 | 目前只有通用转发与 Lua 执行；当前运行角色未完整承接 World 协调或 Hegel 角色/场景。目标命名与边界见[进程职责](./process-roles.md)。 |
+| 跨服房间路由 | 新的最小实现 | `gateway --routing cross`/`crossServer` 提供 group/room 固定路由、epoch 检查和本地硬准入；不提供全局配额、服务发现或玩家状态迁移。 |
 | 服务连接注册、重连和排队投递 | 未迁移 | 当前会话直接连接上游。旧握手已于 2026-10-18 追踪：主动方经 `L_FirstMsg`/`ServerService:handShakeToServer` 发送 `sp.pack(Protocol.HandShake, {name, sidx, tarName})`，被动方把首个原始报文交给 `L_Register`，首个回应后连接切换到帧模式（`L_ServerMsg`），握手前的写请求先排队，重连为固定 2 秒定时器加 `proxyOff` 钩子。该报文只做身份声明、无任何认证，重新实现不会带来安全性。维持静态 `UPSTREAMS` 加 MLC1 epoch 握手；只有出现动态发现或跨不可信网络互联的真实需求时，才一并设计注册与认证。旧发送队列也已追踪：实际生产者是 Lua `net_asyncWrite` 与 C++ `pushData`，向每连接的无界发送链表追加（超过 64 KiB 的载荷拆成带序号的分片，仅打告警），消费者是 `async_write` 链；断线直接销毁链表、不重投；握手前的 `pushQueue` 双端队列在旧代码树中无任何调用方；重连以固定 2 秒定时器无限重试。不引入有界可靠投递模块：旧实现本身没有可移植的投递保证，该模块必须依据具体应用需求再定义，且需明确字节/条数上限与溢出策略。 |
 | 旧线程池 | 可复用现有库 | 旧并发点已于 2026-10-18 分类：`FogsProcess` 线程组属于 Asio I/O（`io_service::run` 加各 `IServer` 循环），`HttpRequestService` 是固定 pthread 池跑阻塞 `curl_easy` 调用，`d_push` 的 `TaskScheduler` 用 CPU 核数的 `ThreadPool` 处理阻塞推送任务，`d_world` 内嵌 Poco HTTP 服务线程池（阻塞），`DeadLoopMonitor` 看门狗线程以指令 hook 取代，旧 MySQL 经 libmysqlclient 在 server 线程上同步调用。Mistlane 热路径全部异步（Asio I/O、Boost.MySQL/Boost.Redis 池）；同步 curl 适配器仅供 CLI 使用并注明禁止在事件循环回调中调用，因此当前不实例化任何阻塞工作池。如出现阻塞任务需求，Boost.Asio `thread_pool` 仍是指定载体，并在提交层定义准入/背压，因为线程池本身不替应用决定队列上限和关闭策略。 |
 | Lua 定时器队列 | 可复用现有库 | 旧 `game/Util/Timer.lua` 接口已于 2026-10-18 对比：`setTimeout`/`setInterval`/`remove` 建在纯 Lua 最小堆加"近期任务"数组上（上限 100 000 个任务、5 秒内任务分桶），由墙钟 `L_doTick` 驱动，`xpcall` 记录错误、周期任务更新时间戳后重新入堆，并以魔法返回值 `xx1` 移除出错周期任务。Boost.Asio `steady_timer` 在底层已提供单调异步计时器。决策：暂不增加可取消的 Lua `timeout`/`interval` API——框架内部没有消费者，旧设计的需求（游戏单位级别六位数量程的调度）属于应用域。日后应用确需时，基于 `steady_timer` 实现薄 timeout/interval 对，带注册句柄、显式取消、明确的回调错误策略（不用魔法哨兵）、VM 重载时挂起定时器随 VM 销毁以及有界任务数，并先按行为分别定义契约（见挂起定时器契约项）。 |

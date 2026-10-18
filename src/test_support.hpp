@@ -172,6 +172,10 @@ struct Context {
         args.insert(args.end(), options.begin(), options.end());
         auto& child = spawn(std::move(args)); child.ready(); return child;
     }
+    Child& cross_gateway(unsigned listen, std::vector<std::string> options) {
+        options.insert(options.end(), {"--routing", "cross"});
+        return node("gateway", listen, std::move(options));
+    }
     int command(std::vector<std::string> args, const fs::path& input = {}) {
         return spawn(std::move(args), input).wait();
     }

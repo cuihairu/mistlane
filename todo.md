@@ -22,11 +22,21 @@
       src/test_cases.cpp probe.control 扩展；src/scaffold.cpp 文案更正；ctest 14/14 绿；
       MariaDB 集成测试本环境复跑通过；docs:build 通过。
 
-- [ ] 多协议监听：游戏服务器与 HTTP 服务均可开启 WS/WSS；支持同进程多个独立监听地址及明文/TLS 共存。当前 --transport 单选，HTTP 模式未注册 WS controller。
-  - [ ] 定义独立 listener 配置、证书与路由绑定；同端口 HTTP→WS upgrade 与不同端口监听均有明确行为，冲突配置启动失败。
-  - [ ] 游戏 WS/WSS 进入游戏会话与 Lua message；HTTP 服务增加 WebSocket 生命周期与消息回调，普通请求保留 Lua http，升级后不走 HTTP handler。
-  - [ ] 增加会话定向推送、发送队列字节上限、慢消费者背压、断连清理及退出策略。
-  - [ ] 验证 TCP + WS + WSS、HTTP + WS、HTTPS + WSS、多个监听同时开启、证书错误、路由隔离与关闭监听；更新脚手架配置和帮助。
+- [x] 多协议监听：游戏服务器与 HTTP 服务均可开启 WS/WSS；支持同进程多个独立监听地址及明文/TLS 共存（2026-10-19 完成）。
+  - [x] 定义独立 listener 配置、证书与路由绑定；同端口 HTTP→WS upgrade 与不同端口监听均有明确行为，冲突配置启动失败。
+      证据：src/main.cpp --listener/LISTENERS 解析、重复端口启动拒绝；src/web.cpp 按 `req->getLocalAddr().toPort()`
+      分发 game/lifecycle；wss/https 监听支持 `?cert=FILE&key=FILE` 覆盖全局证书（src/node.cpp 逐监听证书校验）。
+  - [x] 游戏 WS/WSS 进入游戏会话与 Lua message；HTTP 服务增加 WebSocket 生命周期与消息回调，普通请求保留 Lua http，升级后不走 HTTP handler。
+      证据：src/web.cpp SocketController dispatch；src/node.cpp WebsocketService attach/pump/closed；
+      src/lua_service.cpp websocket_open/message/close + mistlane.websocket.send。
+  - [x] 增加会话定向推送、发送队列字节上限、慢消费者背压、断连清理及退出策略。
+      证据：单次推送上限 1 MiB（src/lua_service.cpp websocket_send）、Trantor 2 MiB 高水位强制关闭
+      （src/web.cpp highWaterMarkCallback）、断连清理与 SIGTERM 先关 WebSocket 会话再退出（src/node.cpp stop/close_all）。
+  - [x] 验证 TCP + WS + WSS、HTTP + WS、HTTPS + WSS、多个监听同时开启、证书错误、路由隔离与关闭监听；更新脚手架配置和帮助。
+      证据：src/test_cases.cpp transport_listeners（`mistlane test --case transport.listeners` 3 次通过）；
+      ctest --preset linux-debug 15/15；scaffold.init 通过（新增 config/instances/gameServer-mixed.env、
+      run-instance.sh LISTENERS 展开）；docs/http.md、docs/guide.md、docs/zh/http.md、docs/zh/guide.md、
+      docs/validation.md、docs/zh/validation.md 同步；check-docs.mjs 28 图通过；pnpm docs:build 通过。
 
 - [x] 整理目标进程职责及实际实现边界：docs/process-roles.md 与 docs/zh/process-roles.md；首页和架构图移除 router 必经层假设。
 - [ ] 按目标职责迁移运行角色（禁止只改名字冒充实现）：gateway、login、coordinator、gameServer、crossServer、data、可选 apiServer；保持单二进制方案可用，目录/target/CLI 一次性迁移并清理别名。

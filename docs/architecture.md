@@ -1,26 +1,42 @@
-# Architecture and migration
+# Architecture and implementation boundary
 
-Mistlane is an extraction and modernization exercise from a legacy game backend, intended for research and learning. The current version does not claim production readiness or compatibility with the old cluster.
+## Target game-service architecture
 
-## System architecture
+This is the **planned responsibility model**, not a completed runtime. Boxes denote service responsibilities, potentially sharing one binary. Solid edges denote intended message/data paths; dashed edges denote placement/route information, not implemented transactions. See [process responsibilities](./process-roles.md). Coordinators operate per region or cross-region group, not as compulsory gameplay relays.
 
 ```mermaid
-flowchart LR
-  client["Client"] -->|TCP| gateway["gateway / router"]
-  web["Web client"] -->|HTTP · HTTPS · WS · WSS| dg["Drogon / Trantor"]
-  dg -->|Bounded messages| node["Asio node loop"]
-  gateway -->|Internal TCP| node
-  node --> lua["Lua VM · single thread"]
-  node --> db["Boost.MySQL connection_pool"]
-  node --> redis["Boost.Redis · bounded async requests"]
-  lua --> data["Streams queue / leaderboard"]
-  data --> redis
-  redis --> store[(Redis)]
-  app["Application executor"] --> curl["libcurl HTTP client"]
-  curl --> remote["Remote HTTP service"]
+flowchart TB
+  client["Client"] <--> gate["gateway · connections and forwarding"]
+  gate <--> login["login · authentication and selection"]
+  gate <--> game["gameServer · regional players and scenes"]
+  gate <--> cross["crossServer · cross-region players and scenes"]
+  coord["coordinator · placement and transfer coordination"] -. "Route information" .-> gate
+  login -. "Request placement" .-> coord
+  coord -. "Placement" .-> game
+  coord -. "Placement" .-> cross
+  game <--> data["data · loading, cache and persistence"]
+  cross <--> data
 ```
 
-MySQL and curl remain C++ extension interfaces. Redis is optional and is exposed to worker Lua scripts through bounded asynchronous Streams and sorted-set leaderboard APIs.
+data denotes ownership-aware service access rather than one shared database for every region. Permanent crossServer changes return to home data; protocol/acknowledgement semantics remain unimplemented and the edge does not authorize dual writers. Optional apiServer ingress and its callback flow are described in [HTTP and WebSocket](./http.md).
+
+## Current runnable prototype
+
+Current code provides forwarding, Lua execution and static gateway-to-crossServer routing, not the complete legacy coordination/character/scene runtime. The existing cross-routing policy does not implement World coordination.
+
+```mermaid
+flowchart TB
+  tcp["TCP client"] --> forward["gateway · forwarding"]
+  ws["WS / WSS client"] --> forward
+  forward -->|Internal TCP| adapters
+  direct["Direct TCP / WS / WSS client"] --> adapters
+  subgraph runtime["gameServer execution process internals"]
+    adapters["Asio TCP / Drogon Web adapter"] -->|Bounded submission| owner["Asio owner thread"]
+    owner --> lua["Lua message or http"]
+  end
+```
+
+Libraries, owner thread and callbacks are grouped inside the execution process. Clients can connect directly or through gateway. Each process currently selects one --transport; displayed protocols are alternatives, not simultaneous listeners. HTTP workers invoke Lua http, while game WS/WSS invokes Lua message. Mixed HTTP/HTTPS and WS/WSS listeners remain future work. MySQL/curl are C++ interfaces; selected bounded asynchronous Redis APIs are exposed to Lua.
 
 ## Code layout
 
@@ -43,7 +59,7 @@ The CMake targets are `mistlane::core` for Lua, `mistlane::net` for nodes, and `
 
 Each node owns one Asio thread for internal TCP, timers, signals and Lua. Web nodes additionally use Drogon/Trantor event loops for HTTP/TLS/WS, with at most one submitted payload per session. Lua is only entered on Asio. WS clients must wait for each response before submitting another request; pipelining closes the session.
 
-Gateway and router are deployment roles with the same forwarding mechanism in this version. Each new session selects an upstream in round-robin order. One downstream session owns one upstream TCP connection and stays with that upstream. A new client connection may select another worker; this does not provide player-ID affinity.
+Gateway is the forwarding role in this version. Each new session selects an upstream in round-robin order. One downstream session owns one upstream TCP connection and stays with that upstream. A new client connection may select another gameServer; this does not provide player-ID affinity.
 
 A session reads one request, obtains one response, writes it, and then reads the next request. There is no unbounded application send queue. Drogon assembles WS/WSS messages and adapts them to internal TCP frames.
 
@@ -71,7 +87,7 @@ See the [migration status ledger](./migration-status) for the fuller inventory o
 | FogsProcess / FogsServer / LuaCallHandler | Retained lifecycle concepts, reimplemented as Node / LuaService |
 | TcpConn / SendBuffer / handwritten WebSocket | New TCP framing; mature Drogon WS/WSS implementation; wire compatibility intentionally broken |
 | ServerConnBase | Per-session upstream connection; original shared connection, registration handshake, and reconnect behavior not migrated |
-| Gateway / World / Hegel | Generic gateway / router / worker topology without player, scene, or global gameplay logic |
+| Gateway / World / Hegel | Generic forwarding/execution only; World coordination and Hegel character/scene hosting are not fully migrated; see process responsibilities |
 | TokenBucket | Rewritten around a monotonic clock with accumulated replenishment |
 | MinHeap | Extracted utility with module export; original bounded heap semantics retained |
 | SQL and custom connection management | Boost.MySQL pool and parameter binding; no old schemas or dirty-write cache |
@@ -98,3 +114,6 @@ Scripts are trusted application code. The instruction hook helps with typical in
 ## Detailed contracts
 
 See [Lua lifecycle](./lua), [native cross-server routing and admission](./cross-server), and [Drogon/libcurl HTTP integration](./http).
+
+
+Character transfer, home-data persistence and map-loading boundaries are covered in [players, scenes and cross-region execution](./player-scene-model.md).

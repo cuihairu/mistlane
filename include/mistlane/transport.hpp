@@ -22,9 +22,13 @@ public:
     virtual void write(std::string payload, Completion callback) = 0;
     virtual void close() = 0;
 };
-// Drogon owns the public listener. Accepted payload channels execute on executor.
+// Drogon owns the public listeners. Accepted payload channels execute on executor.
 struct Config;
-void run_web(const Config&, boost::asio::any_io_executor,
-             std::function<void(std::shared_ptr<Channel>)> attach, HttpHandler http_handler, std::function<void()> ready);
+using Attach = std::function<void(std::shared_ptr<Channel>)>;
+// A WebSocket upgrade on an HTTP/HTTPS listener of a script role: the connection
+// joins the Lua websocket lifecycle (open/message/close) instead of a game session.
+using WsAttach = std::function<void(std::shared_ptr<Channel>, std::string path)>;
+void run_web(const Config&, boost::asio::any_io_executor, Attach attach, WsAttach ws_attach,
+             HttpHandler http_handler, std::function<void()> ready);
 void stop_web();
 }

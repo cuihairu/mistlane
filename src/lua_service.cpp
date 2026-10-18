@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "mistlane/lua_service.hpp"
+#include "mistlane/transport.hpp" // max_frame bounds websocket pushes
 #include <boost/asio/ssl.hpp>
 #include <openssl/ssl.h>
 #include <openssl/x509_vfy.h>
@@ -128,8 +129,9 @@ void LuaService::check(int status) {
         throw std::runtime_error(text ? text : "Lua error");
     }
 }
- LuaService::LuaService(const std::string& path, ServiceContext context, std::shared_ptr<RedisRuntime> redis)
-  : state_(luaL_newstate()), context_(std::move(context)), async_context_(std::make_shared<AsyncContext>()), redis_(std::move(redis)) {
+ LuaService::LuaService(const std::string& path, ServiceContext context, std::shared_ptr<RedisRuntime> redis, WebsocketSink* sink)
+  : state_(luaL_newstate()), context_(std::move(context)), async_context_(std::make_shared<AsyncContext>()),
+    websocket_sink_(sink), redis_(std::move(redis)) {
     if (!state_) throw std::runtime_error("cannot create Lua state");
     async_context_->state = state_;
     try {
@@ -139,14 +141,23 @@ void LuaService::check(int status) {
         luaL_requiref(state_, LUA_TABLIBNAME, luaopen_table, 1); lua_pop(state_, 1);
         luaL_requiref(state_, LUA_MATHLIBNAME, luaopen_math, 1); lua_pop(state_, 1);
         push_stream_api(state_, this);
+        push_websocket_api(state_, this);
         lua_pushcfunction(state_, traceback);
         check(luaL_loadfile(state_, path.c_str()));
         check(protected_call(state_, 0, 1, 1));
         if (!lua_istable(state_, -1)) throw std::runtime_error("script must return a service table");
-        const bool web = context_.transport == "http" || context_.transport == "https";
-        lua_getfield(state_, -1, web ? "http" : "message");
-        if (!lua_isfunction(state_, -1)) throw std::runtime_error(web ? "service.http is required" : "service.message is required");
-        lua_pop(state_, 1);
+        // One script may serve both framed sessions and HTTP, so each transport
+        // its listeners use requires its own handler.
+        if (context_.game_sessions) {
+            lua_getfield(state_, -1, "message");
+            if (!lua_isfunction(state_, -1)) throw std::runtime_error("service.message is required");
+            lua_pop(state_, 1);
+        }
+        if (context_.http_service) {
+            lua_getfield(state_, -1, "http");
+            if (!lua_isfunction(state_, -1)) throw std::runtime_error("service.http is required");
+            lua_pop(state_, 1);
+        }
         module_ = luaL_ref(state_, LUA_REGISTRYINDEX);
         lua_settop(state_, 0);
         callback("init");
@@ -246,6 +257,37 @@ void LuaService::push_stream_api(lua_State* l, LuaService* service) {
     bind("top", leaderboard_top); bind("remove", leaderboard_remove);
     lua_setfield(l, -2, "leaderboard"); lua_setglobal(l, "mistlane");
 }
+void LuaService::push_websocket_api(lua_State* l, LuaService* service) {
+    if (!service->websocket_sink_) return; // no websocket-capable listener on this node
+    lua_getglobal(l, "mistlane");
+    if (!lua_istable(l, -1)) { lua_pop(l, 1); lua_newtable(l); }
+    lua_newtable(l);
+    lua_pushlightuserdata(l, service); lua_pushcclosure(l, websocket_send, 1); lua_setfield(l, -2, "send");
+    lua_setfield(l, -2, "websocket"); lua_setglobal(l, "mistlane");
+}
+void LuaService::websocket_callback(const char* name, std::uint64_t id, std::string_view payload, const std::string& path) {
+    StackGuard guard(state_);
+    lua_pushcfunction(state_, traceback);
+    lua_rawgeti(state_, LUA_REGISTRYINDEX, module_);
+    lua_getfield(state_, -1, name);
+    if (lua_isnil(state_, -1)) return;
+    if (!lua_isfunction(state_, -1)) throw std::runtime_error(std::string(name)+" must be a function");
+    lua_pushinteger(state_, static_cast<lua_Integer>(id));
+    lua_pushlstring(state_, payload.data(), payload.size());
+    lua_pushlstring(state_, path.data(), path.size());
+    check(protected_call(state_, 3, 0, guard.top+1));
+}
+void LuaService::websocket_open(std::uint64_t id, const std::string& path) {
+    if (started_ && !stopped_) websocket_callback("websocket_open", id, {}, path);
+}
+void LuaService::websocket_message(std::uint64_t id, std::string_view payload) {
+    if (started_ && !stopped_) websocket_callback("websocket_message", id, payload, {});
+}
+void LuaService::websocket_close(std::uint64_t id) {
+    // Not gated on started_/stopped_: close fires while the node drains sessions
+    // during stop, before LuaService::stop() runs.
+    websocket_callback("websocket_close", id, {}, {});
+}
 namespace {
 LuaService* stream_service(lua_State* l) { return static_cast<LuaService*>(lua_touserdata(l, lua_upvalueindex(1))); }
 int callback_ref(lua_State* l) {
@@ -272,6 +314,29 @@ constexpr const char* leaderboard_add_script =
 constexpr const char* leaderboard_get_script =
     "local score=redis.call('ZSCORE',KEYS[1],ARGV[1]); if not score then return {} end; "
     "local rank=redis.call('ZREVRANK',KEYS[1],ARGV[1]); return {score,tostring(rank+1)}";
+}
+// mistlane.websocket.send(id, payload) -> true | false, reason
+int LuaService::websocket_send(lua_State* l) {
+    auto* self = stream_service(l);
+    try {
+        if (!self->websocket_sink_) throw std::runtime_error("websocket is not enabled for this node");
+        if (!lua_isinteger(l, 1) || lua_tointeger(l, 1) <= 0)
+            throw std::runtime_error("websocket id must be a positive integer");
+        const auto id = static_cast<std::uint64_t>(lua_tointeger(l, 1));
+        if (lua_type(l, 2) != LUA_TSTRING) throw std::runtime_error("websocket payload must be a string");
+        std::size_t size = 0;
+        const char* data = lua_tolstring(l, 2, &size);
+        if (size > max_frame) {
+            lua_pushboolean(l, 0);
+            lua_pushstring(l, "payload exceeds 1 MiB");
+            return 2;
+        }
+        const std::string reason = self->websocket_sink_->websocket_send(id, {data, size});
+        if (reason.empty()) { lua_pushboolean(l, 1); return 1; }
+        lua_pushboolean(l, 0);
+        lua_pushlstring(l, reason.data(), reason.size());
+        return 2;
+    } catch (const std::exception& e) { return lua_error(l, e); }
 }
 int LuaService::stream_create_group(lua_State* l) {
     auto* self=stream_service(l);

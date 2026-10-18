@@ -19,7 +19,7 @@ with tempfile.TemporaryDirectory(prefix="mistlane-crashpad-") as temporary:
     log_path = Path(temporary) / "node.log"
     with log_path.open("w+") as log:
         process = subprocess.Popen([
-            binary, "--role", "worker", "--listen", f"127.0.0.1:{listen_port}",
+            binary, "--role", "gameServer", "--listen", f"127.0.0.1:{listen_port}",
             "--script", script, "--crashpad-handler", handler,
             "--crashpad-database", str(database),
         ], stdout=log, stderr=log)
@@ -29,7 +29,7 @@ with tempfile.TemporaryDirectory(prefix="mistlane-crashpad-") as temporary:
             log.flush()
             log.seek(0)
             output = log.read()
-            if "ready worker " in output:
+            if "ready gameServer " in output:
                 ready = True
                 break
             if process.poll() is not None:

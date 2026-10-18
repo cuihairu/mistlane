@@ -1,13 +1,13 @@
 # Lua 脚本与完整生命周期
 
-Mistlane 保留“C++ 管网络与调度，Lua 管应用”的分工。worker/shard 各持有一个 VM，所有钩子在所属 Asio 线程串行调用。Drogon/Trantor 解析 HTTP、TLS 和 WS，通过有界消息通道递交任务，不直接并发访问 Lua。
+Mistlane 保留“C++ 管网络与调度，Lua 管应用”的分工。gameServer/crossServer 各持有一个 VM，所有钩子在所属 Asio 线程串行调用。Drogon/Trantor 解析 HTTP、TLS 和 WS，通过有界消息通道递交任务，不直接并发访问 Lua。
 
 ## 模块与运行方式
 
-脚本顶层返回 table。TCP/WS/WSS worker 与 shard 必须提供 message；HTTP/HTTPS worker 必须提供 http，允许不提供 message。钩子用普通函数调用，不隐式传 self；使用 function M.http(req)，不要使用冒号方法定义。
+脚本顶层返回 table。TCP/WS/WSS gameServer 与 crossServer 必须提供 message；HTTP/HTTPS apiServer 必须提供 http，允许不提供 message。钩子用普通函数调用，不隐式传 self；使用 function M.http(req)，不要使用冒号方法定义。
 
 ```sh
-build/debug/mistlane --role worker --listen 127.0.0.1:8080 --transport http --script examples/http.lua
+build/debug/mistlane --role apiServer --listen 127.0.0.1:8080 --transport http --script examples/http.lua
 curl http://127.0.0.1:8080/healthz
 curl --data-binary 'hello' http://127.0.0.1:8080/echo
 ```
@@ -36,9 +36,9 @@ stateDiagram-v2
 | 顶层脚本 | 无 / 模块 table | 启动与每次重载执行；必须返回符合传输类型的模块 |
 | init | context / 忽略返回 | VM 创建并验证后一次；context 含 role、transport、epoch |
 | start | 无 / 忽略返回 | 监听就绪、正式发布 ready 前一次；失败则启动失败或拒绝重载 |
-| message | payload、context / string | 非 HTTP 完整消息；context 在 shard 中含 realm/group/room/epoch，普通 worker 为 nil |
+| message | payload、context / string | 非 HTTP 完整消息；context 在 crossServer 中含 realm/group/room/epoch，普通 gameServer 为 nil |
 | before_request | req / nil 或响应 table | HTTP 前置处理；nil 继续 http，响应 table 短路主 handler |
-| http | req / 响应 table | HTTP/HTTPS worker 的主请求处理器 |
+| http | req / 响应 table | HTTP/HTTPS apiServer 的主请求处理器 |
 | after_request | req、response / nil 或响应 table | 主处理器或前置短路成功后执行；可直接修改 response，或返回替换 table |
 | on_error | req、error string / 响应 table | HTTP 回调或响应校验失败时执行；再次失败则返回通用 500 |
 | tick | 无 / 忽略返回 | start 后，每次完成再等待约 100ms；不是严格实时帧率 |
@@ -95,7 +95,7 @@ req 是独立的请求 table，包含 method、path、query（原始查询串，
 
 请求过程为 before_request → http（如未短路）→ after_request → 响应。前置拒绝也执行 after_request。任何阶段报错会跳至 on_error，不再重复执行 after_request；on_error 缺省、报错或返回非法响应时，返回不暴露 traceback 的通用 500，详细错误写入服务端日志。网络失败或准入拒绝可能在 Lua 之前结束请求。
 
-HTTP 模块匹配通用路径，应用在 http 中选择路径并明确返回 404/405。当前转交 GET/POST/PUT/DELETE/PATCH/OPTIONS/HEAD，HEAD 正文由 HTTP 实现处理；不暴露底层 socket、流式正文、异步 yield 或 WebSocket 升级权限。gateway/router 的 HTTP 模式仍是 POST /message 的正文转发适配器，需要完整 HTTP 语义时直接使用 HTTP worker 或自行扩展网关协议。
+HTTP 模块匹配通用路径，应用在 http 中选择路径并明确返回 404/405。当前转交 GET/POST/PUT/DELETE/PATCH/OPTIONS/HEAD，HEAD 正文由 HTTP 实现处理；不暴露底层 socket、流式正文、异步 yield 或 WebSocket 升级权限。gateway 的 HTTP 模式仍是 POST /message 的正文转发适配器，需要完整 HTTP 语义时直接使用 apiServer 或自行扩展网关协议。
 
 ## 热重载：SIGHUP
 
@@ -118,7 +118,7 @@ sequenceDiagram
 
 候选 VM 重新执行顶层、init 和 start，成功才替换；已有连接后续消息使用新 VM。成功后旧 VM 运行 stop/shutdown 再销毁。候选 start 失败时，旧 VM 不运行退役钩子并继续服务，已初始化候选执行尽力清理。旧模块清理错误记日志，不回滚已发布的新 VM。
 
-重载重置模块状态，不导出、迁移或恢复房间数据。它只保证 VM 激活的替换顺序，不回滚 init/start/stop 中外部副作用；新旧 VM 会短暂共存，应避免抢占不可共享资源。带状态的 shard 先排空房间，或另行设计快照、状态版本和恢复机制。
+重载重置模块状态，不导出、迁移或恢复房间数据。它只保证 VM 激活的替换顺序，不回滚 init/start/stop 中外部副作用；新旧 VM 会短暂共存，应避免抢占不可共享资源。带状态的 crossServer 先排空房间，或另行设计快照、状态版本和恢复机制。
 
 ## 错误与资源边界
 
@@ -128,7 +128,7 @@ message 失败或返回非 string 关闭该会话；tick 错误记录后继续�
 
 ## Redis Streams 消息队列 API
 
-使用 `--redis 127.0.0.1:6379` 启动 worker 后，可在 Lua 中使用异步 `mistlane.stream` API。ACL 凭据通过 `MISTLANE_REDIS_USERNAME` 和 `MISTLANE_REDIS_PASSWORD` 环境变量配置，不要把密码写入命令行。设置 `MISTLANE_REDIS_TLS=on` 后通过 TLS 连接；服务端证书链和所拨地址（域名或 IP）始终进行校验。`MISTLANE_REDIS_CA=FILE` 指定信任锚（未设置时使用系统默认验证路径）。未开启 `MISTLANE_REDIS_TLS=on` 时连接为明文 Redis TCP，只能用于可信内网。队列键统一隔离在 `mistlane:stream:<name>` 下。Redis 请求和回调运行在节点的 Asio 线程上，因此可以安全访问同一个 Lua VM；这些接口不会阻塞或让当前 Lua handler yield。
+使用 `--redis 127.0.0.1:6379` 启动 gameServer 后，可在 Lua 中使用异步 `mistlane.stream` API。ACL 凭据通过 `MISTLANE_REDIS_USERNAME` 和 `MISTLANE_REDIS_PASSWORD` 环境变量配置，不要把密码写入命令行。设置 `MISTLANE_REDIS_TLS=on` 后通过 TLS 连接；服务端证书链和所拨地址（域名或 IP）始终进行校验。`MISTLANE_REDIS_CA=FILE` 指定信任锚（未设置时使用系统默认验证路径）。未开启 `MISTLANE_REDIS_TLS=on` 时连接为明文 Redis TCP，只能用于可信内网。队列键统一隔离在 `mistlane:stream:<name>` 下。Redis 请求和回调运行在节点的 Asio 线程上，因此可以安全访问同一个 Lua VM；这些接口不会阻塞或让当前 Lua handler yield。
 
 ```lua
 mistlane.stream.create_group("mail", "workers", function(err)
@@ -140,7 +140,7 @@ mistlane.stream.publish("mail", { kind = "reward", player = "p-17" }, function(e
   print("published", id)
 end)
 
-mistlane.stream.read("mail", "workers", "worker-1", 20, function(err, entries)
+mistlane.stream.read("mail", "workers", "gameServer-1", 20, function(err, entries)
   if err then return print(err) end
   for _, entry in ipairs(entries) do
     print(entry.id, entry.fields.kind, entry.fields.player)

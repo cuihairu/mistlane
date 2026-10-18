@@ -1,18 +1,24 @@
 # HTTP server and client
 
+This page covers protocols, not a process named http. Legacy World embeds HTTP and separate payment services exist. Optional independent external ingress is named apiServer; see [responsibilities](./process-roles.md).
+
+
+See [process responsibilities](./process-roles.md) for target names. Commands use current CLI roles; character, coordination and persistence integration remain unimplemented.
+
+
 The legacy World HTTP server used Poco. Mistlane uses Drogon for HTTP/HTTPS and WS/WSS, while internal TCP remains on Boost.Asio. Drogon uses the independent Trantor network library, not Boost. The choice provides a complete web framework; it is not an unmeasured performance ranking.
 
-Game clients connect to `/ws` using `gateway --transport ws/wss --upstream IP:PORT`, with payloads handled by a TCP worker's Lua `message(payload)`. Alternatively, `worker --transport ws/wss --script FILE` handles them directly. Game messages after the WebSocket upgrade do not invoke Lua HTTP handlers. See the [game WS/WSS guide](./guide.md) for launch commands, client code and instance configuration. The HTTP examples below use a separate listener instance.
+Game clients connect to `/ws` using `gateway --transport ws/wss --upstream IP:PORT`, with payloads handled by a TCP gameServer's Lua `message(payload)`. Alternatively, `gameServer --transport ws/wss --script FILE` handles them directly. Game messages after the WebSocket upgrade do not invoke Lua HTTP handlers. See the [game WS/WSS guide](./guide.md) for launch commands, client code and instance configuration. The HTTP examples below use a separate listener instance.
 
 ## Server
 
 ```sh
-build/debug/mistlane --role worker --listen 127.0.0.1:7102 --script examples/echo.lua
+build/debug/mistlane --role gameServer --listen 127.0.0.1:7102 --script examples/echo.lua
 build/debug/mistlane --role gateway --listen 127.0.0.1:8080 --transport http --upstream 127.0.0.1:7102
 curl --data-binary 'hello' http://127.0.0.1:8080/message
 ```
 
-HTTP/HTTPS gateway/router mode exposes POST /message. The body becomes the Lua payload; success returns 200 with an application/octet-stream body, session/upstream failure returns 503, unknown paths return 404, and unsupported methods are rejected by Drogon. For TLS use --transport https --cert FILE --key FILE. WS/WSS exposes / and /ws. HTTP and WS use separate listener processes in this version.
+HTTP/HTTPS gateway mode exposes POST /message. The body becomes the Lua payload; success returns 200 with an application/octet-stream body, session/upstream failure returns 503, unknown paths return 404, and unsupported methods are rejected by Drogon. For TLS use --transport https --cert FILE --key FILE. WS/WSS exposes / and /ws. HTTP and WebSocket listeners can also share one process; see [Multiple listeners](#multiple-listeners-and-websocket-lifecycle).
 
 Each HTTP request owns a separate internal session without user affinity. A WS connection keeps one upstream and must wait for a response before sending its next request; pipelining closes the connection. Drogon parses traffic and submits at most one outstanding payload per channel to Asio, where Lua executes.
 
@@ -53,23 +59,55 @@ References: [Drogon](https://github.com/drogonframework/drogon), [1.9.14 release
 sequenceDiagram
   participant Client
   participant Web as Drogon / Trantor
-  participant Loop as Asio owner thread
+  participant Owner as Asio owner thread
   participant Lua as Lua service
   Client->>Web: HTTP request
   Web->>Web: Parse / body limit / admission
-  Web->>Loop: Bounded request submission
-  Loop->>Lua: before_request(req)
+  Web->>Owner: Bounded request submission
+  Owner->>Lua: before_request(req)
   alt no early response
-    Loop->>Lua: http(req)
+    Owner->>Lua: http(req)
   end
-  Loop->>Lua: after_request(req, response)
+  Owner->>Lua: after_request(req, response)
   alt callback or response validation fails
-    Loop->>Lua: on_error(req, error)
+    Owner->>Lua: on_error(req, error)
   end
-  Loop-->>Web: status / headers / body
+  Owner-->>Web: status / headers / body
   Web-->>Client: HTTP response
 ```
 
 ## Lua HTTP handlers
 
-Use worker --transport http/https --script examples/http.lua for full Lua HTTP request/response handling, middleware and error hooks, plus init/start/tick/stop/shutdown. See [Lua lifecycle and HTTP contracts](./lua).
+Use gameServer --transport http/https --script examples/http.lua for full Lua HTTP request/response handling, middleware and error hooks, plus init/start/tick/stop/shutdown. See [Lua lifecycle and HTTP contracts](./lua).
+
+
+## Multiple listeners and WebSocket lifecycle
+
+One process runs any mix of independently configured TCP, HTTP, HTTPS, WS and WSS listeners, including simultaneous cleartext and TLS. `--listen`/`--transport` configure the primary listener; each `--listener PROTO://IP:PORT` adds another. A `wss`/`https` listener uses the global `--cert`/`--key` unless it appends its own `?cert=FILE&key=FILE` query override. Listener ports must be unique across the process, so upgrade routing (which reads the local port of the accepted connection) is never ambiguous; conflicting sets fail at startup. Config files carry the same entries under `LISTENERS=` (comma separated).
+
+Routing follows the listener, not the path:
+
+- WS/WSS listeners and gateway HTTP listeners carry framed game sessions → Lua `message`. Plain requests on them do not reach the Lua HTTP service.
+- An HTTP/HTTPS listener of a script role (gameServer/apiServer) serves the Lua HTTP service, and a WebSocket upgrade on `/` or `/ws` joins the Lua WebSocket lifecycle below instead of a game session.
+
+The Lua WebSocket lifecycle adds three optional callbacks and one push API:
+
+```lua
+local M = {}
+function M.websocket_open(id, path) end      -- session joined, upgrade path included
+function M.websocket_message(id, payload) end -- one call per client frame (≤ 1 MiB)
+function M.websocket_close(id) end           -- disconnect or node shutdown
+function M.http(request) end                 -- unchanged, same port as the upgrades
+return M
+```
+
+`mistlane.websocket.send(id, payload)` pushes to one session and returns `true`, or `false` plus a reason (`unknown websocket id`, `payload exceeds 1 MiB`). Lua errors inside `websocket_open`/`websocket_message` close that session without running `websocket_close`; the node keeps serving. Each push is capped at 1 MiB, and per-connection output backlog past the 2 MiB high-water mark force-closes the slow consumer, which then reaches `websocket_close`. Sessions count against `--max-connections` together with game sessions. On SIGTERM the node closes websocket sessions while the VM can still run their close callbacks. A script that only serves upgrades may omit `message`; a listener mix containing any tcp/ws/wss entry still requires it.
+
+```mermaid
+flowchart TB
+  config["One process · independent listeners"] --> game["Game ingress: TCP / WS / WSS"]
+  config --> web["Web service: HTTP / HTTPS + WS / WSS"]
+  game --> message["Game session → Lua message"]
+  web --> request["HTTP request → Lua http"]
+  web --> socket["Upgrade → websocket_open/message/close + push"]
+```

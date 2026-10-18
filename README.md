@@ -27,7 +27,7 @@ This is an educational framework candidate, not a production deployment recommen
 | Async networking | Boost.Asio |
 | HTTP / HTTPS / WS / WSS | Drogon / Trantor and OpenSSL |
 | HTTP client | libcurl C++ adapter |
-| Cross-server | Native cross/shard roles, room affinity and admission |
+| Cross-server | Native gateway cross routing/crossServer roles, room affinity and admission |
 | Diagnostics | Optional private `/metrics` (Prometheus) listener, internal PROBE1 liveness/readiness probe, Crashpad local minidumps |
 | MySQL pool | Existing Boost.MySQL connection_pool |
 | Redis data | Optional Boost.Redis Streams and sorted-set leaderboard APIs for Lua |
@@ -35,23 +35,24 @@ This is an educational framework candidate, not a production deployment recommen
 | C++ dependencies | CMake Presets + pinned vcpkg manifest |
 | Documentation | VitePress, English and Chinese |
 
+The diagram below describes the current communication prototype, not the complete legacy game architecture. See [target process responsibilities](docs/process-roles.md); gateway connects directly to gameServer in the default deployment.
+
 ```mermaid
 flowchart LR
-  C[TCP clients] --> G[gateway / router]
-  G --> R[Internal TCP]
-  R --> W[workers + Lua message]
+  C[TCP clients] --> G[gateway]
+  G --> W[gameServer + Lua message]
   H[HTTP / HTTPS / WS / WSS] --> D[Drogon / Trantor]
   D --> B[Bounded thread bridge]
-  B --> L[HTTP worker + Lua hooks]
+  B --> L[apiServer + Lua hooks]
   A[C++ extensions] --> P[Boost.MySQL pool]
   P --> DB[(MySQL / MariaDB)]
   W --> Q[Async Lua Streams / leaderboard]
   Q --> KV[(Redis)]
-  E[Realm gateways] --> X[cross routing / admission]
-  X --> S[shard Lua rooms]
+  E[Realm gateways] --> X[gateway · cross routing / admission]
+  X --> S[crossServer Lua rooms]
 ```
 
-gateway/router select an upstream per new connection, then keep the session there and process requests serially. Drogon/Trantor handles HTTP, HTTPS, WS and WSS; Asio owns internal TCP and Lua callbacks, with a bounded bridge between event loops. HTTP workers expose Lua request hooks. Start a Lua worker with `--redis IP:PORT` to enable asynchronous Redis Streams publish, consume groups, ACK and pending recovery; requests are bounded and credentials can come from environment variables. Native cross/shard roles route group/room pairs and enforce connection admission without restoring game logic. Workers can expose an optional private Prometheus endpoint with `--metrics-listen IP:PORT` and an internal liveness/readiness probe with `--probe-listen IP:PORT`; cross upstreams take `IP:PORT[:PROBE]` to gate new joins on shard readiness (see the [cross-server design](docs/cross-server.md)). Boost.MySQL and libcurl remain C++ interfaces without Lua bindings. See [architecture](docs/architecture.md), [Lua lifecycle](docs/lua.md) and [cross-server design](docs/cross-server.md).
+gateway selects an upstream per new connection, then keep the session there and process requests serially. Drogon/Trantor handles HTTP, HTTPS, WS and WSS; Asio owns internal TCP and Lua callbacks, with a bounded bridge between event loops. apiServer instances expose Lua request hooks. Start a Lua gameServer with `--redis IP:PORT` to enable asynchronous Redis Streams publish, consume groups, ACK and pending recovery; requests are bounded and credentials can come from environment variables. Native gateway cross routing/crossServer roles route group/room pairs and enforce connection admission without restoring game logic. Lua services can expose an optional private Prometheus endpoint with `--metrics-listen IP:PORT` and an internal liveness/readiness probe with `--probe-listen IP:PORT`; cross upstreams take `IP:PORT[:PROBE]` to gate new joins on crossServer readiness (see the [cross-server design](docs/cross-server.md)). Boost.MySQL and libcurl remain C++ interfaces without Lua bindings. See [architecture](docs/architecture.md), [Lua lifecycle](docs/lua.md) and [cross-server design](docs/cross-server.md).
 
 ## Build
 
@@ -74,25 +75,24 @@ Use linux-release for Release. The baseline supplies Boost 1.92.0, Lua 5.5.1, an
 Start these in three terminals from the repository root:
 
 ```bash
-./build/debug/mistlane --role worker --listen 127.0.0.1:7102 --script examples/echo.lua
-./build/debug/mistlane --role router --listen 127.0.0.1:7101 --upstream 127.0.0.1:7102
-./build/debug/mistlane --role gateway --listen 127.0.0.1:7100 --upstream 127.0.0.1:7101
+./build/debug/mistlane --role gameServer --listen 127.0.0.1:7102 --script examples/echo.lua
+./build/debug/mistlane --role gateway --listen 127.0.0.1:7100 --upstream 127.0.0.1:7102
 ```
 
 ```bash
 python3 tools/client.py 'hello mistlane'
 ```
 
-Game clients can connect through a WS gateway while the router and worker keep using TCP:
+Game clients can connect through a WS gateway while the gameServer uses internal TCP:
 
 ```bash
 ./build/debug/mistlane --role gateway --listen 0.0.0.0:8080 \
-  --transport ws --upstream 127.0.0.1:7101
+  --transport ws --upstream 127.0.0.1:7102
 ```
 
-Connect to `ws://server:8080/ws`; game messages reach Lua `message(payload)`. Each WS message is one payload with no TCP length header; responses are binary. For WSS select `--transport wss --cert FILE --key FILE` and connect to `wss://certificate-hostname:port/ws`. A worker can also listen directly with `--transport ws/wss --script FILE`. Current channels require waiting for each reply; Lua server push and broadcast are not implemented. See the [game connection guide](docs/guide.md) for both topologies, browser code and template certificate configuration.
+Connect to `ws://server:8080/ws`; game messages reach Lua `message(payload)`. Each WS message is one payload with no TCP length header; responses are binary. For WSS select `--transport wss --cert FILE --key FILE` and connect to `wss://certificate-hostname:port/ws`. A gameServer can also listen directly with `--transport ws/wss --script FILE`. Current channels require waiting for each reply; Lua server push and broadcast are not implemented. See the [game connection guide](docs/guide.md) for both topologies, browser code and template certificate configuration.
 
-For HTTP/HTTPS, run a worker with --transport http/https and examples/http.lua. The Lua handler accepts method/path/query/headers/body and returns status/headers/body. Its before_request, http, after_request, on_error, init, start, tick, stop and shutdown hooks are documented in the [lifecycle guide](docs/lua.md).
+For HTTP/HTTPS, run a gameServer with --transport http/https and examples/http.lua. The Lua handler accepts method/path/query/headers/body and returns status/headers/body. Its before_request, http, after_request, on_error, init, start, tick, stop and shutdown hooks are documented in the [lifecycle guide](docs/lua.md).
 
 Generate a starter project with `./build/debug/mistlane init ./my-service`. It includes per-instance shell configuration, Lua entrypoints, local process operations and a systemd unit template. See [legacy and modern architecture comparison](docs/architecture-comparison.md) for the configuration and deployment analysis. The launcher shell files stay canonical for the generated project; the runtime itself also parses a native `KEY=VALUE` config through `--config FILE` (see the [guide](docs/guide.md)).
 
@@ -105,6 +105,13 @@ pnpm install --frozen-lockfile
 pnpm docs:dev
 pnpm docs:build
 pnpm docs:preview
+```
+
+Validate diagrams after building (also runs in CI):
+
+```sh
+pnpm exec playwright install chromium
+pnpm docs:check
 ```
 
 English pages live at docs/, Chinese pages at docs/zh/. The VitePress language menu switches between them. Default base: /mistlane/; override with DOCS_BASE for another deployment path. Building does not publish the site.

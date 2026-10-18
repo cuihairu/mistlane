@@ -42,9 +42,8 @@ Release 使用 linux-release。首次配置由 vcpkg 安装依赖，之后复用
 在仓库根目录的三个终端分别运行：
 
 ```bash
-./build/debug/mistlane --role worker --listen 127.0.0.1:7102 --script examples/echo.lua
-./build/debug/mistlane --role router --listen 127.0.0.1:7101 --upstream 127.0.0.1:7102
-./build/debug/mistlane --role gateway --listen 127.0.0.1:7100 --upstream 127.0.0.1:7101
+./build/debug/mistlane --role gameServer --listen 127.0.0.1:7102 --script examples/echo.lua
+./build/debug/mistlane --role gateway --listen 127.0.0.1:7100 --upstream 127.0.0.1:7102
 ```
 
 发送请求：
@@ -61,16 +60,16 @@ python3 tools/client.py 'hello mistlane'
 
 | 用途 | 角色与参数 | 客户端地址 | Lua 入口 |
 |---|---|---|---|
-| 游戏长连接，经网关转发 | `gateway --transport ws/wss --upstream IP:PORT` | `ws://host:port/ws` 或 `wss://host:port/ws` | TCP worker 的 `message` |
-| 单进程游戏消息服务 | `worker --transport ws/wss --script FILE` | 同上 | 当前 worker 的 `message` |
-| HTTP API | `worker --transport http/https --script FILE` | `http://host:port/path` 或 HTTPS | `http` 及请求钩子 |
+| 游戏长连接，经网关转发 | `gateway --transport ws/wss --upstream IP:PORT` | `ws://host:port/ws` 或 `wss://host:port/ws` | TCP gameServer 的 `message` |
+| 单进程游戏消息服务 | `gameServer --transport ws/wss --script FILE` | 同上 | 当前 gameServer 的 `message` |
+| HTTP API | `apiServer --transport http/https --script FILE` | `http://host:port/path` 或 HTTPS | `http` 及请求钩子 |
 
-### WS 网关连接 TCP 游戏 worker
+### WS 网关连接 TCP 游戏 gameServer
 
-在两个终端分别运行；这里网关直接连接 worker，也可以在中间保留 TCP router：
+在两个终端分别运行；这里网关直接连接 gameServer：
 
 ```bash
-./build/debug/mistlane --role worker --listen 127.0.0.1:7102 --script examples/echo.lua
+./build/debug/mistlane --role gameServer --listen 127.0.0.1:7102 --script examples/echo.lua
 ./build/debug/mistlane --role gateway --listen 0.0.0.0:8080 \
   --transport ws --upstream 127.0.0.1:7102
 ```
@@ -80,9 +79,9 @@ python3 tools/client.py 'hello mistlane'
 ```mermaid
 flowchart LR
   Client[游戏客户端] -->|WS / WSS| Gateway[Drogon 游戏网关]
-  Gateway -->|内部 TCP| Worker[Asio / Lua worker]
+  Gateway -->|内部 TCP| Worker[gameServer · Asio / Lua]
   Worker --> Message[message payload]
-  Api[HTTP API 客户端] -->|HTTP / HTTPS| Http[独立 HTTP worker]
+  Api[HTTP API 客户端] -->|HTTP / HTTPS| Http[独立 apiServer]
   Http --> Handler[http request]
 ```
 
@@ -90,7 +89,7 @@ flowchart LR
 
 ### WSS 游戏网关
 
-将游戏网关改为以下命令，内部 worker 仍使用上面的 TCP 配置：
+将游戏网关改为以下命令，内部 gameServer 仍使用上面的 TCP 配置：
 
 ```bash
 ./build/debug/mistlane --role gateway --listen 0.0.0.0:7443 \
@@ -102,10 +101,10 @@ flowchart LR
 
 ### 单进程直接处理游戏 WS / WSS
 
-开发或小型消息服务可以让 worker 自己监听 WS，无须额外网关或上游：
+开发或小型消息服务可以让 gameServer 自己监听 WS，无须额外网关或上游：
 
 ```bash
-./build/debug/mistlane --role worker --listen 0.0.0.0:8081 \
+./build/debug/mistlane --role gameServer --listen 0.0.0.0:8081 \
   --transport ws --script examples/echo.lua
 ```
 
@@ -124,16 +123,16 @@ socket.onopen = () => socket.send(new TextEncoder().encode('hello mistlane'))
 
 原生客户端同样使用标准 WS/WSS 库。服务端接受 text/binary 消息，响应统一为 binary，单消息最大 1 MiB。应用自己定义 payload 编码和消息 ID，当前示例只原样回显。
 
-当前通道是串行请求/响应模型：收到上一响应后才能发下一条应用消息，超前发送会关闭连接；尚无 Lua 主动推送、广播或按会话发送 API。它适合验证游戏连接和消息链路，高频全双工游戏所需的有界收发队列、会话生命周期和主动推送仍需补齐。
+当前通道是串行请求/响应模型：收到上一响应后才能发下一条应用消息，超前发送会关闭连接；尚无面向游戏会话的 Lua 主动推送、广播或按会话发送 API（脚本角色 HTTP 监听上的 WebSocket 升级有独立的推送 API，见[多监听章节](./http.md#多监听与-websocket-生命周期)）。它适合验证游戏连接和消息链路，高频全双工游戏所需的有界收发队列、会话生命周期和主动推送仍需补齐。
 
-每个进程当前只监听一种 transport。需要同时提供 TCP、WS、WSS 和 HTTP 时，分别启动不同实例、使用不同端口；HTTP worker 与游戏网关可共享同一套内部业务服务设计。
+一个进程也可以同时服务多种协议：`--transport` 仍为单一选择、作用于主监听；每个 `--listener PROTO://IP:PORT` 追加一个独立监听（明文与 TLS 可并存；`wss`/`https` 条目可追加 `?cert=FILE&key=FILE` 绑定自己的证书）。WS/WSS 监听照旧承载游戏会话，同一个 gameServer 可以在不同端口同时暴露原生客户端的帧式 TCP 和浏览器用的 WS/WSS。HTTP 侧见[HTTP 多监听与 WebSocket 生命周期](./http.md#多监听与-websocket-生命周期)。
 
 ### 初始化模板中的配置
 
-`mistlane init` 会生成可选的 `gateway-ws.env` 和 `gateway-wss.env`，默认集群仍启动 TCP 网关。WS 示例监听 `127.0.0.1:8080`；远程接入时修改对应文件中的 `LISTEN`。
+`mistlane init` 会生成可选的 `gateway-ws.env` 和 `gateway-wss.env`，默认集群仍启动 TCP 网关。WS 示例监听 `127.0.0.1:8080`；远程接入时修改对应文件中的 `LISTEN`。`gameServer-mixed.env` 演示同一个 gameServer 通过 `LISTENERS` 在 7102 提供帧式 TCP、在 7082 提供 WS 监听。
 
 ```bash
-MISTLANE_BIN=/path/to/mistlane ./ops/cluster.sh start worker router gateway-ws
+MISTLANE_BIN=/path/to/mistlane ./ops/cluster.sh start gameServer gateway-ws
 ```
 
 WSS 在 `config/instances/gateway-wss.env` 中设置 `CERT` 和 `KEY`，可填绝对路径或相对项目根目录的路径，然后启动 `gateway-wss`。脚本会检查证书文件并传给 `--cert`/`--key`；不会生成或提交私钥。systemd 对应实例为 `mistlane@gateway-wss.service`。
@@ -147,9 +146,10 @@ WSS 在 `config/instances/gateway-wss.env` 中设置 `CERT` 和 `KEY`，可填�
 | `ROLE` | 必填 | 作为 `--role` 传入；`cluster.sh` 还用它匹配就绪行（`ready <ROLE> <LISTEN>`），匹配成功才报告实例已启动。 |
 | `LISTEN` | 必填 | `IP:PORT` 作为 `--listen` 传入。 |
 | `TRANSPORT` | 可选 | `tcp` 为默认值，不出现在命令行；`ws`、`wss`、`http`、`https` 原样传入。`wss`/`https` 在 `CERT` 和 `KEY` 不可读时拒绝启动。 |
-| `SCRIPT` | 可选 | Lua 入口作为 `--script` 传入；相对路径按项目根目录解析。gateway 和 router 留空。 |
+| `SCRIPT` | 可选 | Lua 入口作为 `--script` 传入；相对路径按项目根目录解析。gateway 留空。 |
 | `UPSTREAMS` | 可选 | 逗号分隔的 `IP:PORT`（或 `IP:PORT:PROBE`，使 cross 按对端内部就绪探测挡住新加入）列表；每个条目展开为一个 `--upstream` 参数。 |
-| `ROUTE_EPOCH` | 可选 | cross/shard 纪元作为 `--route-epoch` 传入；留空则省略该参数。 |
+| `ROUTE_EPOCH` | 可选 | gateway cross routing/crossServer 纪元作为 `--route-epoch` 传入；留空则省略该参数。 |
+| `LISTENERS` | 可选 | 逗号分隔的 `PROTO://IP:PORT` 条目；每个条目展开为一个 `--listener` 参数，一个实例即可同时暴露 TCP、WS、WSS 与 HTTP。`wss`/`https` 条目可追加 `?cert=FILE&key=FILE`；query 路径原样传递，不按项目根目录解析。 |
 | `CERT`、`KEY` | 仅 wss/https | 证书链与私钥，绝对路径或项目根目录相对路径；启动器先确认两者可读。 |
 
 实例文件随模板仓库一起提交时不要放任何机密：初始化器不生成证书材料，`gateway-wss.env` 只带 `certs/` 占位路径。私钥等文件应放在仓库之外或由部署方管理的 `certs/` 目录；其他凭据通过安装后的 systemd unit（`Environment=`、`LoadCredential=`）或部署工具注入，而不是写进 `config/instances/` 提交。
@@ -159,28 +159,28 @@ WSS 在 `config/instances/gateway-wss.env` 中设置 `CERT` 和 `KEY`，可填�
 二进制也能不经 shell 启动器直接读原生配置格式：
 
 ```bash
-./build/debug/mistlane --config config/instances/worker.env --max-connections 512
+./build/debug/mistlane --config config/instances/gameServer.env --max-connections 512
 ```
 
 - 首个非空行必须是版本标记 `# mistlane-config 1`；缺失即拒绝，避免把任意 shell env 文件悄悄当作配置。
 - 其余行为 `KEY=VALUE`。空行与 `#` 注释忽略，空值跳过，重复键报错，未知键以「文件:行号」拒绝。
-- 键为 CLI 选项的大写形式（`ROLE`、`LISTEN`、`TRANSPORT`、`SCRIPT`、逗号分隔的 `UPSTREAMS`、`ROUTE_EPOCH`、`CERT`、`KEY`、`REDIS`、`METRICS_LISTEN`、`PROBE_LISTEN`、`OVERLOAD_RATIO`、`READY_HYSTERESIS`、`MAX_CONNECTIONS`、`MEMORY_BUDGET_MIB`、`MAX_ROOM_SESSIONS`、`MAX_GROUP_SESSIONS`、`MAX_SHARD_SESSIONS`、`CRASHPAD_HANDLER`、`CRASHPAD_DATABASE`），另有 `ROOT`。
+- 键为 CLI 选项的大写形式（`ROLE`、`LISTEN`、`TRANSPORT`、`SCRIPT`、逗号分隔的 `UPSTREAMS`、`ROUTE_EPOCH`、逗号分隔的 `LISTENERS`、`CERT`、`KEY`、`REDIS`、`METRICS_LISTEN`、`PROBE_LISTEN`、`OVERLOAD_RATIO`、`READY_HYSTERESIS`、`MAX_CONNECTIONS`、`MEMORY_BUDGET_MIB`、`MAX_ROOM_SESSIONS`、`MAX_GROUP_SESSIONS`、`MAX_SHARD_SESSIONS`、`CRASHPAD_HANDLER`、`CRASHPAD_DATABASE`），另有 `ROOT`。
 - 同一次运行的优先级：文件值 < 非空的 `MISTLANE_<KEY>` 环境变量 < `--config` 之后给出的显式参数。
 - `SCRIPT`、`CERT`、`KEY`、`CRASHPAD_HANDLER`、`CRASHPAD_DATABASE` 的相对路径按配置文件所在目录解析；设置 `ROOT` 时改按 `ROOT`（其本身相对配置文件目录）。这与 shell 启动器按项目根目录解析不同；想让生成的模板直接走 `--config`，设置 `ROOT` 即可。
 - 机密仍应放在部署方管理的环境（`MISTLANE_*` 或 systemd `LoadCredential=`），不提交到文件。
 
 
-## HTTP worker
+## apiServer
 
-除了基于帧 TCP/WS 的 Lua `message` 模式，worker 还可以直接提供 HTTP 服务。用 `--transport http`（或 `https`）配合 HTTP 脚本（如 `examples/http.lua`）启动：
+除了基于帧 TCP/WS 的 Lua `message` 模式，gameServer 还可以直接提供 HTTP 服务。用 `--transport http`（或 `https`）配合 HTTP 脚本（如 `examples/http.lua`）启动：
 
 ```bash
-./build/debug/mistlane --role worker --listen 127.0.0.1:7500 \
+./build/debug/mistlane --role gameServer --listen 127.0.0.1:7500 \
   --transport http --script examples/http.lua
 curl -s http://127.0.0.1:7500/healthz
 ```
 
-HTTPS 需另加 `--cert` 和 `--key`。传给 Lua 的请求表包含 method、path、query、headers 和 body；响应表设置 status、headers 和 body。请求生命周期钩子为 `before_request`、`http`、`after_request`、`on_error`，以及通用的 `init`/`start`/`tick`/`stop`/`shutdown` 回调。HTTP worker 必须提供 `http`，可省略 `message`；帧 worker 必须提供 `message`。限制与钩子契约见 [HTTP 参考](./http.md) 和 [Lua 生命周期](./lua.md)。
+HTTPS 需另加 `--cert` 和 `--key`。传给 Lua 的请求表包含 method、path、query、headers 和 body；响应表设置 status、headers 和 body。请求生命周期钩子为 `before_request`、`http`、`after_request`、`on_error`，以及通用的 `init`/`start`/`tick`/`stop`/`shutdown` 回调。apiServer 必须提供 `http`，可省略 `message`；帧 gameServer 必须提供 `message`。限制与钩子契约见 [HTTP 参考](./http.md) 和 [Lua 生命周期](./lua.md)。
 
 ## Lua 服务
 

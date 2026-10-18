@@ -23,9 +23,9 @@
 ## 组成
 
 - Boost.Asio：异步 TCP、定时器、信号和协程。
-- Drogon / Trantor：HTTP/HTTPS、WS/WSS；HTTP worker 支持 Lua handler 及完整生命周期。
+- Drogon / Trantor：HTTP/HTTPS、WS/WSS；apiServer 支持 Lua handler 及完整生命周期。
 - libcurl：有超时、证书校验与响应大小上限的 C++ HTTP 客户端。
-- 原生 cross/shard：固定房间路由和硬准入，剥离旧跨服玩法。
+- 原生 gateway cross routing/crossServer：固定房间路由和硬准入，剥离旧跨服玩法。
 - 诊断：可选私有 `/metrics`（Prometheus）端点、内部 PROBE1 存活/就绪探测、Crashpad 本地 minidump。
 - Boost.MySQL：`connection_pool`，负责连接分配、归还、重置、健康检查与重连。
 - Boost.Redis：可选 Asio 原生连接，向 Lua 提供异步 Redis Streams 消费组 API。
@@ -33,21 +33,22 @@
 - Lua：单线程模块生命周期、消息回调、tick 和可回滚的脚本重载。
 - CMake + vcpkg manifest：固定 baseline 管理直接和间接依赖。
 
+下图仅表示当前通信原型，不是老游戏的完整服务架构。目标进程职责与命名见[职责说明](docs/zh/process-roles.md)；标准部署由 gateway 直接连接 gameServer。
+
 ```mermaid
 flowchart LR
-  C[客户端 TCP] --> G[gateway / router]
-  G --> R[内部 TCP]
-  R --> W[worker + Lua message]
+  C[客户端 TCP] --> G[gateway]
+  G --> W[gameServer + Lua message]
   H[HTTP / HTTPS / WS / WSS] --> D[Drogon / Trantor]
   D --> B[有界线程桥接]
-  B --> L[HTTP worker + Lua hooks]
+  B --> L[apiServer + Lua hooks]
   A[C++ 扩展] --> P[Boost.MySQL pool]
   P --> DB[(MySQL / MariaDB)]
-  E[区服 Gate] --> X[cross 路由 / 准入]
-  X --> S[shard Lua 房间]
+  E[区服 Gate] --> X[gateway · 跨服路由/准入]
+  X --> S[crossServer Lua 房间]
 ```
 
-gateway/router 通过新连接轮询上游；每条会话固定到一个上游并串行请求 / 响应。Drogon/Trantor 负责 HTTP、HTTPS、WS、WSS，Asio 线程运行内部 TCP 与 Lua；有界桥接隔离两个事件循环。HTTP worker 使用 Lua handler 和请求钩子。worker 使用 `--redis IP:PORT` 可启用 Redis Streams Lua API，支持发布、消费组、ACK 和 pending 恢复；请求数有界，凭据可从环境变量读取。原生 cross/shard 对 group/room 固定路由并执行连接数硬准入，不包含旧游戏玩法。worker 可用 `--metrics-listen IP:PORT` 开启私有 Prometheus 端点、用 `--probe-listen IP:PORT` 开启内部存活/就绪探测；cross 上游可写 `IP:PORT[:PROBE]`，按 shard 就绪状态挡住新加入（见[跨服设计](docs/zh/cross-server.md)）。Boost.MySQL 与 libcurl 是 C++ 扩展，尚未绑定 Lua。
+gateway 通过新连接轮询上游；每条会话固定到一个上游并串行请求 / 响应。Drogon/Trantor 负责 HTTP、HTTPS、WS、WSS，Asio 线程运行内部 TCP 与 Lua；有界桥接隔离两个事件循环。apiServer 使用 Lua handler 和请求钩子。gameServer 使用 `--redis IP:PORT` 可启用 Redis Streams Lua API，支持发布、消费组、ACK 和 pending 恢复；请求数有界，凭据可从环境变量读取。原生 gateway cross routing/crossServer 对 group/room 固定路由并执行连接数硬准入，不包含旧游戏玩法。gameServer 可用 `--metrics-listen IP:PORT` 开启私有 Prometheus 端点、用 `--probe-listen IP:PORT` 开启内部存活/就绪探测；cross 上游可写 `IP:PORT[:PROBE]`，按 crossServer 就绪状态挡住新加入（见[跨服设计](docs/zh/cross-server.md)）。Boost.MySQL 与 libcurl 是 C++ 扩展，尚未绑定 Lua。
 
 ## 构建
 
@@ -81,39 +82,38 @@ baseline 内 Boost 为 1.92.0，Lua 为 5.5.1，OpenSSL 为 3.6.5#2。OpenSSL �
 在本目录的三个终端分别运行：
 
 ```bash
-./build/debug/mistlane --role worker --listen 127.0.0.1:7102 --script examples/echo.lua
-./build/debug/mistlane --role router --listen 127.0.0.1:7101 --upstream 127.0.0.1:7102
-./build/debug/mistlane --role gateway --listen 127.0.0.1:7100 --upstream 127.0.0.1:7101
+./build/debug/mistlane --role gameServer --listen 127.0.0.1:7102 --script examples/echo.lua
+./build/debug/mistlane --role gateway --listen 127.0.0.1:7100 --upstream 127.0.0.1:7102
 ```
 
 ```bash
 python3 tools/client.py 'hello mistlane'
 ```
 
-`--upstream` 可重复指定多个 worker，按连接轮询。游戏客户端使用 WS 时，启动独立游戏网关，内部 router/worker 保持 TCP：
+`--upstream` 可重复指定多个 gameServer，按连接轮询。游戏客户端使用 WS 时，启动独立游戏网关，内部 gateway/gameServer 保持 TCP：
 
 ```bash
 ./build/debug/mistlane --role gateway --listen 0.0.0.0:8080 \
-  --transport ws --upstream 127.0.0.1:7101
+  --transport ws --upstream 127.0.0.1:7102
 ```
 
-客户端连接 `ws://服务器地址:8080/ws`，消息进入 worker 的 Lua `message(payload)`。一条 WS 消息就是一个 payload，无须额外 TCP 长度头。单进程也可使用 `worker --transport ws --script examples/echo.lua` 直接监听；它与 HTTP worker 的 `http(request)` 是两种入口。
+客户端连接 `ws://服务器地址:8080/ws`，消息进入 gameServer 的 Lua `message(payload)`。一条 WS 消息就是一个 payload，无须额外 TCP 长度头。单进程也可使用 `gameServer --transport ws --script examples/echo.lua` 直接监听；它与 apiServer 的 `http(request)` 是两种入口。
 
 WSS 示例（使用你自己的证书链与私钥）：
 
 ```bash
 ./build/debug/mistlane --role gateway --listen 127.0.0.1:7443 \
   --transport wss --cert /path/to/fullchain.pem --key /path/to/private-key.pem \
-  --upstream 127.0.0.1:7101
+  --upstream 127.0.0.1:7102
 ```
 
 证书和私钥不进入源码包。WS/WSS 的实现直接使用 Drogon；内部 TCP payload 为四字节网络序长度加数据，最大 1 MiB，允许空消息和二进制内容。
 
-WSS 客户端连接 `wss://证书对应域名:7443/ws`，远程接入时将上述 WSS 监听地址改为合适的服务端网卡地址。响应是 binary WS 消息；当前必须等待上一响应再发送下一条应用消息，Lua 主动推送/广播尚未实现。浏览器代码、网关/直接 worker 两种拓扑及初始化模板的 `CERT`/`KEY` 配置见[游戏接入指南](docs/zh/guide.md)。
+WSS 客户端连接 `wss://证书对应域名:7443/ws`，远程接入时将上述 WSS 监听地址改为合适的服务端网卡地址。响应是 binary WS 消息；当前必须等待上一响应再发送下一条应用消息，Lua 主动推送/广播尚未实现。浏览器代码、网关/直接 gameServer 两种拓扑及初始化模板的 `CERT`/`KEY` 配置见[游戏接入指南](docs/zh/guide.md)。
 
 ## Lua 扩展
 
-TCP/WS/WSS worker 和 shard 的脚本必须提供 `message(payload, context) -> string`。HTTP/HTTPS worker 改为提供 `http(request) -> response`，可省略 message。HTTP 请求依次经过可选 `before_request`、主 `http`、`after_request`；异常由 `on_error` 处理。完整请求/响应字段、生命周期和限制见 [Lua 生命周期说明](docs/zh/lua.md)。
+TCP/WS/WSS gameServer 和 crossServer 的脚本必须提供 `message(payload, context) -> string`。HTTP/HTTPS apiServer 改为提供 `http(request) -> response`，可省略 message。HTTP 请求依次经过可选 `before_request`、主 `http`、`after_request`；异常由 `on_error` 处理。完整请求/响应字段、生命周期和限制见 [Lua 生命周期说明](docs/zh/lua.md)。
 
 初始化 context 后，监听就绪时调用 `start`；运行期间串行执行消息/HTTP handler 与 tick；正常停止依次调用 `stop`、`shutdown`。tick 在上次完成后约 100ms 再调度，并非实时帧率。SIGHUP 创建候选 VM，执行 init/start 成功才激活并退役旧 VM；失败保留当前 VM。成功重载重置模块内状态，不迁移房间状态，也不回滚生命周期钩子的外部副作用。钩子始终在 Asio 所属线程执行，必须快速返回。
 
@@ -160,6 +160,13 @@ pnpm install --frozen-lockfile
 pnpm docs:dev
 pnpm docs:build
 pnpm docs:preview
+```
+
+文档图表验收（在构建后运行；CI 同样执行）：
+
+```sh
+pnpm exec playwright install chromium
+pnpm docs:check
 ```
 
 中文入口为 [docs/zh/index.md](docs/zh/index.md)，英文入口为 [docs/index.md](docs/index.md)。默认站点路径 /mistlane/，可用 DOCS_BASE 调整。构建不会自动发布站点。

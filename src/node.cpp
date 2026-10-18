@@ -14,6 +14,7 @@
 #include <functional>
 #include <iomanip>
 #include <iostream>
+#include <map>
 #include <memory>
 #include <set>
 #include <sstream>
@@ -267,17 +268,17 @@ private:
             self->diagnostics_.add_payload_bytes("rx", payload.size());
             self->request_started_ = std::chrono::steady_clock::now();
             self->deadline(10);
-            if ((self->config_.role == "cross" || self->config_.role == "shard") && !self->joined_) {
+            if ((self->config_.is_cross_gateway() || self->config_.role == "crossServer") && !self->joined_) {
                 try {
                     self->context_ = cross_context(payload);
                     if (self->context_.epoch != self->config_.route_epoch) return self->reject("EPOCH");
-                    auto index = self->config_.role == "cross"
+                    auto index = self->config_.is_cross_gateway()
                         ? cross_shard(self->context_, self->config_.upstreams.size()) : 0;
                     auto error = self->admission_.acquire(self.get(), self->context_, index);
                     if (!error.empty()) return self->reject(error);
                     self->joined_ = true;
-                    self->awaiting_join_ = self->config_.role == "cross";
-                    if (self->config_.role == "shard")
+                    self->awaiting_join_ = self->config_.is_cross_gateway();
+                    if (self->config_.role == "crossServer")
                         return self->reply("MLC1 OK " + std::to_string(self->config_.route_epoch));
                     const auto& endpoint = self->config_.upstreams[index];
                     self->endpoint_ = tcp::endpoint(parse_address(endpoint.address), endpoint.port);
@@ -429,10 +430,92 @@ private:
     std::uint64_t generation_ = 0;
     bool closed_ = false;
 };
+// Lua websocket lifecycle sessions (script roles with an http/https listener).
+// Every method runs on the node's event loop thread, matching the WebsocketSink
+// contract, so no locking is needed. Sessions share max_connections with the
+// framed game sessions.
+class WebsocketService : public WebsocketSink, public std::enable_shared_from_this<WebsocketService> {
+public:
+    using Admission = std::function<bool()>;
+    using Publish = std::function<void()>;
+    WebsocketService(std::shared_ptr<LuaService>& service, Admission admit, Publish publish)
+      : service_(service), admit_(std::move(admit)), publish_(std::move(publish)) {}
+    std::size_t size() const { return sessions_.size(); }
+    void attach(std::shared_ptr<Channel> channel, std::string path) {
+        if (!admit_()) return channel->close();
+        const auto id = next_id_++;
+        sessions_.emplace(id, channel);
+        publish_();
+        try {
+            service_->websocket_open(id, path);
+        } catch (const std::exception& e) {
+            // A failing open never reaches the message/close callbacks; drop it.
+            std::cerr << "websocket open failed: " << e.what() << '\n';
+            sessions_.erase(id);
+            publish_();
+            channel->close();
+            return;
+        }
+        pump(id);
+    }
+    void close_all() {
+        // WebChannel::close() completes the pending read inline, which erases
+        // from sessions_ while Lua's websocket_close callback runs.
+        while (!sessions_.empty()) sessions_.begin()->second->close();
+    }
+private:
+    std::string websocket_send(std::uint64_t id, std::string_view payload) override {
+        if (payload.size() > max_frame) return "payload exceeds 1 MiB";
+        const auto found = sessions_.find(id);
+        if (found == sessions_.end()) return "unknown websocket id";
+        auto channel = found->second;
+        channel->write(std::string(payload), [self=shared_from_this(), id](Error ec) {
+            if (ec) self->closed(id);
+        });
+        return "";
+    }
+    void pump(std::uint64_t id) {
+        const auto found = sessions_.find(id);
+        if (found == sessions_.end()) return;
+        auto channel = found->second;
+        channel->read([self=shared_from_this(), id](Error ec, std::string payload) {
+            if (ec) return self->closed(id);
+            try {
+                self->service_->websocket_message(id, payload);
+            } catch (const std::exception& e) {
+                std::cerr << "websocket message failed: " << e.what() << '\n';
+                // Lua failures close the session; the close callback is not re-fired.
+                self->drop(id);
+                return;
+            }
+            self->pump(id);
+        });
+    }
+    void closed(std::uint64_t id) {
+        if (sessions_.erase(id) == 0) return;
+        publish_();
+        try {
+            service_->websocket_close(id);
+        } catch (const std::exception& e) { std::cerr << "websocket close failed: " << e.what() << '\n'; }
+    }
+    void drop(std::uint64_t id) {
+        const auto found = sessions_.find(id);
+        if (found == sessions_.end()) return;
+        auto channel = found->second;
+        sessions_.erase(found);
+        publish_();
+        channel->close(); // the aborted read lands in closed(), a no-op on the erased id
+    }
+    std::shared_ptr<LuaService>& service_;
+    Admission admit_;
+    Publish publish_;
+    std::map<std::uint64_t, std::shared_ptr<Channel>> sessions_;
+    std::uint64_t next_id_ = 1;
+};
 class Node {
 public:
     explicit Node(Config config)
-      : config_(std::move(config)), acceptor_(io_), signals_(io_, SIGINT, SIGTERM, SIGHUP), tick_(io_),
+      : config_(std::move(config)), signals_(io_, SIGINT, SIGTERM, SIGHUP), tick_(io_),
         admission_(std::max<std::size_t>(1, config_.upstreams.size()), config_.max_room_sessions,
                    config_.max_group_sessions, config_.max_shard_sessions) {
         diagnostics_ = std::make_unique<Diagnostics>(config_);
@@ -449,43 +532,81 @@ public:
             config_.memory_budget_mib*1024*1024/session_envelope);
         if (!config_.max_connections) throw std::invalid_argument("memory budget too small for one session");
         std::cout << "session admission limit " << config_.max_connections << std::endl;
-        if (config_.transport == "wss" || config_.transport == "https") {
-            tls_ = std::make_unique<asio::ssl::context>(asio::ssl::context::tls_server);
-            if (!SSL_CTX_set_min_proto_version(tls_->native_handle(), TLS1_2_VERSION))
+        // What the listener mix demands from the script and from the process:
+        // framed game sessions (tcp/ws/wss), the Lua HTTP service (http/https),
+        // and whether Drogon owns any listener at all.
+        bool game_sessions = false, http_service = false;
+        for (const auto& item : config_.listeners) {
+            if (item.protocol == "http" || item.protocol == "https") http_service = true;
+            else game_sessions = true;
+            web_mode_ = web_mode_ || item.protocol != "tcp";
+        }
+        for (const auto& item : config_.listeners) {
+            if (item.protocol != "wss" && item.protocol != "https") continue;
+            // Validate every TLS listener's effective pair (listener override,
+            // else the global --cert/--key) before any port opens.
+            const auto& certificate = item.certificate.empty() ? config_.certificate : item.certificate;
+            const auto& private_key = item.private_key.empty() ? config_.private_key : item.private_key;
+            asio::ssl::context check(asio::ssl::context::tls_server);
+            if (!SSL_CTX_set_min_proto_version(check.native_handle(), TLS1_2_VERSION))
                 throw std::runtime_error("cannot configure minimum TLS version");
-            tls_->use_certificate_chain_file(config_.certificate);
-            tls_->use_private_key_file(config_.private_key, asio::ssl::context::pem);
-            if (!SSL_CTX_check_private_key(tls_->native_handle()))
+            check.use_certificate_chain_file(certificate);
+            check.use_private_key_file(private_key, asio::ssl::context::pem);
+            if (!SSL_CTX_check_private_key(check.native_handle()))
                 throw std::runtime_error("TLS private key does not match certificate");
         }
         if (config_.redis_enabled) {
             redis_ = std::make_shared<RedisRuntime>(io_, config_.redis.address, config_.redis.port);
             redis_->start();
         }
-        if (config_.role == "worker" || config_.role == "shard") service_ = std::make_shared<LuaService>(config_.script, ServiceContext{config_.role, config_.transport, config_.route_epoch}, redis_);
+        const bool script_role = config_.role == "gameServer" || config_.role == "crossServer" || config_.role == "apiServer";
+        service_context_ = ServiceContext{config_.role, config_.transport, config_.route_epoch, game_sessions, http_service};
+        if (script_role && http_service)
+            // Holds a reference to service_, so script reloads swap under it freely.
+            websockets_ = std::make_shared<WebsocketService>(service_,
+                [this] { return !stopping_ && active_sessions() < config_.max_connections; },
+                [this] { publish_active(); });
+        if (script_role)
+            service_ = std::make_shared<LuaService>(config_.script, service_context_, redis_, websockets_.get());
         for (const auto& e : config_.upstreams) (void)parse_address(e.address);
-        if (config_.transport == "tcp") {
-            auto endpoint = tcp::endpoint(parse_address(config_.listen.address), config_.listen.port);
-            acceptor_.open(endpoint.protocol());
-            acceptor_.set_option(asio::socket_base::reuse_address(true));
-            acceptor_.bind(endpoint);
-            acceptor_.listen();
+        for (const auto& item : config_.listeners) {
+            if (item.protocol != "tcp") continue;
+            auto acceptor = std::make_shared<tcp::acceptor>(io_);
+            auto endpoint = tcp::endpoint(parse_address(item.endpoint.address), item.endpoint.port);
+            acceptor->open(endpoint.protocol());
+            acceptor->set_option(asio::socket_base::reuse_address(true));
+            acceptor->bind(endpoint);
+            acceptor->listen();
+            acceptors_.push_back(std::move(acceptor));
         }
     }
     void run() {
         signal();
         tick();
-        if (config_.transport == "tcp") {
+        const auto announce = [this](const Listener& item) {
+            std::cout << "ready " << config_.role << ' ' << item.endpoint.address << ':'
+                      << item.endpoint.port << std::endl;
+        };
+        if (!web_mode_) {
             if (service_) service_->start();
             accept();
             diagnostics_->set_ready(true);
             ready_ = true;
-            std::cout << "ready " << config_.role << ' ' << config_.listen.address << ':' << config_.listen.port << std::endl;
+            for (const auto& item : config_.listeners) announce(item);
             io_.run();
         } else {
             std::thread worker([this] { io_.run(); });
             try {
+                // Mixed listeners: framed TCP beside the Drogon-owned ones.
+                accept();
+                for (const auto& item : config_.listeners)
+                    if (item.protocol == "tcp") announce(item);
+                WsAttach lifecycle;
+                if (websockets_) lifecycle = [this](std::shared_ptr<Channel> channel, std::string path) {
+                    websockets_->attach(std::move(channel), std::move(path));
+                };
                 run_web(config_, io_.get_executor(), [this](std::shared_ptr<Channel> c) { attach(std::move(c)); },
+                    std::move(lifecycle),
                     [this](WebRequest request, HttpCompletion complete) {
                         asio::post(io_, [this, request=std::move(request), complete=std::move(complete)]() mutable {
                             if (stopping_ || !service_) return complete({503, {}, "Service Unavailable"});
@@ -494,12 +615,13 @@ public:
                             diagnostics_->observe_lua_callback("http", std::chrono::steady_clock::now() - started);
                             complete(std::move(response));
                         });
-                    }, [this] {
+                    }, [this, &announce] {
                         try {
                             if (service_) service_->start();
                             diagnostics_->set_ready(true);
                             ready_ = true;
-                            std::cout << "ready " << config_.role << ' ' << config_.listen.address << ':' << config_.listen.port << std::endl;
+                            for (const auto& item : config_.listeners)
+                                if (item.protocol != "tcp") announce(item);
                         } catch (...) { startup_error_ = std::current_exception(); stop(); }
                     });
             }
@@ -510,25 +632,33 @@ public:
         }
     }
 private:
+    // Game sessions and Lua websocket sessions share one admission budget.
+    std::size_t active_sessions() const {
+        return sessions_.size() + (websockets_ ? websockets_->size() : 0);
+    }
+    void publish_active() { diagnostics_->set_active_sessions(active_sessions()); }
     void attach(std::shared_ptr<Channel> client) {
-        if (stopping_ || sessions_.size() >= config_.max_connections) return client->close();
-        const Endpoint* upstream = config_.upstreams.empty() || config_.role == "cross" ? nullptr
+        if (stopping_ || active_sessions() >= config_.max_connections) return client->close();
+        const Endpoint* upstream = config_.upstreams.empty() || config_.is_cross_gateway() ? nullptr
             : &config_.upstreams[cursor_++ % config_.upstreams.size()];
         auto session = std::make_shared<Session>(std::move(client), service_, upstream, config_, admission_, *diagnostics_,
             [this](Session* ptr) {
                 admission_.release(ptr);
                 for (auto i = sessions_.begin(); i != sessions_.end(); ++i)
                     if (i->get() == ptr) { sessions_.erase(i); break; }
-                diagnostics_->set_active_sessions(sessions_.size());
+                publish_active();
             });
         sessions_.insert(session);
-        diagnostics_->set_active_sessions(sessions_.size());
+        publish_active();
         session->start();
     }
     void accept() {
-        acceptor_.async_accept([this](Error ec, tcp::socket socket) {
+        for (const auto& acceptor : acceptors_) accept(acceptor);
+    }
+    void accept(const std::shared_ptr<tcp::acceptor>& acceptor) {
+        acceptor->async_accept([this, acceptor](Error ec, tcp::socket socket) {
             if (stopping_) return;
-            if (!ec && sessions_.size() < config_.max_connections) {
+            if (!ec && active_sessions() < config_.max_connections) {
                 attach(std::make_shared<TcpChannel>(std::move(socket)));
             } else if (!ec) { diagnostics_->reject("connection_limit"); Error ignored; socket.close(ignored); }
             // Resource exhaustion should fail visibly rather than spin the event loop.
@@ -537,7 +667,7 @@ private:
                 stop();
                 return;
             }
-            if (!ec) accept();
+            if (!ec) accept(acceptor);
         });
     }
     void signal() {
@@ -546,7 +676,7 @@ private:
             if (value == SIGHUP) {
                 if (service_) {
                     try {
-                        auto replacement = std::make_shared<LuaService>(config_.script, ServiceContext{config_.role, config_.transport, config_.route_epoch}, redis_);
+                        auto replacement = std::make_shared<LuaService>(config_.script, service_context_, redis_, websockets_.get());
                         replacement->start();
                         service_.swap(replacement);
                         std::cout << "script reloaded; module state reset" << std::endl;
@@ -570,7 +700,7 @@ private:
             // Readiness flips only after a full hysteresis window on either side,
             // so a single busy tick never starts rejecting new rooms.
             const bool saturated =
-                static_cast<double>(sessions_.size()) >= config_.overload_ratio*static_cast<double>(config_.max_connections);
+                static_cast<double>(active_sessions()) >= config_.overload_ratio*static_cast<double>(config_.max_connections);
             over_ticks_ = saturated ? over_ticks_+1 : 0;
             healthy_ticks_ = saturated ? 0 : healthy_ticks_+1;
             if (over_ticks_ >= config_.ready_hysteresis) admitting_ = false;
@@ -589,7 +719,7 @@ private:
     std::string readiness_summary() const {
         std::ostringstream out;
         out << "ok " << (ready_ && admitting_ ? "ready" : "notready")
-            << " active=" << sessions_.size() << " capacity=" << config_.max_connections
+            << " active=" << active_sessions() << " capacity=" << config_.max_connections
             << " lag_ms=" << std::fixed << std::setprecision(1) << last_lag_seconds_*1000.0;
         return out.str();
     }
@@ -600,13 +730,15 @@ private:
         diagnostics_->set_ready(false);
         if (probe_) probe_->stop();
         Error ignored;
-        acceptor_.close(ignored);
+        for (const auto& acceptor : acceptors_) acceptor->close(ignored);
+        // Close websocket sessions while the VM can still run their callbacks.
+        if (websockets_) websockets_->close_all();
         if (service_) {
             try { service_->stop(); }
             catch (const std::exception& e) { std::cerr << "stop failed: " << e.what() << '\n'; }
         }
         if (redis_) redis_->stop();
-        if (config_.transport != "tcp") stop_web();
+        if (web_mode_) stop_web();
         signals_.cancel();
         tick_.cancel();
         while (!sessions_.empty()) {
@@ -621,11 +753,12 @@ private:
     }
     Config config_;
     asio::io_context io_;
-    tcp::acceptor acceptor_;
+    std::vector<std::shared_ptr<tcp::acceptor>> acceptors_;
     asio::signal_set signals_;
     asio::steady_timer tick_;
-    std::unique_ptr<asio::ssl::context> tls_;
     std::shared_ptr<LuaService> service_;
+    std::shared_ptr<WebsocketService> websockets_;
+    ServiceContext service_context_;
     std::shared_ptr<RedisRuntime> redis_;
     std::set<std::shared_ptr<Session>> sessions_;
     std::size_t cursor_ = 0;
@@ -636,7 +769,7 @@ private:
     bool ready_ = false, admitting_ = true;
     unsigned over_ticks_ = 0, healthy_ticks_ = 0;
     double last_lag_seconds_ = 0;
-    bool stopping_ = false;
+    bool stopping_ = false, web_mode_ = false;
 };
 }
 int run_node(Config config) { Node node(std::move(config)); node.run(); return 0; }

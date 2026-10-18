@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
+#include "mistlane/roles.hpp"
 #include "mistlane/node.hpp"
 #include "mistlane/cli.hpp"
 #include "mistlane/scaffold.hpp"
@@ -53,6 +54,40 @@ double ratio(std::string_view text) {
         throw std::invalid_argument("overload ratio must be in (0,1]: "+plain);
     return value;
 }
+// "PROTO://IP:PORT[?cert=FILE&key=FILE]" adds one independent listener. The
+// query certificate/key pair overrides the global --cert/--key for that
+// listener only; anything else in the query is rejected.
+mistlane::Listener listener(std::string_view text) {
+    const auto scheme_end = text.find("://");
+    if (scheme_end == text.npos) throw std::invalid_argument("listener must be PROTO://IP:PORT: "+std::string(text));
+    mistlane::Listener result;
+    result.protocol = std::string(text.substr(0, scheme_end));
+    if (result.protocol != "tcp" && result.protocol != "ws" && result.protocol != "wss" &&
+        result.protocol != "http" && result.protocol != "https")
+        throw std::invalid_argument("unknown listener protocol: "+result.protocol);
+    auto rest = text.substr(scheme_end+3);
+    if (auto query = rest.find('?'); query != rest.npos) {
+        const auto fields = rest.substr(query+1);
+        rest.remove_suffix(rest.size()-query);
+        std::size_t at = 0;
+        for (;;) {
+            const auto next = fields.find('&', at);
+            const auto item = fields.substr(at, next == fields.npos ? fields.npos : next-at);
+            const auto equals = item.find('=');
+            const auto name = item.substr(0, equals);
+            if (equals == item.npos || item.empty() ||
+                (name != "cert" && name != "key"))
+                throw std::invalid_argument("unsupported listener query field: "+std::string(item));
+            (name == "cert" ? result.certificate : result.private_key) = std::string(item.substr(equals+1));
+            if (next == fields.npos) break;
+            at = next+1;
+        }
+    }
+    result.endpoint = endpoint(rest);
+    if (result.certificate.empty() != result.private_key.empty())
+        throw std::invalid_argument("listener certificates need both cert= and key=");
+    return result;
+}
 // Native config files are line-based KEY=VALUE with a mandatory version header,
 // so a random shell env file is never consumed silently. Entries become the
 // same flags the command line parses, in order: file values, then MISTLANE_<KEY>
@@ -60,9 +95,9 @@ double ratio(std::string_view text) {
 std::vector<std::pair<std::string, std::string>> config_flags(const std::filesystem::path& file) {
     struct Field { const char* key; const char* flag; bool path; bool list; bool root; };
     static constexpr Field fields[] = {
-        {"ROLE","--role",0,0,0}, {"LISTEN","--listen",0,0,0}, {"TRANSPORT","--transport",0,0,0},
+        {"ROLE","--role",0,0,0}, {"ROUTING","--routing",0,0,0}, {"LISTEN","--listen",0,0,0}, {"TRANSPORT","--transport",0,0,0},
         {"SCRIPT","--script",1,0,0}, {"UPSTREAMS","--upstream",0,1,0}, {"CERT","--cert",1,0,0},
-        {"KEY","--key",1,0,0}, {"REDIS","--redis",0,0,0},
+        {"KEY","--key",1,0,0}, {"LISTENERS","--listener",0,1,0}, {"REDIS","--redis",0,0,0},
         {"METRICS_LISTEN","--metrics-listen",0,0,0}, {"PROBE_LISTEN","--probe-listen",0,0,0},
         {"OVERLOAD_RATIO","--overload-ratio",0,0,0}, {"READY_HYSTERESIS","--ready-hysteresis",0,0,0},
         {"MAX_CONNECTIONS","--max-connections",0,0,0}, {"MEMORY_BUDGET_MIB","--memory-budget-mib",0,0,0},
@@ -149,6 +184,7 @@ int main(int argc, char** argv) {
             if (scaffold_result >= 0) return scaffold_result;
         }
         mistlane::Config config;
+        bool transport_selected = false;
         // --config entries expand in place: file values first, MISTLANE_<KEY>
         // environment overrides inside the reader, then any explicit flag after.
         std::vector<std::string> tokens;
@@ -167,16 +203,19 @@ int main(int argc, char** argv) {
         for (std::size_t i = 0; i < tokens.size(); ++i) {
             std::string key = tokens[i];
             if (key == "--help") {
-                std::cout << "mistlane --role worker|router|gateway|cross|shard --listen IP:PORT\n"
+                std::cout << "mistlane --role gateway|gameServer|crossServer|apiServer --listen IP:PORT\n"
                              "mistlane init [DIRECTORY]  Create a multi-role starter project\n"
                              "mistlane test [--list|--suite NAME|--case NAME]  Run native C++ cases\n"
                              "mistlane bot --url URL [--clients N --count N]  Simulate game requests\n"
                              "  --config FILE  KEY=VALUE native config ('# mistlane-config 1' header;\n"
                              "    MISTLANE_<KEY> env overrides, flags after --config win, relative\n"
                              "    paths resolve against the file or its ROOT= entry)\n"
-                             "  worker: --script FILE\n"
-                             "  router/gateway: --upstream IP:PORT (repeat for session round robin)\n"
+                             "  gameServer/crossServer/apiServer: --script FILE\n"
+                             "  gateway: --upstream IP:PORT (repeat for session round robin)\n"
+                             "  --routing session|cross (gateway only; default session)\n"
                              "  --transport tcp|ws|wss|http|https (wss/https require --cert FILE --key FILE)\n"
+                             "  --listener PROTO://IP:PORT (repeat; independent extra listener, mixed\n"
+                             "    plaintext/TLS allowed; wss/https may add ?cert=FILE&key=FILE overrides)\n"
                              "  --max-connections N (default 1024)\n"
                              "  --memory-budget-mib N (default 256; conservative admission envelope)\n"
                              "  --redis IP:PORT (optional; Streams Lua API enabled)\n"
@@ -185,11 +224,12 @@ int main(int argc, char** argv) {
                              "  --metrics-listen IP:PORT (optional; Prometheus /metrics endpoint)\n"
                              "  --probe-listen IP:PORT (optional; internal PROBE1 liveness/readiness)\n"
                              "    --overload-ratio X (readiness gate, default 0.9) --ready-hysteresis N (default 3)\n"
-                             "    upstreams take IP:PORT[:PROBE] so cross can check shard readiness\n"
+                             "    upstreams take IP:PORT[:PROBE] so cross-routing gateways can check crossServer readiness\n"
                              "  --crashpad-handler FILE --crashpad-database DIR (optional; local dumps only)\n"
-                             "  cross/shard: --route-epoch N --max-room-sessions N\n"
+                             "  cross routing/crossServer: --route-epoch N --max-room-sessions N\n"
                              "    --max-group-sessions N --max-shard-sessions N\n"
-                             "SIGHUP: transactional worker script reload (state is reset)\n";
+                             "SIGHUP: transactional script reload (state is reset)\n"
+                             "Planned, not runnable: login, coordinator, data\n";
                 return 0;
             }
             if (++i >= tokens.size()) throw std::invalid_argument("missing value for "+key);
@@ -197,9 +237,11 @@ int main(int argc, char** argv) {
             if (key == "--role") config.role = value;
             else if (key == "--listen") config.listen = endpoint(value);
             else if (key == "--upstream") config.upstreams.push_back(upstream(value));
-            else if (key == "--transport") config.transport = value;
+            else if (key == "--routing") config.routing = value;
+            else if (key == "--transport") { config.transport = value; transport_selected = true; }
             else if (key == "--cert") config.certificate = value;
             else if (key == "--key") config.private_key = value;
+            else if (key == "--listener") config.listeners.push_back(listener(value));
             else if (key == "--script") config.script = value;
             else if (key == "--redis") { config.redis = endpoint(value); config.redis_enabled = true; }
             else if (key == "--metrics-listen") { config.metrics_listen = endpoint(value); config.metrics_enabled = true; }
@@ -216,6 +258,14 @@ int main(int argc, char** argv) {
             else if (key == "--max-connections") config.max_connections = number(value, 100000);
             else throw std::invalid_argument("unknown option: "+key);
         }
+        const auto* role = mistlane::find_role(config.role);
+        if (!role) throw std::invalid_argument("unknown role: " + config.role);
+        if (!role->runnable) throw std::invalid_argument("role " + config.role + " is planned but not implemented");
+        if (config.role == "apiServer" && !transport_selected) config.transport = "http";
+        if (config.routing != "session" && config.routing != "cross")
+            throw std::invalid_argument("unknown routing policy: " + config.routing);
+        if (config.routing != "session" && config.role != "gateway")
+            throw std::invalid_argument("--routing applies to gateway only");
         if (config.transport != "tcp" && config.transport != "ws" && config.transport != "wss" && config.transport != "http" && config.transport != "https")
             throw std::invalid_argument("unknown transport");
         if (config.transport == "wss" || config.transport == "https") {
@@ -223,17 +273,41 @@ int main(int argc, char** argv) {
                 throw std::invalid_argument("wss/https require --cert and --key");
         } else if (!config.certificate.empty() || !config.private_key.empty())
             throw std::invalid_argument("cert/key only apply to wss/https");
-        if (config.role == "worker" || config.role == "shard") {
+        if (role->script) {
             if (config.script.empty() || !config.upstreams.empty())
-                throw std::invalid_argument("worker requires --script and no upstream");
-        } else if (config.role == "router" || config.role == "gateway" || config.role == "cross") {
-            if (config.upstreams.empty() || !config.script.empty())
-                throw std::invalid_argument("router/gateway requires upstream and no script");
-        } else throw std::invalid_argument("unknown role: "+config.role);
+                throw std::invalid_argument(config.role + " requires --script and no upstream");
+        } else if (config.upstreams.empty() || !config.script.empty()) {
+            throw std::invalid_argument("gateway requires upstream and no script");
+        }
+        // The primary listener comes from --listen/--transport; --listener entries follow.
+        mistlane::Listener primary;
+        primary.protocol = config.transport;
+        primary.endpoint = config.listen;
+        config.listeners.insert(config.listeners.begin(), std::move(primary));
+        for (std::size_t i = 0; i < config.listeners.size(); ++i)
+            for (std::size_t j = i+1; j < config.listeners.size(); ++j)
+                // Same port twice (any address) is ambiguous for websocket
+                // upgrade dispatch, which reads the local port per connection.
+                if (config.listeners[i].endpoint.port == config.listeners[j].endpoint.port)
+                    throw std::invalid_argument("duplicate listener port "+
+                        std::to_string(config.listeners[i].endpoint.port));
+        bool any_tls = false, any_non_tcp = false, any_tcp = false;
+        for (const auto& item : config.listeners) {
+            const bool tls = item.protocol == "wss" || item.protocol == "https";
+            any_tls = any_tls || tls;
+            any_non_tcp = any_non_tcp || item.protocol != "tcp";
+            any_tcp = any_tcp || item.protocol == "tcp";
+            if (tls && (item.certificate.empty() ? config.certificate : item.certificate).empty())
+                throw std::invalid_argument("wss/https listeners require --cert and --key (or listener ?cert= and ?key=)");
+        }
+        if (!any_tls && (!config.certificate.empty() || !config.private_key.empty()))
+            throw std::invalid_argument("cert/key only apply to wss/https");
+        if (config.role == "apiServer" && any_tcp)
+            throw std::invalid_argument("apiServer requires http, https, ws or wss transport");
         if (config.crashpad_handler.empty() != config.crashpad_database.empty())
             throw std::invalid_argument("Crashpad requires both --crashpad-handler and --crashpad-database");
-        if ((config.role == "cross" || config.role == "shard") && config.transport != "tcp")
-            throw std::invalid_argument("cross/shard require internal TCP transport");
+        if ((config.is_cross_gateway() || config.role == "crossServer") && any_non_tcp)
+            throw std::invalid_argument("cross routing and crossServer require internal TCP transport");
         return mistlane::run_node(std::move(config));
     } catch (const std::exception& e) {
         std::cerr << "fatal: " << e.what() << '\n';

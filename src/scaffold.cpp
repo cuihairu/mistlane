@@ -49,14 +49,14 @@ MISTLANE_BIN=/path/to/mistlane ./ops/cluster.sh start
 ./ops/cluster.sh stop
 ```
 
-The default set starts worker → router → gateway, two shards → cross, and an HTTP worker. Run the TCP client against `127.0.0.1:7100`; the cross ingress listens on `127.0.0.1:7300`; HTTP listens on `127.0.0.1:7400`.
+The default set starts gameServer → gateway, two crossServer instances → gateway-cross, and apiServer. Run the TCP client against `127.0.0.1:7100`; the cross ingress listens on `127.0.0.1:7300`; HTTP listens on `127.0.0.1:7400`.
 
 ## Game clients over WebSocket
 
-The optional `gateway-ws` and `gateway-wss` instances connect game clients to the same TCP router/worker. They are not started by the default cluster command. Each WS message calls the worker's Lua `message` callback; HTTP workers use a separate `http` callback.
+The optional `gateway-ws` and `gateway-wss` instances connect game clients to the same TCP gameServer. They are not started by the default cluster command. Each WS message calls the gameServer's Lua `message` callback; apiServer instances use a separate `http` callback.
 
 ```sh
-MISTLANE_BIN=/path/to/mistlane ./ops/cluster.sh start worker router gateway-ws
+MISTLANE_BIN=/path/to/mistlane ./ops/cluster.sh start gameServer gateway-ws
 ```
 
 Connect to `ws://127.0.0.1:8080/ws`. Both `/` and `/ws` accept upgrades. To use WSS, set `CERT` and `KEY` in `config/instances/gateway-wss.env`, then start `gateway-wss` and connect to `wss://your-certificate-hostname:7443/ws`. Certificate paths are absolute or relative to this project root, including when launched through systemd. Private keys are supplied by the deployment; the initializer does not create them. Change `LISTEN` from loopback to the appropriate server interface for remote clients.
@@ -69,19 +69,19 @@ After installing the project at `/opt/mistlane`, create a dedicated `mistlane` s
 
 ```sh
 sudo systemctl daemon-reload
-sudo systemctl enable --now mistlane@worker.service mistlane@router.service mistlane@gateway.service
+sudo systemctl enable --now mistlane@gameServer.service mistlane@gateway.service
 sudo systemctl status mistlane@gateway.service
-sudo systemctl stop mistlane@gateway.service mistlane@router.service mistlane@worker.service
+sudo systemctl stop mistlane@gateway.service mistlane@gameServer.service
 ```
 
-Instance names map to `config/instances/<name>.env`. Enable the cross/shard and HTTP instances separately when needed. This sample unit is a starting point; production users should set service users, filesystem permissions, resource limits and network policy for their deployment.
+Instance names map to `config/instances/<name>.env`. Enable the crossServer, gateway-cross and apiServer instances separately when needed. This sample unit is a starting point; production users should set service users, filesystem permissions, resource limits and network policy for their deployment.
 
-The cross/shard Lua callback only echoes bytes. It does not implement gameplay, authentication or persistence.
+The crossServer Lua callback only echoes bytes. It does not implement gameplay, authentication or persistence.
 )MD"},
     TemplateFile{"scripts/echo.lua", R"LUA(local M = {}
 
 function M.init(context)
-  print("echo worker init", context.role, context.transport)
+  print("echo gameServer init", context.role, context.transport)
 end
 
 function M.message(payload)
@@ -117,71 +117,76 @@ end
 
 return M
 )LUA"},
-    TemplateFile{"config/instances/worker.env", R"ENV(ROLE=worker
+    TemplateFile{"config/instances/gameServer.env", R"ENV(ROLE=gameServer
 LISTEN=127.0.0.1:7102
 SCRIPT=scripts/echo.lua
 TRANSPORT=tcp
 UPSTREAMS=
 ROUTE_EPOCH=
 )ENV"},
-    TemplateFile{"config/instances/router.env", R"ENV(ROLE=router
-LISTEN=127.0.0.1:7101
-SCRIPT=
-TRANSPORT=tcp
-UPSTREAMS=127.0.0.1:7102
-ROUTE_EPOCH=
-)ENV"},
     TemplateFile{"config/instances/gateway.env", R"ENV(ROLE=gateway
 LISTEN=127.0.0.1:7100
 SCRIPT=
 TRANSPORT=tcp
-UPSTREAMS=127.0.0.1:7101
+UPSTREAMS=127.0.0.1:7102
 ROUTE_EPOCH=
 )ENV"},
     TemplateFile{"config/instances/gateway-ws.env", R"ENV(ROLE=gateway
 LISTEN=127.0.0.1:8080
 SCRIPT=
 TRANSPORT=ws
-UPSTREAMS=127.0.0.1:7101
+UPSTREAMS=127.0.0.1:7102
 ROUTE_EPOCH=
 )ENV"},
     TemplateFile{"config/instances/gateway-wss.env", R"ENV(ROLE=gateway
 LISTEN=127.0.0.1:7443
 SCRIPT=
 TRANSPORT=wss
-UPSTREAMS=127.0.0.1:7101
+UPSTREAMS=127.0.0.1:7102
 ROUTE_EPOCH=
 # Supply your deployment certificate chain and key; no private key is generated.
 CERT=certs/fullchain.pem
 KEY=certs/private-key.pem
 )ENV"},
-    TemplateFile{"config/instances/shard-a.env", R"ENV(ROLE=shard
+    TemplateFile{"config/instances/crossServer-a.env", R"ENV(ROLE=crossServer
 LISTEN=127.0.0.1:7201
 SCRIPT=scripts/cross.lua
 TRANSPORT=tcp
 UPSTREAMS=
 ROUTE_EPOCH=1
 )ENV"},
-    TemplateFile{"config/instances/shard-b.env", R"ENV(ROLE=shard
+    TemplateFile{"config/instances/crossServer-b.env", R"ENV(ROLE=crossServer
 LISTEN=127.0.0.1:7202
 SCRIPT=scripts/cross.lua
 TRANSPORT=tcp
 UPSTREAMS=
 ROUTE_EPOCH=1
 )ENV"},
-    TemplateFile{"config/instances/cross.env", R"ENV(ROLE=cross
+    TemplateFile{"config/instances/gateway-cross.env", R"ENV(ROLE=gateway
+ROUTING=cross
 LISTEN=127.0.0.1:7300
 SCRIPT=
 TRANSPORT=tcp
 UPSTREAMS=127.0.0.1:7201,127.0.0.1:7202
 ROUTE_EPOCH=1
 )ENV"},
-    TemplateFile{"config/instances/http.env", R"ENV(ROLE=worker
+    TemplateFile{"config/instances/apiServer.env", R"ENV(ROLE=apiServer
 LISTEN=127.0.0.1:7400
 SCRIPT=scripts/http.lua
 TRANSPORT=http
 UPSTREAMS=
 ROUTE_EPOCH=
+)ENV"},
+    TemplateFile{"config/instances/gameServer-mixed.env", R"ENV(ROLE=gameServer
+LISTEN=127.0.0.1:7102
+SCRIPT=scripts/echo.lua
+TRANSPORT=tcp
+UPSTREAMS=
+ROUTE_EPOCH=
+# LISTENERS adds independent extra listeners, comma separated; each may bind
+# its own transport, and wss/https entries may append ?cert=FILE&key=FILE to
+# override the global certificate pair.
+LISTENERS=ws://127.0.0.1:7082
 )ENV"},
     TemplateFile{"ops/run-instance.sh", R"SH(#!/bin/sh
 set -eu
@@ -200,6 +205,7 @@ if [ -n "$SCRIPT" ]; then
   [ -r "$script" ] || { echo "missing Lua entrypoint: $script" >&2; exit 2; }
   set -- "$@" --script "$script"
 fi
+[ -z "${ROUTING:-}" ] || set -- "$@" --routing "$ROUTING"
 [ "$TRANSPORT" = tcp ] || set -- "$@" --transport "$TRANSPORT"
 case "$TRANSPORT" in
   wss|https)
@@ -220,13 +226,18 @@ if [ -n "$UPSTREAMS" ]; then
   IFS=$old_ifs
 fi
 [ -z "$ROUTE_EPOCH" ] || set -- "$@" --route-epoch "$ROUTE_EPOCH"
+if [ -n "${LISTENERS:-}" ]; then
+  old_ifs=$IFS; IFS=,
+  for listener in $LISTENERS; do set -- "$@" --listener "$listener"; done
+  IFS=$old_ifs
+fi
 exec "$@"
 )SH"},
     TemplateFile{"ops/cluster.sh", R"SH(#!/bin/sh
 set -eu
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 action=${1:-}; shift || true
-default_instances="worker router gateway shard-a shard-b cross http"
+default_instances="gameServer gateway crossServer-a crossServer-b gateway-cross apiServer"
 instances=${*:-$default_instances}
 mkdir -p "$root/var/run" "$root/var/log"
 newly_started=""
@@ -330,10 +341,10 @@ ReadWritePaths=/opt/mistlane/var
 WantedBy=multi-user.target
 )UNIT"},
     TemplateFile{"run-local.sh", R"SH(#!/bin/sh
-exec "$(dirname -- "$0")/ops/cluster.sh" "${1:-start}" worker router gateway
+exec "$(dirname -- "$0")/ops/cluster.sh" "${1:-start}" gameServer gateway
 )SH"},
     TemplateFile{"run-cross-local.sh", R"SH(#!/bin/sh
-exec "$(dirname -- "$0")/ops/cluster.sh" "${1:-start}" shard-a shard-b cross
+exec "$(dirname -- "$0")/ops/cluster.sh" "${1:-start}" crossServer-a crossServer-b gateway-cross
 )SH"}
 };
 
@@ -364,7 +375,7 @@ int run_scaffold(std::string_view command, int argc, char** argv) {
         std::string_view arg(argv[i]);
         if (arg == "--help" || arg == "-h") {
             std::cout << "Usage: mistlane init [DIRECTORY]\n"
-                         "Create a starter project with TCP gateway/router/worker, cross/shard, and HTTP Lua examples.\n"
+                         "Create a starter project with gateway/gameServer, crossServer with gateway routing, and apiServer Lua examples.\n"
                          "The destination must be empty if it already exists.\n";
             return 0;
         }

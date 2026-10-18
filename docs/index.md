@@ -36,7 +36,7 @@ Mistlane is a C++20 / Lua framework extracted and reorganized from a **legacy ga
 
 It is an educational framework candidate, not a recommendation for production deployment. The extraction removes the original game's gameplay, content tables, account integration, payment code, channel SDKs, production configuration, and repository history.
 
-The new implementation keeps the gateway / router / worker topology while introducing new interfaces and a new wire protocol. It is not a drop-in replacement for the original servers.
+The current code is a communication and Lua runtime prototype, not a complete extraction of legacy coordination, characters, maps or instances. Target responsibilities are gateway, login, coordinator, gameServer, crossServer, data and optional apiServer; see [process responsibilities](./process-roles.md).
 
 ## What you can study
 
@@ -48,17 +48,20 @@ The new implementation keeps the gateway / router / worker topology while introd
 | Application scripting | Single-threaded Lua module lifecycle and transactional VM replacement |
 | Reproducible dependencies | CMake Presets and a pinned vcpkg manifest baseline |
 
-```text
-TCP / WS / WSS client
-        |
-     gateway
-        |
-      router
-     /      \
- worker    worker
-  + Lua     + Lua
+### Target responsibilities — planned
 
-Application extension --> Boost.MySQL connection_pool --> database
+```mermaid
+flowchart TB
+  client["Client"] <--> gate["gateway · connections and forwarding"]
+  gate <--> login["login · authentication and selection"]
+  gate <--> game["gameServer · regional players and scenes"]
+  gate <--> cross["crossServer · cross-region players and scenes"]
+  coord["coordinator · placement and transfer coordination"] -. "Route information" .-> gate
+  login -. "Request placement" .-> coord
+  coord -. "Placement" .-> game
+  coord -. "Placement" .-> cross
+  game <--> data["data · loading, cache and persistence"]
+  cross <--> data
 ```
 
 The database adapter is a separate C++ integration, not yet a Lua database bridge. Current routing is per connection; player migration, shared connection multiplexing, and distributed recovery are outside this version.

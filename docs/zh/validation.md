@@ -1,17 +1,18 @@
 # 验证记录
 
-验证日期：2026-10-17；HTTP/HTTPS、Lua HTTP worker 与原生 cross/shard 检查同 Redis 新增项于 2026-10-18 验证。环境为 Linux x64、GCC 15.2.0、CMake 4.2.3，固定 vcpkg baseline：a5f736224e85b32e25a8ffc52562333180396642。
+验证日期：2026-10-17；HTTP/HTTPS、Lua apiServer 与原生 gateway cross routing/crossServer 检查同 Redis 新增项于 2026-10-18 验证；多监听与 WebSocket 生命周期检查于 2026-10-19 验证。环境为 Linux x64、GCC 15.2.0、CMake 4.2.3，固定 vcpkg baseline：a5f736224e85b32e25a8ffc52562333180396642。
 
 | 项目 | 实际结果 |
 |---|---|
 | CMake 配置与完整 Debug 构建 | 通过，实际使用 vcpkg 的 Boost 1.92.0、Lua 5.5.1、OpenSSL 3.6.5#2 |
-| 三段 TCP 链路 | gateway → router → worker 往返通过 |
+| 三段 TCP 链路 | gateway → forwarding gateway → gameServer 往返通过 |
 | TCP 分帧 | 空、二进制、UTF-8、上限长度、拆包、合包与超大报文通过 |
 | 并发与路由 | 并发请求及会话固定上游通过 |
 | WS / WSS | Drogon 握手、掩码、分片、ping/pong、受信任证书 TLS echo 通过 |
 | HTTP / HTTPS | 两种传输下的 Drogon 请求、二进制正文，以及 curl 适配的证书 / 主机名校验、仅允许 HTTP/HTTPS 的协议限制和响应大小上限通过 |
-| Lua HTTP worker | 请求元数据、before_request 短路、after_request 修改、on_error 兜底、响应校验与重载回退通过 |
-| 原生 cross/shard | MLC1 握手、group/room 固定到同一 shard、ROOM_FULL 最终准入、断连释放租约、EPOCH 不匹配与上游失败隔离通过 |
+| 多监听与 WebSocket 生命周期 | `transport.listeners` 启动混合 gameServer（TCP 主监听 + WS + WSS，WSS 用 `?cert=&key=` 单独覆盖证书）、apiServer HTTP 节点（`/`、`/ws` 升级进入 Lua `websocket_open/message/close` 生命周期，`mistlane.websocket.send` 覆盖成功、`unknown websocket id`、`payload exceeds 1 MiB`）、`websocket_message` 内 Lua 报错只关闭该会话且 HTTP 服务继续应答、SIGTERM 排空在线会话、慢消费者越过 2 MiB 输出高水位被强制关闭、HTTPS+WSS 单监听证书、gateway HTTP 监听承载游戏会话升级、配置文件 `LISTENERS=`，以及脚本角色 TCP 监听与重复端口的启动拒绝 |
+| Lua apiServer | 请求元数据、before_request 短路、after_request 修改、on_error 兜底、响应校验与重载回退通过 |
+| 原生 gateway cross routing/crossServer | MLC1 握手、group/room 固定到同一 crossServer、ROOM_FULL 最终准入、断连释放租约、EPOCH 不匹配与上游失败隔离通过 |
 | Lua | 成功重载、语法 / 接口错误回退、回调错误、典型死循环中断、重复回调通过 |
 | 提取的堆工具 | 在实际链接的 Lua 中验证模块隔离与有序弹出 |
 | 错误和资源路径 | 上游连接失败、连接上限、消息限流、非法参数、SIGTERM 退出通过 |
@@ -21,9 +22,9 @@
 | Redis Streams 与排行榜 | 本地 Redis 端到端 Lua 检查通过，覆盖消费组幂等创建、发布/读取、pending 认领与 ACK、增分/名次查询、榜单分页和删除 |
 | 崩溃演练（minidump） | `mistlane-crash-sample` 经同一套本地管线执行受控空指针解引用：crashpad 数据库落出真实 minidump（大于 4 KiB 且以 `MDMP` 魔数开头）、样例进程因 `SIGSEGV` 退出、handler 无残留（`mistlane test --case crashpad.minidump` 连续四次通过） |
 | dump 与二进制关联 | `tools/crash_symbols.py build-id` 返回样例的 `NT_GNU_BUILD_ID`（与 `readelf -n` 一致），`modules` 列出 dump 全部七个模块的 build id，`match` 将演练 dump 与确切样例二进制配对（exit 0）、拒绝另一构建（exit 1）；`minidump_stackwalk` 完整走栈步骤已记录但未本地执行，因 vcpkg crashpad port 只带 `crashpad_handler` |
-| 流量与 tick 指标 | `transport.tcp` 抓取实时 `/metrics` 输出，断言收发消息计数非零、tx 字节数超过 1 MiB、请求耗时直方图有观测、事件循环 tick 延迟直方图与运行期最大值非零（等待首个调度 tick 后）、健康 worker 的上游错误/超时为零，以及指向死端口的 gateway 至少记录一次上游错误 |
+| 流量与 tick 指标 | `transport.tcp` 抓取实时 `/metrics` 输出，断言收发消息计数非零、tx 字节数超过 1 MiB、请求耗时直方图有观测、事件循环 tick 延迟直方图与运行期最大值非零（等待首个调度 tick 后）、健康 gameServer 的上游错误/超时为零，以及指向死端口的 gateway 至少记录一次上游错误 |
 | 内部探测（PROBE1） | `probe.control` 以裸 TCP 驱动协议：liveness/version/command/malformed/nonce 错误路径、带 `active`/`capacity`/`lag_ms` 的就绪应答、空闲连接截止、`--overload-ratio 0.5 --ready-hysteresis 2` 下饱和驱动的 `ready -> notready -> ready` 翻转并与 `mistlane_ready` 指标一致、`MISTLANE_PROBE_TOKEN` 下的 `err auth`，以及经 `IP:PORT:PROBE` 的 cross 门控（明确 notready 返回 `MLC1 ERR NOT_READY`、探测端口不可达返回 `MLC1 ERR UPSTREAM`、不带探测端口的上游不门控、已建立房间不受影响，被拒加入计入 `mistlane_admission_rejections_total`），另覆盖连续 50 次探测生命周期、300 字节超长请求行被无应答关闭、64 个挂起连接外的第 65 个被拒，以及 `[::1]` 方括号 IPv6 的监听/探测/上游地址（带门控与不门控） |
-| 原生配置文件 | `config.file` 用 `# mistlane-config 1` 文件启动 worker（role、listen、相对文件解析的 script、transport、容量上限），拒绝缺失版本行、未知键与重复键并报「文件:行号」，`MISTLANE_MAX_CONNECTIONS` 覆盖文件值、显式参数再覆盖两者，`ROOT=` 支持项目根风格条目，文件中的 `PROBE_LISTEN`/`METRICS_LISTEN` 生效 |
+| 原生配置文件 | `config.file` 用 `# mistlane-config 1` 文件启动 gameServer（role、listen、相对文件解析的 script、transport、容量上限），拒绝缺失版本行、未知键与重复键并报「文件:行号」，`MISTLANE_MAX_CONNECTIONS` 覆盖文件值、显式参数再覆盖两者，`ROOT=` 支持项目根风格条目，文件中的 `PROBE_LISTEN`/`METRICS_LISTEN` 生效 |
 | 文档站 | 使用 pnpm 10.33.0、VitePress 1.6.4 与修复版 Vite 6.4.4 构建两种语言；10 个页面的语言、导航与仓库链接检查通过 |
 | 文档依赖审计 | Vite 覆盖更新后，pnpm audit 返回零告警 |
 | 源码包 | 白名单与 SHA256 检查通过，无原游戏目录或 Git 历史 |

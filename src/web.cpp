@@ -3,8 +3,10 @@
 #include "mistlane/transport.hpp"
 #include <drogon/drogon.h>
 #include <drogon/WebSocketController.h>
+#include <algorithm>
 #include <atomic>
 #include <iostream>
+#include <map>
 #include <optional>
 
 namespace mistlane {
@@ -61,21 +63,32 @@ private:
     std::atomic<bool> credit_{true}, closed_{false}, closing_{false};
     bool once_, finished_ = false;
 };
-using Attach = std::function<void(std::shared_ptr<Channel>)>;
 class SocketController : public drogon::WebSocketController<SocketController, false> {
 public:
-    SocketController(asio::any_io_executor ex, Attach attach) : executor_(ex), attach_(std::move(attach)) {}
+    // Which listener an upgrade lands on decides its contract: ws/wss listeners
+    // (and gateway http listeners) carry framed game sessions; an http/https
+    // listener of a script role joins the Lua websocket lifecycle instead.
+    enum class Kind { game, lifecycle };
+    using Dispatch = std::function<Kind(std::uint16_t port)>;
+    SocketController(asio::any_io_executor ex, Attach attach, WsAttach ws_attach, Dispatch dispatch)
+      : executor_(ex), attach_(std::move(attach)), ws_attach_(std::move(ws_attach)), dispatch_(std::move(dispatch)) {}
     WS_PATH_LIST_BEGIN
     WS_PATH_ADD("/");
     WS_PATH_ADD("/ws");
     WS_PATH_LIST_END
-    void handleNewConnection(const drogon::HttpRequestPtr&, const drogon::WebSocketConnectionPtr& conn) override {
+    void handleNewConnection(const drogon::HttpRequestPtr& req, const drogon::WebSocketConnectionPtr& conn) override {
+        const auto kind = dispatch_(req->getLocalAddr().toPort());
         std::weak_ptr<drogon::WebSocketConnection> weak = conn;
         auto channel = std::make_shared<WebChannel>(executor_, [weak](std::string data) {
             if (auto c = weak.lock()) c->send(data, drogon::WebSocketMessageType::Binary);
         }, [weak] { if (auto c = weak.lock()) c->forceClose(); }, false);
         conn->setContext(channel);
-        asio::post(executor_, [attach=attach_, channel] { attach(channel); });
+        if (kind == Kind::lifecycle) {
+            const std::string path = req->path();
+            asio::post(executor_, [ws_attach=ws_attach_, channel, path] { ws_attach(channel, path); });
+        } else {
+            asio::post(executor_, [attach=attach_, channel] { attach(channel); });
+        }
     }
     void handleNewMessage(const drogon::WebSocketConnectionPtr& conn, std::string&& data,
                           const drogon::WebSocketMessageType& type) override {
@@ -89,25 +102,51 @@ public:
 private:
     asio::any_io_executor executor_;
     Attach attach_;
+    WsAttach ws_attach_;
+    Dispatch dispatch_;
 };
 }
 void stop_web() { drogon::app().quit(); }
-void run_web(const Config& config, asio::any_io_executor executor, Attach attach, HttpHandler http_handler, std::function<void()> ready) {
+void run_web(const Config& config, asio::any_io_executor executor, Attach attach, WsAttach ws_attach,
+             HttpHandler http_handler, std::function<void()> ready) {
     auto& app = drogon::app();
-    const bool secure = config.transport == "wss" || config.transport == "https";
+    const bool script_role = config.role == "gameServer" || config.role == "apiServer";
     app.disableSigtermHandling().setThreadNum(1).setLogLevel(trantor::Logger::kWarn)
        .setMaxConnectionNum(config.max_connections).setIdleConnectionTimeout(60)
        .setClientMaxBodySize(max_frame).setClientMaxMemoryBodySize(max_frame)
        // Drogon rejects when outstanding + parsed >= threshold: 2 permits one request.
-       .setClientMaxWebSocketMessageSize(max_frame).setPipeliningRequestsNumber(2)
-       .addListener(config.listen.address, config.listen.port, secure, config.certificate, config.private_key);
+       .setClientMaxWebSocketMessageSize(max_frame).setPipeliningRequestsNumber(2);
+    // One Drogon listener per config entry; TLS entries carry their effective
+    // certificate pair (listener override, else the global --cert/--key).
+    std::map<std::uint16_t, SocketController::Kind> dispatch;
+    for (const auto& item : config.listeners) {
+        if (item.protocol == "tcp") continue; // framed listeners stay with the node's own acceptors
+        const bool tls = item.protocol == "wss" || item.protocol == "https";
+        app.addListener(item.endpoint.address, item.endpoint.port, tls,
+            tls ? (item.certificate.empty() ? config.certificate : item.certificate) : std::string(),
+            tls ? (item.private_key.empty() ? config.private_key : item.private_key) : std::string());
+        if (item.protocol == "ws" || item.protocol == "wss")
+            dispatch.emplace(item.endpoint.port, SocketController::Kind::game);
+        else if (item.protocol == "http" || item.protocol == "https")
+            // First writer wins; the CLI rejects duplicate ports across listeners.
+            dispatch.emplace(item.endpoint.port, script_role && ws_attach
+                ? SocketController::Kind::lifecycle : SocketController::Kind::game);
+    }
     app.setConnectionCallback([](const trantor::TcpConnectionPtr& conn) {
         if (conn->connected()) conn->setHighWaterMarkCallback(
             [](const trantor::TcpConnectionPtr& c, size_t) { c->forceClose(); }, 2*max_frame);
     });
-    if (config.transport == "ws" || config.transport == "wss")
-        app.registerController(std::make_shared<SocketController>(executor, attach));
-    else if (config.role == "worker") {
+    if (!dispatch.empty()) {
+        auto game_attach = attach;
+        app.registerController(std::make_shared<SocketController>(executor, std::move(game_attach), ws_attach,
+            [dispatch](std::uint16_t port) {
+                const auto found = dispatch.find(port);
+                return found == dispatch.end() ? SocketController::Kind::game : found->second;
+            }));
+    }
+    const bool any_http = std::any_of(config.listeners.begin(), config.listeners.end(), [](const Listener& item) {
+        return item.protocol == "http" || item.protocol == "https"; });
+    if (any_http && script_role) {
         auto pending = std::make_shared<std::atomic<std::size_t>>(0);
         app.registerHandlerViaRegex("/.*", [http_handler, pending, limit=config.max_connections](const drogon::HttpRequestPtr& req,
                             std::function<void(const drogon::HttpResponsePtr&)>&& callback) {
@@ -129,7 +168,7 @@ void run_web(const Config& config, asio::any_io_executor executor, Attach attach
                 callback(response);
             });
         }, {drogon::Get, drogon::Post, drogon::Put, drogon::Delete, drogon::Patch, drogon::Options, drogon::Head});
-    } else {
+    } else if (any_http && config.role == "gateway") {
         app.registerHandler("/message", [executor, attach](const drogon::HttpRequestPtr& req,
                             std::function<void(const drogon::HttpResponsePtr&)>&& callback) {
             // Each HTTP request is a separate service session. No implicit user affinity.

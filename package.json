@@ -9,10 +9,12 @@
   "scripts": {
     "docs:dev": "vitepress dev docs",
     "docs:build": "vitepress build docs",
-    "docs:preview": "vitepress preview docs"
+    "docs:preview": "vitepress preview docs",
+    "docs:check": "node tools/check-docs.mjs"
   },
   "devDependencies": {
     "mermaid": "12.2.0",
+    "playwright": "1.64.1",
     "vitepress": "1.6.4"
   },
   "type": "module",

@@ -42,9 +42,8 @@ The initializer refuses to overwrite a non-empty directory. It creates `config/i
 Open three terminals in the repository root:
 
 ```bash
-./build/debug/mistlane --role worker --listen 127.0.0.1:7102 --script examples/echo.lua
-./build/debug/mistlane --role router --listen 127.0.0.1:7101 --upstream 127.0.0.1:7102
-./build/debug/mistlane --role gateway --listen 127.0.0.1:7100 --upstream 127.0.0.1:7101
+./build/debug/mistlane --role gameServer --listen 127.0.0.1:7102 --script examples/echo.lua
+./build/debug/mistlane --role gateway --listen 127.0.0.1:7100 --upstream 127.0.0.1:7102
 ```
 
 Then send a request:
@@ -61,16 +60,16 @@ Game clients can connect directly to Mistlane's WebSocket listener. Drogon handl
 
 | Purpose | Role and options | Client URL | Lua entrypoint |
 |---|---|---|---|
-| Persistent game connections through a gateway | `gateway --transport ws/wss --upstream IP:PORT` | `ws://host:port/ws` or `wss://host:port/ws` | TCP worker's `message` |
-| One-process game message service | `worker --transport ws/wss --script FILE` | Same URLs | Local worker's `message` |
-| HTTP API | `worker --transport http/https --script FILE` | `http://host:port/path` or HTTPS | `http` and request hooks |
+| Persistent game connections through a gateway | `gateway --transport ws/wss --upstream IP:PORT` | `ws://host:port/ws` or `wss://host:port/ws` | TCP gameServer's `message` |
+| One-process game message service | `gameServer --transport ws/wss --script FILE` | Same URLs | Local gameServer's `message` |
+| HTTP API | `apiServer --transport http/https --script FILE` | `http://host:port/path` or HTTPS | `http` and request hooks |
 
-### WS gateway to a TCP game worker
+### WS gateway to a TCP game gameServer
 
-Run these in separate terminals. This gateway connects straight to the worker; a TCP router can also sit between them:
+Run these in separate terminals. This gateway connects straight to the gameServer; a additional gateway forwarding hop can also be configured:
 
 ```bash
-./build/debug/mistlane --role worker --listen 127.0.0.1:7102 --script examples/echo.lua
+./build/debug/mistlane --role gameServer --listen 127.0.0.1:7102 --script examples/echo.lua
 ./build/debug/mistlane --role gateway --listen 0.0.0.0:8080 \
   --transport ws --upstream 127.0.0.1:7102
 ```
@@ -80,9 +79,9 @@ Connect to `ws://127.0.0.1:8080/ws`. Remote clients replace `127.0.0.1` with the
 ```mermaid
 flowchart LR
   Client[Game client] -->|WS / WSS| Gateway[Drogon game gateway]
-  Gateway -->|Internal TCP| Worker[Asio / Lua worker]
+  Gateway -->|Internal TCP| Worker[gameServer · Asio / Lua]
   Worker --> Message[message payload]
-  Api[HTTP API client] -->|HTTP / HTTPS| Http[Separate HTTP worker]
+  Api[HTTP API client] -->|HTTP / HTTPS| Http[Separate apiServer]
   Http --> Handler[http request]
 ```
 
@@ -90,7 +89,7 @@ Each complete WS message is one payload. Clients omit the four-byte TCP length p
 
 ### WSS game gateway
 
-Use this gateway command while keeping the TCP worker above:
+Use this gateway command while keeping the TCP gameServer above:
 
 ```bash
 ./build/debug/mistlane --role gateway --listen 0.0.0.0:7443 \
@@ -100,12 +99,12 @@ Use this gateway command while keeping the TCP worker above:
 
 Connect to `wss://game.example.com:7443/ws` with a matching hostname and a certificate chain trusted by the client. Keep certificates and private keys outside source control. WSS requires TLS 1.2 or newer; game clients on HTTPS pages should use WSS.
 
-### Direct WS / WSS game worker
+### Direct WS / WSS game gameServer
 
-For development or a small message service, let a worker listen directly without a gateway or upstream:
+For development or a small message service, let a gameServer listen directly without a gateway or upstream:
 
 ```bash
-./build/debug/mistlane --role worker --listen 0.0.0.0:8081 \
+./build/debug/mistlane --role gameServer --listen 0.0.0.0:8081 \
   --transport ws --script examples/echo.lua
 ```
 
@@ -126,14 +125,14 @@ Native clients use any standard WS/WSS library. The server accepts text/binary m
 
 The current channel uses serial request/response: wait for the previous response before sending the next application message; sending ahead closes the connection. Lua APIs for unsolicited server push, broadcast and sending to a session are absent. This validates game connections and message flow; high-frequency full-duplex games still need bounded receive/send queues, session lifecycle and server push.
 
-Each process currently listens using one transport. To expose TCP, WS, WSS and HTTP together, run separate instances on distinct ports. HTTP workers and game gateways can form part of the same application deployment.
+A process can also serve several protocols at once: `--transport` stays single-select for the primary listener, and each `--listener PROTO://IP:PORT` flag adds an independent extra listener (plaintext and TLS side by side; `wss`/`https` entries may append `?cert=FILE&key=FILE` to bind their own certificate). WS/WSS listeners carry game sessions like before, so the same gameServer can expose framed TCP for native clients and WS/WSS for browsers on other ports. See [HTTP listeners and the WebSocket lifecycle](./http.md#multiple-listeners-and-websocket-lifecycle) for the HTTP side.
 
 ### Generated project configuration
 
-`mistlane init` generates optional `gateway-ws.env` and `gateway-wss.env` instances; the default cluster still starts a TCP gateway. The WS sample binds `127.0.0.1:8080`; change `LISTEN` in its instance file for remote access.
+`mistlane init` generates optional `gateway-ws.env` and `gateway-wss.env` instances; the default cluster still starts a TCP gateway. The WS sample binds `127.0.0.1:8080`; change `LISTEN` in its instance file for remote access. `gameServer-mixed.env` shows one gameServer serving framed TCP on 7102 plus a WS listener on 7082 through `LISTENERS`.
 
 ```bash
-MISTLANE_BIN=/path/to/mistlane ./ops/cluster.sh start worker router gateway-ws
+MISTLANE_BIN=/path/to/mistlane ./ops/cluster.sh start gameServer gateway-ws
 ```
 
 For WSS, set `CERT` and `KEY` in `config/instances/gateway-wss.env` to absolute paths or paths relative to the project root, then start `gateway-wss`. The launcher checks both files and forwards them as `--cert`/`--key`; it does not generate or commit a private key. The systemd instance is `mistlane@gateway-wss.service`.
@@ -147,9 +146,10 @@ Each `config/instances/<name>.env` file is sourced as shell assignments by `ops/
 | `ROLE` | always | Passed as `--role`; `cluster.sh` also matches its readiness line (`ready <ROLE> <LISTEN>`) before reporting the instance started. |
 | `LISTEN` | always | `IP:PORT` passed as `--listen`. |
 | `TRANSPORT` | optional | `tcp` is the default and is omitted from the command line; `ws`, `wss`, `http` and `https` are passed through. `wss` and `https` refuse to start unless readable `CERT` and `KEY` are configured. |
-| `SCRIPT` | optional | Lua entrypoint passed as `--script`; relative paths resolve against the project root. Gateways and routers leave it empty. |
+| `SCRIPT` | optional | Lua entrypoint passed as `--script`; relative paths resolve against the project root. Gateway leaves it empty. |
 | `UPSTREAMS` | optional | Comma-separated `IP:PORT` (or `IP:PORT:PROBE`, so cross nodes gate new joins on the peer's internal readiness probe) list; each entry becomes one `--upstream` flag. |
-| `ROUTE_EPOCH` | optional | Cross/shard epoch passed as `--route-epoch`; an empty value omits the flag. |
+| `ROUTE_EPOCH` | optional | Cross/crossServer epoch passed as `--route-epoch`; an empty value omits the flag. |
+| `LISTENERS` | optional | Comma-separated `PROTO://IP:PORT` entries; each becomes one `--listener` flag, so an instance can expose TCP, WS, WSS and HTTP side by side. `wss`/`https` entries may append `?cert=FILE&key=FILE`; those query paths are passed through verbatim, not root-resolved. |
 | `CERT`, `KEY` | `wss`/`https` only | Certificate chain and private key, absolute or project-root relative; the launcher verifies both are readable. |
 
 Keep secrets out of these files when they live in a version-controlled template: the initializer creates no certificate material, and `gateway-wss.env` only ships placeholder `certs/` paths. Provision key files outside the repository or under a deployment-managed `certs/` directory, and inject any other credentials through the installed systemd unit (`Environment=`, `LoadCredential=`) or your deployment tooling instead of committing them to `config/instances/`.
@@ -159,23 +159,23 @@ Keep secrets out of these files when they live in a version-controlled template:
 The binary also reads a native config format directly, without the shell launcher:
 
 ```bash
-./build/debug/mistlane --config config/instances/worker.env --max-connections 512
+./build/debug/mistlane --config config/instances/gameServer.env --max-connections 512
 ```
 
 - The first non-empty line must be the version marker `# mistlane-config 1`; a file without it is rejected, so a random shell env file is never consumed silently.
 - Remaining lines are `KEY=VALUE`. Blank lines and `#` comments are ignored, empty values are skipped, and a repeated key is an error. Unknown keys are rejected with the file and line number.
-- Keys are the uppercase forms of the CLI options (`ROLE`, `LISTEN`, `TRANSPORT`, `SCRIPT`, `UPSTREAMS` comma-separated, `ROUTE_EPOCH`, `CERT`, `KEY`, `REDIS`, `METRICS_LISTEN`, `PROBE_LISTEN`, `OVERLOAD_RATIO`, `READY_HYSTERESIS`, `MAX_CONNECTIONS`, `MEMORY_BUDGET_MIB`, `MAX_ROOM_SESSIONS`, `MAX_GROUP_SESSIONS`, `MAX_SHARD_SESSIONS`, `CRASHPAD_HANDLER`, `CRASHPAD_DATABASE`) plus `ROOT`.
+- Keys are the uppercase forms of the CLI options (`ROLE`, `LISTEN`, `TRANSPORT`, `SCRIPT`, `UPSTREAMS` comma-separated, `ROUTE_EPOCH`, `CERT`, `KEY`, `LISTENERS` comma-separated, `REDIS`, `METRICS_LISTEN`, `PROBE_LISTEN`, `OVERLOAD_RATIO`, `READY_HYSTERESIS`, `MAX_CONNECTIONS`, `MEMORY_BUDGET_MIB`, `MAX_ROOM_SESSIONS`, `MAX_GROUP_SESSIONS`, `MAX_SHARD_SESSIONS`, `CRASHPAD_HANDLER`, `CRASHPAD_DATABASE`) plus `ROOT`.
 - Precedence inside one run: file value, then a non-empty `MISTLANE_<KEY>` environment variable, then any explicit flag given after `--config`.
 - `SCRIPT`, `CERT`, `KEY`, `CRASHPAD_HANDLER` and `CRASHPAD_DATABASE` resolve relative paths against the config file's directory, or against `ROOT` when that key is set (itself relative to the config file). This differs from the shell launcher, which resolves against the project root; set `ROOT` to run the generated templates through `--config` unchanged.
 - Secrets still belong in deployment-managed environment (`MISTLANE_*` or systemd `LoadCredential=`), not in a committed file.
 
 
-## HTTP worker
+## apiServer
 
-Besides the Lua `message` mode over framed TCP/WS, a worker can serve HTTP directly. Run it with `--transport http` (or `https`) and an HTTP script such as `examples/http.lua`:
+Besides the Lua `message` mode over framed TCP/WS, a gameServer can serve HTTP directly. Run it with `--transport http` (or `https`) and an HTTP script such as `examples/http.lua`:
 
 ```bash
-./build/debug/mistlane --role worker --listen 127.0.0.1:7500 \
+./build/debug/mistlane --role gameServer --listen 127.0.0.1:7500 \
   --transport http --script examples/http.lua
 curl -s http://127.0.0.1:7500/healthz
 ```

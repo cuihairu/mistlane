@@ -125,7 +125,7 @@ return {
             else:
                 raise RuntimeError("local Redis did not start")
             worker = subprocess.Popen([
-                str(binary), "--role", "worker", "--listen", f"127.0.0.1:{worker_port}",
+                str(binary), "--role", "gameServer", "--listen", f"127.0.0.1:{worker_port}",
                 "--script", str(script), "--redis", f"127.0.0.1:{redis_port}"
             ], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
             deadline = time.monotonic() + 8

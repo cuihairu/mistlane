@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
+#include <cstdint>
 #include <memory>
 #include <string>
 #include <string_view>
@@ -10,7 +11,21 @@
 #include <boost/asio/io_context.hpp>
 
 namespace mistlane {
-struct ServiceContext { std::string role = "worker", transport = "tcp"; unsigned epoch = 1; };
+struct ServiceContext {
+    std::string role = "gameServer", transport = "tcp";
+    unsigned epoch = 1;
+    // What the listeners of this node require from the script: framed game
+    // sessions (tcp/ws/wss) and/or the Lua HTTP service (http/https).
+    bool game_sessions = true, http_service = false;
+};
+// Push adapter for Lua websocket sessions; implemented by the node. All calls
+// run on the node's event loop thread, so implementations need no locking.
+class WebsocketSink {
+public:
+    virtual ~WebsocketSink() = default;
+    // Returns "" on success or a short machine-readable reason for Lua.
+    virtual std::string websocket_send(std::uint64_t id, std::string_view payload) = 0;
+};
 class RedisRuntime {
 public:
     RedisRuntime(boost::asio::io_context& io, std::string host, std::uint16_t port);
@@ -29,13 +44,18 @@ private:
 class LuaService {
 public:
     struct AsyncContext { lua_State* state = nullptr; };
-    explicit LuaService(const std::string& path, ServiceContext context = {}, std::shared_ptr<RedisRuntime> redis = {});
+    explicit LuaService(const std::string& path, ServiceContext context = {}, std::shared_ptr<RedisRuntime> redis = {},
+                        WebsocketSink* websocket_sink = nullptr);
     ~LuaService();
     LuaService(const LuaService&) = delete;
     LuaService& operator=(const LuaService&) = delete;
     std::string message(std::string_view payload, const CrossContext* context = nullptr);
     void validate_http();
     WebResponse http(const WebRequest& request);
+    // Lua websocket lifecycle (optional callbacks; failures close the session).
+    void websocket_open(std::uint64_t id, const std::string& path);
+    void websocket_message(std::uint64_t id, std::string_view payload);
+    void websocket_close(std::uint64_t id);
     void start();
     void stop();
     void tick();
@@ -46,7 +66,10 @@ private:
     static int stream_read(lua_State*);
     static int stream_ack(lua_State*);
     static int stream_claim(lua_State*);
+    static int websocket_send(lua_State*);
     static void push_stream_api(lua_State*, LuaService*);
+    static void push_websocket_api(lua_State*, LuaService*);
+    void websocket_callback(const char* name, std::uint64_t id, std::string_view payload, const std::string& path);
     static int leaderboard_add(lua_State*);
     static int leaderboard_get(lua_State*);
     static int leaderboard_top(lua_State*);
@@ -56,6 +79,7 @@ private:
     lua_State* state_ = nullptr;
     int module_ = LUA_NOREF;
     ServiceContext context_;
+    WebsocketSink* websocket_sink_ = nullptr;
     bool started_ = false, stopped_ = false, shutdown_ = false;
     std::shared_ptr<AsyncContext> async_context_;
     std::shared_ptr<RedisRuntime> redis_;
