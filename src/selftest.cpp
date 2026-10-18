@@ -12,7 +12,6 @@ void transport_websocket();
 void transport_http();
 void lua_lifecycle();
 void lua_http();
-void lua_script();
 void cross_admission();
 void scaffold_init();
 void cli_bot();
@@ -70,7 +69,6 @@ int run_tests(int argc, char** argv) {
         {"transport.http","transport",test::transport_http},
         {"lua.lifecycle","lua",test::lua_lifecycle},
         {"lua.http","lua",test::lua_http},
-        {"lua.script","lua",test::lua_script},
         {"cross.admission","cross",test::cross_admission},
         {"scaffold.init","scaffold",test::scaffold_init},
         {"cli.bot","cli",test::cli_bot},

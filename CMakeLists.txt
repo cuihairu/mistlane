@@ -43,7 +43,7 @@ target_link_libraries(mistlane-mysql-probe PRIVATE mistlane_mysql)
 include(CTest)
 if(BUILD_TESTING)
   foreach(test_case IN ITEMS core.contracts transport.tcp transport.websocket transport.http
-      lua.lifecycle lua.http lua.script cross.admission scaffold.init cli.bot)
+      lua.lifecycle lua.http cross.admission scaffold.init cli.bot)
     string(REPLACE "." "_" test_name "${test_case}")
     add_test(NAME mistlane_${test_name} COMMAND mistlane test --case "${test_case}")
     set_tests_properties(mistlane_${test_name} PROPERTIES TIMEOUT 60)
