@@ -76,3 +76,5 @@ References: [Boost.Asio thread pool](https://www.boost.org/doc/libs/1_92_0/doc/h
 ## Extraction naming and provenance
 
 Public package paths and filenames use the Mistlane namespace and do not inherit legacy product prefixes. Renaming a path does not change source provenance: reused material and adapted third-party files remain identified in `NOTICE` and `THIRD_PARTY.md`. Do not include legacy source files in the export package merely to document a design reference.
+
+As of 2026-10-18 no generic module carries a migration approval: MinHeap is extracted, and every other legacy utility was excluded by the screening above, so there are no split-out implementation tasks to define. Any future approval must land as its own task stating the public interface, the license provenance and independent acceptance criteria before code is written.
