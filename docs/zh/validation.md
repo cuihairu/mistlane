@@ -20,6 +20,7 @@
 | 数据库认证错误 | 在配置的获取期限内失败 |
 | Redis Streams 与排行榜 | 本地 Redis 端到端 Lua 检查通过，覆盖消费组幂等创建、发布/读取、pending 认领与 ACK、增分/名次查询、榜单分页和删除 |
 | 崩溃演练（minidump） | `mistlane-crash-sample` 经同一套本地管线执行受控空指针解引用：crashpad 数据库落出真实 minidump（大于 4 KiB 且以 `MDMP` 魔数开头）、样例进程因 `SIGSEGV` 退出、handler 无残留（`mistlane test --case crashpad.minidump` 连续四次通过） |
+| dump 与二进制关联 | `tools/crash_symbols.py build-id` 返回样例的 `NT_GNU_BUILD_ID`（与 `readelf -n` 一致），`modules` 列出 dump 全部七个模块的 build id，`match` 将演练 dump 与确切样例二进制配对（exit 0）、拒绝另一构建（exit 1）；`minidump_stackwalk` 完整走栈步骤已记录但未本地执行，因 vcpkg crashpad port 只带 `crashpad_handler` |
 | 文档站 | 使用 pnpm 10.33.0、VitePress 1.6.4 与修复版 Vite 6.4.4 构建两种语言；10 个页面的语言、导航与仓库链接检查通过 |
 | 文档依赖审计 | Vite 覆盖更新后，pnpm audit 返回零告警 |
 | 源码包 | 白名单与 SHA256 检查通过，无原游戏目录或 Git 历史 |

@@ -227,3 +227,17 @@ python3 tools/export.py
 - handler 与服务端放在同一文件系统并显式传入：`--crashpad-handler PREFIX/bin/crashpad_handler --crashpad-database /var/lib/mistlane/crashes`。数据库指向按保留策略定容的本地目录；上传保持关闭，数据不出机器。
 - Linux 崩溃抓取依赖 `ptrace`（handler 需要检查崩溃进程）。容器运行时必须允许它：Docker 默认 seccomp profile 在受支持的内核上放行 `ptrace`，但加固、无特权或自定义 AppArmor/seccomp profile 可能拒绝。`ptrace` 被拒时节点照常启动与服务，只是不会写 minidump——在该环境依赖 dump 前先用一次受控崩溃验证整条链路。
 - 仓库自带演练二进制：`mistlane-crash-sample`（与 `mistlane` 一起构建安装）用 `--crashpad-handler FILE --crashpad-database DIR` 接好同一套本地管线后主动解引用空指针。原生 `crashpad.minidump` 用例断言数据库落出带 `MDMP` 魔数的真实 minidump、样例进程因 `SIGSEGV` 退出。
+
+### 符号归档与栈回溯
+
+每个构建都内嵌 ELF `NT_GNU_BUILD_ID` note，minidump 的每个模块记录也带同一 ID，因此 dump 无需符号服务器即可指认自己的二进制。对你实际部署的那个二进制归档**未剥离**副本（`linux-debug` 与 `linux-release` 两个 preset 同样适用；剥离会删掉栈回溯所需的符号）：
+
+```bash
+id=$(python3 tools/crash_symbols.py build-id build/debug/mistlane)
+cp build/debug/mistlane /var/lib/mistlane/symbols/mistlane-$id
+# 之后对崩溃数据库下的任意 dump：
+python3 tools/crash_symbols.py match /var/lib/mistlane/crashes/pending/xxx.dmp /var/lib/mistlane/symbols/mistlane-$id
+python3 tools/crash_symbols.py modules /var/lib/mistlane/crashes/pending/xxx.dmp
+```
+
+`match` 在 dump 属于其他构建时返回非零——不要用错误的符号去走栈。完整栈回溯需从 Crashpad 上游获取 `minidump_stackwalk`（vcpkg crashpad port 只带 `crashpad_handler`），指向归档目录运行；栈帧按模块 build id 逐个解析。

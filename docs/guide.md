@@ -227,3 +227,17 @@ Deployment conventions for the optional dump pipeline:
 - Keep the handler on the same filesystem as the server and pass it explicitly: `--crashpad-handler PREFIX/bin/crashpad_handler --crashpad-database /var/lib/mistlane/crashes`. Point the database at a local directory sized by your retention policy; uploads stay disabled and nothing leaves the machine.
 - Linux crash generation requires `ptrace` (the handler inspects the crashed process). Container runtimes must allow it: Docker's default seccomp profile permits `ptrace` on supported kernels, but hardened, unprivileged, or custom AppArmor/seccomp profiles may not. If `ptrace` is denied the node still starts and serves, but no minidump is written — verify the pair with a controlled crash before relying on dumps in that environment.
 - A drill binary exists for that check: `mistlane-crash-sample` (built and installed next to `mistlane`) wires the same local-only pipeline with `--crashpad-handler FILE --crashpad-database DIR` and then dereferences a null pointer. The native `crashpad.minidump` test case asserts the database receives a real minidump (`MDMP` magic) while the sample exits from `SIGSEGV`.
+
+### Symbol archives and stack walks
+
+Every build embeds an ELF `NT_GNU_BUILD_ID` note and every minidump module record carries the same id, so a dump names its binary without a symbol server. Archive the **unstripped** copy of whichever binary you deploy (the `linux-debug` and `linux-release` presets both qualify; stripping deletes the symbols a stack walk needs):
+
+```bash
+id=$(python3 tools/crash_symbols.py build-id build/debug/mistlane)
+cp build/debug/mistlane /var/lib/mistlane/symbols/mistlane-$id
+# later, for any dump under the crash database:
+python3 tools/crash_symbols.py match /var/lib/mistlane/crashes/pending/xxx.dmp /var/lib/mistlane/symbols/mistlane-$id
+python3 tools/crash_symbols.py modules /var/lib/mistlane/crashes/pending/xxx.dmp
+```
+
+`match` exits nonzero when the dump belongs to a different build — never walk such a dump with the wrong symbols. For a full stack walk, obtain `minidump_stackwalk` from upstream Crashpad builds (the vcpkg crashpad port ships only `crashpad_handler`) and point it at the archive directory; frames resolve per module by build id.

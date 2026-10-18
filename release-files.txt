@@ -72,6 +72,7 @@ tests/scaffold.py
 tests/mysql_integration.py
 tests/redis_integration.py
 tools/client.py
+tools/crash_symbols.py
 tools/export.py
 vcpkg-configuration.json
 vcpkg.json
