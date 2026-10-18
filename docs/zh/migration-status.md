@@ -4,7 +4,7 @@
 
 | 老框架能力 | Mistlane 状态 | 当前边界 / 后续决策 |
 |---|---|---|
-| 进程启动、监听器、信号和退出 | 重新实现 | 新生命周期由 `Node` 管理；不保留旧进程 API 或二进制兼容。 |
+| 进程启动、监听器、信号和退出 | 重新实现 | 新生命周期由 `Node` 管理，逐项核对见[旧生命周期核对](#旧生命周期核对)；不保留旧进程 API 或二进制兼容。 |
 | 异步 TCP 传输 | 重新实现 | 使用新的四字节长度头协议，并有会话限制和期限；不支持旧分帧及客户端协议。 |
 | WebSocket / 安全 WebSocket | 替换 | WS/WSS 由 Drogon/Trantor 处理，不迁移手写握手、掩码或控制帧解析。 |
 | HTTP 服务端 | 替换 | Drogon 处理 HTTP/HTTPS 和 Lua 请求处理器；不保留旧 HTTP API。 |
@@ -27,6 +27,20 @@
 | 加密、压缩、URL、序列化工具 | 未整体迁移 | 排除游戏专用工具和自定义协议；遇到明确需求时使用维护中的库及显式格式。 |
 | 通用 Lua 工具 | 选择性提取 | 目前只审核并提取 MinHeap；其他工具逐个检查依赖、行为、验证和来源。 |
 | 玩法、账号、支付、寻路、缓存表、运维及 SDK | 排除 | 属于游戏应用、私有部署或第三方集成，不属于通用框架迁移目标。 |
+
+## 旧生命周期核对
+
+对照旧 `FogsProcess`/`d_*` main 与 Mistlane `Node` 的逐项核对（2026-10-18 双向核对两份源码）：
+
+| 生命周期条目 | 旧行为 | Mistlane 行为 | 结论 |
+|---|---|---|---|
+| 启动入口 | `main()` 解析命令行（Lua 配置文件、日志配置、进程编号），配置 log4cxx，注册全局 `mysql_init`/`mysql_end`，再按顺序跑 `initGlobal`/`initSysCounter`/`checkProtocol` 布尔检查。 | CLI 解析与 `Node` 构造同步完成全部初始化；任一步失败即抛异常退出，不会留下半启动状态。Lua 配置文件与进程编号由实例 env 文件加 CLI 参数替代。 | 契约不同的重新实现 |
+| 线程模型 | `FogsProcess::start` 为每个附加 `IServer` 起一个 `boost::thread`，另起一个 `io_service::run` 线程，期间屏蔽全部信号；随后 `main` 进入 `sigwait`。 | TCP 角色由单个 `io_context` 驱动到底；web 传输多一个工作线程。没有按 server 拆分线程。 | 简化 |
+| 信号集 | `sigwait` 等待 `SIGINT`、`SIGQUIT`、`SIGTERM`；其余信号保持默认，仅在起线程窗口内持掩码。 | `asio::signal_set` 在事件循环上处理 `SIGINT`、`SIGTERM`、`SIGHUP`；`SIGQUIT` 刻意留给 Crashpad 作为崩溃路径。 | 契约不同 |
+| 热重载 | 不存在。 | `SIGHUP` 只有在替换模块加载并初始化成功后才切换 Lua VM；失败保留旧 VM 与模块状态。 | 新能力 |
+| 退出入口 | `sigwait` 返回后 `shutdown()` 置状态位、停主 server，然后每 100ms 轮询 `serverConns_` 排空，每秒打日志，超过 30 秒强制移除残余连接。 | 信号回调调用 `stop()`：清除就绪位、关闭 acceptor、停 Lua tick、停 Redis 与 web 栈，按顺序停止每个会话，再执行 Lua `shutdown` 回调；每个回调都有包装，单点失败只打日志并继续收尾。 | 重新实现；无固定强杀窗口 |
+| IO/线程收尾 | 排空循环后 post `io_service::stop`，逐个对附加 server 调 `shutdown(0)`，最后 `join_all`。 | 会话先完成取消处理器再销毁 `Node` 状态；io context 自然排空，可选工作线程被 join。 | 顺序等价、机制不同 |
+| 异常路径 | 初始化步骤逐级返回布尔并以 `EXIT_FAILURE` 退出；shutdown 期间的异常没有包装。 | 构造与 CLI 失败在 `main` 捕获后非零退出；web 启动异常被捕获、停机后重抛；stop/shutdown 回调捕获并打日志，不会从循环中抛穿。 | 强于旧实现 |
 
 ## 状态定义
 

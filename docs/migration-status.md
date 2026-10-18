@@ -4,7 +4,7 @@ This ledger distinguishes architectural ideas carried forward from code that has
 
 | Legacy capability | Mistlane status | Current boundary / next decision |
 |---|---|---|
-| Process startup, listeners, signal handling and shutdown | Reimplemented | `Node` owns the new lifecycle. The old process API and binary compatibility are not retained. |
+| Process startup, listeners, signal handling and shutdown | Reimplemented | `Node` owns the new lifecycle; see the [lifecycle audit](#legacy-lifecycle-audit) for the item-by-item comparison. The old process API and binary compatibility are not retained. |
 | Asynchronous TCP transport | Reimplemented | New four-byte length-prefixed payload protocol, per-session limits and deadlines. Old framing and client protocol are unsupported. |
 | WebSocket / secure WebSocket | Replaced | Drogon/Trantor handles WS/WSS; no handwritten handshake, masking or control-frame parser is carried over. |
 | HTTP server | Replaced | Drogon handles HTTP/HTTPS and Lua request handlers. The old HTTP server API is not retained. |
@@ -27,6 +27,20 @@ This ledger distinguishes architectural ideas carried forward from code that has
 | Crypto, compression, URL, serialization helpers | Not migrated wholesale | Game-specific helpers and custom protocol utilities are excluded. Use maintained libraries and explicit formats for concrete needs. |
 | Generic Lua utility files | Selective extraction | Only MinHeap was reviewed and extracted; other utilities need dependency, behavior, test and provenance review one file at a time. |
 | Gameplay, accounts, payments, navigation, cache tables, operations and SDKs | Excluded | These are application/game systems, private deployment concerns or third-party integrations, not framework migration targets. |
+
+## Legacy lifecycle audit
+
+Item-by-item comparison of the legacy `FogsProcess`/`d_*` mains against Mistlane `Node` (checked against both sources on 2026-10-18):
+
+| Lifecycle item | Legacy behavior | Mistlane behavior | Verdict |
+|---|---|---|---|
+| Startup entry | `main()` parses program options (Lua config file, log config, process index), configures log4cxx, registers global `mysql_init`/`mysql_end`, then runs `initGlobal`/`initSysCounter`/`checkProtocol` as ordered boolean checks. | CLI parsing and `Node` construction perform all initialization synchronously; any failure throws and the process exits without a partially started state. The Lua config file and process index are replaced by instance env files plus CLI flags. | Reimplemented with a different contract |
+| Thread model | `FogsProcess::start` spawns one `boost::thread` per extra `IServer` plus an `io_service::run` thread while all signals are blocked; `main` then blocks in `sigwait`. | One `io_context` drives TCP roles end to end; web transports add a single worker thread. There are no per-server threads. | Simplified |
+| Signal set | `sigwait` for `SIGINT`, `SIGQUIT` and `SIGTERM`; other signals keep their defaults except a mask held only while threads spawn. | `asio::signal_set` handles `SIGINT`, `SIGTERM` and `SIGHUP` on the event loop; `SIGQUIT` is deliberately left as a crash path for the Crashpad handler. | Different contract |
+| Hot reload | Not present. | `SIGHUP` swaps the Lua VM only after the replacement module loads and initializes; a failure retains the previous VM and module state. | New capability |
+| Shutdown entry | `sigwait` returns and `shutdown()` sets a state flag, stops the main server, then polls every 100 ms for `serverConns_` to drain, logging per second and force-removing leftovers after 30 seconds. | The signal handler calls `stop()`: readiness is cleared, the acceptor closes, the Lua tick stops, Redis and the web stack stop, every session is stopped in order, and the Lua `shutdown` callback runs; each callback is wrapped so one failure logs and shutdown continues. | Reimplemented; no fixed force-kill window |
+| IO/thread teardown | After the drain loop an `io_service::stop` is posted, each extra server gets `shutdown(0)`, then `join_all`. | Sessions finish their cancellation handlers before `Node` state is destroyed; the io context drains and the optional worker thread is joined. | Equivalent ordering via a different mechanism |
+| Exception paths | Initialization steps return booleans and exit with `EXIT_FAILURE`; shutdown-time exceptions are not wrapped. | Constructor and CLI failures are caught in `main` and exit non-zero; web startup errors are captured, stop the node, then rethrown; stop/shutdown callbacks catch and log instead of unwinding out of the loop. | Stronger than legacy |
 
 ## Acceptance meaning
 

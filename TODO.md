@@ -137,7 +137,7 @@
 
 - [x] 建立双语能力迁移状态清单，区分重写、替换、部分替换、未迁移和排除项。证据：`docs/migration-status.md`、`docs/zh/migration-status.md`。
 - [x] 检查发布候选内没有以旧产品前缀命名的文件。证据：`rg --files mistlane` 前缀扫描无匹配。
-- [ ] 从旧 C++ 生命周期实现中逐项核对 Node 启动、信号处理、退出顺序和异常路径，并更新状态清单。
+- [x] 从旧 C++ 生命周期实现中逐项核对 Node 启动、信号处理、退出顺序和异常路径，并更新状态清单。证据：2026-10-18 对照 game-fogs `d_common/common/src/FogsProcess.cpp`、`FogsServer.hpp` 与 `d_gateway/main.cpp` 逐项核对，migration-status.md 双语新增"旧生命周期核对"表（启动入口、线程模型、信号集、热重载、退出入口、IO/线程收尾、异常路径七项），并更新首行状态指向该节；pnpm docs:build 通过。
 - [ ] 从旧 Lua 回调实现中逐项核对 init/start/tick/stop/shutdown 映射，并更新状态清单。
 - [ ] 追踪旧服务连接注册报文及其调用方，决定是否设计新的服务认证/注册接口。
 - [ ] 追踪旧服务连接重连和发送队列的生产者、消费者与排队字节数，决定是否需要有界可靠投递模块。
