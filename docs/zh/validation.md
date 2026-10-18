@@ -10,6 +10,7 @@
 | 并发与路由 | 并发请求及会话固定上游通过 |
 | WS / WSS | Drogon 握手、掩码、分片、ping/pong、受信任证书 TLS echo 通过 |
 | 会话推送与广播 | `transport.push` 启动带 TCP+WS 监听的 gameServer 并置于 gateway 之后，验证全双工会话：message context 中的会话身份、handler 返回 nil 后会话仍可用、`mistlane.session.send` 先于响应到达、广播覆盖全部帧式会话（直连 TCP、经 gateway、WS 链路）、约 32×64 KiB 推送后触发积压拒绝并以有界 `queued+refused` 报告而非 Lua 报错或断连、`unknown session id` 与 `payload exceeds 1 MiB` 原因、gateway 无请求转发主动推送、节点日志无 `callback failed` |
+| 请求关联（MLC2） | `transport.correlate` 在同一节点组合上验证可选关联模式：仅首帧生效的握手（`MLC2` → `MLC2 OK`）、直连/gateway/WS 三链路响应逐字节回显 u32 BE 请求 ID、Lua 可见 `context.request`、推送与广播携带 ID 0 而同服务器未握手会话保持原帧格式、越界的关联推送返回 `payload exceeds 1 MiB` 而非 handler 报错、cross 路由以 `MLC1 ERR INVALID` 拒绝 `MLC2`、节点日志无 `callback failed` |
 | HTTP / HTTPS | 两种传输下的 Drogon 请求、二进制正文，以及 curl 适配的证书 / 主机名校验、仅允许 HTTP/HTTPS 的协议限制和响应大小上限通过 |
 | 多监听与 WebSocket 生命周期 | `transport.listeners` 启动混合 gameServer（TCP 主监听 + WS + WSS，WSS 用 `?cert=&key=` 单独覆盖证书）、apiServer HTTP 节点（`/`、`/ws` 升级进入 Lua `websocket_open/message/close` 生命周期，`mistlane.websocket.send` 覆盖成功、`unknown websocket id`、`payload exceeds 1 MiB`）、`websocket_message` 内 Lua 报错只关闭该会话且 HTTP 服务继续应答、SIGTERM 排空在线会话、慢消费者越过 2 MiB 输出高水位被强制关闭、HTTPS+WSS 单监听证书、gateway HTTP 监听承载游戏会话升级、配置文件 `LISTENERS=`，以及脚本角色 TCP 监听与重复端口的启动拒绝 |
 | Lua apiServer | 请求元数据、before_request 短路、after_request 修改、on_error 兜底、响应校验与重载回退通过 |

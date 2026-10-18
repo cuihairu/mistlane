@@ -109,7 +109,7 @@ WSS 示例（使用你自己的证书链与私钥）：
 
 证书和私钥不进入源码包。WS/WSS 的实现直接使用 Drogon；内部 TCP payload 为四字节网络序长度加数据，最大 1 MiB，允许空消息和二进制内容。
 
-WSS 客户端连接 `wss://证书对应域名:7443/ws`，远程接入时将上述 WSS 监听地址改为合适的服务端网卡地址。响应是 binary WS 消息；会话全双工，客户端可流水发送，Lua 通过 `mistlane.session.send`/`mistlane.session.broadcast` 向单个或全部游戏会话主动推送（每会话输出积压有界），脚本角色 HTTP 监听另有独立的 WebSocket 推送 API。浏览器代码、网关/直接 gameServer 两种拓扑及初始化模板的 `CERT`/`KEY` 配置见[游戏接入指南](docs/zh/guide.md)。
+WSS 客户端连接 `wss://证书对应域名:7443/ws`，远程接入时将上述 WSS 监听地址改为合适的服务端网卡地址。响应是 binary WS 消息；会话全双工，客户端可流水发送，Lua 通过 `mistlane.session.send`/`mistlane.session.broadcast` 向单个或全部游戏会话主动推送（每会话输出积压有界），可选的请求 ID 关联模式（`MLC2`）让响应与推送可区分，脚本角色 HTTP 监听另有独立的 WebSocket 推送 API。浏览器代码、网关/直接 gameServer 两种拓扑及初始化模板的 `CERT`/`KEY` 配置见[游戏接入指南](docs/zh/guide.md)。
 
 ## Lua 扩展
 

@@ -123,7 +123,7 @@ socket.onopen = () => socket.send(new TextEncoder().encode('hello mistlane'))
 
 原生客户端同样使用标准 WS/WSS 库。服务端接受 text/binary 消息，响应统一为 binary，单消息最大 1 MiB。应用自己定义 payload 编码和消息 ID，当前示例只原样回显。
 
-会话是全双工的：客户端帧不依赖响应到达，可以流水发送多条请求；handler 返回 nil 时该请求没有响应帧。响应与服务端推送共用同一条有界通道——每个会话最多积压约 2 MiB 输出，越界时 Lua 收到明确的拒绝而非 handler 报错。游戏会话的主动推送、广播与按会话发送通过 `mistlane.session.send` 与 `mistlane.session.broadcast` 提供；帧率令牌桶与输出上限共同约束吞吐。当前适合验证游戏连接、消息链路与推送路径；玩家鉴权、账号绑定与按玩家路由仍缺失。
+会话是全双工的：客户端帧不依赖响应到达，可以流水发送多条请求；handler 返回 nil 时该请求没有响应帧。响应与服务端推送共用同一条有界通道——每个会话最多积压约 2 MiB 输出，越界时 Lua 收到明确的拒绝而非 handler 报错。游戏会话的主动推送、广播与按会话发送通过 `mistlane.session.send` 与 `mistlane.session.broadcast` 提供；帧率令牌桶与输出上限共同约束吞吐。推送与响应交错导致归属不明时，可用可选关联模式：首帧 `MLC2` 将会话（直连或经 gateway，TCP 或 WS）切换为逐帧携带 4 字节请求 ID，响应回显、推送置 0——详见[架构说明](./architecture.md#执行与连接模型)。当前适合验证游戏连接、消息链路与推送路径；玩家鉴权、账号绑定与按玩家路由仍缺失。
 
 一个进程也可以同时服务多种协议：`--transport` 仍为单一选择、作用于主监听；每个 `--listener PROTO://IP:PORT` 追加一个独立监听（明文与 TLS 可并存；`wss`/`https` 条目可追加 `?cert=FILE&key=FILE` 绑定自己的证书）。WS/WSS 监听照旧承载游戏会话，同一个 gameServer 可以在不同端口同时暴露原生客户端的帧式 TCP 和浏览器用的 WS/WSS。HTTP 侧见[HTTP 多监听与 WebSocket 生命周期](./http.md#多监听与-websocket-生命周期)。
 

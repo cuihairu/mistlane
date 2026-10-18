@@ -61,7 +61,7 @@ flowchart TB
 
 gateway 的当前运行机制为：新连接按 upstream 列表轮询；一个下游会话对应一个上游 TCP 连接。会话按帧到达节奏读取，向每个对端方向一次只在途一帧，慢下游因此对上游形成背压而非无限缓冲。每通道发送按序排队且有界：内部帧约 2 MiB 积压上限、越界拒绝，WS 侧由 Trantor 2 MiB 高水位约束。WS/WSS 由 Drogon 解析完整消息再转为内部 TCP 帧。连接固定到某个上游；重新连接可能选到另一上游，不具备按玩家 ID 路由的保证。
 
-TCP：`u32 big-endian length | payload`。WS：一条消息即一个 payload，允许二进制与文本输入，输出为二进制消息。payload 上限为 1 MiB。请求 / 响应顺序一致，协议里没有业务消息 ID、账号 ID 或服务注册数据。
+TCP：`u32 big-endian length | payload`。WS：一条消息即一个 payload，允许二进制与文本输入，输出为二进制消息。payload 上限为 1 MiB。请求 / 响应顺序一致，基础协议里没有业务消息 ID、账号 ID 或服务注册数据。可选关联模式补充请求 ID：首帧 `MLC2` 将会话切换为帧内携带 4 字节 big-endian 请求 ID（`id | payload`），响应回显该 ID，主动推送携带 ID 0；`MLC2` 仅首帧生效，与 cross 路由（`MLC1`）互斥并被拒绝。未握手的会话保持原帧格式。
 
 - 连接上限由 --max-connections 和 --memory-budget-mib 共同决定，默认有效上限 42；详见跨服文档的内存估算边界。
 - 每会话令牌桶容量 200、补充速度 100 条消息/秒。

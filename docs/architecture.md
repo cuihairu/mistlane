@@ -63,7 +63,7 @@ Gateway is the forwarding role in this version. Each new session selects an upst
 
 A session reads frames as they arrive and keeps one frame in flight toward each peer, so a slow downstream applies back pressure to upstream instead of buffering indefinitely. Writes are queued per channel and bounded: internal frames accept about 2 MiB of backlog and refuse beyond it, while the Drogon side of a WS session is capped by the Trantor 2 MiB high-water mark. Drogon assembles WS/WSS messages and adapts them to internal TCP frames.
 
-TCP frames use a four-byte big-endian payload length. A WS message is one payload without that header. Empty and binary payloads are supported, with a 1 MiB limit. WS responses are binary. There is no business message ID, account ID, or registration schema in this protocol.
+TCP frames use a four-byte big-endian payload length. A WS message is one payload without that header. Empty and binary payloads are supported, with a 1 MiB limit. WS responses are binary. The base protocol has no business message ID, account ID, or registration schema. An optional correlation mode adds one: the first frame `MLC2` switches the session to a four-byte big-endian request id carried inside each frame payload (`id | payload`); replies echo the id, unsolicited pushes carry id 0, and `MLC2` is honored only as the first frame — cross routing (`MLC1`) stays exclusive and rejects it. Sessions without the handshake keep the plain framing.
 
 | Control | Current behavior |
 |---|---|

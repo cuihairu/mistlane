@@ -39,6 +39,15 @@ asio::ip::address parse_address(const std::string& text) {
 // into a refusal instead of unbounded growth. Both refusal paths report
 // message_size synchronously before returning.
 constexpr std::size_t write_backlog = 2*max_frame;
+// Correlated sessions (MLC2) carry a u32 BE request id inside the frame
+// payload; pushes keep id 0 so clients can tell solicitations from replies.
+std::string correlated_frame(std::uint64_t request, std::string_view payload) {
+    std::string frame(4, '\0');
+    auto id = request;
+    for (int i = 3; i >= 0; --i) { frame[i] = static_cast<char>(id & 255); id >>= 8; }
+    frame.append(payload);
+    return frame;
+}
 class TcpChannel : public Channel, public std::enable_shared_from_this<TcpChannel> {
 public:
     explicit TcpChannel(tcp::socket socket) : socket_(std::move(socket)) {}
@@ -257,17 +266,26 @@ public:
         return id;
     }
     void detach(std::uint64_t id) { sessions_.erase(id); }
+    // Flips once the session completes the MLC2 handshake; pushes then carry
+    // the id-0 prefix so the client can tell them from replies.
+    void set_correlated(std::uint64_t id) {
+        const auto found = sessions_.find(id);
+        if (found != sessions_.end()) found->second.correlated = true;
+    }
 private:
-    struct Entry { std::shared_ptr<Channel> channel; Failure fail; };
+    struct Entry { std::shared_ptr<Channel> channel; Failure fail; bool correlated = false; };
     std::string session_send(std::uint64_t id, std::string_view payload) override {
-        if (payload.size() > max_frame) return "payload exceeds 1 MiB";
         const auto found = sessions_.find(id);
         if (found == sessions_.end()) return "unknown session id";
+        const auto& entry = found->second;
+        const bool oversize = entry.correlated ? payload.size()+4 > max_frame : payload.size() > max_frame;
+        if (oversize) return "payload exceeds 1 MiB";
         // Refusals report synchronously before write() returns, so the stack
         // `reason` is safe; a write that dies later only retires the session.
-        auto fail = found->second.fail;
+        auto fail = entry.fail;
         std::string reason;
-        found->second.channel->write(std::string(payload), [&reason, fail](Error ec) {
+        entry.channel->write(entry.correlated ? correlated_frame(0, payload) : std::string(payload),
+            [&reason, fail](Error ec) {
             if (!ec) return;
             if (ec == asio::error::message_size) { reason = "session backlogged"; return; }
             if (ec == asio::error::operation_aborted) { reason = "unknown session id"; return; }
@@ -282,8 +300,11 @@ private:
         std::size_t queued = 0;
         for (const auto& [id, entry] : sessions_) {
             (void)id;
+            const bool oversize = entry.correlated ? payload.size()+4 > max_frame : payload.size() > max_frame;
+            if (oversize) continue;
             auto accepted = std::make_shared<bool>(true);
-            entry.channel->write(std::string(payload), [accepted, fail = entry.fail](Error ec) {
+            entry.channel->write(entry.correlated ? correlated_frame(0, payload) : std::string(payload),
+                [accepted, fail = entry.fail](Error ec) {
                 if (!ec) return;
                 if (ec == asio::error::message_size) { *accepted = false; return; }
                 fail(); // a dead connection retires its session
@@ -359,6 +380,19 @@ private:
         });
     }
     void route(std::string payload) {
+        if (fresh_) {
+            fresh_ = false;
+            // Correlation is a local-session mode; a plain gateway relays the
+            // handshake (and its verdict) upstream like any other frame, and
+            // cross routing keeps its own MLC1 handshake exclusive.
+            if (!upstream_ && !config_.is_cross_gateway() && config_.role != "crossServer"
+                && payload == "MLC2") {
+                reply("MLC2 OK"); // queued unprefixed while correlation is still off
+                correlated_ = true;
+                if (registry_ && context_.session) registry_->set_correlated(context_.session);
+                return;
+            }
+        }
         if ((config_.is_cross_gateway() || config_.role == "crossServer") && !joined_) {
             try {
                 context_ = cross_context(payload);
@@ -377,7 +411,17 @@ private:
                 upstream_ = std::make_shared<TcpChannel>(tcp::socket(client_->executor()));
             } catch (const std::exception&) { return reject("INVALID"); }
         }
-        if (!upstream_) return serve_local(std::move(payload));
+        if (!upstream_) {
+            // Correlated requests carry their id in the first payload bytes;
+            // the reply echoes it, pushes answer with id 0.
+            if (!correlated_) return serve_local(std::move(payload));
+            if (payload.size() < 4) return stop(); // malformed correlated frame
+            std::uint64_t request = 0;
+            for (int i = 0; i < 4; ++i)
+                request = (request << 8) | static_cast<unsigned char>(payload[i]);
+            payload.erase(0, 4);
+            return serve_local(std::move(payload), request);
+        }
         if (awaiting_join_) deadline(10); // the join verdict is bounded, not the session
         if (upstream_->socket().is_open()) return forward_upstream(std::move(payload));
         if (probe_port_ && !probed_) return probe(std::move(payload));
@@ -391,12 +435,13 @@ private:
     }
     // Local script path: one Lua call per frame; a handler that returns nil
     // sends nothing and the session keeps reading.
-    void serve_local(std::string payload) {
+    void serve_local(std::string payload, std::uint64_t request = 0) {
         try {
+            context_.request = request;
             const auto started = std::chrono::steady_clock::now();
             auto response = service_->message(payload, &context_);
             diagnostics_.observe_lua_callback("message", std::chrono::steady_clock::now() - started);
-            if (response) return reply(std::move(*response));
+            if (response) return reply(std::move(*response), request);
             pump_client();
         }
         catch (const std::exception& e) {
@@ -533,7 +578,8 @@ private:
             self->pump_client();
         });
     }
-    void reply(std::string payload) {
+    void reply(std::string payload, std::uint64_t request = 0) {
+        if (request) payload = correlated_frame(request, payload); // echo the request id
         diagnostics_.add_message("tx");
         diagnostics_.add_payload_bytes("tx", payload.size());
         diagnostics_.observe_request(std::chrono::steady_clock::now() - request_started_);
@@ -557,6 +603,7 @@ private:
     std::uint16_t probe_port_ = 0;
     bool probed_ = false, joined_ = false, awaiting_join_ = false;
     bool client_reading_ = false, upstream_reading_ = false;
+    bool fresh_ = true, correlated_ = false;
     std::function<void(Session*)> on_close_;
     TokenBucket bucket_;
     std::uint64_t generation_ = 0;

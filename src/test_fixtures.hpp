@@ -199,4 +199,27 @@ function M.message(payload, context)
 end
 return M
 )fixture";
+// Optional request correlation (MLC2): Lua sees the request id from the
+// message context and oversized correlated pushes report instead of failing.
+inline constexpr std::string_view correlate_lua = R"fixture(
+local M = {}
+function M.message(payload, context)
+  if type(context) ~= 'table' then error('session context missing') end
+  if payload == 'self' then
+    return 'session='..context.session..':req='..tostring(context.request)
+  elseif payload == 'silent' then
+    return nil
+  elseif payload == 'push' then
+    assert(mistlane.session.send(context.session, 'pushed'))
+    return 'done'
+  elseif payload == 'bcast' then
+    return 'bcast='..mistlane.session.broadcast('bc')
+  elseif payload == 'big' then
+    local ok, err = mistlane.session.send(context.session, string.rep('x', 1024*1024-3))
+    return 'big='..tostring(ok)..':'..tostring(err)
+  end
+  return payload
+end
+return M
+)fixture";
 }

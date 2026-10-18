@@ -43,6 +43,7 @@
   - [ ] 定义服务身份、会话身份、请求关联和有界双向消息；替换强制一问一答路径，补推送/广播及服务连接复用。
     - 已代决（2026-10-19，第一切片）：会话身份=帧式会话数字 id（Session::start attach，message context.session 可见）；双向消息=全双工双泵（pump_client/pump_upstream 各自在途一帧，写完成幂等重挂，网关在 connect 即开始收上游，主动推送无需请求）；有界=每通道 ~2 MiB 写积压，Lua `mistlane.session.send` 同步拒绝（`session backlogged`/`unknown session id`/`payload exceeds 1 MiB`）、`mistlane.session.broadcast` 返回接受数；handler 返回 nil 不回帧且会话继续（WebChannel 桥接槽位改在 deliver 归还）；期限改为首帧 10s、双向空闲 60s、cross join 判定 10s；join 判定帧（MLC1 OK）照常回给客户端。测试 `transport.push`（16/16 绿）；docs guide/http/architecture/lua/validation/process-roles/cross-server 及 zh 同步。
     - 仍留待后续切片：服务身份握手（服务间认证）、服务连接复用/多路复用、按请求关联 ID 的请求-响应匹配（当前同会话按序）。
+    - 第二切片（2026-10-19）：请求关联落地为可选模式——首帧 `MLC2` 把会话切到帧内 `u32 BE 请求 ID | payload` 编码；响应回显该 ID（`context.request` 对 Lua 可见），推送/广播携带 ID 0；握手仅首帧生效，经 gateway 透传（判定帧照常回给客户端），cross 路由保持 `MLC1` 互斥并以 `MLC1 ERR INVALID` 拒绝 `MLC2`；同服务器未握手会话不受影响。越界关联推送按 `payload exceeds 1 MiB` 拒绝。测试 `transport.correlate`（17/17 绿）；docs architecture/guide/lua/validation/README 及 zh 同步。
   - [ ] 实现 coordinator 的进程注册/就绪/负载、角色与场景归属、迁移状态；区服与跨服组明确作用域，router 不直接改名顶替该能力。
   - [ ] 明确 gameServer 的角色、场景模板/实例、计时、同步和释放；从旧代码逐项评估通用能力，排除原游戏玩法和配置。
   - [ ] 实现 crossServer 的参与者来源、场景与返回上下文；长期变更回传归属侧 data；先确定回传与持久化确认协议及唯一写入权，再实现移交/结算/重试/离线/回服故障恢复。

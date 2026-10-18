@@ -13,6 +13,7 @@ void transport_websocket();
 void transport_http();
 void transport_listeners();
 void transport_push();
+void transport_correlate();
 void lua_lifecycle();
 void lua_http();
 void cross_admission();
@@ -77,6 +78,7 @@ int run_tests(int argc, char** argv) {
         {"transport.http","transport",test::transport_http},
         {"transport.listeners","transport",test::transport_listeners},
         {"transport.push","transport",test::transport_push},
+        {"transport.correlate","transport",test::transport_correlate},
         {"lua.lifecycle","lua",test::lua_lifecycle},
         {"lua.http","lua",test::lua_http},
         {"cross.admission","cross",test::cross_admission},

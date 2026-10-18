@@ -175,6 +175,13 @@ public:
         for (std::size_t i = 0; i < payload.size(); ++i) frame.push_back(payload[i] ^ mask[i % 4]);
         send_all(frame);
     }
+    void bin(std::string_view payload) {
+        require(payload.size() <= 125, "test frame too large");
+        const char mask[4] = {'\x11', '\x22', '\x33', '\x44'};
+        std::string frame{'\x82', static_cast<char>(0x80 | payload.size()), mask[0], mask[1], mask[2], mask[3]};
+        for (std::size_t i = 0; i < payload.size(); ++i) frame.push_back(payload[i] ^ mask[i % 4]);
+        send_all(frame);
+    }
     std::string read_text() {
         for (;;) {
             unsigned char head[2];
@@ -522,6 +529,107 @@ void transport_listeners() {
 // Framed game sessions carry a session identity and accept Lua pushes:
 // mistlane.session.send/broadcast deliver frames without a matching request,
 // a handler may answer nothing, and outbound pushes stay bounded per session.
+// Optional correlation mode: the first frame "MLC2" switches the session to
+// u32 BE request ids carried inside the frame payload; pushes carry id 0.
+void transport_correlate() {
+    Context c;
+    write(c.path("correlate.lua"), correlate_lua);
+    const auto gameServer = port(), gateway = port(), ws_port = port();
+    auto& node = c.spawn({self().string(), "--role", "gameServer", "--listen", endpoint(gameServer),
+        "--script", c.path("correlate.lua").string(),
+        "--listener", "ws://127.0.0.1:"+std::to_string(ws_port)});
+    c.node("gateway", gateway, {"--upstream", endpoint(gameServer)});
+    const auto send_frame = [](RawSocket& raw, std::string_view payload) {
+        std::string frame(4, '\0');
+        auto length = static_cast<std::uint32_t>(payload.size());
+        for (int i = 3; i >= 0; --i) { frame[i] = static_cast<char>(length & 255); length >>= 8; }
+        raw.send(frame+std::string(payload));
+    };
+    const auto read_frame = [](RawSocket& raw) {
+        const auto header = raw.receive(4);
+        std::size_t length = 0;
+        for (unsigned char ch : header) length = (length << 8) | ch;
+        return raw.receive(length);
+    };
+    const auto tagged = [](std::uint32_t id, std::string_view payload) {
+        std::string frame(4, '\0');
+        for (int i = 3; i >= 0; --i) { frame[i] = static_cast<char>(id & 255); id >>= 8; }
+        return frame+std::string(payload);
+    };
+    std::uint32_t id = 0;
+    std::string body;
+    const auto split = [&id, &body](const std::string& frame) {
+        require(frame.size() >= 4, "correlated frame too short");
+        id = 0;
+        for (int i = 0; i < 4; ++i) id = (id<<8) | static_cast<unsigned char>(frame[i]);
+        body = frame.substr(4);
+    };
+    // Handshake, then replies echo the request id byte for byte.
+    RawSocket first(gameServer);
+    send_frame(first, "MLC2");
+    equal(read_frame(first), "MLC2 OK");
+    send_frame(first, tagged(0x01020304, "hello"));
+    split(read_frame(first));
+    require(id == 0x01020304 && body == "hello", "correlated echo lost id or payload");
+    send_frame(first, tagged(9, "self"));
+    split(read_frame(first));
+    require(id == 9 && body.starts_with("session=") && body.ends_with(":req=9"),
+        "lua request id missing: "+body);
+    // A nil reply still means no frame; pushes carry id 0 and precede the reply.
+    send_frame(first, tagged(5, "silent"));
+    std::this_thread::sleep_for(300ms);
+    require(!first.pending(), "nil reply produced a frame");
+    send_frame(first, tagged(6, "push"));
+    split(read_frame(first));
+    require(id == 0 && body == "pushed", "push must stay uncorrelated");
+    split(read_frame(first));
+    require(id == 6 && body == "done", "reply after push lost its id");
+    // An oversized correlated push reports instead of failing the handler.
+    send_frame(first, tagged(7, "big"));
+    split(read_frame(first));
+    require(id == 7 && body == "big=false:payload exceeds 1 MiB", "oversize push not reported: "+body);
+    // A plain client on the same server stays uncorrelated; broadcast shapes differ.
+    RawSocket second(gameServer);
+    send_frame(second, "hello");
+    equal(read_frame(second), "hello");
+    send_frame(second, "bcast");
+    split(read_frame(first));
+    require(id == 0 && body == "bc", "broadcast to a correlated session must carry id 0");
+    equal(read_frame(second), "bc");
+    equal(read_frame(second), "bcast=2");
+    // The handshake is honored as the first frame only.
+    send_frame(second, "MLC2");
+    equal(read_frame(second), "MLC2");
+    // The same contract through a gateway: ids survive the relay.
+    RawSocket via(gateway);
+    send_frame(via, "MLC2");
+    equal(read_frame(via), "MLC2 OK");
+    send_frame(via, tagged(0x0A0B0C0D, "ping"));
+    split(read_frame(via));
+    require(id == 0x0A0B0C0D && body == "ping", "gateway lost correlation");
+    send_frame(via, tagged(3, "self"));
+    split(read_frame(via));
+    require(id == 3 && body.ends_with(":req=3"), "gateway lua request id missing: "+body);
+    // The ws game-session leg speaks the same mode in binary frames.
+    {
+        WsRaw over(ws_port);
+        over.text("MLC2");
+        equal(over.read_text(), "MLC2 OK");
+        over.bin(tagged(11, "w"));
+        split(over.read_text());
+        require(id == 11 && body == "w", "ws correlated echo failed");
+    }
+    // Cross routing keeps its own handshake and rejects correlation.
+    const auto shard = port(), cross_gate = port();
+    c.node("crossServer", shard, {"--script", c.path("correlate.lua").string()});
+    c.cross_gateway(cross_gate, {"--upstream", endpoint(shard)});
+    {
+        RawSocket crossed(cross_gate);
+        send_frame(crossed, "MLC2");
+        equal(read_frame(crossed), "MLC1 ERR INVALID");
+    }
+    require(node.output().find("callback failed") == std::string::npos, "correlation path logged Lua failures");
+}
 void transport_push() {
     Context c;
     write(c.path("push.lua"), push_lua);

@@ -212,6 +212,10 @@ std::optional<std::string> LuaService::message(std::string_view payload, const C
             lua_pushinteger(state_, static_cast<lua_Integer>(context->session));
             lua_setfield(state_, -2, "session");
         }
+        if (context->request) {
+            lua_pushinteger(state_, static_cast<lua_Integer>(context->request));
+            lua_setfield(state_, -2, "request");
+        }
         if (!context->realm.empty()) {
             lua_pushlstring(state_, context->realm.data(), context->realm.size()); lua_setfield(state_, -2, "realm");
             lua_pushlstring(state_, context->group.data(), context->group.size()); lua_setfield(state_, -2, "group");

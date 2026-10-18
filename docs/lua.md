@@ -36,7 +36,7 @@ stateDiagram-v2
 | Script top level | None / module table | Startup and reload; validate required handler for the transport |
 | init | context / ignored | Once after validation; context has role, transport, epoch |
 | start | None / ignored | Listener ready, before ready is published; failure aborts startup/reload |
-| message | payload, context / string or nil | Non-HTTP messages; context carries the numeric session identity on framed listeners, and crossServer joins add realm/group/room/epoch; a nil return sends no reply frame |
+| message | payload, context / string or nil | Non-HTTP messages; context carries the numeric session identity on framed listeners, and crossServer joins add realm/group/room/epoch; correlation mode (first frame `MLC2`) adds `request` with the client's id; a nil return sends no reply frame |
 | before_request | req / nil or response | Before HTTP handler; a response short-circuits http |
 | http | req / response table | Main HTTP handler |
 | after_request | req, response / nil or response | After successful handler or short circuit; mutate response or return a replacement |
@@ -50,7 +50,7 @@ stateDiagram-v2
 
 `mistlane.websocket.send(id, payload)` pushes to one websocket session and returns true, or false plus a reason. See [HTTP listeners and the WebSocket lifecycle](./http.md#multiple-listeners-and-websocket-lifecycle).
 
-Framed game sessions expose `mistlane.session.send(id, payload)` and `mistlane.session.broadcast(payload)` when the listener mix carries tcp/ws/wss. `send` returns true, or false plus a reason (`unknown session id`, `payload exceeds 1 MiB`, `session backlogged` when the session's ~2 MiB output bound is full); `broadcast` queues the payload for every live framed session and returns how many accepted it. The `id` is the session identity passed in the message context. A reply-less handler (nil return) and a handler that pushes compose freely: writes queue per channel, so reply order after pushes is preserved.
+Framed game sessions expose `mistlane.session.send(id, payload)` and `mistlane.session.broadcast(payload)` when the listener mix carries tcp/ws/wss. `send` returns true, or false plus a reason (`unknown session id`, `payload exceeds 1 MiB`, `session backlogged` when the session's ~2 MiB output bound is full); `broadcast` queues the payload for every live framed session and returns how many accepted it. The `id` is the session identity passed in the message context. A reply-less handler (nil return) and a handler that pushes compose freely: writes queue per channel, so reply order after pushes is preserved. In correlation mode (`MLC2`) pushed frames carry request id 0 while replies echo `context.request`.
 
 All hooks except the message/http a listener mix requires are optional. Nil means absent; other non-function fields fail when called. There are no player connect/disconnect hooks. Legacy Timer, SQLService, C_* globals and gameplay protocols are not migrated.
 
