@@ -143,8 +143,8 @@
 - [x] 追踪旧服务连接重连和发送队列的生产者、消费者与排队字节数，决定是否需要有界可靠投递模块。证据：2026-10-18 核对 `TcpConn.cpp::asyncWrite`（侵入式无界发送链表、>64KB 拆分仅告警、无字节计数）、`ServerConnBase.cpp`（断线 `serverConn_.reset()` 销毁队列不重投、固定 2 秒重连定时器；`pushQueue` 握手前队列全树零调用方为死代码）、生产者 `netapi.hpp::net_asyncWrite` 与 `pushData`；决策为不引入有界可靠投递模块（旧实现无可移植投递保证），有具体应用需求时再定义并带显式字节/条数上限与溢出策略；双语 migration-status.md 行已更新，docs:build 通过。
 - [x] 对旧线程池的实际工作负载分类，逐项标记为 Asio I/O、Boost.MySQL 异步 I/O、阻塞任务或已废弃。证据：2026-10-18 分类 `FogsProcess.cpp::start`（tg_ 线程组=Asio I/O）、`HttpRequestService.cpp::start`（固定 pthread 池阻塞 curl=阻塞任务）、`d_push/Task/TaskScheduler.cpp`（CPU 核数池阻塞推送=阻塞任务）、`d_world/HttpServer.hpp`（Poco 池=阻塞 I/O）、`DeadLoopMonitor.hpp`（看门狗线程=已废弃，指令 hook 取代）、旧 MySQL 为 libmysqlclient 同步调用（阻塞）；Mistlane 热路径全异步、curl 适配器仅 CLI，migration-status.md 双语行已更新，docs:build 通过。
 - [x] 若存在阻塞任务需求，先评估 `boost::asio::thread_pool`；只为其补充任务准入上限、拒绝策略、取消和关闭适配，不另造线程调度器。证据：2026-10-18 评估结论为当前无阻塞任务需求（src 下无 asio::thread_pool 实例化；curl 适配器仅 cli_client 同步 CLI 调用并在契约中禁止入事件循环；MySQL/Redis 全异步），thread_pool 保持指定载体不落地，出现需求时按准入上限/拒绝策略/取消/关闭四项补充适配；migration-status.md 行已记录，docs:build 通过。
-- [ ] 比较旧 Lua Timer/TimerQueue 的接口与候选 tick 钩子，确定是否需要 cancellable timeout/interval API。
-- [ ] 若增加 Lua 定时器 API，为单次、周期、取消、回调异常和重载行为分别定义契约。
+- [x] 比较旧 Lua Timer/TimerQueue 的接口与候选 tick 钩子，确定是否需要 cancellable timeout/interval API。证据：2026-10-18 核对 `game/Util/Timer.lua`（setTimeout/setInterval/remove/内建堆+近期数组、TIMER_LIMIT=100000、MAX_DELAY=5000、xpcall、`xx1` 哨兵自删）与 `TimerQueue.lua`（TimerHeap/TimerArr 双结构、墙钟驱动）；决策为不加 cancellable timeout/interval API：框架内部无消费者且旧需求属应用域，日后确需时按 steady_timer 薄适配+显式契约实现；双语 migration-status.md 行已更新，docs:build 通过。
+- [x] 若增加 Lua 定时器 API，为单次、周期、取消、回调异常和重载行为分别定义契约。证据：2026-10-18 前置条件已由上一条决策否定（暂不增加 Lua 定时器 API），契约工作随之搁置；migration-status.md 定时器行已写明日后实现时的四项先行契约（句柄/取消/错误策略/重载销毁+有界），docs:build 通过。
 - [ ] 对旧 UDP API 的实际调用点做只读盘点；若仍需要，使用 Boost.Asio UDP socket 实现最薄的协议适配。
 - [x] 对旧 Redis C/Lua API 的调用点做只读盘点，并基于 Boost.Redis 的 RESP3、断线重连和 Sentinel 能力确定集成边界。证据：Redis 适配集中在 Asio worker，Drogon Redis 未启用。
 - [x] 检查当前 vcpkg baseline 是否提供所需 Boost.Redis port/feature，并记录解析出的精确版本。证据：`boost-redis` 1.92.0 已配置并由 vcpkg 成功安装。
