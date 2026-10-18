@@ -35,7 +35,7 @@ Use `linux-release` for a Release build. Initial configuration installs the mani
 ./build/debug/mistlane init ./my-service
 ```
 
-The initializer refuses to overwrite a non-empty directory. It creates `config/instances/` with one trusted environment file per process, `scripts/` with Lua entrypoints, `ops/run-instance.sh` to resolve paths from the project root, `ops/cluster.sh` for local start/stop/restart/status/logs, and a systemd template under `ops/systemd/`. The generated config files are consumed by the shell launcher; Mistlane itself still takes CLI arguments and does not parse a native config file. See [architecture comparison](./architecture-comparison.md) for the old deployment layout and the reasoning behind the template.
+The initializer refuses to overwrite a non-empty directory. It creates `config/instances/` with one trusted environment file per process, `scripts/` with Lua entrypoints, `ops/run-instance.sh` to resolve paths from the project root, `ops/cluster.sh` for local start/stop/restart/status/logs, and a systemd template under `ops/systemd/`. The generated config files are consumed by the shell launcher; the runtime also parses a native `--config FILE` format (below). See [architecture comparison](./architecture-comparison.md) for the old deployment layout and the reasoning behind the template.
 
 ## Run three processes
 
@@ -153,6 +153,21 @@ Each `config/instances/<name>.env` file is sourced as shell assignments by `ops/
 | `CERT`, `KEY` | `wss`/`https` only | Certificate chain and private key, absolute or project-root relative; the launcher verifies both are readable. |
 
 Keep secrets out of these files when they live in a version-controlled template: the initializer creates no certificate material, and `gateway-wss.env` only ships placeholder `certs/` paths. Provision key files outside the repository or under a deployment-managed `certs/` directory, and inject any other credentials through the installed systemd unit (`Environment=`, `LoadCredential=`) or your deployment tooling instead of committing them to `config/instances/`.
+
+### Native config file
+
+The binary also reads a native config format directly, without the shell launcher:
+
+```bash
+./build/debug/mistlane --config config/instances/worker.env --max-connections 512
+```
+
+- The first non-empty line must be the version marker `# mistlane-config 1`; a file without it is rejected, so a random shell env file is never consumed silently.
+- Remaining lines are `KEY=VALUE`. Blank lines and `#` comments are ignored, empty values are skipped, and a repeated key is an error. Unknown keys are rejected with the file and line number.
+- Keys are the uppercase forms of the CLI options (`ROLE`, `LISTEN`, `TRANSPORT`, `SCRIPT`, `UPSTREAMS` comma-separated, `ROUTE_EPOCH`, `CERT`, `KEY`, `REDIS`, `METRICS_LISTEN`, `PROBE_LISTEN`, `OVERLOAD_RATIO`, `READY_HYSTERESIS`, `MAX_CONNECTIONS`, `MEMORY_BUDGET_MIB`, `MAX_ROOM_SESSIONS`, `MAX_GROUP_SESSIONS`, `MAX_SHARD_SESSIONS`, `CRASHPAD_HANDLER`, `CRASHPAD_DATABASE`) plus `ROOT`.
+- Precedence inside one run: file value, then a non-empty `MISTLANE_<KEY>` environment variable, then any explicit flag given after `--config`.
+- `SCRIPT`, `CERT`, `KEY`, `CRASHPAD_HANDLER` and `CRASHPAD_DATABASE` resolve relative paths against the config file's directory, or against `ROOT` when that key is set (itself relative to the config file). This differs from the shell launcher, which resolves against the project root; set `ROOT` to run the generated templates through `--config` unchanged.
+- Secrets still belong in deployment-managed environment (`MISTLANE_*` or systemd `LoadCredential=`), not in a committed file.
 
 
 ## HTTP worker

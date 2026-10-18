@@ -94,7 +94,7 @@ Connect to `ws://server:8080/ws`; game messages reach Lua `message(payload)`. Ea
 
 For HTTP/HTTPS, run a worker with --transport http/https and examples/http.lua. The Lua handler accepts method/path/query/headers/body and returns status/headers/body. Its before_request, http, after_request, on_error, init, start, tick, stop and shutdown hooks are documented in the [lifecycle guide](docs/lua.md).
 
-Generate a starter project with `./build/debug/mistlane init ./my-service`. It includes per-instance shell configuration, Lua entrypoints, local process operations and a systemd unit template. See [legacy and modern architecture comparison](docs/architecture-comparison.md) for the configuration and deployment analysis. The generated files are starter tooling; the runtime still receives command-line options and does not parse a native config format.
+Generate a starter project with `./build/debug/mistlane init ./my-service`. It includes per-instance shell configuration, Lua entrypoints, local process operations and a systemd unit template. See [legacy and modern architecture comparison](docs/architecture-comparison.md) for the configuration and deployment analysis. The launcher shell files stay canonical for the generated project; the runtime itself also parses a native `KEY=VALUE` config through `--config FILE` (see the [guide](docs/guide.md)).
 
 ## Bilingual documentation
 

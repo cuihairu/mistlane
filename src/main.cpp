@@ -3,9 +3,15 @@
 #include "mistlane/cli.hpp"
 #include "mistlane/scaffold.hpp"
 #include <charconv>
+#include <cstdlib>
+#include <filesystem>
+#include <fstream>
 #include <iostream>
+#include <map>
 #include <stdexcept>
 #include <string_view>
+#include <utility>
+#include <vector>
 
 namespace {
 unsigned number(std::string_view text, unsigned maximum) {
@@ -47,6 +53,92 @@ double ratio(std::string_view text) {
         throw std::invalid_argument("overload ratio must be in (0,1]: "+plain);
     return value;
 }
+// Native config files are line-based KEY=VALUE with a mandatory version header,
+// so a random shell env file is never consumed silently. Entries become the
+// same flags the command line parses, in order: file values, then MISTLANE_<KEY>
+// environment overrides, then any explicit flag given after --config.
+std::vector<std::pair<std::string, std::string>> config_flags(const std::filesystem::path& file) {
+    struct Field { const char* key; const char* flag; bool path; bool list; bool root; };
+    static constexpr Field fields[] = {
+        {"ROLE","--role",0,0,0}, {"LISTEN","--listen",0,0,0}, {"TRANSPORT","--transport",0,0,0},
+        {"SCRIPT","--script",1,0,0}, {"UPSTREAMS","--upstream",0,1,0}, {"CERT","--cert",1,0,0},
+        {"KEY","--key",1,0,0}, {"REDIS","--redis",0,0,0},
+        {"METRICS_LISTEN","--metrics-listen",0,0,0}, {"PROBE_LISTEN","--probe-listen",0,0,0},
+        {"OVERLOAD_RATIO","--overload-ratio",0,0,0}, {"READY_HYSTERESIS","--ready-hysteresis",0,0,0},
+        {"MAX_CONNECTIONS","--max-connections",0,0,0}, {"MEMORY_BUDGET_MIB","--memory-budget-mib",0,0,0},
+        {"MAX_ROOM_SESSIONS","--max-room-sessions",0,0,0}, {"MAX_GROUP_SESSIONS","--max-group-sessions",0,0,0},
+        {"MAX_SHARD_SESSIONS","--max-shard-sessions",0,0,0}, {"ROUTE_EPOCH","--route-epoch",0,0,0},
+        {"CRASHPAD_HANDLER","--crashpad-handler",1,0,0}, {"CRASHPAD_DATABASE","--crashpad-database",1,0,0},
+        {"ROOT","",0,0,1},
+    };
+    std::ifstream in(file);
+    if (!in) throw std::invalid_argument("cannot read config file: "+file.string());
+    const auto trim = [](std::string_view text) {
+        const auto from = text.find_first_not_of(" \t");
+        const auto to = text.find_last_not_of(" \t");
+        return from == std::string_view::npos ? std::string() : std::string(text.substr(from, to-from+1));
+    };
+    const auto version_error = [&](std::size_t line) {
+        return file.string()+":"+std::to_string(line)+
+            ": config must start with the '# mistlane-config 1' version line"; };
+    std::map<std::string, std::string> entries;
+    std::map<std::string, std::size_t> first_seen;
+    bool header = false;
+    std::size_t line_no = 0;
+    std::string raw;
+    while (std::getline(in, raw)) {
+        ++line_no;
+        if (!raw.empty() && raw.back() == '\r') raw.pop_back();
+        const auto head = raw.find_first_not_of(" \t");
+        if (head == std::string::npos) continue;
+        if (raw[head] == '#') {
+            if (!header && std::string_view(raw).substr(head) != "# mistlane-config 1")
+                throw std::invalid_argument(version_error(line_no));
+            header = true;
+            continue;
+        }
+        if (!header) throw std::invalid_argument(version_error(line_no));
+        const auto equals = raw.find('=');
+        const auto key = trim(std::string_view(raw).substr(0, equals == std::string::npos ? raw.size() : equals));
+        if (equals == std::string::npos || key.empty())
+            throw std::invalid_argument(file.string()+":"+std::to_string(line_no)+": expected KEY=VALUE");
+        bool known = false;
+        for (const auto& field : fields) known = known || key == field.key;
+        if (!known)
+            throw std::invalid_argument(file.string()+":"+std::to_string(line_no)+": unknown key "+key);
+        if (first_seen.count(key))
+            throw std::invalid_argument(file.string()+":"+std::to_string(line_no)+
+                ": duplicate key "+key+" (first set on line "+std::to_string(first_seen[key])+")");
+        first_seen.emplace(key, line_no);
+        auto value = trim(std::string_view(raw).substr(equals+1));
+        if (const char* override_value = ::getenv(("MISTLANE_"+key).c_str()); override_value && *override_value)
+            value = override_value;
+        if (!value.empty()) entries[key] = std::move(value);
+    }
+    if (!header) throw std::invalid_argument(version_error(1));
+    std::filesystem::path base = file.parent_path();
+    if (const auto root = entries.find("ROOT"); root != entries.end()) base = base / root->second;
+    std::vector<std::pair<std::string, std::string>> flags;
+    for (const auto& field : fields) {
+        if (field.root) continue;
+        const auto entry = entries.find(field.key);
+        if (entry == entries.end()) continue;
+        if (field.path) {
+            std::filesystem::path resolved(entry->second);
+            if (resolved.is_relative()) resolved = base / resolved;
+            flags.emplace_back(field.flag, resolved.string());
+        } else if (field.list) {
+            for (std::size_t at = 0; at < entry->second.size();) {
+                const auto next = entry->second.find(',', at);
+                auto item = entry->second.substr(at, next == std::string::npos ? std::string::npos : next-at);
+                if (const auto trimmed = trim(item); !trimmed.empty()) flags.emplace_back(field.flag, trimmed);
+                if (next == std::string::npos) break;
+                at = next+1;
+            }
+        } else flags.emplace_back(field.flag, entry->second);
+    }
+    return flags;
+}
 }
 int main(int argc, char** argv) {
     try {
@@ -57,13 +149,31 @@ int main(int argc, char** argv) {
             if (scaffold_result >= 0) return scaffold_result;
         }
         mistlane::Config config;
-        for (int i = 1; i < argc; ++i) {
-            std::string key = argv[i];
+        // --config entries expand in place: file values first, MISTLANE_<KEY>
+        // environment overrides inside the reader, then any explicit flag after.
+        std::vector<std::string> tokens;
+        for (int i = 1; i < argc;) {
+            if (std::string_view(argv[i]) == "--config") {
+                if (++i >= argc) throw std::invalid_argument("missing value for --config");
+                for (const auto& item : config_flags(argv[i])) {
+                    tokens.emplace_back(item.first);
+                    tokens.emplace_back(item.second);
+                }
+                ++i;
+                continue;
+            }
+            tokens.emplace_back(argv[i++]);
+        }
+        for (std::size_t i = 0; i < tokens.size(); ++i) {
+            std::string key = tokens[i];
             if (key == "--help") {
                 std::cout << "mistlane --role worker|router|gateway|cross|shard --listen IP:PORT\n"
                              "mistlane init [DIRECTORY]  Create a multi-role starter project\n"
                              "mistlane test [--list|--suite NAME|--case NAME]  Run native C++ cases\n"
                              "mistlane bot --url URL [--clients N --count N]  Simulate game requests\n"
+                             "  --config FILE  KEY=VALUE native config ('# mistlane-config 1' header;\n"
+                             "    MISTLANE_<KEY> env overrides, flags after --config win, relative\n"
+                             "    paths resolve against the file or its ROOT= entry)\n"
                              "  worker: --script FILE\n"
                              "  router/gateway: --upstream IP:PORT (repeat for session round robin)\n"
                              "  --transport tcp|ws|wss|http|https (wss/https require --cert FILE --key FILE)\n"
@@ -82,8 +192,8 @@ int main(int argc, char** argv) {
                              "SIGHUP: transactional worker script reload (state is reset)\n";
                 return 0;
             }
-            if (++i >= argc) throw std::invalid_argument("missing value for "+key);
-            std::string value = argv[i];
+            if (++i >= tokens.size()) throw std::invalid_argument("missing value for "+key);
+            std::string value = tokens[i];
             if (key == "--role") config.role = value;
             else if (key == "--listen") config.listen = endpoint(value);
             else if (key == "--upstream") config.upstreams.push_back(upstream(value));

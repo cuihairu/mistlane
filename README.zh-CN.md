@@ -72,7 +72,7 @@ ctest --preset linux-debug
 
 Release 使用 `linux-release` preset。第一次配置会由 vcpkg 下载和编译依赖；后续复用二进制缓存。`CMakeUserPresets.json` 可保存个人路径，已忽略提交。
 
-使用 `./build/debug/mistlane init ./my-service` 生成应用模板，内含逐进程 shell 配置、Lua 入口、本地运维脚本和 systemd unit 模板。旧项目配置/部署结构与新模板依据见[架构对比](docs/zh/architecture-comparison.md)。这些配置由脚本读取；Mistlane 运行时仍接收命令行参数，不解析原生配置文件。
+使用 `./build/debug/mistlane init ./my-service` 生成应用模板，内含逐进程 shell 配置、Lua 入口、本地运维脚本和 systemd unit 模板。旧项目配置/部署结构与新模板依据见[架构对比](docs/zh/architecture-comparison.md)。启动脚本仍是生成项目的标配；运行时也可经 `--config FILE` 直接解析原生 `KEY=VALUE` 配置（见[指南](docs/zh/guide.md)）。
 
 baseline 内 Boost 为 1.92.0，Lua 为 5.5.1，OpenSSL 为 3.6.5#2。OpenSSL 上游另有更新的 4.0.3；当前选用该 vcpkg baseline 提供的最新 port，不自行增加未经验证的 overlay。详见 [依赖策略](docs/zh/dependencies.md)。
 
