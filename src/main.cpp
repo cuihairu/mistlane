@@ -21,6 +21,32 @@ mistlane::Endpoint endpoint(std::string_view text) {
     if (colon == text.npos || colon == 0) throw std::invalid_argument("expected IP:PORT");
     return {std::string(text.substr(0, colon)), static_cast<std::uint16_t>(number(text.substr(colon+1), 65535))};
 }
+mistlane::Endpoint upstream(std::string_view text) {
+    // "IP:PORT" or, when the peer exposes a probe listener, "IP:PORT:PROBE".
+    // The probe form needs the two trailing fields to be bare ports, so bracket
+    // IPv6 literals when a probe port is appended; plain "IP:PORT" still splits
+    // at the last colon like endpoint().
+    if (auto last = text.rfind(':'); last != text.npos && last > 0) {
+        if (auto split = text.rfind(':', last-1); split != text.npos && split > 0) {
+            const auto address = text.substr(0, split);
+            const auto digits = [](std::string_view field) {
+                return !field.empty() && field.find_first_not_of("0123456789") == field.npos; };
+            if ((address.find(':') == address.npos || (address.front() == '[' && address.back() == ']'))
+                && digits(text.substr(split+1, last-split-1)) && digits(text.substr(last+1)))
+                return {std::string(address), static_cast<std::uint16_t>(number(text.substr(split+1, last-split-1), 65535)),
+                    static_cast<std::uint16_t>(number(text.substr(last+1), 65535))};
+        }
+    }
+    return endpoint(text);
+}
+double ratio(std::string_view text) {
+    const std::string plain(text);
+    std::size_t consumed = 0;
+    const double value = std::stod(plain, &consumed);
+    if (consumed != plain.size() || !(value > 0 && value <= 1))
+        throw std::invalid_argument("overload ratio must be in (0,1]: "+plain);
+    return value;
+}
 }
 int main(int argc, char** argv) {
     try {
@@ -47,6 +73,9 @@ int main(int argc, char** argv) {
                              "    Redis TLS: MISTLANE_REDIS_TLS=on (chain+hostname verified),\n"
                              "    MISTLANE_REDIS_CA=FILE (optional trust anchor)\n"
                              "  --metrics-listen IP:PORT (optional; Prometheus /metrics endpoint)\n"
+                             "  --probe-listen IP:PORT (optional; internal PROBE1 liveness/readiness)\n"
+                             "    --overload-ratio X (readiness gate, default 0.9) --ready-hysteresis N (default 3)\n"
+                             "    upstreams take IP:PORT[:PROBE] so cross can check shard readiness\n"
                              "  --crashpad-handler FILE --crashpad-database DIR (optional; local dumps only)\n"
                              "  cross/shard: --route-epoch N --max-room-sessions N\n"
                              "    --max-group-sessions N --max-shard-sessions N\n"
@@ -57,13 +86,16 @@ int main(int argc, char** argv) {
             std::string value = argv[i];
             if (key == "--role") config.role = value;
             else if (key == "--listen") config.listen = endpoint(value);
-            else if (key == "--upstream") config.upstreams.push_back(endpoint(value));
+            else if (key == "--upstream") config.upstreams.push_back(upstream(value));
             else if (key == "--transport") config.transport = value;
             else if (key == "--cert") config.certificate = value;
             else if (key == "--key") config.private_key = value;
             else if (key == "--script") config.script = value;
             else if (key == "--redis") { config.redis = endpoint(value); config.redis_enabled = true; }
             else if (key == "--metrics-listen") { config.metrics_listen = endpoint(value); config.metrics_enabled = true; }
+            else if (key == "--probe-listen") { config.probe_listen = endpoint(value); config.probe_enabled = true; }
+            else if (key == "--overload-ratio") config.overload_ratio = ratio(value);
+            else if (key == "--ready-hysteresis") config.ready_hysteresis = number(value, 100000);
             else if (key == "--crashpad-handler") config.crashpad_handler = value;
             else if (key == "--crashpad-database") config.crashpad_database = value;
             else if (key == "--memory-budget-mib") config.memory_budget_mib = number(value, 100000);

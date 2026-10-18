@@ -83,13 +83,30 @@ shard 不可用时关闭受影响会话，不自动转移或重放。其他 shar
 
 ## 内部诊断能力现状
 
-目前 cross/shard 没有进程存活或就绪探测。TCP 连接和操作系统 keepalive 只能说明传输层可达，不能证明 Asio/Lua 事件循环仍在推进。旧代码有 Lua 调用超时 hook（`C_monitorDeadLoop`），但没有 CPU/内存 profiler 或服务间健康协议。该 hook 能中断一部分失控 Lua 调用，却不能定位热点函数，也解释不了 native 线程卡顿。
+可选的内部探测监听器（`--probe-listen IP:PORT`，默认关闭）在 Asio 事件循环上内联应答存活与就绪查询，任何应答本身就证明事件循环仍在推进；TCP 连接和操作系统 keepalive 只能说明传输层可达。旧代码有 Lua 调用超时 hook（`C_monitorDeadLoop`），但没有 CPU/内存 profiler。该 hook 能中断一部分失控 Lua 调用，却不能定位热点函数，也解释不了 native 线程卡顿。
 
 | 信号 | 用途 | 设计边界 |
 |---|---|---|
 | Prometheus 指标 | 观测活动会话、准入拒绝、收发字节和延迟、Lua 回调/tick 耗时、事件循环定时器延迟，以及可用时的 RSS/CPU | 从私有 metrics 监听端口抓取；标签保持低基数（role/shard/result），不使用玩家或房间 ID。 |
-| 内部探测 | 报告进程响应性和就绪/容量状态 | 使用独立控制监听器、nonce 和截止时间；测量探测往返及事件循环延迟。未就绪时拒绝新加入，但保留现有房间归属。 |
+| 内部探测 | 报告进程响应性和就绪/容量状态 | 以 `--probe-listen` 提供 PROBE1 协议（见下节）。未就绪时拒绝新加入，但保留现有房间归属。 |
 | Crashpad | native 崩溃后保留本地 minidump | 启动独立 handler，使用有界本地数据库；默认不配置上传端点。每个构建归档对应符号。 |
 | Profiler | 把 CPU 和内存分配成本归因到代码路径 | 等指标与可复现负载建立后，再提供可选剖析模式；剖析输出不是健康信号。 |
 
-当前可选 `/metrics` 端点导出就绪状态、活动会话、准入拒绝、Lua 回调耗时、RSS、按方向的收发消息数与字节数（`mistlane_messages_total`、`mistlane_payload_bytes_total`）、客户端请求耗时（`mistlane_request_seconds`）、上游错误与截止超时计数（`mistlane_upstream_errors_total`、`mistlane_upstream_timeouts_total`），以及事件循环 tick 调度延迟（`mistlane_event_loop_lag_seconds` 及运行期最大值）。全部指标只带 role 标签，桶边界固定。Crashpad 可显式启用，并将报告保存在关闭上传的本地数据库。内部存活探测、崩溃转储保留限制和目标环境过载演练仍待补齐。不会因节点暂时未就绪就自动把有状态房间转移到别的 shard。这些诊断能提供过载证据，但仍需目标环境压测才能得出容量结论。
+### 内部探测协议（PROBE1）
+
+`--probe-listen IP:PORT` 开启独立的内部监听器，协议为单行文本。应答在事件循环上产生，任何应答都等价于存活证明；编排系统与负载均衡可轮询独立端口，不占用玩家流量。
+
+```
+PROBE1 <nonce> liveness    -> PROBE1 <nonce> ok alive
+PROBE1 <nonce> readiness   -> PROBE1 <nonce> ok ready|notready active=N capacity=N lag_ms=F
+                           -> PROBE1 <nonce> err version|auth|command|malformed
+```
+
+- 每个连接一个请求，LF 结尾；应答后服务器关闭连接，空闲连接 2 秒后断开。`<nonce>` 取 `[A-Za-z0-9._:-]{1,64}` 并原样回显，用于丢弃过期应答。
+- `liveness` 证明事件循环仍在推进。`readiness` 额外报告是否接纳新会话：`active` 为已建立会话数，`capacity` 为 `--max-connections` 经内存预算封顶后的值（启动日志 `session admission limit`），`lag_ms` 为最近一次 100ms tick 的调度延迟。
+- 就绪状态带滞回：当 `active >= --overload-ratio * capacity` 视为饱和，且只有连续 `--ready-hysteresis` 个 100ms tick 才在 ready/notready 之间翻转。默认 ratio 0.9、hysteresis 3。
+- 节点环境设置 `MISTLANE_PROBE_TOKEN` 后，请求必须以第四字段携带令牌（`PROBE1 <nonce> <token> readiness`），否则应答 `err auth`；令牌不经过面向玩家的监听器。
+
+cross 节点的上游写作 `IP:PORT[:PROBE]`。带探测端口时，cross 会话仅在转发首个房间加入前询问一次 shard：明确 `notready` 以 `MLC1 ERR NOT_READY` 拒绝客户端；连接失败或应答非法以 `MLC1 ERR UPSTREAM` 拒绝。已建立房间不会重复探测，shard 未就绪期间继续转发；未带探测端口的上游不做门控。
+
+当前可选 `/metrics` 端点导出就绪状态、活动会话、准入拒绝、Lua 回调耗时、RSS、按方向的收发消息数与字节数（`mistlane_messages_total`、`mistlane_payload_bytes_total`）、客户端请求耗时（`mistlane_request_seconds`）、上游错误与截止超时计数（`mistlane_upstream_errors_total`、`mistlane_upstream_timeouts_total`），以及事件循环 tick 调度延迟（`mistlane_event_loop_lag_seconds` 及运行期最大值）。全部指标只带 role 标签，桶边界固定。Crashpad 可显式启用，并将报告保存在关闭上传的本地数据库。崩溃转储保留限制、CPU/内存 profiler 评估和目标环境过载演练仍待补齐。不会因节点暂时未就绪就自动把有状态房间转移到别的 shard。这些诊断能提供过载证据，但仍需目标环境压测才能得出容量结论。

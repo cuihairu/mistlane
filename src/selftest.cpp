@@ -13,6 +13,7 @@ void transport_http();
 void lua_lifecycle();
 void lua_http();
 void cross_admission();
+void probe_control();
 void scaffold_init();
 void cli_bot();
 void crashpad_startup(const fs::path&);
@@ -36,7 +37,7 @@ int run_tests(int argc, char** argv) {
         if (key=="--help") {
             std::cout << "mistlane test [--suite NAME | --case NAME] [--list] [--keep-temp]\n"
                 "mistlane test --script FILE [--script FILE ...] [--case SUITE.CASE] [--timeout-ms N]\n"
-                "Suites: core, transport, lua, cross, scaffold, cli, crashpad, redis, mysql.\n"
+                "Suites: core, transport, lua, cross, probe, scaffold, cli, crashpad, redis, mysql.\n"
                 "Default 'all' runs dependency-free suites; Redis/MySQL/Crashpad are opt-in.\n"
                 "  --crashpad-handler FILE  Handler used by the crashpad suite\n"
                 "  --list                   List matching cases without running them\n"
@@ -72,6 +73,7 @@ int run_tests(int argc, char** argv) {
         {"lua.lifecycle","lua",test::lua_lifecycle},
         {"lua.http","lua",test::lua_http},
         {"cross.admission","cross",test::cross_admission},
+        {"probe.control","probe",test::probe_control},
         {"scaffold.init","scaffold",test::scaffold_init},
         {"cli.bot","cli",test::cli_bot},
         {"crashpad.startup","crashpad",[&] {test::crashpad_startup(handler);},true},

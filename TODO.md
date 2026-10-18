@@ -184,11 +184,11 @@
 - [x] 记录 Asio 100ms tick 的调度延迟直方图/最大值，让事件循环阻塞能被观测；测量本身不得阻塞 Lua loop。证据：2026-10-18 `Node::tick` 改用 `expires_at` 并在回调首行以纯时间戳计算 scheduled→fired 延迟（不触碰 Lua，不阻塞事件循环），`mistlane_event_loop_lag_seconds` 直方图（14 桶，0.5ms–10s）+ `mistlane_event_loop_lag_max_seconds` 运行期最大 gauge（原 gauge 从未接线，改为 max 语义）；`transport.tcp` 等待首个调度 tick 后断言 count/max 非零，5/5 稳定；双语文档同步。
 - [x] 每个约 100ms tick 从 Linux procfs 采样 RSS；CPU 指标和采样语义文档仍待补。
 - [x] 为 Prometheus endpoint 添加集成检查：路径、文本 exposition、ready 指标和活动连接数。
-- [ ] 设计独立内部探测协议：独立 control listener、请求 nonce、超时、协议版本和最小身份校验；不与玩家会话共用连接或 Lua handler。
-- [ ] 分开实现 liveness 与 readiness：liveness 判断进程/事件循环是否响应；readiness 判断能否接纳新会话，并返回 active/capacity、event-loop lag 等有界摘要。
-- [ ] 为 shard 配置过载阈值与迟滞窗口；连续失败才降为 not-ready，连续恢复才重新 ready，避免探测抖动。
-- [ ] 让 cross 在新房间握手时读取 shard readiness 并拒绝不可接纳节点；保留已有会话和房间 owner，禁止探测失败触发状态房间自动重映射。
-- [ ] 增加探测功能测试：响应 nonce、错误版本、超时、事件循环阻塞、readiness 转换迟滞、关闭清理及多个 cross 观测同一 shard。
+- [x] 设计独立内部探测协议：独立 control listener、请求 nonce、超时、协议版本和最小身份校验；不与玩家会话共用连接或 Lua handler。证据：2026-10-18 `--probe-listen` 开启独立 `ProbeServer`（匿名命名空间；构造仅绑定 acceptor，`start()/stop()` 分离以避开 `shared_from_this` 构造期问题），协议 PROBE1：nonce `[A-Za-z0-9._:-]{1,64}` 原样回显、`err version|auth|command|malformed`、空闲 2 秒断开、单连接单请求单应答；应答在 Node 事件循环内联生成，不共用玩家会话也不经过 Lua handler。
+- [x] 分开实现 liveness 与 readiness：liveness 判断进程/事件循环是否响应；readiness 判断能否接纳新会话，并返回 active/capacity、event-loop lag 等有界摘要。证据：`liveness` 恒答 `ok alive`（应答本身即事件循环推进证明）；`readiness_summary()` 返回 `ok ready|notready active=N capacity=N lag_ms=F`，capacity 为 `--max-connections` 经内存预算封顶后的值，lag_ms 为最近一次 100ms tick 调度延迟（fixed 一位小数）。
+- [x] 为 shard 配置过载阈值与迟滞窗口；连续失败才降为 not-ready，连续恢复才重新 ready，避免探测抖动。证据：新增 `--overload-ratio`（限 (0,1]，默认 0.9）与 `--ready-hysteresis`（默认 3）进 Config；100ms tick 内 `active >= ratio*capacity` 连续 N tick 才置 `admitting_=false`，连续 N tick 回落才置回 `true`，任一侧不足 N 不翻转。
+- [x] 让 cross 在新房间握手时读取 shard readiness 并拒绝不可接纳节点；保留已有会话和房间 owner，禁止探测失败触发状态房间自动重映射。证据：`--upstream` 接受 `IP:PORT[:PROBE]`（新 upstream() 解析器：末两段均为纯数字且地址段无冒号或带方括号时按三段式切分，否则回退末冒号切分，兼容不带探测端口的裸 IPv6）；cross 会话仅在转发首个房间加入前探测一次（每会话一次，`probed_`）：明确 notready → `MLC1 ERR NOT_READY`，连接/写/读失败或应答非法 → `MLC1 ERR UPSTREAM`（`Session::probe` 分阶段 1 秒定时器）；已建立房间不再探测、继续转发，探测结果不触发任何房间重映射。
+- [x] 增加探测功能测试：响应 nonce、错误版本、超时、事件循环阻塞、readiness 转换迟滞、关闭清理及多个 cross 观测同一 shard。证据：新增 `probe.control` 用例（CTest `mistlane_probe_control`，共 13 项）以裸 TCP 覆盖 nonce 回显、version/command/malformed/nonce 非法、readiness 行格式与 lag_ms 字段、空闲连接 2s 截止、`--overload-ratio 0.5 --ready-hysteresis 2` 下容量 2 与 4 节点的饱和翻转 notready→ready 迟滞、`MISTLANE_PROBE_TOKEN` 的 err auth 与带 token 成功、四个 cross 观测同一 shard（NOT_READY 拒绝、恢复后可加入、无探测端口不门控、死探测端口 UPSTREAM）、节点退出时 ProbeServer 随 io 排空关闭；用例 4/4 稳定，完整 ctest 13/13 绿；双语 cross-server/validation 更新。
 - [ ] 对 profiler 做 vcpkg 可用性与采样开销评估，选择可选外部采样器/工具集成路线；不在服务热路径自行实现采样器。
 - [ ] 为 profiler 工作流提供可重复的跨服压测场景和符号化步骤，记录采样对吞吐、P99 和 RSS 的影响。
 - [ ] 同步更新双语 README、依赖页、架构页、迁移状态、跨服排障页和验证记录，标清哪些能力已实现、哪些只是依赖声明。

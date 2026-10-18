@@ -67,13 +67,30 @@ Reject full rooms or use an external bounded queue with retry jitter. Exercise s
 
 ## Internal diagnostics status
 
-There is no cross/shard liveness or readiness probe yet. A TCP connection or OS keepalive only establishes transport-level reachability; it cannot show that the Asio/Lua loop is making progress. The old code has a Lua call timeout hook (`C_monitorDeadLoop`), but no CPU/memory profiler or service-to-service health protocol. That hook can interrupt some runaway Lua execution and does not identify hot functions or explain native stalls.
+An optional internal probe listener (`--probe-listen IP:PORT`, off by default) answers liveness and readiness queries inline on the Asio event loop, so any reply itself proves the loop is making progress; a TCP connection or OS keepalive only establishes transport-level reachability. The old code has a Lua call timeout hook (`C_monitorDeadLoop`), but no CPU/memory profiler. That hook can interrupt some runaway Lua execution and does not identify hot functions or explain native stalls.
 
 | Signal | Purpose | Design boundary |
 |---|---|---|
 | Prometheus metrics | Track active sessions, admission rejects, payload sizes and latency, Lua callback/tick duration, event-loop timer lag, and RSS/CPU where available | Scrape from a private metrics listener; keep labels low-cardinality (role/shard/result, never player/room IDs). |
-| Internal probe | Report process responsiveness and readiness/capacity state | Use a separate control listener with nonce/deadline; measure probe round-trip and event-loop lag. Readiness false blocks new joins but preserves existing room ownership. |
+| Internal probe | Report process responsiveness and readiness/capacity state | Ships as `--probe-listen` with the PROBE1 protocol below. Readiness false blocks new joins but preserves existing room ownership. |
 | Crashpad | Preserve a local minidump after native crashes | Start the out-of-process handler and use a bounded local database; no upload endpoint by default. Archive matching symbols per build. |
 | Profiler | Attribute CPU and allocation cost to code paths | Add an opt-in diagnostic mode after metrics establish a reproducible workload; profiler output is not a health signal. |
 
-The optional `/metrics` listener currently exports readiness, active sessions, admission rejections, Lua callback duration, resident memory, per-direction message and payload-byte counters (`mistlane_messages_total`, `mistlane_payload_bytes_total`), client-request latency (`mistlane_request_seconds`), upstream failures and deadline timeouts (`mistlane_upstream_errors_total`, `mistlane_upstream_timeouts_total`), and event-loop tick lag (`mistlane_event_loop_lag_seconds` plus a running max). All metrics are labeled with the role only and use fixed bucket boundaries. Crashpad can be enabled explicitly and keeps reports in a local database with uploads disabled. Internal liveness probes, crash-dump retention limits and overload drills in the target environment remain pending. Health-based automatic shard reassignment is excluded: a stateful room cannot safely move merely because its owner is temporarily unready. These additions provide overload evidence; they do not prove a capacity fix.
+### Internal probe protocol (PROBE1)
+
+`--probe-listen IP:PORT` opens a second, internal-only listener that speaks a one-line protocol. Answers are produced on the event loop, so any reply doubles as a liveness signal; orchestrators and load balancers can poll a separate port without touching player traffic.
+
+```
+PROBE1 <nonce> liveness    -> PROBE1 <nonce> ok alive
+PROBE1 <nonce> readiness   -> PROBE1 <nonce> ok ready|notready active=N capacity=N lag_ms=F
+                           -> PROBE1 <nonce> err version|auth|command|malformed
+```
+
+- One request per connection, LF-terminated; the server closes after one reply and drops idle connections after 2 seconds. `<nonce>` is `[A-Za-z0-9._:-]{1,64}` and is echoed so stale replies can be discarded.
+- `liveness` proves event-loop progress. `readiness` additionally reports whether the node admits new sessions: `active` is the established session count, `capacity` is `--max-connections` clamped by the memory-budget envelope (printed at startup as `session admission limit`), and `lag_ms` is the last 100 ms tick-lag observation.
+- Readiness is hysteresis-gated: a node counts as saturated once `active >= --overload-ratio * capacity` and only flips between `ready`/`notready` after `--ready-hysteresis` consecutive 100 ms ticks. Defaults: ratio 0.9, hysteresis 3.
+- When `MISTLANE_PROBE_TOKEN` is set in the node environment, every request must carry the token as a fourth field (`PROBE1 <nonce> <token> readiness`) or the answer is `err auth`; the token never travels on the player-facing listener.
+
+Cross nodes accept upstreams as `IP:PORT[:PROBE]`. With a probe port, a cross session consults the shard once, immediately before forwarding its first room join: an explicit `notready` rejects the client with `MLC1 ERR NOT_READY`, while connection errors or malformed replies reject with `MLC1 ERR UPSTREAM`. Established rooms are never re-probed and keep flowing while the shard reports notready; upstreams without a probe port forward ungated.
+
+The optional `/metrics` listener currently exports readiness, active sessions, admission rejections, Lua callback duration, resident memory, per-direction message and payload-byte counters (`mistlane_messages_total`, `mistlane_payload_bytes_total`), client-request latency (`mistlane_request_seconds`), upstream failures and deadline timeouts (`mistlane_upstream_errors_total`, `mistlane_upstream_timeouts_total`), and event-loop tick lag (`mistlane_event_loop_lag_seconds` plus a running max). All metrics are labeled with the role only and use fixed bucket boundaries. Crashpad can be enabled explicitly and keeps reports in a local database with uploads disabled. Crash-dump retention limits, CPU/memory profiler evaluation and overload drills in the target environment remain pending. Health-based automatic shard reassignment is excluded: a stateful room cannot safely move merely because its owner is temporarily unready. These additions provide overload evidence; they do not prove a capacity fix.

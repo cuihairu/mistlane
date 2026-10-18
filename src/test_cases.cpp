@@ -51,6 +51,18 @@ public:
         }
         return result;
     }
+    std::string receive_line() {
+        std::string result;
+        for (;;) {
+            char ch;
+            auto n = ::recv(fd_, &ch, 1, 0);
+            if (n < 0 && errno == EINTR) continue;
+            require(n > 0, "raw TCP closed or timed out");
+            if (ch == '\n') break;
+            result.push_back(ch);
+        }
+        return result;
+    }
     bool closed() {
         char ch;
         auto n = ::recv(fd_, &ch, 1, 0);
@@ -337,6 +349,85 @@ void cross_admission() {
     must_fail([&] { auto failed=tcp(ingress); (void)join(*failed,"a",rooms[0]); });
     auto healthy=tcp(ingress); equal(join(*healthy,"a",rooms[1]),"MLC1 OK 1");
     equal(healthy->request("ok"),"a:g/"+rooms[1]+":ok");
+}
+void probe_control() {
+    Context c;
+    write(c.path("echo.lua"), echo);
+    // Capacity 2 with a 0.5 readiness gate saturates at one session; two ticks flip state.
+    const auto work=port(), probe=port(), guarded=port(), guard_probe=port();
+    c.node("worker", work, {"--script", c.path("echo.lua").string(), "--max-connections", "2",
+        "--overload-ratio", "0.5", "--ready-hysteresis", "2", "--probe-listen", endpoint(probe)});
+    const auto ask = [](unsigned listen, const std::string& line) {
+        RawSocket raw(listen);
+        raw.send(line + "\n");
+        return raw.receive_line();
+    };
+    equal(ask(probe, "PROBE1 n1 liveness"), "PROBE1 n1 ok alive");
+    equal(ask(probe, "PROBE9 n2 liveness"), "PROBE1 n2 err version");
+    equal(ask(probe, "PROBE1 n3 status"), "PROBE1 n3 err command");
+    equal(ask(probe, "PROBE1 n4"), "PROBE1 n4 err malformed");
+    equal(ask(probe, "PROBE1 bad!n liveness"), "PROBE1 - err malformed");
+    equal(ask(probe, "hello world"), "PROBE1 world err version");
+    const auto readiness = ask(probe, "PROBE1 n5 readiness");
+    require(readiness.starts_with("PROBE1 n5 ok ready active=0 capacity=2 "),
+        "unexpected readiness reply: " + readiness);
+    require(readiness.find(" lag_ms=") != std::string::npos, "readiness lag summary missing");
+    // A probe connection that never asks must be closed by the server read deadline.
+    {
+        RawSocket silent(probe);
+        eventually([&] { return silent.closed(); });
+    }
+    // Saturating flips to notready, releasing the session flips back.
+    auto session = tcp(work);
+    equal(session->request("busy"), "busy");
+    eventually([&] {
+        return ask(probe, "PROBE1 n6 readiness").find(" ok notready active=1 capacity=2 ") != std::string::npos;
+    });
+    session.reset();
+    eventually([&] {
+        return ask(probe, "PROBE1 n7 readiness").find(" ok ready active=0 capacity=2 ") != std::string::npos;
+    });
+    {
+        // Minimal identity check: a token env makes unauthenticated probes fail.
+        ScopedEnv token("MISTLANE_PROBE_TOKEN", "s3cret");
+        c.node("worker", guarded, {"--script", c.path("echo.lua").string(), "--max-connections", "5",
+            "--probe-listen", endpoint(guard_probe)});
+    }
+    equal(ask(guard_probe, "PROBE1 n8 readiness"), "PROBE1 n8 err auth");
+    equal(ask(guard_probe, "PROBE1 n9 wrong readiness"), "PROBE1 n9 err auth");
+    const auto authenticated = ask(guard_probe, "PROBE1 n10 s3cret readiness");
+    require(authenticated.starts_with("PROBE1 n10 ok ready active=0 capacity=5 "),
+        "unexpected authenticated readiness: " + authenticated);
+
+    // Cross consults shard readiness for new rooms; established rooms keep flowing.
+    const auto shard=port(), shard_probe=port(), ingress=port(), ingress2=port(), plain=port(), broken=port();
+    c.node("shard", shard, {"--script", c.path("echo.lua").string(), "--max-connections", "4",
+        "--overload-ratio", "0.5", "--ready-hysteresis", "2", "--probe-listen", endpoint(shard_probe)});
+    const auto upstream = endpoint(shard) + ":" + std::to_string(shard_probe);
+    c.node("cross", ingress, {"--upstream", upstream});
+    c.node("cross", ingress2, {"--upstream", upstream});
+    const auto join = [](cli::Client& peer, const std::string& room) {
+        return peer.request("MLC1 1 realm g " + room);
+    };
+    auto room1 = tcp(ingress), room2 = tcp(ingress2);
+    equal(join(*room1, "r1"), "MLC1 OK 1");
+    equal(join(*room2, "r2"), "MLC1 OK 1");
+    eventually([&] {
+        return ask(shard_probe, "PROBE1 nr readiness").find(" ok notready active=2 ") != std::string::npos;
+    }, 5s, "shard to reach notready at active=2");
+    equal(join(*tcp(ingress), "r3"), "MLC1 ERR NOT_READY");
+    equal(join(*tcp(ingress2), "r4"), "MLC1 ERR NOT_READY");
+    room1.reset();
+    eventually([&] {
+        return ask(shard_probe, "PROBE1 nr2 readiness").find(" ok ready active=1 ") != std::string::npos;
+    }, 5s, "shard to recover ready at active=1");
+    equal(join(*tcp(ingress), "r5"), "MLC1 OK 1");
+    // Without a probe port the cross node cannot gate, so it keeps forwarding.
+    c.node("cross", plain, {"--upstream", endpoint(shard)});
+    equal(join(*tcp(plain), "r7"), "MLC1 OK 1");
+    // A dead probe listener is an upstream failure, not a silent accept.
+    c.node("cross", broken, {"--upstream", endpoint(shard) + ":" + std::to_string(port())});
+    equal(join(*tcp(broken), "r8"), "MLC1 ERR UPSTREAM");
 }
 void scaffold_init() {
     Context c; const auto root=c.path("sample service");

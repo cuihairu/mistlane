@@ -8,12 +8,17 @@
 #include <utility>
 #include <boost/asio.hpp>
 #include <array>
+#include <cctype>
 #include <csignal>
+#include <cstdlib>
 #include <functional>
+#include <iomanip>
 #include <iostream>
 #include <memory>
 #include <set>
+#include <sstream>
 #include <thread>
+#include <vector>
 
 namespace mistlane {
 namespace {
@@ -62,6 +67,129 @@ public:
 private:
     tcp::socket socket_;
     std::array<unsigned char, 4> header_{};
+};
+// Internal probe protocol: one request line per connection, answered inline on
+// the event loop, so a timely reply doubles as liveness evidence. It never
+// shares a connection or a Lua handler with player sessions.
+//   request:  PROBE1 <nonce> liveness|readiness [token]
+//   response: PROBE1 <nonce> ok alive
+//             PROBE1 <nonce> ok ready|notready active=N capacity=N lag_ms=F
+//             PROBE1 <nonce> err version|auth|command|malformed
+class ProbeServer : public std::enable_shared_from_this<ProbeServer> {
+public:
+    using Answer = std::function<std::string(std::string_view command)>;
+    ProbeServer(asio::io_context& io, const Endpoint& listen, Answer answer)
+      : acceptor_(io, tcp::endpoint(asio::ip::make_address(listen.address), listen.port)),
+        answer_(std::move(answer)) {}
+    // Separate from the constructor: accept() needs shared_from_this() ownership.
+    void start() { accept(); }
+    void stop() {
+        Error ignored;
+        acceptor_.close(ignored);
+        for (auto& peer : peers_) peer->close();
+        peers_.clear();
+    }
+private:
+    class Peer : public std::enable_shared_from_this<Peer> {
+    public:
+        Peer(tcp::socket socket, Answer answer)
+          : socket_(std::move(socket)), timer_(socket_.get_executor()), answer_(std::move(answer)) {}
+        void start(const std::shared_ptr<void>& owner) {
+            owner_ = owner;
+            read();
+            expire();
+        }
+        void close() {
+            Error ignored;
+            timer_.cancel();
+            socket_.close(ignored);
+        }
+    private:
+        void read() {
+            auto self = shared_from_this();
+            asio::async_read_until(socket_, buffer_, '\n',
+              [self](Error ec, std::size_t) {
+                if (ec) { self->owner_.reset(); return; }
+                std::istream line(&self->buffer_);
+                std::string request;
+                std::getline(line, request);
+                self->reply(self->handle(request));
+            });
+        }
+        void expire() {
+            auto self = shared_from_this();
+            timer_.expires_after(std::chrono::seconds(2));
+            timer_.async_wait([self](Error ec) {
+                if (ec) return;
+                Error ignored;
+                self->socket_.close(ignored);
+            });
+        }
+        static bool nonce(std::string_view value) {
+            if (value.empty() || value.size() > 64) return false;
+            for (char ch : value)
+                if (!(std::isalnum(static_cast<unsigned char>(ch)) ||
+                      ch == '_' || ch == '-' || ch == '.' || ch == ':')) return false;
+            return true;
+        }
+        std::string handle(std::string_view request) {
+            std::vector<std::string_view> fields;
+            for (auto item = request.data(); item != request.data()+request.size();) {
+                while (item != request.data()+request.size() && (*item==' '||*item=='\t')) ++item;
+                auto end = item;
+                while (end != request.data()+request.size() && *end!=' ' && *end!='\t') ++end;
+                if (end != item) fields.emplace_back(item, end-item);
+                item = end;
+            }
+            const std::string_view nonce_text = fields.size() > 1 ? fields[1] : std::string_view("-");
+            const auto error = [&](std::string_view reason) {
+                return "PROBE1 " + std::string(nonce_text) + " err " + std::string(reason);
+            };
+            if (fields.empty()) return error("malformed");
+            if (!nonce(nonce_text)) return "PROBE1 - err malformed";
+            if (fields.front() != "PROBE1") return error("version");
+            const char* expected = ::getenv("MISTLANE_PROBE_TOKEN");
+            std::string_view command;
+            if (expected && *expected) {
+                if (fields.size() != 4 || fields[2] != expected) return error("auth");
+                command = fields[3];
+            } else {
+                if (fields.size() != 3) return error("malformed");
+                command = fields[2];
+            }
+            if (command != "liveness" && command != "readiness") return error("command");
+            return "PROBE1 " + std::string(nonce_text) + " " + answer_(command);
+        }
+        void reply(std::string text) {
+            auto self = shared_from_this();
+            asio::async_write(socket_, asio::buffer(text+'\n'),
+              [self, text](Error, std::size_t) {
+                Error ignored;
+                self->timer_.cancel();
+                self->socket_.shutdown(tcp::socket::shutdown_both, ignored);
+                self->socket_.close(ignored);
+                self->owner_.reset();
+            });
+        }
+        tcp::socket socket_;
+        asio::steady_timer timer_;
+        asio::streambuf buffer_;
+        Answer answer_;
+        std::shared_ptr<void> owner_;
+    };
+    void accept() {
+        auto self = shared_from_this();
+        acceptor_.async_accept([self](Error ec, tcp::socket socket) {
+            if (ec) return;
+            auto peer = std::make_shared<Peer>(std::move(socket), self->answer_);
+            self->peers_.insert(peer);
+            peer->start(self);
+            self->accept();
+        });
+    }
+    tcp::acceptor acceptor_;
+    Answer answer_;
+    std::set<std::shared_ptr<Peer>> peers_;
 };
 class Session : public std::enable_shared_from_this<Session> {
 public:
@@ -127,6 +255,7 @@ private:
                         return self->reply("MLC1 OK " + std::to_string(self->config_.route_epoch));
                     const auto& endpoint = self->config_.upstreams[index];
                     self->endpoint_ = tcp::endpoint(asio::ip::make_address(endpoint.address), endpoint.port);
+                    self->probe_port_ = endpoint.probe_port;
                     self->upstream_ = std::make_shared<TcpChannel>(tcp::socket(self->client_->executor()));
                 } catch (const std::exception&) { return self->reject("INVALID"); }
             }
@@ -144,6 +273,7 @@ private:
                 return;
             }
             if (self->upstream_->socket().is_open()) self->forward(std::move(payload));
+            else if (self->probe_port_ && !self->probed_) self->probe(std::move(payload));
             else {
                 self->upstream_->socket().async_connect(self->endpoint_,
                   [self, payload=std::move(payload)](Error error) mutable {
@@ -157,6 +287,72 @@ private:
     void reject(const std::string& reason) {
         std::cerr << "cross admission rejected: " << reason << '\n';
         client_->write("MLC1 ERR " + reason, [self=shared_from_this()](Error) { self->stop(); });
+    }
+    // A new room only joins a shard the probe just saw ready. Probe failures are
+    // conservative: an explicit notready rejects with NOT_READY, anything else
+    // (refused, timeout, garbage) with UPSTREAM. Existing rooms never re-probe,
+    // so a probe never evicts or remaps established state.
+    void probe(std::string payload) {
+        probed_ = true;
+        auto self = shared_from_this();
+        auto socket = std::make_shared<tcp::socket>(client_->executor());
+        auto timer = std::make_shared<asio::steady_timer>(client_->executor());
+        auto buffer = std::make_shared<std::string>();
+        const std::string request = [] {
+            if (const char* token = ::getenv("MISTLANE_PROBE_TOKEN"); token && *token)
+                return std::string("PROBE1 join readiness ") + token + "\n";
+            return std::string("PROBE1 join readiness\n");
+        }();
+        auto done = std::make_shared<bool>(false);
+        auto fail = [self=shared_from_this(), timer, socket, done](const char* reason) {
+            if (*done || self->closed_) return;
+            *done = true;
+            Error ignored;
+            timer->cancel();
+            socket->close(ignored);
+            if (std::string_view(reason) == "NOT_READY") return self->reject("NOT_READY");
+            self->diagnostics_.upstream_error();
+            self->reject("UPSTREAM");
+        };
+        auto succeed = [self=shared_from_this(), timer, socket, done, payload=std::move(payload)]() mutable {
+            if (*done || self->closed_) return;
+            *done = true;
+            Error ignored;
+            timer->cancel();
+            socket->close(ignored);
+            self->upstream_->socket().async_connect(self->endpoint_,
+              [self, payload=std::move(payload)](Error error) mutable {
+                if (self->closed_) return;
+                if (error) { self->diagnostics_.upstream_error(); return self->stop(); }
+                self->forward(std::move(payload));
+              });
+        };
+        timer->expires_after(std::chrono::seconds(1));
+        timer->async_wait([socket, done, fail](Error ec) {
+            if (!ec && !*done) fail("TIMEOUT");
+        });
+        const tcp::endpoint probe_target{endpoint_.address(), probe_port_};
+        socket->async_connect(probe_target, [self, socket, timer, request, buffer, done, fail, succeed](Error error) {
+            if (error || *done) return fail("CONNECT");
+            timer->expires_after(std::chrono::seconds(1));
+            asio::async_write(*socket, asio::buffer(request),
+              [socket, timer, buffer, done, fail, succeed](Error write_error, std::size_t) {
+                if (write_error || *done) return fail("WRITE");
+                asio::async_read_until(*socket, asio::dynamic_buffer(*buffer), '\n',
+                  [socket, timer, buffer, done, fail, succeed](Error read_error, std::size_t) mutable {
+                    if (read_error || *done) return fail("READ");
+                    const auto end = buffer->find('\n');
+                    std::istringstream line(buffer->substr(0, end == buffer->npos ? buffer->size() : end));
+                    std::string magic, nonce, verdict, state;
+                    if (line >> magic >> nonce >> verdict >> state && magic == "PROBE1" &&
+                        nonce == "join" && verdict == "ok") {
+                        if (state == "ready") return succeed();
+                        return fail("NOT_READY");
+                    }
+                    fail("GARBAGE");
+                });
+            });
+        });
     }
     void forward(std::string payload) {
         upstream_->write(std::move(payload), [self=shared_from_this()](Error ec) {
@@ -197,7 +393,8 @@ private:
     Diagnostics& diagnostics_;
     CrossContext context_;
     std::chrono::steady_clock::time_point request_started_{};
-    bool joined_ = false, awaiting_join_ = false;
+    std::uint16_t probe_port_ = 0;
+    bool probed_ = false, joined_ = false, awaiting_join_ = false;
     std::function<void(Session*)> on_close_;
     TokenBucket bucket_;
     std::uint64_t generation_ = 0;
@@ -210,6 +407,13 @@ public:
         admission_(std::max<std::size_t>(1, config_.upstreams.size()), config_.max_room_sessions,
                    config_.max_group_sessions, config_.max_shard_sessions) {
         diagnostics_ = std::make_unique<Diagnostics>(config_);
+        if (config_.probe_enabled) {
+            probe_ = std::make_shared<ProbeServer>(io_, config_.probe_listen,
+                [this](std::string_view command) {
+                    return command == "liveness" ? std::string("ok alive") : readiness_summary();
+                });
+            probe_->start();
+        }
         // Reserve an admission envelope before allocating protocol buffers. Not a hard RSS quota.
         constexpr std::size_t session_envelope = 6*max_frame + 64*1024;
         config_.max_connections = std::min(config_.max_connections,
@@ -246,6 +450,7 @@ public:
             if (service_) service_->start();
             accept();
             diagnostics_->set_ready(true);
+            ready_ = true;
             std::cout << "ready " << config_.role << ' ' << config_.listen.address << ':' << config_.listen.port << std::endl;
             io_.run();
         } else {
@@ -264,6 +469,7 @@ public:
                         try {
                             if (service_) service_->start();
                             diagnostics_->set_ready(true);
+                            ready_ = true;
                             std::cout << "ready " << config_.role << ' ' << config_.listen.address << ':' << config_.listen.port << std::endl;
                         } catch (...) { startup_error_ = std::current_exception(); stop(); }
                     });
@@ -329,7 +535,17 @@ private:
         tick_.async_wait([this, scheduled](Error ec) {
             if (ec || stopping_) return;
             // Timestamps only: observing the lag must never block the Lua loop.
-            diagnostics_->observe_event_loop_lag(std::chrono::steady_clock::now() - scheduled);
+            const auto lag = std::chrono::steady_clock::now() - scheduled;
+            diagnostics_->observe_event_loop_lag(lag);
+            last_lag_seconds_ = std::chrono::duration<double>(lag).count();
+            // Readiness flips only after a full hysteresis window on either side,
+            // so a single busy tick never starts rejecting new rooms.
+            const bool saturated =
+                static_cast<double>(sessions_.size()) >= config_.overload_ratio*static_cast<double>(config_.max_connections);
+            over_ticks_ = saturated ? over_ticks_+1 : 0;
+            healthy_ticks_ = saturated ? 0 : healthy_ticks_+1;
+            if (over_ticks_ >= config_.ready_hysteresis) admitting_ = false;
+            if (healthy_ticks_ >= config_.ready_hysteresis) admitting_ = true;
             if (service_) {
                 try { service_->tick(); }
                 catch (const std::exception& e) { std::cerr << "tick failed: " << e.what() << '\n'; }
@@ -338,10 +554,19 @@ private:
             tick();
         });
     }
+    std::string readiness_summary() const {
+        std::ostringstream out;
+        out << "ok " << (ready_ && admitting_ ? "ready" : "notready")
+            << " active=" << sessions_.size() << " capacity=" << config_.max_connections
+            << " lag_ms=" << std::fixed << std::setprecision(1) << last_lag_seconds_*1000.0;
+        return out.str();
+    }
     void stop() {
         if (stopping_) return;
         stopping_ = true;
+        ready_ = false;
         diagnostics_->set_ready(false);
+        if (probe_) probe_->stop();
         Error ignored;
         acceptor_.close(ignored);
         if (service_) {
@@ -374,7 +599,11 @@ private:
     std::size_t cursor_ = 0;
     CrossAdmission admission_;
     std::unique_ptr<Diagnostics> diagnostics_;
+    std::shared_ptr<ProbeServer> probe_;
     std::exception_ptr startup_error_;
+    bool ready_ = false, admitting_ = true;
+    unsigned over_ticks_ = 0, healthy_ticks_ = 0;
+    double last_lag_seconds_ = 0;
     bool stopping_ = false;
 };
 }

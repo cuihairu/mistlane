@@ -181,13 +181,14 @@ struct Context {
             "/CN=localhost", "-addext", "subjectAltName=DNS:localhost"}) == 0, "test certificate generation failed");
     }
 };
-template<class Work> void eventually(Work work, std::chrono::seconds timeout = 5s) {
+template<class Work> void eventually(Work work, std::chrono::seconds timeout = 5s,
+    const std::string& what = "condition did not converge before deadline") {
     auto end = std::chrono::steady_clock::now()+timeout;
     do {
         if (work()) return;
         std::this_thread::sleep_for(30ms);
     } while (std::chrono::steady_clock::now() < end);
-    throw std::runtime_error("condition did not converge before deadline");
+    throw std::runtime_error(what);
 }
 struct ScopedEnv {
     std::string name;
