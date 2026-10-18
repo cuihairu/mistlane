@@ -121,7 +121,7 @@ Protected calls install an instruction-count hook at about one million Lua instr
 
 ## Redis Streams queue API
 
-Start a worker with `--redis 127.0.0.1:6379` to enable the asynchronous `mistlane.stream` Lua API. Optional ACL credentials come from `MISTLANE_REDIS_USERNAME` and `MISTLANE_REDIS_PASSWORD`; do not put passwords on the command line. Stream keys are isolated under `mistlane:stream:<name>`. Redis requests and callbacks run on the node's Asio thread, so a callback can safely use the same Lua VM. These calls do not block or yield the current Lua handler.
+Start a worker with `--redis 127.0.0.1:6379` to enable the asynchronous `mistlane.stream` Lua API. Optional ACL credentials come from `MISTLANE_REDIS_USERNAME` and `MISTLANE_REDIS_PASSWORD`; do not put passwords on the command line. Set `MISTLANE_REDIS_TLS=on` to connect over TLS; the server certificate chain and the dialed name (DNS name or IP) are always verified. `MISTLANE_REDIS_CA=FILE` pins the trust anchor (falls back to system default verify paths when unset). Without `MISTLANE_REDIS_TLS=on` the connection is plaintext Redis TCP and must stay on a trusted private network. Stream keys are isolated under `mistlane:stream:<name>`. Redis requests and callbacks run on the node's Asio thread, so a callback can safely use the same Lua VM. These calls do not block or yield the current Lua handler.
 
 ```lua
 mistlane.stream.create_group("mail", "workers", function(err)
@@ -146,7 +146,7 @@ end)
 
 `read` fetches up to 100 new entries without `BLOCK`, avoiding head-of-line blocking on the shared Redis connection. Call it from `tick` for polling. `claim(stream, group, consumer, min_idle_ms, start_id, count, callback)` reclaims abandoned pending entries using `XAUTOCLAIM` (Redis 6.2+); pass the previous result's `next` cursor to continue scanning. `ack` removes a processed ID from the pending list. This provides at-least-once delivery: handlers must tolerate duplicates and acknowledge only after their work is durable. `create_group` is idempotent. Entries accept string fields, up to 64 KiB total and 64 field/value pairs; reads and claims cap at 100 entries per call.
 
-The current connection uses plaintext Redis TCP; use a trusted/private network until TLS configuration is added. Boost.MySQL and blocking libcurl remain C++ interfaces without Lua bindings. Cross context is routing metadata, not identity. See [HTTP](./http) and [cross-server design](./cross-server).
+Redis without `MISTLANE_REDIS_TLS=on` uses plaintext TCP on a trusted/private network; TLS mode verifies the chain and the dialed name with no verification-bypass option. Boost.MySQL and blocking libcurl remain C++ interfaces without Lua bindings. Cross context is routing metadata, not identity. See [HTTP](./http) and [cross-server design](./cross-server).
 
 ## Redis leaderboard API
 

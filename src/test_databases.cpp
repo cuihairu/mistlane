@@ -54,6 +54,85 @@ void redis_lua_api() {
     eventually([&] { auto probe=client->request("probe"); return !probe.empty() && probe.substr(0,6)!="error:"; });
     replacement.signal(SIGTERM); require(replacement.wait()==0,"replacement Redis shutdown failed");
 }
+void redis_tls() {
+    Context c; const auto first=port(), second=port();
+    auto certificate=[&](const char* name, const char* names) {
+        require(c.command({"openssl","req","-x509","-newkey","rsa:2048","-nodes",
+            "-keyout",c.path(std::string(name)+".key").string(),"-out",c.path(std::string(name)+".pem").string(),
+            "-days","1","-subj","/CN=localhost","-addext",std::string("subjectAltName=")+names})==0,
+            "test certificate generation failed");
+    };
+    // good: trust anchor with a DNS and an IP name; noip: valid chain, name only DNS;
+    // other: unrelated trust anchor for a wrong-CA check.
+    certificate("good","DNS:localhost,IP:127.0.0.1");
+    certificate("noip","DNS:localhost");
+    certificate("other","DNS:elsewhere.example");
+    auto start_redis=[&](unsigned listen, const char* name) -> Child& {
+        auto& server=c.spawn({"redis-server","--bind","127.0.0.1","--port","0",
+            "--tls-port",std::to_string(listen),
+            "--tls-cert-file",c.path(std::string(name)+".pem").string(),
+            "--tls-key-file",c.path(std::string(name)+".key").string(),
+            "--tls-ca-cert-file",c.path(std::string(name)+".pem").string(),
+            "--tls-auth-clients","no",
+            "--save","","--appendonly","no","--daemonize","no","--dir",c.temp.path.string()});
+        eventually([&] {
+            if (server.poll()) throw std::runtime_error(std::string(name)+" Redis exited:\n"+server.output());
+            try { auto connection=tcp(listen); return true; } catch (const std::exception&) { return false; }
+        });
+        return server;
+    };
+    auto& primary=start_redis(first,"good");
+    auto& nameless=start_redis(second,"noip");
+    write(c.path("redis.lua"),redis_lua);
+    auto worker=[&](unsigned redis_listen, const std::string& host) {
+        const unsigned own=port();
+        auto& child=c.node("worker",own,{"--script",c.path("redis.lua").string(),
+            "--redis",host+":"+std::to_string(redis_listen)});
+        return std::pair<Child&,unsigned>{child,own};
+    };
+    auto fields=[](const std::string& value) {
+        std::vector<std::string> result; std::istringstream in(value); std::string item;
+        while (std::getline(in,item,'|')) result.push_back(item);
+        return result;
+    };
+    auto expect_ok=[&](std::pair<Child&,unsigned> launched) {
+        auto client=tcp(launched.second);
+        equal(client->request("setup"),"started");
+        eventually([&] { auto value=fields(client->request("status")); return value.size()>2 && !value[2].empty(); });
+        equal(client->request("read"),"reading");
+        eventually([&] { return client->request("status").starts_with("ok|"); });
+    };
+    auto expect_rejected=[&](std::pair<Child&,unsigned> launched, const std::string& failure) {
+        auto client=tcp(launched.second);
+        equal(client->request("setup"),"started");
+        std::this_thread::sleep_for(2s);
+        auto value=fields(client->request("status"));
+        require(value.size()<=2 || value[2].empty(),failure+" was bypassed");
+        require(!launched.first.poll(),"worker exited while Redis TLS was being verified");
+        require(launched.first.output().find("SSL")!=std::string::npos ||
+            launched.first.output().find("certificate")!=std::string::npos ||
+            launched.first.output().find("handshake")!=std::string::npos,
+            "worker log lacks a TLS failure record:\n"+launched.first.output());
+    };
+    {
+        ScopedEnv tls("MISTLANE_REDIS_TLS","on");
+        ScopedEnv ca("MISTLANE_REDIS_CA",c.path("good.pem").string());
+        expect_ok(worker(first,"localhost"));
+        expect_ok(worker(first,"127.0.0.1"));
+    }
+    {
+        ScopedEnv tls("MISTLANE_REDIS_TLS","on");
+        ScopedEnv ca("MISTLANE_REDIS_CA",c.path("other.pem").string());
+        expect_rejected(worker(first,"localhost"),"chain verification failure");
+    }
+    {
+        ScopedEnv tls("MISTLANE_REDIS_TLS","on");
+        ScopedEnv ca("MISTLANE_REDIS_CA",c.path("noip.pem").string());
+        expect_rejected(worker(second,"127.0.0.1"),"hostname mismatch");
+    }
+    primary.signal(SIGTERM); require(primary.wait()==0,"primary Redis shutdown failed");
+    nameless.signal(SIGTERM); require(nameless.wait()==0,"second Redis shutdown failed");
+}
 namespace {
 std::string random_password() {
     std::array<unsigned char,24> bytes{};

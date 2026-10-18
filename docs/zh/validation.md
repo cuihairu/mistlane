@@ -39,7 +39,7 @@ pnpm docs:build
 python3 tools/export.py
 ```
 
-启用后，数据库与 Redis 检查分别注册为 `mistlane_mysql_integration` 和 `mistlane_redis_integration`。Redis 集成测试会启动临时本地 Redis，覆盖消费组重复创建、服务端被杀后在同一端口重启后的断线重连，以及 Lua 热重载期间仍挂起的 stream 回调（被替换 VM 持有的回调必须被丢弃）；完整 CTest 会执行所有已启用的检查。
+启用后，数据库与 Redis 检查分别注册为 `mistlane_mysql_integration` 和 `mistlane_redis_integration`。Redis 集成测试会启动临时本地 Redis，覆盖消费组重复创建、服务端被杀后在同一端口重启后的断线重连、Lua 热重载期间仍挂起的 stream 回调（被替换 VM 持有的回调必须被丢弃），以及仅 TLS 的 Redis 服务端（CA 与名称匹配时接受；错误 CA 和缺少 IP 名称时拒绝）；完整 CTest 会执行所有已启用的检查。
 
 依赖安装期间，当前环境的临时文件系统拒绝写入较大的 OpenSSL 归档；把 vcpkg 工作目录移到普通磁盘后完成构建。没有为此修改 port 源码或降低依赖版本。
 

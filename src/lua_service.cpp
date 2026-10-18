@@ -1,5 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "mistlane/lua_service.hpp"
+#include <boost/asio/ssl.hpp>
+#include <openssl/ssl.h>
+#include <openssl/x509_vfy.h>
+#include <arpa/inet.h>
+#include <netinet/in.h>
 #include <chrono>
 #include <stdexcept>
 #include <iostream>
@@ -103,6 +108,19 @@ int protected_call(lua_State* l, int arguments, int results, int handler) {
     lua_sethook(l, nullptr, 0, 0);
     return status;
 }
+boost::redis::config redis_config(std::string host, std::uint16_t port) {
+    boost::redis::config config;
+    config.addr.host = std::move(host);
+    config.addr.port = std::to_string(port);
+    if (const char* username = std::getenv("MISTLANE_REDIS_USERNAME")) config.username = username;
+    if (const char* password = std::getenv("MISTLANE_REDIS_PASSWORD")) config.password = password;
+    const char* tls = std::getenv("MISTLANE_REDIS_TLS");
+    const bool enabled = tls && std::string_view{tls} == "on";
+    if (tls && *tls && !enabled) throw std::runtime_error("MISTLANE_REDIS_TLS accepts only 'on'");
+    if (std::getenv("MISTLANE_REDIS_CA") && !enabled) throw std::runtime_error("MISTLANE_REDIS_CA requires MISTLANE_REDIS_TLS=on");
+    if (enabled) config.use_ssl = true;
+    return config;
+}
 }
 void LuaService::check(int status) {
     if (status != LUA_OK) {
@@ -141,11 +159,24 @@ LuaService::~LuaService() {
     lua_close(state_);
 }
 RedisRuntime::RedisRuntime(boost::asio::io_context& io, std::string host, std::uint16_t port)
-  : connection_(std::make_shared<boost::redis::connection>(io)) {
-    config_.addr.host = std::move(host);
-    config_.addr.port = std::to_string(port);
-    if (const char* username = std::getenv("MISTLANE_REDIS_USERNAME")) config_.username = username;
-    if (const char* password = std::getenv("MISTLANE_REDIS_PASSWORD")) config_.password = password;
+  : config_(redis_config(std::move(host), port)) {
+    // Boost.Redis verifies nothing by itself; the ssl::context below owns chain and
+    // hostname checks, so TLS is only as trustworthy as this configuration.
+    boost::asio::ssl::context context{boost::asio::ssl::context::tlsv12_client};
+    if (config_.use_ssl) {
+        if (const char* ca = std::getenv("MISTLANE_REDIS_CA")) context.load_verify_file(ca);
+        else context.set_default_verify_paths();
+        context.set_verify_mode(boost::asio::ssl::verify_peer | boost::asio::ssl::verify_fail_if_no_peer_cert);
+        // Match SSL_set1_host semantics: IP literals verify against IP SANs.
+        in_addr v4{}; in6_addr v6{};
+        auto* param = ::SSL_CTX_get0_param(context.native_handle());
+        if (::inet_pton(AF_INET, config_.addr.host.c_str(), &v4) == 1 ||
+            ::inet_pton(AF_INET6, config_.addr.host.c_str(), &v6) == 1)
+            ::X509_VERIFY_PARAM_set1_ip_asc(param, config_.addr.host.c_str());
+        else
+            ::X509_VERIFY_PARAM_set1_host(param, config_.addr.host.c_str(), 0);
+    }
+    connection_ = std::make_shared<boost::redis::connection>(io, std::move(context));
 }
 RedisRuntime::~RedisRuntime() { stop(); }
 void RedisRuntime::start() {

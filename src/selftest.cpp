@@ -17,6 +17,7 @@ void scaffold_init();
 void cli_bot();
 void crashpad_startup(const fs::path&);
 void redis_lua_api();
+void redis_tls();
 void mysql_pool();
 }
 namespace mistlane {
@@ -74,6 +75,7 @@ int run_tests(int argc, char** argv) {
         {"cli.bot","cli",test::cli_bot},
         {"crashpad.startup","crashpad",[&] {test::crashpad_startup(handler);},true},
         {"redis.lua","redis",test::redis_lua_api,true},
+        {"redis.tls","redis",test::redis_tls,true},
         {"mysql.pool","mysql",test::mysql_pool,true},
     };
     unsigned passed=0,failed=0,matched=0;

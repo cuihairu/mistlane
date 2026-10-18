@@ -128,7 +128,7 @@ message 失败或返回非 string 关闭该会话；tick 错误记录后继续�
 
 ## Redis Streams 消息队列 API
 
-使用 `--redis 127.0.0.1:6379` 启动 worker 后，可在 Lua 中使用异步 `mistlane.stream` API。ACL 凭据通过 `MISTLANE_REDIS_USERNAME` 和 `MISTLANE_REDIS_PASSWORD` 环境变量配置，不要把密码写入命令行。队列键统一隔离在 `mistlane:stream:<name>` 下。Redis 请求和回调运行在节点的 Asio 线程上，因此可以安全访问同一个 Lua VM；这些接口不会阻塞或让当前 Lua handler yield。
+使用 `--redis 127.0.0.1:6379` 启动 worker 后，可在 Lua 中使用异步 `mistlane.stream` API。ACL 凭据通过 `MISTLANE_REDIS_USERNAME` 和 `MISTLANE_REDIS_PASSWORD` 环境变量配置，不要把密码写入命令行。设置 `MISTLANE_REDIS_TLS=on` 后通过 TLS 连接；服务端证书链和所拨地址（域名或 IP）始终进行校验。`MISTLANE_REDIS_CA=FILE` 指定信任锚（未设置时使用系统默认验证路径）。未开启 `MISTLANE_REDIS_TLS=on` 时连接为明文 Redis TCP，只能用于可信内网。队列键统一隔离在 `mistlane:stream:<name>` 下。Redis 请求和回调运行在节点的 Asio 线程上，因此可以安全访问同一个 Lua VM；这些接口不会阻塞或让当前 Lua handler yield。
 
 ```lua
 mistlane.stream.create_group("mail", "workers", function(err)
@@ -153,7 +153,7 @@ end)
 
 `read` 非阻塞地拉取最多 100 条新消息，避免阻塞共享 Redis 连接；可从 `tick` 钩子轮询。`claim(stream, group, consumer, min_idle_ms, start_id, count, callback)` 使用 `XAUTOCLAIM`（Redis 6.2+）认领消费者异常退出后遗留的 pending 消息；后续分页使用上次返回的 `next` 游标。消息处理持久化成功后再调用 `ack`。这是至少一次投递，业务处理必须能容忍重复；`create_group` 可重复调用。每条消息最多 64 KiB、最多 64 组字段和值；每次 read/claim 最多 100 条。
 
-当前 Redis 连接使用明文 TCP；TLS 配置完成前请仅连接可信的内网 Redis。Boost.MySQL 与阻塞式 libcurl 尚无 Lua 绑定。跨服 context 是路由元数据，不是身份凭证。参阅[HTTP 接入](./http)和[跨服设计](./cross-server)。
+未开启 `MISTLANE_REDIS_TLS=on` 时 Redis 为明文 TCP，仅限可信内网；TLS 模式始终校验证书链和所拨地址，不提供跳过校验的选项。Boost.MySQL 与阻塞式 libcurl 尚无 Lua 绑定。跨服 context 是路由元数据，不是身份凭证。参阅[HTTP 接入](./http)和[跨服设计](./cross-server)。
 
 ## Redis 排行榜 API
 

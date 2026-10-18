@@ -19,7 +19,7 @@
 | Lua 死循环监视线程 | 部分替换 | 已有指令计数 hook；没有照搬旧监视线程及其停止竞态。 |
 | CPU/内存性能剖析器 | 未迁移 | 老框架和 Mistlane 都没有 CPU 采样、内存分配剖析或 Lua 函数级性能剖析。旧 Lua 超时 hook 不是 profiler。 |
 | MySQL 接入 | 仅连接池层已替换 | 使用 Boost.MySQL `connection_pool` 并提供探针；未迁移游戏表结构、脏写缓存、SQL helper 或通用 Lua 异步数据库桥。 |
-| Redis 客户端和 Lua 绑定 | 替换/部分迁移 | vcpkg 已启用 Boost.Redis 1.92。可选 `--redis` 提供有界异步 Lua Streams API 和 sorted-set 排行榜 API。TLS、通用命令接口和 Redis 自动化集成测试仍待实现。 |
+| Redis 客户端和 Lua 绑定 | 替换/部分迁移 | vcpkg 已启用 Boost.Redis 1.92。可选 `--redis` 提供有界异步 Lua Streams API 和 sorted-set 排行榜 API。`MISTLANE_REDIS_TLS=on` 启用 TLS 并强制校验证书链和所拨地址（`MISTLANE_REDIS_CA` 指定信任锚）；明文模式保留为可信内网默认。集成测试覆盖消费组重复创建、服务端重启后的断线重连、热重载期间旧回调失效，以及 TLS 按 CA 与名称的接受/拒绝。通用命令接口仍待实现。 |
 | UDP 传输 | 可复用现有库 | 旧 UDP 调用点已于 2026-10-18 盘点：唯一的服务端实例化是 `WorldServer::openUdpServer`，以 `C_openUdpServer(ip, port)` 暴露给 Lua，而其唯一 Lua 调用点（`WorldService.lua`）已被注释；`UdpClient` 侧与 `L_onUdpClientMsg`/`L_onUdpServerMsg` 回调在 net 层之外无任何调用方，旧代码树中 UDP 实际处于死代码状态。Boost.Asio 已有异步 UDP socket；不添加 datagram 契约或 Lua 适配，公开 API 出现前必须先确认真实用例。 |
 | 日志服务和 Lua logger API | 可复用现有库 | Boost.Log 提供过滤器、属性、格式化器和 sink；Drogon 也有日志设施。先为各进程选择统一 C++ 日志门面，再向 Lua 暴露精简结构化 logger。远端聚合属于部署层。 |
 | 指标、进程监控和系统信息 | 部分完成 | 可选私有 `/metrics` 端点导出就绪状态、活动会话、准入拒绝、Lua 回调耗时和 RSS。内部健康端点、完整流量/tick 指标、生产仪表盘和压测仍待完成。 |

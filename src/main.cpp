@@ -44,6 +44,8 @@ int main(int argc, char** argv) {
                              "  --max-connections N (default 1024)\n"
                              "  --memory-budget-mib N (default 256; conservative admission envelope)\n"
                              "  --redis IP:PORT (optional; Streams Lua API enabled)\n"
+                             "    Redis TLS: MISTLANE_REDIS_TLS=on (chain+hostname verified),\n"
+                             "    MISTLANE_REDIS_CA=FILE (optional trust anchor)\n"
                              "  --metrics-listen IP:PORT (optional; Prometheus /metrics endpoint)\n"
                              "  --crashpad-handler FILE --crashpad-database DIR (optional; local dumps only)\n"
                              "  cross/shard: --route-epoch N --max-room-sessions N\n"
