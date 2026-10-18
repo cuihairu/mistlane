@@ -7,7 +7,9 @@
 | 依赖 | baseline 版本 | 使用方式 |
 |---|---|---|
 | boost-asio | 1.92.0 | `Boost::asio`，协程、TCP、计时、信号 |
-| boost-beast | 1.92.0 | `Boost::beast`，WS/WSS |
+| drogon | 1.9.14（overlay） | `Drogon::Drogon`，HTTP/HTTPS/WS/WSS |
+| trantor | 1.5.28 | Drogon 的网络依赖，非 Boost.Asio |
+| curl | 8.23.0 | `CURL::libcurl`，HTTP 客户端 |
 | boost-mysql | 1.92.0 | `Boost::mysql`，成熟异步连接池 |
 | lua | 5.5.1 | CMake FindLua 提供 include 与 libraries |
 | openssl | 3.6.5#2 | `OpenSSL::SSL` / `OpenSSL::Crypto` |
@@ -35,3 +37,7 @@ Boost.Charconv 等间接依赖由 Boost.MySQL 的 port 和 CMake target 自动�
 文档使用 npm 稳定版 VitePress 1.6.4，未使用 2.x alpha。升级时应同步更新固定版本与 pnpm-lock.yaml，并执行 pnpm install --frozen-lockfile 和文档构建。
 
 VitePress 1.6.4 默认依赖较旧的 Vite 5；本项目通过 workspace override 使用 Vite 6.4.4，处理已报告的 Vite/esbuild 依赖告警，并保持稳定版 VitePress 与 plugin-vue 5 的兼容性。通过文档构建和依赖审计验证该覆盖。package.json 固定包管理器版本，CI 读取该版本。
+
+Drogon 1.9.14 是截至 2026-10-18 核对的稳定版，当前 baseline 的 port 为 1.9.13#2。项目通过 vcpkg-configuration.json 指定 ports overlay，固定 1.9.14 源码及 SHA512，沿用 vcpkg 的打包补丁，调整视图工具补丁并修正静态 JsonCpp target。没有在 CMake 中另行下载 Drogon。未启用 Drogon ORM/MySQL feature，数据库池仍使用 Boost.MySQL。Trantor 由依赖自动安装。
+
+当前 Boost 版本已经包含 Asio `thread_pool`、`steady_timer`、UDP socket、Boost.Log 和 Boost.Redis。Mistlane 已启用 Boost.Redis，用于可选的 Lua Streams 队列和排行榜 API。Drogon 自带的 Redis client 继续关闭，避免维护两套客户端。详见[迁移状态清单](./migration-status)。

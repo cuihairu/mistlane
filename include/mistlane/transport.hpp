@@ -1,5 +1,6 @@
 #pragma once
 #include <utility>
+#include "mistlane/http_service.hpp"
 #include <boost/asio.hpp>
 #include <boost/asio/ssl/context.hpp>
 #include <functional>
@@ -20,6 +21,9 @@ public:
     virtual void write(std::string payload, Completion callback) = 0;
     virtual void close() = 0;
 };
-std::shared_ptr<Channel> make_websocket(boost::asio::ip::tcp::socket socket,
-                                      boost::asio::ssl::context* tls);
+// Drogon owns the public listener. Accepted payload channels execute on executor.
+struct Config;
+void run_web(const Config&, boost::asio::any_io_executor,
+             std::function<void(std::shared_ptr<Channel>)> attach, HttpHandler http_handler, std::function<void()> ready);
+void stop_web();
 }

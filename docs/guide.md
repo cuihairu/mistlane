@@ -29,6 +29,14 @@ ctest --preset linux-debug
 
 Use `linux-release` for a Release build. Initial configuration installs the manifest dependencies; subsequent builds reuse vcpkg's binary cache. See [dependencies](./dependencies.md) for the exact versions.
 
+## Generate an application starter
+
+```bash
+./build/debug/mistlane init ./my-service
+```
+
+The initializer refuses to overwrite a non-empty directory. It creates `config/instances/` with one trusted environment file per process, `scripts/` with Lua entrypoints, `ops/run-instance.sh` to resolve paths from the project root, `ops/cluster.sh` for local start/stop/restart/status/logs, and a systemd template under `ops/systemd/`. The generated config files are consumed by the shell launcher; Mistlane itself still takes CLI arguments and does not parse a native config file. See [architecture comparison](./architecture-comparison.md) for the old deployment layout and the reasoning behind the template.
+
 ## Run three processes
 
 Open three terminals in the repository root:
@@ -57,7 +65,7 @@ Add `--transport ws` to a gateway to accept WebSocket messages. Each WS message 
   --upstream 127.0.0.1:7101
 ```
 
-Use your own certificate and private key, kept outside source control. Beast handles protocol details. WSS requires TLS 1.2 or newer. Responses are binary WS messages. Internal TCP frames use a four-byte big-endian length and a payload, up to 1 MiB.
+Use your own certificate and private key, kept outside source control. Drogon handles protocol details. WSS requires TLS 1.2 or newer. Responses are binary WS messages. Internal TCP frames use a four-byte big-endian length and a payload, up to 1 MiB.
 
 ## Lua services
 
@@ -84,7 +92,7 @@ TLS with CA and hostname verification is required by default. Set `SSL_CERT_FILE
 With MariaDB tools installed, run the optional disposable-server integration check:
 
 ```bash
-python3 tools/mysql_integration.py ./build/debug/mistlane-mysql-probe
+python3 tests/mysql_integration.py ./build/debug/mistlane-mysql-probe
 ```
 
 It creates a temporary database directory, random credentials, a temporary port, and a temporary certificate, then stops the server and cleans up. To register it in CTest, configure with `-DMISTLANE_TEST_LOCAL_DATABASE=ON`.

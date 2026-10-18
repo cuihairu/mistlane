@@ -7,19 +7,24 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 find_package(Threads REQUIRED)
-find_package(Boost 1.92 CONFIG REQUIRED COMPONENTS asio beast mysql)
+find_package(Boost 1.92 CONFIG REQUIRED COMPONENTS asio mysql redis)
 find_package(OpenSSL 3.6.5 REQUIRED)
+find_package(Drogon 1.9.14 CONFIG REQUIRED)
+find_package(CURL 8.23 CONFIG REQUIRED)
 find_package(Lua 5.5.1 REQUIRED)
-add_library(mistlane_core src/lua_service.cpp)
+find_package(crashpad CONFIG REQUIRED)
+find_package(prometheus-cpp CONFIG REQUIRED)
+add_library(mistlane_core src/lua_service.cpp src/diagnostics.cpp)
 target_include_directories(mistlane_core PUBLIC include)
 target_include_directories(mistlane_core SYSTEM PUBLIC ${LUA_INCLUDE_DIR})
 target_link_libraries(mistlane_core PUBLIC
-  Boost::asio Boost::beast Threads::Threads OpenSSL::SSL OpenSSL::Crypto ${LUA_LIBRARIES})
+  Boost::asio Boost::redis Threads::Threads OpenSSL::SSL OpenSSL::Crypto ${LUA_LIBRARIES})
+target_link_libraries(mistlane_core PUBLIC crashpad::crashpad prometheus-cpp::core prometheus-cpp::pull)
 target_compile_options(mistlane_core PRIVATE -Wall -Wextra -Wpedantic)
-add_library(mistlane_net src/node.cpp src/websocket.cpp)
-target_link_libraries(mistlane_net PUBLIC mistlane_core)
+add_library(mistlane_net src/node.cpp src/web.cpp)
+target_link_libraries(mistlane_net PUBLIC mistlane_core Drogon::Drogon)
 target_compile_options(mistlane_net PRIVATE -Wall -Wextra -Wpedantic)
-add_executable(mistlane src/main.cpp)
+add_executable(mistlane src/main.cpp src/scaffold.cpp)
 target_link_libraries(mistlane PRIVATE mistlane_net)
 target_compile_options(mistlane PRIVATE -Wall -Wextra -Wpedantic)
 add_library(mistlane::core ALIAS mistlane_core)
@@ -34,14 +39,39 @@ include(CTest)
 if(BUILD_TESTING)
   find_package(Python3 REQUIRED COMPONENTS Interpreter)
   add_test(NAME mistlane_integration COMMAND ${Python3_EXECUTABLE}
-    ${CMAKE_CURRENT_SOURCE_DIR}/tools/integration.py $<TARGET_FILE:mistlane>
+    ${CMAKE_CURRENT_SOURCE_DIR}/tests/integration.py $<TARGET_FILE:mistlane>
     ${CMAKE_CURRENT_SOURCE_DIR})
   set_tests_properties(mistlane_integration PROPERTIES TIMEOUT 60)
+  add_test(NAME mistlane_scaffold COMMAND ${Python3_EXECUTABLE}
+    ${CMAKE_CURRENT_SOURCE_DIR}/tests/scaffold.py $<TARGET_FILE:mistlane>)
+  set_tests_properties(mistlane_scaffold PROPERTIES TIMEOUT 10)
+  if(EXISTS "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/tools/crashpad_handler")
+    add_test(NAME mistlane_crashpad_startup COMMAND ${Python3_EXECUTABLE}
+      ${CMAKE_CURRENT_SOURCE_DIR}/tests/crashpad_startup.py $<TARGET_FILE:mistlane>
+      "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/tools/crashpad_handler"
+      ${CMAKE_CURRENT_SOURCE_DIR}/examples/echo.lua)
+    set_tests_properties(mistlane_crashpad_startup PROPERTIES TIMEOUT 15)
+  endif()
 endif()
 
 option(MISTLANE_TEST_LOCAL_DATABASE "Test against a disposable local MariaDB (requires installed tools)" OFF)
 if(BUILD_TESTING AND MISTLANE_TEST_LOCAL_DATABASE)
   add_test(NAME mistlane_mysql_integration COMMAND ${Python3_EXECUTABLE}
-    ${CMAKE_CURRENT_SOURCE_DIR}/tools/mysql_integration.py $<TARGET_FILE:mistlane-mysql-probe>)
+    ${CMAKE_CURRENT_SOURCE_DIR}/tests/mysql_integration.py $<TARGET_FILE:mistlane-mysql-probe>)
   set_tests_properties(mistlane_mysql_integration PROPERTIES TIMEOUT 60)
 endif()
+
+option(MISTLANE_TEST_LOCAL_REDIS "Test against a disposable local Redis server" OFF)
+if(BUILD_TESTING AND MISTLANE_TEST_LOCAL_REDIS)
+  add_test(NAME mistlane_redis_integration COMMAND ${Python3_EXECUTABLE}
+    ${CMAKE_CURRENT_SOURCE_DIR}/tests/redis_integration.py $<TARGET_FILE:mistlane>
+    ${CMAKE_CURRENT_SOURCE_DIR})
+  set_tests_properties(mistlane_redis_integration PROPERTIES TIMEOUT 60)
+endif()
+
+add_library(mistlane_http src/http_client.cpp)
+target_include_directories(mistlane_http PUBLIC include)
+target_link_libraries(mistlane_http PUBLIC CURL::libcurl)
+add_library(mistlane::http ALIAS mistlane_http)
+add_executable(mistlane-http-probe examples/http_probe.cpp)
+target_link_libraries(mistlane-http-probe PRIVATE mistlane_http)

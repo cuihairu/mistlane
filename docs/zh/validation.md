@@ -1,6 +1,6 @@
 # 验证记录
 
-验证日期：2026-10-17。环境为 Linux x64、GCC 15.2.0、CMake 4.2.3，固定 vcpkg baseline：a5f736224e85b32e25a8ffc52562333180396642。
+验证日期：2026-10-17；Redis 新增项于 2026-10-18 验证。环境为 Linux x64、GCC 15.2.0、CMake 4.2.3，固定 vcpkg baseline：a5f736224e85b32e25a8ffc52562333180396642。
 
 | 项目 | 实际结果 |
 |---|---|
@@ -8,13 +8,14 @@
 | 三段 TCP 链路 | gateway → router → worker 往返通过 |
 | TCP 分帧 | 空、二进制、UTF-8、上限长度、拆包、合包与超大报文通过 |
 | 并发与路由 | 并发请求及会话固定上游通过 |
-| WS / WSS | Beast 握手、掩码、分片、ping/pong、受信任证书 TLS echo 通过 |
+| WS / WSS | Drogon 握手、掩码、分片、ping/pong、受信任证书 TLS echo 通过 |
 | Lua | 成功重载、语法 / 接口错误回退、回调错误、典型死循环中断、重复回调通过 |
 | 提取的堆工具 | 在实际链接的 Lua 中验证模块隔离与有序弹出 |
 | 错误和资源路径 | 上游连接失败、连接上限、消息限流、非法参数、SIGTERM 退出通过 |
 | 数据库池 | 池上限为一，连续三次获取 / 查询 / 自动归还通过 |
 | 参数与 TLS | 引号 / 反斜线参数绑定、CA 和主机名校验通过 |
 | 数据库认证错误 | 在配置的获取期限内失败 |
+| Redis Streams 与排行榜 | 本地 Redis 端到端 Lua 检查通过，覆盖消费组幂等创建、发布/读取、pending 认领与 ACK、增分/名次查询、榜单分页和删除 |
 | 文档站 | 使用 pnpm 10.33.0、VitePress 1.6.4 与修复版 Vite 6.4.4 构建两种语言；10 个页面的语言、导航与仓库链接检查通过 |
 | 文档依赖审计 | Vite 覆盖更新后，pnpm audit 返回零告警 |
 | 源码包 | 白名单与 SHA256 检查通过，无原游戏目录或 Git 历史 |
@@ -24,16 +25,16 @@
 执行命令：
 
 ```bash
-cmake --preset linux-debug -DMISTLANE_TEST_LOCAL_DATABASE=ON
+cmake --preset linux-debug -DMISTLANE_TEST_LOCAL_DATABASE=ON -DMISTLANE_TEST_LOCAL_REDIS=ON
 cmake --build --preset linux-debug
 ctest --preset linux-debug -R '^mistlane_integration$'
-python3 tools/mysql_integration.py ./build/debug/mistlane-mysql-probe
+python3 tests/mysql_integration.py ./build/debug/mistlane-mysql-probe
 pnpm install --frozen-lockfile
 pnpm docs:build
 python3 tools/export.py
 ```
 
-启用后，数据库检查也注册为 mistlane_mysql_integration，完整 CTest 可执行两项检查。
+启用后，数据库与 Redis 检查分别注册为 `mistlane_mysql_integration` 和 `mistlane_redis_integration`。Redis 集成测试会启动临时本地 Redis，完整 CTest 会执行所有已启用的检查。
 
 依赖安装期间，当前环境的临时文件系统拒绝写入较大的 OpenSSL 归档；把 vcpkg 工作目录移到普通磁盘后完成构建。没有为此修改 port 源码或降低依赖版本。
 

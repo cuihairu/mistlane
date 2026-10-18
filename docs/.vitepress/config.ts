@@ -1,9 +1,24 @@
 import { defineConfig } from 'vitepress'
 
+const base = process.env.DOCS_BASE || '/mistlane/'
+
 export default defineConfig({
   title: 'Mistlane',
   description: 'A framework extracted from a legacy game backend, for research and learning.',
-  base: process.env.DOCS_BASE || '/mistlane/',
+  base,
+  head: [['link', { rel: 'icon', type: 'image/svg+xml', href: `${base}logo.svg` }]],
+  markdown: {
+    config(md) {
+      const fence = md.renderer.rules.fence!
+      md.renderer.rules.fence = (tokens, index, options, env, self) => {
+        if (tokens[index].info.trim() === 'mermaid') {
+          const source = md.utils.escapeHtml(JSON.stringify(tokens[index].content))
+          return `<MermaidDiagram :source="${source}" />`
+        }
+        return fence(tokens, index, options, env, self)
+      }
+    }
+  },
   cleanUrls: false,
   lastUpdated: true,
   locales: {
@@ -13,6 +28,8 @@ export default defineConfig({
         nav: [
           { text: 'Guide', link: '/guide' },
           { text: 'Architecture', link: '/architecture' },
+          { text: 'Legacy and modern comparison', link: '/architecture-comparison' },
+          { text: 'Migration status', link: '/migration-status' },
           { text: 'GitHub', link: 'https://github.com/cuihairu/mistlane' }
         ],
         outline: { label: 'On this page' },
@@ -28,6 +45,8 @@ export default defineConfig({
         nav: [
           { text: '使用指南', link: '/zh/guide' },
           { text: '架构说明', link: '/zh/architecture' },
+          { text: '老架构与现代架构对比', link: '/zh/architecture-comparison' },
+          { text: '迁移状态', link: '/zh/migration-status' },
           { text: 'GitHub', link: 'https://github.com/cuihairu/mistlane' }
         ],
         outline: { label: '本页目录' },
@@ -42,6 +61,7 @@ export default defineConfig({
     }
   },
   themeConfig: {
+    logo: { src: '/logo.svg', alt: 'Mistlane' },
     search: { provider: 'local' },
     socialLinks: [{ icon: 'github', link: 'https://github.com/cuihairu/mistlane' }],
     sidebar: {
@@ -49,6 +69,11 @@ export default defineConfig({
         { text: '项目介绍', link: '/zh/' },
         { text: '使用指南', link: '/zh/guide' },
         { text: '架构与迁移', link: '/zh/architecture' },
+        { text: '老架构与现代架构对比', link: '/zh/architecture-comparison' },
+        { text: '迁移状态', link: '/zh/migration-status' },
+        { text: 'HTTP 与客户端', link: '/zh/http' },
+        { text: 'Lua 与生命周期', link: '/zh/lua' },
+        { text: '跨服与过载保护', link: '/zh/cross-server' },
         { text: '依赖管理', link: '/zh/dependencies' },
         { text: '验证记录', link: '/zh/validation' }
       ] }],
@@ -56,6 +81,11 @@ export default defineConfig({
         { text: 'Introduction', link: '/' },
         { text: 'Getting started', link: '/guide' },
         { text: 'Architecture and migration', link: '/architecture' },
+        { text: 'Legacy and modern comparison', link: '/architecture-comparison' },
+        { text: 'Migration status', link: '/migration-status' },
+        { text: 'HTTP and client', link: '/http' },
+        { text: 'Lua lifecycle', link: '/lua' },
+        { text: 'Cross-server and overload', link: '/cross-server' },
         { text: 'Dependencies', link: '/dependencies' },
         { text: 'Validation', link: '/validation' }
       ] }]

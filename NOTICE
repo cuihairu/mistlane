@@ -1,9 +1,8 @@
 Mistlane
 
-New code follows the MIT license already selected for cuihairu/mistlane.
-Derived source material from the FOGS backend retains Apache-2.0 markings;
-the corresponding license text is in licenses/Apache-2.0.txt. Existing author
-attribution is preserved in derived source material.
+Mistlane is distributed under the Apache License 2.0; see LICENSE. Existing
+author attribution and source provenance for material derived from the FOGS
+backend are preserved below.
 The meaning and origin of the original FOGS project name have not been confirmed.
 
 Source provenance:
@@ -18,3 +17,9 @@ Source provenance:
 
 The release package does not contain the original game, third-party SDKs,
 production configuration, compiled artifacts or repository history.
+
+Drogon overlay port recipes and packaging patches are adapted from microsoft/vcpkg
+at a5f736224e85b32e25a8ffc52562333180396642, under the MIT license
+in ports/LICENSE.txt. The overlay updates the source release, adapts the view
+tool patch and fixes the exported JsonCpp target for static builds. The original
+vcpkg license is retained for these adapted port files; see THIRD_PARTY.md.

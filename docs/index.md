@@ -1,9 +1,10 @@
 <script setup lang="ts">
+import { withBase } from 'vitepress'
 // 首次访问按浏览器语言选择文档语言（vitepress 无此能力，GitHub Pages 不支持 _redirects）
 // 优先级：localStorage 手动选择 > navigator.language > 保持当前 locale
 import { onBeforeMount } from 'vue'
 const KEY = 'mistlane-lang-auto-picked'
-const BASE = '/mistlane/'
+const BASE = import.meta.env.BASE_URL
 const ROOT_PATH = BASE
 const ZH_PATH = BASE + 'zh/'
 onBeforeMount(() => {{
@@ -25,6 +26,10 @@ if (typeof window !== 'undefined') {{
 }}
 </script>
 
+<p align="center">
+  <img :src="withBase('/logo.svg')" alt="Mistlane logo" width="64" height="64" style="margin-inline: auto;">
+</p>
+
 # Mistlane
 
 Mistlane is a C++20 / Lua framework extracted and reorganized from a **legacy game backend**. It is published for **research and learning**: studying service separation, asynchronous networking, Lua integration, and the modernization of an existing codebase.
@@ -38,7 +43,7 @@ The new implementation keeps the gateway / router / worker topology while introd
 | Area | Implementation |
 |---|---|
 | Asynchronous I/O | Boost.Asio TCP, timers, signals, coroutines |
-| WS and WSS | Boost.Beast, with OpenSSL TLS |
+| WS and WSS | Drogon, with OpenSSL TLS |
 | Database integration | Boost.MySQL's existing connection_pool and parameter binding |
 | Application scripting | Single-threaded Lua module lifecycle and transactional VM replacement |
 | Reproducible dependencies | CMake Presets and a pinned vcpkg manifest baseline |
@@ -62,4 +67,4 @@ Start with the [guide](./guide.md), read the [architecture and limitations](./ar
 
 ## Origin and licensing
 
-The framework was derived from FOGS. The original meaning of that project name is unconfirmed. New code follows the independent repository's MIT license; two derived utility files retain Apache-2.0 markings and notices. See [LICENSE](https://github.com/cuihairu/mistlane/blob/main/LICENSE), [NOTICE](https://github.com/cuihairu/mistlane/blob/main/NOTICE), and [third-party information](https://github.com/cuihairu/mistlane/blob/main/THIRD_PARTY.md).
+The framework was derived from FOGS. The original meaning of that project name is unconfirmed. Mistlane is licensed under Apache License 2.0. Source provenance and third-party licenses are documented in [NOTICE](https://github.com/cuihairu/mistlane/blob/main/NOTICE) and [third-party information](https://github.com/cuihairu/mistlane/blob/main/THIRD_PARTY.md).

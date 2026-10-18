@@ -7,7 +7,9 @@ Pinned baseline: `a5f736224e85b32e25a8ffc52562333180396642`, checked on 2026-10-
 | Dependency | Baseline version | Integration |
 |---|---|---|
 | boost-asio | 1.92.0 | Boost::asio, asynchronous I/O and coroutines |
-| boost-beast | 1.92.0 | Boost::beast, WS/WSS |
+| drogon | 1.9.14 (overlay) | Drogon::Drogon, HTTP/HTTPS/WS/WSS |
+| trantor | 1.5.28 | Drogon network dependency; independent of Boost.Asio |
+| curl | 8.23.0 | CURL::libcurl, HTTP client |
 | boost-mysql | 1.92.0 | Boost::mysql, asynchronous connection_pool |
 | lua | 5.5.1 | CMake FindLua include/library variables |
 | openssl | 3.6.5#2 | OpenSSL::SSL and OpenSSL::Crypto |
@@ -34,3 +36,7 @@ Use a vcpkg checkout containing the pinned commit and matching version database.
 Sources: [vcpkg baseline](https://github.com/microsoft/vcpkg/tree/a5f736224e85b32e25a8ffc52562333180396642), [Boost stable release](https://www.boost.org/releases/latest/), [Lua downloads](https://www.lua.org/ftp/), [OpenSSL downloads](https://www.openssl-library.org/source/), [Boost.MySQL pool tutorial](https://www.boost.org/latest/libs/mysql/doc/html/mysql/tutorial_connection_pool.html), [VitePress](https://vitepress.dev/).
 
 VitePress 1.6.4 defaults to the older Vite 5 line. The workspace overrides it with Vite 6.4.4 to address reported Vite/esbuild dependency advisories while keeping the stable VitePress release and plugin-vue 5 compatibility. Documentation builds and a dependency audit validate this override. The package manager version is pinned in package.json; CI reads that pin.
+
+Drogon 1.9.14 is the stable release checked on 2026-10-18; the pinned baseline packages 1.9.13#2. vcpkg-configuration.json selects a ports overlay with a fixed release/SHA512, adapted vcpkg packaging patches and a static JsonCpp target fix. CMake does not download Drogon separately. Drogon ORM/MySQL features are disabled; Boost.MySQL remains the pool implementation. Trantor is installed transitively.
+
+The same Boost line supplies Asio `thread_pool`, `steady_timer`, UDP sockets, Boost.Log and Boost.Redis. Mistlane enables Boost.Redis for optional Lua Streams and leaderboard APIs. Drogon's separate Redis client remains disabled to avoid maintaining two clients. See the [migration status ledger](./migration-status) for boundaries and upstream references.

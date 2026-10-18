@@ -29,6 +29,14 @@ ctest --preset linux-debug
 
 Release 使用 linux-release。首次配置由 vcpkg 安装依赖，之后复用二进制缓存。具体版本见[依赖管理](./dependencies.md)。
 
+## 初始化应用模板
+
+```bash
+./build/debug/mistlane init ./my-service
+```
+
+目标目录非空时会拒绝覆盖。生成内容包括逐进程配置 `config/instances/`、Lua 入口 `scripts/`、按项目根目录解析路径的 `ops/run-instance.sh`、支持本地启停/重启/状态/日志的 `ops/cluster.sh`，以及 `ops/systemd/` 下的 unit 模板。配置文件是由启动脚本读取的可信 shell 赋值；Mistlane 本身仍接收 CLI 参数，不解析原生配置文件。旧项目部署结构和新模板设计依据见[架构对比](./architecture-comparison.md)。
+
 ## 启动三个进程
 
 在仓库根目录的三个终端分别运行：
@@ -57,7 +65,7 @@ python3 tools/client.py 'hello mistlane'
   --upstream 127.0.0.1:7101
 ```
 
-使用自己的证书链和私钥，保存在源码仓库之外。协议细节由 Beast 处理，WSS 最低 TLS 1.2。响应为二进制 WS 消息。内部 TCP 使用四字节网络序长度头加 payload，上限 1 MiB。
+使用自己的证书链和私钥，保存在源码仓库之外。协议细节由 Drogon 处理，WSS 最低 TLS 1.2。响应为二进制 WS 消息。内部 TCP 使用四字节网络序长度头加 payload，上限 1 MiB。
 
 ## Lua 服务
 
@@ -84,7 +92,7 @@ export MISTLANE_MYSQL_USER=your_user
 安装 MariaDB 工具后，可运行临时数据库检查：
 
 ```bash
-python3 tools/mysql_integration.py ./build/debug/mistlane-mysql-probe
+python3 tests/mysql_integration.py ./build/debug/mistlane-mysql-probe
 ```
 
 脚本创建临时数据目录、随机凭据、临时端口和证书，结束时停止并清理服务。配置 -DMISTLANE_TEST_LOCAL_DATABASE=ON 可纳入 CTest。

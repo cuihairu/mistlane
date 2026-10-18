@@ -2,7 +2,7 @@
   "name": "mistlane",
   "version-semver": "0.1.0",
   "description": "A lightweight C++/Lua multi-process service framework extracted and modernized from FOGS",
-  "license": "MIT AND Apache-2.0",
+  "license": "Apache-2.0",
   "builtin-baseline": "a5f736224e85b32e25a8ffc52562333180396642",
   "dependencies": [
     {
@@ -14,7 +14,7 @@
       ]
     },
     {
-      "name": "boost-beast",
+      "name": "boost-redis",
       "version>=": "1.92.0"
     },
     {
@@ -28,6 +28,25 @@
     {
       "name": "openssl",
       "version>=": "3.6.5"
+    },
+    {
+      "name": "drogon",
+      "version>=": "1.9.14",
+      "default-features": false
+    },
+    {
+      "name": "curl",
+      "version>=": "8.23.0",
+      "default-features": false,
+      "features": [
+        "openssl"
+      ]
+    },
+    "crashpad",
+    {
+      "name": "prometheus-cpp",
+      "default-features": false,
+      "features": ["pull"]
     }
   ],
   "homepage": "https://github.com/cuihairu/mistlane"
