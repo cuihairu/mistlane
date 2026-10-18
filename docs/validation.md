@@ -23,6 +23,8 @@ Validated on 2026-10-17; Redis additions and the HTTP/HTTPS, Lua HTTP worker and
 | Documentation dependency audit | pnpm audit reported zero advisories after the Vite override |
 | Source package | Allowlist and SHA256 checksum verification passed; no original game directories or Git history |
 
+Decision record (self-decided 2026-10-18): the VitePress build's "large chunk" warnings caused by Mermaid's lazy-loaded bundles were evaluated. The single lazy-loaded chunk layout is kept without splitting; the warnings do not fail the build. Revisit only if a future bundle audit shows a real load-time cost.
+
 The database check used a disposable **MariaDB 11.8.6** instance. This verifies the adapter against MariaDB; it is not an Oracle MySQL server compatibility matrix. The test created its own temporary data directory, random credentials, port, and certificate, and cleaned them up after completion.
 
 Commands:

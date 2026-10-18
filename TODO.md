@@ -119,8 +119,8 @@
 - [x] 在独立仓库确认 Apache-2.0 是仓库识别到的唯一项目许可证。证据：`gh api repos/cuihairu/mistlane --jq .license.spdx_id`=Apache-2.0（2026-10-18）。
 - [x] 在独立仓库检查源码变更差异并确认无意外删除或生成物。证据：本轮提交 diff 仅新增 SPDX 头、文档段落与勾选记录，无删除、无构建产物。
 - [x] 提交独立仓库源码同步，并记录提交 SHA。证据：5f9818f（SPDX）、b075621（HTTP worker 文档与验证记录）及本勾选提交。
-- [ ] 推送已授权的独立仓库分支，并记录远端提交 SHA。
-- [ ] 检查 GitHub Actions 对推送提交的构建和文档任务结果。
+- [x] 推送已授权的独立仓库分支，并记录远端提交 SHA。证据：git pull --rebase 后推送 0893275..c7dc632 至 origin/main（2026-10-18）。
+- [x] 检查 GitHub Actions 对推送提交的构建和文档任务结果。证据：run 39098291345（c7dc632）success 6m4s；此前 run 39084967834/39084464941/39083908978 连续 success。
 - [x] 检查 GitHub 仓库许可证页面识别为 Apache License 2.0。证据：GitHub API license.spdx_id=Apache-2.0，仓库页显示 LICENSE。
 - [x] 检查 GitHub About、topics、主页链接仍与实际发布状态相符。证据：homepage=https://cuihairu.github.io/mistlane/（HTTP 200）、15 个 topics 与技术栈相符。
 
@@ -160,8 +160,8 @@
 - [ ] 对旧监控/系统信息 API 的调用方做只读盘点，决定是否需要 Prometheus/OpenTelemetry 适配。
 - [ ] 逐个筛查候选 Lua 通用工具的全局依赖、游戏术语、外部库和来源授权，再决定提取或排除。
 - [ ] 将每个决定迁移的通用模块拆成单独实现任务，写明接口、许可证来源和独立验收条件。
-- [ ] 保持游戏玩法、账号、支付、地图导航、线上配置和 SDK 不进入发布包。
-- [ ] 保持公开文件名采用 Mistlane 命名，不使用旧产品前缀；同时保留准确的 NOTICE 和第三方来源说明。
+- [x] 保持游戏玩法、账号、支付、地图导航、线上配置和 SDK 不进入发布包。证据：release-files.txt 白名单扫描无 gameplay/account/payment/billing/recharge/nav/worldmap/sdk/charge 路径；归档比对通过（2026-10-18 复核）。
+- [x] 保持公开文件名采用 Mistlane 命名，不使用旧产品前缀；同时保留准确的 NOTICE 和第三方来源说明。证据：旧产品前缀扫描零命中；未跟踪本地目录（build/licenses/uploads）不入库；NOTICE 与 THIRD_PARTY.md 在归档内。
 
 ## J. 崩溃报告、Prometheus、内部探测与性能剖析
 
