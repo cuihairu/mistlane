@@ -17,7 +17,7 @@ void redis_lua_api() {
         try { auto connection=tcp(redis_port); return true; } catch (const std::exception&) { return false; }
     });
     write(c.path("redis.lua"),redis_lua);
-    c.node("worker",worker,{"--script",c.path("redis.lua").string(),"--redis",endpoint(redis_port)});
+    auto& node=c.node("worker",worker,{"--script",c.path("redis.lua").string(),"--redis",endpoint(redis_port)});
     auto client=tcp(worker);
     auto fields=[](const std::string& value) {
         std::vector<std::string> result; std::istringstream in(value); std::string item;
@@ -34,7 +34,25 @@ void redis_lua_api() {
     eventually([&] { return client->request("status").find("7:1:7:1")!=std::string::npos; });
     equal(client->request("remove"),"removing");
     eventually([&] { return client->request("status").ends_with("|1"); });
-    redis.signal(SIGTERM); require(redis.wait()==0,"Redis shutdown failed");
+    // Freeze Redis so a stream callback stays pending across a hot reload: the
+    // callback owned by the replaced VM must be dropped, not run on closed state.
+    redis.signal(SIGSTOP);
+    equal(client->request("pend"),"pending");
+    node.signal(SIGHUP);
+    eventually([&] { return client->request("status")=="pending|pending|||"; });
+    redis.signal(SIGCONT);
+    eventually([&] { return client->request("status")=="pending|pending|||"; });
+    // Kill Redis and restart it on the same port; the worker must reconnect and serve.
+    redis.signal(SIGKILL); require(redis.wait()==137,"Redis did not exit on SIGKILL");
+    auto& replacement=c.spawn({"redis-server","--bind","127.0.0.1","--port",std::to_string(redis_port),
+        "--save","","--appendonly","no","--daemonize","no","--dir",c.temp.path.string()});
+    eventually([&] {
+        if (replacement.poll()) throw std::runtime_error("replacement Redis exited:\n"+replacement.output());
+        try { auto connection=tcp(redis_port); return true; } catch (const std::exception&) { return false; }
+    });
+    equal(client->request("reconnect"),"probing");
+    eventually([&] { auto probe=client->request("probe"); return !probe.empty() && probe.substr(0,6)!="error:"; });
+    replacement.signal(SIGTERM); require(replacement.wait()==0,"replacement Redis shutdown failed");
 }
 namespace {
 std::string random_password() {

@@ -153,7 +153,7 @@
 - [x] 为 Lua Redis Streams 添加 create_group、publish、read、ack、claim API，并对 stream 命名、消息字段、批次和待处理消息恢复行为写明契约。证据：`docs/lua.md`、`docs/zh/lua.md`。
 - [x] 为 Lua 排行榜添加原子增分/名次、查询、分页榜单和删除 API，并定义一基名次、并列顺序、精度和分页上限。证据：`docs/lua.md`、`docs/zh/lua.md`。
 - [x] 为 Streams 与排行榜 API 增加可重复执行的本地 Redis 集成验证：发布/读取字段、claim 接管 pending、ACK、排行榜增分/查询/分页/删除。证据：`tests/redis_integration.py`，通过 `MISTLANE_TEST_LOCAL_REDIS=ON` 启用。
-- [ ] 扩展 Redis 集成验证，覆盖消费组重复创建、断线重连和热重载期间旧 Lua 回调失效。
+- [x] 扩展 Redis 集成验证，覆盖消费组重复创建、断线重连和热重载期间旧 Lua 回调失效。证据：2026-10-18 `src/test_databases.cpp`/`src/test_fixtures.hpp` 扩展 redis.lua 用例——SIGSTOP 冻结 Redis 后挂起 stream 回调、SIGHUP 换 VM、SIGCONT 后旧回调被丢弃且新 VM 状态保持纯净；SIGKILL 后同端口重启 Redis，worker 自动重连并可继续收发；`mistlane test --case redis.lua` 5/5 通过，完整 ctest 12/12 绿，双语 validation.md 更新，docs:build 通过。
 - [ ] 增加 Redis TLS 与 CA/主机名校验配置；在实现前仅使用可信内网 Redis，并确保文档保持此限制说明。
 - [ ] 评估 Stream 消息幂等键、保留/裁剪策略、失败重试与死信队列配置；确认默认值前不自动裁剪或 ACK。
 - [ ] 为日志功能确定最小需求：结构化字段、级别、并发写入、轮转和采集边界；优先评估 Boost.Log 作为跨角色统一设施。

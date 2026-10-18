@@ -39,7 +39,7 @@ pnpm docs:build
 python3 tools/export.py
 ```
 
-The optional database and Redis checks are registered as `mistlane_mysql_integration` and `mistlane_redis_integration` when enabled. The Redis integration test starts a disposable local Redis server; a full CTest run then executes all enabled checks.
+The optional database and Redis checks are registered as `mistlane_mysql_integration` and `mistlane_redis_integration` when enabled. The Redis integration test starts a disposable local Redis server and covers duplicate consumer-group creation, reconnect after the server is killed and restarted on the same port, and a stream callback left pending across a Lua hot reload (the callback owned by the replaced VM must be dropped); a full CTest run then executes all enabled checks.
 
 During dependency setup, the environment's temporary filesystem refused a large OpenSSL archive. Rebuilding the vcpkg working tree on the regular disk resolved it. No port source patches or dependency downgrades were introduced for this environment issue.
 

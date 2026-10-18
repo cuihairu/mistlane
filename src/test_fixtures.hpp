@@ -54,6 +54,16 @@ return {
         state.removed = err and ("error:" .. err) or tostring(count)
       end)
       return "removing"
+    elseif payload == "pend" then
+      mistlane.stream.read("it", "workers", "worker-a", 10, function() end)
+      return "pending"
+    elseif payload == "reconnect" then
+      mistlane.stream.publish("reconnect-probe", {kind = "probe"}, function(err, id)
+        state.reconnected = err and ("error:" .. err) or id
+      end)
+      return "probing"
+    elseif payload == "probe" then
+      return state.reconnected or ""
     elseif payload == "status" then
       return (state.stream or "") .. "|" .. (state.board or "") .. "|" ..
         (state.published or "") .. "|" .. tostring(state.acked or "") .. "|" .. (state.removed or "")
