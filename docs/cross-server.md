@@ -74,7 +74,7 @@ An optional internal probe listener (`--probe-listen IP:PORT`, off by default) a
 | Prometheus metrics | Track active sessions, admission rejects, payload sizes and latency, Lua callback/tick duration, event-loop timer lag, and RSS/CPU where available | Scrape from a private metrics listener; keep labels low-cardinality (role/shard/result, never player/room IDs). |
 | Internal probe | Report process responsiveness and readiness/capacity state | Ships as `--probe-listen` with the PROBE1 protocol below. Readiness false blocks new joins but preserves existing room ownership. |
 | Crashpad | Preserve a local minidump after native crashes | Start the out-of-process handler and use a bounded local database; no upload endpoint by default. Archive matching symbols per build. |
-| Profiler | Attribute CPU and allocation cost to code paths | Add an opt-in diagnostic mode after metrics establish a reproducible workload; profiler output is not a health signal. |
+| Profiler | Attribute CPU and allocation cost to code paths | External sampler against the running process only. No in-process sampler: self-sampling spends the same CPU budget it measures. See the runbook below. |
 
 ### Internal probe protocol (PROBE1)
 
@@ -92,5 +92,19 @@ PROBE1 <nonce> readiness   -> PROBE1 <nonce> ok ready|notready active=N capacity
 - When `MISTLANE_PROBE_TOKEN` is set in the node environment, every request must carry the token as a fourth field (`PROBE1 <nonce> <token> readiness`) or the answer is `err auth`; the token never travels on the player-facing listener.
 
 Cross nodes accept upstreams as `IP:PORT[:PROBE]`. With a probe port, a cross session consults the shard once, immediately before forwarding its first room join: an explicit `notready` rejects the client with `MLC1 ERR NOT_READY`, while connection errors or malformed replies reject with `MLC1 ERR UPSTREAM`. Established rooms are never re-probed and keep flowing while the shard reports notready; upstreams without a probe port forward ungated.
+
+### Profiling and stress runs
+
+Profiler route decision (2026-10-18): use an external sampler against the running process. No in-process sampler: a sampler inside the Asio loop spends the same CPU budget it measures, so it cannot establish its own overhead. gperftools exists as a vcpkg port but stays off the link line for the same reason; reconsider it only as an opt-in diagnostic build if the target host also blocks external sampling.
+
+No sampler overhead numbers are claimed: this development sandbox cannot collect any. `perf` 7.0.14 is installed but `kernel.perf_event_paranoid=4` without `CAP_PERFMON` refuses to open events ("Failure to open any events for recording"), `strace -c -p` fails with `ptrace(PTRACE_SEIZE): Operation not permitted`, and `eu-stack`/`pprof` are not installed. Collecting sampler overhead on the target host is part of the environment drills. There, the workflow is `perf record -F 99 -g -p PID -- sleep 30` under `CAP_PERFMON` with `kernel.perf_event_paranoid<=1` (fall back to `--call-graph fp` if DWARF unwinding is too costly), symbolized via build-id matching against the archived symbols.
+
+A repeatable stress run needs no external tooling: bring up a shard plus one cross node with `--metrics-listen`, then drive it with the bundled generator and scrape `/metrics` before, during and after:
+
+```
+mistlane bot --url tcp://127.0.0.1:<cross-port> --clients 64 --count 500
+```
+
+Read `mistlane_request_seconds`, `mistlane_messages_total`, `mistlane_event_loop_lag_seconds`, RSS and admission rejections from the same scrape. Runs are only comparable when the scenario script, room layout, upstream list and generator flags are identical; otherwise the numbers are noise.
 
 The optional `/metrics` listener currently exports readiness, active sessions, admission rejections, Lua callback duration, resident memory, per-direction message and payload-byte counters (`mistlane_messages_total`, `mistlane_payload_bytes_total`), client-request latency (`mistlane_request_seconds`), upstream failures and deadline timeouts (`mistlane_upstream_errors_total`, `mistlane_upstream_timeouts_total`), and event-loop tick lag (`mistlane_event_loop_lag_seconds` plus a running max). All metrics are labeled with the role only and use fixed bucket boundaries. Crashpad can be enabled explicitly and keeps reports in a local database with uploads disabled. Crash-dump retention limits, CPU/memory profiler evaluation and overload drills in the target environment remain pending. Health-based automatic shard reassignment is excluded: a stateful room cannot safely move merely because its owner is temporarily unready. These additions provide overload evidence; they do not prove a capacity fix.
