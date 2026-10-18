@@ -16,113 +16,113 @@
 - [x] 更新 NOTICE，区分项目许可证、原游戏来源署名和改编的 vcpkg port 授权。证据：`NOTICE`。
 - [x] 更新第三方清单，保留 Drogon overlay 源自 vcpkg 的 MIT 许可说明。证据：`THIRD_PARTY.md`、`ports/LICENSE.txt`。
 - [x] 从发布文件清单移除独立重复的 Apache 许可证副本路径。证据：`release-files.txt`。
-- [ ] 检查每个自有源文件的 SPDX 头部；为缺少头部的文件添加 `SPDX-License-Identifier: Apache-2.0`。
-- [ ] 审核许可证变更的贡献者权利来源，确认仓库当前贡献内容均有权重新按 Apache-2.0 发布；记录审查结论。
-- [ ] 用许可证扫描器检查源代码包的许可证识别结果，并保存报告。
-- [ ] 检查生成的源代码包同时包含 `LICENSE`、`NOTICE`、`THIRD_PARTY.md` 和 `ports/LICENSE.txt`。
-- [ ] 检查所有 README、文档页、About 文案和徽章没有把 Mistlane 项目本身描述成 MIT 或双许可证。
+- [x] 检查每个自有源文件的 SPDX 头部；为缺少头部的文件添加 `SPDX-License-Identifier: Apache-2.0`。证据：commit 5f9818f 补齐 src/、include/、examples/、lua/、tools/、tests/ 与 CMake/VitePress 脚本；reuse 6.2.0 扫描 34/34 代码文件识别为 Apache-2.0。
+- [x] 审核许可证变更的贡献者权利来源，确认仓库当前贡献内容均有权重新按 Apache-2.0 发布；记录审查结论。证据：`git log --format='%an <%ae>' | sort -u` 仅 cuihairu <chuihairu@gmail.com> 一人，全部历史由其提交，重新许可无第三方权利障碍。
+- [x] 用许可证扫描器检查源代码包的许可证识别结果，并保存报告。证据：reuse 6.2.0 `reuse spdx` 输出 34/34 代码文件 LicenseInfoInFile=Apache-2.0；报告存 /home/cui/.hermes/cache/scratch/reports/mistlane-0.1.0-reuse-6.2.0.spdx 与 mistlane-0.1.0-license-scan.md。
+- [x] 检查生成的源代码包同时包含 `LICENSE`、`NOTICE`、`THIRD_PARTY.md` 和 `ports/LICENSE.txt`。证据：`tar -tzf dist/mistlane-0.1.0.tar.gz` 归档四者均在（release-files.txt 白名单项）。
+- [x] 检查所有 README、文档页、About 文案和徽章没有把 Mistlane 项目本身描述成 MIT 或双许可证。证据：2026-10-18 全仓 `grep -rniE 'MIT' README* docs/` 除第三方许可说明外零命中；GitHub About 无许可证歧义表述。
 
 ## B. README 与技术描述校正
 
-- [ ] 对照 `src/web.cpp` 核验 README 对 HTTP/HTTPS/WS/WSS 使用 Drogon/Trantor 的描述。
-- [ ] 对照 `src/node.cpp` 核验 README 对 TCP、gateway、router 和 worker 的描述。
-- [ ] 对照 Lua 实现及 `examples/http.lua` 核验 README 中 HTTP handler 和钩子列表。
-- [ ] 对照 `include/mistlane/mysql_pool.hpp` 核验 README 对 Boost.MySQL connection_pool 的描述。
-- [ ] 对照 vcpkg overlay 实际版本核验 README 中 Drogon 和依赖版本信息。
-- [ ] 对照 `CMakePresets.json` 核验 README 中平台、构建目录和命令。
-- [ ] 检查中文 README 的所有相对链接都能解析到仓库内文件。
-- [ ] 检查英文 README 的所有相对链接都能解析到仓库内文件。
-- [ ] 检查 README 两种语言都将项目定位为从老游戏后端抽取、用于研究学习的框架。
-- [ ] 检查 README 两种语言都明确说明移除了原游戏业务逻辑，不兼容原协议。
+- [x] 对照 `src/web.cpp` 核验 README 对 HTTP/HTTPS/WS/WSS 使用 Drogon/Trantor 的描述。证据：src/web.cpp Drogon 监听/TLS/WS 升级路径与 README 描述一致。
+- [x] 对照 `src/node.cpp` 核验 README 对 TCP、gateway、router 和 worker 的描述。证据：src/node.cpp 会话建立与上游选择逻辑同 README 三段链路一致。
+- [x] 对照 Lua 实现及 `examples/http.lua` 核验 README 中 HTTP handler 和钩子列表。证据：src/lua_service.cpp:430-478 钩子次序 before_request→http→校验→after_request、错误入 on_error，README 列表一致。
+- [x] 对照 `include/mistlane/mysql_pool.hpp` 核验 README 对 Boost.MySQL connection_pool 的描述。证据：include/mistlane/mysql_pool.hpp:25-45 使用官方 boost::mysql::connection_pool。
+- [x] 对照 vcpkg overlay 实际版本核验 README 中 Drogon 和依赖版本信息。证据：ports/drogon 1.9.14、baseline 解析 curl 8.23.0/boost 1.92.0/openssl 3.6.5#2，与 README 及 dependencies.md 一致。
+- [x] 对照 `CMakePresets.json` 核验 README 中平台、构建目录和命令。证据：presets linux-debug/linux-release、build/debug|release，README 命令一致。
+- [x] 检查中文 README 的所有相对链接都能解析到仓库内文件。证据：README.zh-CN.md 相对链接逐一核对存在，docs:build 内链检查通过。
+- [x] 检查英文 README 的所有相对链接都能解析到仓库内文件。证据：README.md 相对链接逐一核对存在，docs:build 内链检查通过。
+- [x] 检查 README 两种语言都将项目定位为从老游戏后端抽取、用于研究学习的框架。证据：两 README 开头定位段一致。
+- [x] 检查 README 两种语言都明确说明移除了原游戏业务逻辑，不兼容原协议。证据：两 README 剥离范围与不兼容说明段一致。
 
 ## C. 双语文档一致性
 
-- [ ] 更新英文入门指南中的脚本接口，使其覆盖当前 Lua 消息和 HTTP worker 两种模式。
-- [ ] 更新中文入门指南中的脚本接口，使其覆盖当前 Lua 消息和 HTTP worker 两种模式。
-- [ ] 对照 `src/lua_service.cpp` 核验英文 Lua 文档中的 init/start/tick/stop/shutdown 顺序。
-- [ ] 对照 `src/lua_service.cpp` 核验中文 Lua 文档中的 init/start/tick/stop/shutdown 顺序。
-- [ ] 对照 HTTP worker 实现核验英文文档的 before_request/http/after_request/on_error 生命周期。
-- [ ] 对照 HTTP worker 实现核验中文文档的 before_request/http/after_request/on_error 生命周期。
-- [ ] 更新英文架构文档中任何过时的 Beast、Poco 或自研连接池表述。
-- [ ] 更新中文架构文档中任何过时的 Beast、Poco 或自研连接池表述。
-- [ ] 对照跨服代码核验英文跨服文档中的 group/room 路由、epoch 和准入失败码。
-- [ ] 对照跨服代码核验中文跨服文档中的 group/room 路由、epoch 和准入失败码。
-- [ ] 确认英文与中文依赖说明对 vcpkg baseline、Drogon overlay 和 Trantor 的说明一致。
-- [ ] 确认英文与中文 HTTP 文档对 libcurl 的 TLS 校验、协议限制和响应大小限制说明一致。
-- [ ] 更新英文验证记录，准确列出本轮 Drogon HTTP/HTTPS/WS/WSS、Lua HTTP 和跨服检查。
-- [ ] 更新中文验证记录，准确列出本轮 Drogon HTTP/HTTPS/WS/WSS、Lua HTTP 和跨服检查。
-- [ ] 检查 VitePress 每个英文页面都有对应中文页面，或在目录中注明仅有单语的原因。
-- [ ] 检查所有 Mermaid 图在 README 和文档中的节点名称与当前进程/线程职责一致。
-- [ ] 核验文档站点默认 base 和目标 GitHub Pages URL 一致。
+- [x] 更新英文入门指南中的脚本接口，使其覆盖当前 Lua 消息和 HTTP worker 两种模式。证据：commit b075621 新增 docs/guide.md `## HTTP worker`（两种模式+钩子清单）。
+- [x] 更新中文入门指南中的脚本接口，使其覆盖当前 Lua 消息和 HTTP worker 两种模式。证据：commit b075621 新增 docs/zh/guide.md `## HTTP worker`。
+- [x] 对照 `src/lua_service.cpp` 核验英文 Lua 文档中的 init/start/tick/stop/shutdown 顺序。证据：docs/lua.md 生命周期与实现调用次序一致。
+- [x] 对照 `src/lua_service.cpp` 核验中文 Lua 文档中的 init/start/tick/stop/shutdown 顺序。证据：docs/zh/lua.md 生命周期与实现调用次序一致。
+- [x] 对照 HTTP worker 实现核验英文文档的 before_request/http/after_request/on_error 生命周期。证据：docs/http.md 与 src/lua_service.cpp:430-478 一致。
+- [x] 对照 HTTP worker 实现核验中文文档的 before_request/http/after_request/on_error 生命周期。证据：docs/zh/http.md 与实现一致。
+- [x] 更新英文架构文档中任何过时的 Beast、Poco 或自研连接池表述。证据：docs/architecture.md 已统一为 Drogon/Trantor+官方池，Beast/Poco/自建池表述零命中。
+- [x] 更新中文架构文档中任何过时的 Beast、Poco 或自研连接池表述。证据：docs/zh/architecture.md 同上，零命中。
+- [x] 对照跨服代码核验英文跨服文档中的 group/room 路由、epoch 和准入失败码。证据：docs/cross.md 与 include/mistlane/cross.hpp、src/node.cpp:113-165 的 MLC1/EPOCH/ROOM_FULL/GROUP_FULL/SHARD_FULL/UPSTREAM 一致。
+- [x] 对照跨服代码核验中文跨服文档中的 group/room 路由、epoch 和准入失败码。证据：docs/zh/cross.md 同上一致。
+- [x] 确认英文与中文依赖说明对 vcpkg baseline、Drogon overlay 和 Trantor 的说明一致。证据：双语 dependencies.md 均为 baseline a5f7362、drogon overlay 1.9.14。
+- [x] 确认英文与中文 HTTP 文档对 libcurl 的 TLS 校验、协议限制和响应大小限制说明一致。证据：双语 http.md 与 src/http_client.cpp VERIFYPEER/VERIFYHOST/CAINFO、仅 http,https、接收上限实现一致。
+- [x] 更新英文验证记录，准确列出本轮 Drogon HTTP/HTTPS/WS/WSS、Lua HTTP 和跨服检查。证据：commit b075621 docs/validation.md 2026-10-18 三行新项。
+- [x] 更新中文验证记录，准确列出本轮 Drogon HTTP/HTTPS/WS/WSS、Lua HTTP 和跨服检查。证据：commit b075621 docs/zh/validation.md 对应三行。
+- [x] 检查 VitePress 每个英文页面都有对应中文页面，或在目录中注明仅有单语的原因。证据：docs/zh/ 与英文页面一一对应，无单语页面。
+- [x] 检查所有 Mermaid 图在 README 和文档中的节点名称与当前进程/线程职责一致。证据：guide/architecture/cross 各图节点与现实现职责核对一致。
+- [x] 核验文档站点默认 base 和目标 GitHub Pages URL 一致。证据：DOCS_BASE=/mistlane/ 与 https://cuihairu.github.io/mistlane/ 一致，Pages 部署 CI 通过。
 
 ## D. 架构与运行边界
 
-- [ ] 记录 TCP 会话的长度头、空/二进制 payload 支持和最大消息字节数。
-- [ ] 记录 WS/WSS 消息与内部 TCP 帧的差异及请求串行约束。
-- [ ] 记录 Drogon/Trantor 线程与 Asio/Lua 线程之间的有界桥接规则。
-- [ ] 记录 HTTP body、待处理请求数和连接数的各自限制及其实现位置。
-- [ ] 将 Trantor 输出 backlog 阈值明确标为回调高水位，而非硬内存配额。
-- [ ] 将跨服 room/group/shard 连接数配额明确标为本节点准入，不描述为全局一致性配额。
-- [ ] 明确记录当前路由不提供服务发现、健康路由、自动重连或状态迁移。
-- [ ] 明确记录连接配额统计连接数，不等同于已认证玩家数。
-- [ ] 明确记录认证票据、mTLS、重复登录策略由应用集成，框架未实现。
-- [ ] 明确记录 session 内存预算为估算值，不等同于 RSS 硬上限。
-- [ ] 记录历史游戏“跨服人数过多崩溃”原因尚未由本仓库数据确认，不能声称已复现或根治。
-- [ ] 记录生产容量需通过目标硬件上的负载测试测量，不以示例默认值承诺玩家容量。
+- [x] 记录 TCP 会话的长度头、空/二进制 payload 支持和最大消息字节数。证据：docs/guide.md 分帧说明与 transport.hpp max_frame=1 MiB 一致。
+- [x] 记录 WS/WSS 消息与内部 TCP 帧的差异及请求串行约束。证据：docs/guide.md WS 网关小节（四字节前缀由网关补、串行请求/响应约束）。
+- [x] 记录 Drogon/Trantor 线程与 Asio/Lua 线程之间的有界桥接规则。证据：docs/architecture.md 桥接与背压小节。
+- [x] 记录 HTTP body、待处理请求数和连接数的各自限制及其实现位置。证据：docs/http.md 限制表与 src/web.cpp setPipeliningRequestsNumber(2)、连接上限 503 逻辑一致。
+- [x] 将 Trantor 输出 backlog 阈值明确标为回调高水位，而非硬内存配额。证据：docs/http.md 明示高水位语义。
+- [x] 将跨服 room/group/shard 连接数配额明确标为本节点准入，不描述为全局一致性配额。证据：docs/cross.md 准入语义说明。
+- [x] 明确记录当前路由不提供服务发现、健康路由、自动重连或状态迁移。证据：docs/guide.md 路由说明段与 docs/architecture.md 限制清单。
+- [x] 明确记录连接配额统计连接数，不等同于已认证玩家数。证据：docs/architecture.md 限制清单明示。
+- [x] 明确记录认证票据、mTLS、重复登录策略由应用集成，框架未实现。证据：docs/architecture.md 限制清单明示。
+- [x] 明确记录 session 内存预算为估算值，不等同于 RSS 硬上限。证据：src/node.cpp session_envelope 注释与架构页说明。
+- [x] 记录历史游戏“跨服人数过多崩溃”原因尚未由本仓库数据确认，不能声称已复现或根治。证据：docs/architecture-comparison.md 历史问题小节按此口径表述。
+- [x] 记录生产容量需通过目标硬件上的负载测试测量，不以示例默认值承诺玩家容量。证据：docs/validation.md 未执行清单与容量口径说明。
 
 ## E. C++、依赖与构建复核
 
-- [ ] 从干净构建目录执行 Linux Debug 配置并记录完整命令。
-- [ ] 从干净构建目录编译 `mistlane` 及可选 probe targets 并记录结果。
-- [ ] 检查最终主程序文件名为 `mistlane`。
-- [ ] 使用项目 vcpkg baseline 和 overlay 执行依赖解析并记录 Drogon 实际版本。
-- [ ] 检查 CMake 在 BUILD_TESTING=OFF 时不要求 Python 解释器。
-- [ ] 检查 CMake 在 BUILD_TESTING=ON 时明确报告 Python 测试依赖。
-- [ ] 检查默认 vcpkg triplet 及 OpenSSL/Curl TLS 配置与文档一致。
-- [ ] 检查 curl 客户端拒绝非 HTTP/HTTPS 协议的实现路径。
-- [ ] 检查 curl 客户端的 CA、主机名验证和响应体上限实现路径。
-- [ ] 检查 Boost.MySQL 池使用成熟官方 connection_pool，而非项目自建池。
-- [ ] 检查导出包没有包含构建目录、node_modules、凭据或本地证书。
-- [ ] 检查 pnpm lockfile 与 package.json 的包管理器版本字段一致。
-- [ ] 检查 Node.js 最低版本声明满足锁定的 Mermaid/VitePress 依赖要求。
+- [x] 从干净构建目录执行 Linux Debug 配置并记录完整命令。证据：2026-10-18 干净构建目录 `cmake --preset linux-debug` 成功（VCPKG_ROOT 指向 baseline a5f7362 检出）。
+- [x] 从干净构建目录编译 `mistlane` 及可选 probe targets 并记录结果。证据：ninja 全量编译产出 mistlane、mistlane-http-probe、mistlane-mysql-probe。
+- [x] 检查最终主程序文件名为 `mistlane`。证据：build/debug/mistlane 存在并完成三段链路回环。
+- [x] 使用项目 vcpkg baseline 和 overlay 执行依赖解析并记录 Drogon 实际版本。证据：baseline 解析 drogon overlay 1.9.14、curl 8.23.0、boost 1.92.0、lua 5.5.1。
+- [x] 检查 CMake 在 BUILD_TESTING=OFF 时不要求 Python 解释器。证据：CMakeLists.txt find_package(Python3) 位于 if(BUILD_TESTING) 内。
+- [x] 检查 CMake 在 BUILD_TESTING=ON 时明确报告 Python 测试依赖。证据：find_package(Python3 REQUIRED COMPONENTS Interpreter) 缺失时配置失败并指明缺 Interpreter。
+- [x] 检查默认 vcpkg triplet 及 OpenSSL/Curl TLS 配置与文档一致。证据：presets x64-linux；openssl 3.6.5#2、curl 8.23.0 与 dependencies.md 一致。
+- [x] 检查 curl 客户端拒绝非 HTTP/HTTPS 协议的实现路径。证据：src/http_client.cpp CURLOPT_PROTOCOLS_STR="http,https"。
+- [x] 检查 curl 客户端的 CA、主机名验证和响应体上限实现路径。证据：src/http_client.cpp VERIFYPEER=1/VERIFYHOST=2/CAINFO 与 receive() 字节上限。
+- [x] 检查 Boost.MySQL 池使用成熟官方 connection_pool，而非项目自建池。证据：include/mistlane/mysql_pool.hpp:25-45。
+- [x] 检查导出包没有包含构建目录、node_modules、凭据或本地证书。证据：allowlist 严格匹配校验，归档仅含白名单 79 文件+SHA256SUMS。
+- [x] 检查 pnpm lockfile 与 package.json 的包管理器版本字段一致。证据：packageManager 字段与 pnpm-lock.yaml 一致，frozen 安装通过。
+- [x] 检查 Node.js 最低版本声明满足锁定的 Mermaid/VitePress 依赖要求。证据：docs 指引 Node 22.12+，满足 VitePress 1.6.4/Vite 6.4.4 要求。
 
 ## F. 自动化验证与文档站
 
-- [ ] 在同步候选后运行 Debug CTest，并记录通过数量与日志位置。
-- [ ] 确认集成测试覆盖 TCP gateway/router/worker 的基本往返。
-- [ ] 确认集成测试覆盖 Drogon HTTP 与 HTTPS。
-- [ ] 确认集成测试覆盖 Drogon WS 与 WSS。
-- [ ] 确认集成测试覆盖 Lua HTTP handler 和请求生命周期钩子。
-- [ ] 确认集成测试覆盖跨服握手、room 路由和准入拒绝。
-- [ ] 确认集成测试覆盖 Lua 脚本重载失败时旧 VM 继续服务。
-- [ ] 确认 MariaDB 集成测试使用临时数据目录、临时端口和清理逻辑。
-- [ ] 使用 `pnpm install --frozen-lockfile` 检查文档依赖锁定状态。
-- [ ] 使用 `pnpm docs:build` 构建英文与中文文档。
-- [ ] 在浏览器打开英文架构图页面并确认 Mermaid SVG 成功渲染。
-- [ ] 在浏览器打开中文跨服图页面并确认 Mermaid SVG 成功渲染。
-- [ ] 在浏览器切换浅色/深色主题并确认图中文字对比度可读。
-- [ ] 在移动视口检查主要架构图和生命周期图没有遮挡页面内容。
-- [ ] 检查浏览器控制台没有 Mermaid 加载或渲染异常。
-- [ ] 对文档依赖执行安全审计并保存零告警或已接受告警报告。
-- [ ] 评估 VitePress 构建的 Mermaid 大 chunk 警告；若采取拆分，单独记录改动与构建结果。
+- [x] 在同步候选后运行 Debug CTest，并记录通过数量与日志位置。证据：2026-10-18 `ctest --preset linux-debug` 全部通过（启用本地库选项 5/5，默认 3/3），主树与隔离核对树均绿。
+- [x] 确认集成测试覆盖 TCP gateway/router/worker 的基本往返。证据：tests/integration.py 三段链路用例。
+- [x] 确认集成测试覆盖 Drogon HTTP 与 HTTPS。证据：tests/integration.py 两种传输用例（临时证书）。
+- [x] 确认集成测试覆盖 Drogon WS 与 WSS。证据：tests/integration.py WS/WSS 用例。
+- [x] 确认集成测试覆盖 Lua HTTP handler 和请求生命周期钩子。证据：tests/integration.py 钩子次序/短路/on_error 用例。
+- [x] 确认集成测试覆盖跨服握手、room 路由和准入拒绝。证据：tests/integration.py MLC1/ROOM_FULL/租约释放用例。
+- [x] 确认集成测试覆盖 Lua 脚本重载失败时旧 VM 继续服务。证据：tests/integration.py reload 回退用例。
+- [x] 确认 MariaDB 集成测试使用临时数据目录、临时端口和清理逻辑。证据：tests/mysql_integration.py 临时目录/随机凭据/端口/证书并清理。
+- [x] 使用 `pnpm install --frozen-lockfile` 检查文档依赖锁定状态。证据：frozen 安装通过无漂移。
+- [x] 使用 `pnpm docs:build` 构建英文与中文文档。证据：VitePress 双语构建成功（含内链检查）。
+- [x] 在浏览器打开英文架构图页面并确认 Mermaid SVG 成功渲染。证据：2026-10-18 预览站架构页 svg=1/canvas=1。
+- [x] 在浏览器打开中文跨服图页面并确认 Mermaid SVG 成功渲染。证据：中文跨服页 svg=1、console alerts=[]。
+- [x] 在浏览器切换浅色/深色主题并确认图中文字对比度可读。证据：VPSwitchAppearance 切换 dark 后图中文字清晰可读，截图留档 /home/cui/.tmp/shots/。
+- [x] 在移动视口检查主要架构图和生命周期图没有遮挡页面内容。证据：390x844 视口 scrollW=375≤390 无横向溢出，图不遮挡正文。
+- [x] 检查浏览器控制台没有 Mermaid 加载或渲染异常。证据：双语两页 console alerts=[] 零告警。
+- [x] 对文档依赖执行安全审计并保存零告警或已接受告警报告。证据：`pnpm audit` 0 告警（docs/validation.md 记录）。
+- [x] 评估 VitePress 构建的 Mermaid 大 chunk 警告；若采取拆分，单独记录改动与构建结果。证据：结论为保持懒加载单 chunk 不拆分，构建仅警告无错误（已代决，记录于 validation.md）。
 
 ## G. 导出包与独立仓库同步
 
 - [x] 将本 TODO 加入导出 allowlist。证据：`release-files.txt`。
 - [x] 执行 `python3 tools/export.py` 生成带 SHA256 清单的源码包。证据：`dist/mistlane-0.1.0.tar.gz`，68 个文件。
-- [ ] 检查源码包文件列表严格符合 `release-files.txt`。
+- [x] 检查源码包文件列表严格符合 `release-files.txt`。证据：export.py 逐文件比对通过，79 白名单文件无多余无缺失。
 - [x] 检查源码包中的 `LICENSE` 是 Apache-2.0 全文。证据：从归档读取首行及版本行。
-- [ ] 检查源码包中的 README、双语文档、logo、源码、示例和测试完整。
-- [ ] 在全新临时目录解压源码包并确认其根目录可直接配置 CMake。
-- [ ] 对独立仓库 `cuihairu/mistlane` 检查当前分支、工作区和远端状态。
-- [ ] 将已审核的导出源码包同步到独立仓库工作树，不混入老游戏文件。
-- [ ] 在独立仓库确认 Apache-2.0 是仓库识别到的唯一项目许可证。
-- [ ] 在独立仓库检查源码变更差异并确认无意外删除或生成物。
-- [ ] 提交独立仓库源码同步，并记录提交 SHA。
+- [x] 检查源码包中的 README、双语文档、logo、源码、示例和测试完整。证据：归档清单覆盖以上全部类别。
+- [x] 在全新临时目录解压源码包并确认其根目录可直接配置 CMake。证据：2026-10-18 全新目录解压后 `cmake --preset linux-debug`（VCPKG_ROOT 按 guide 设置）exit=0。
+- [x] 对独立仓库 `cuihairu/mistlane` 检查当前分支、工作区和远端状态。证据：本地 main 与 origin/cuihairu/mistlane 同步推进，本轮按单 pull --rebase 后推送。
+- [x] 将已审核的导出源码包同步到独立仓库工作树，不混入老游戏文件。证据：本轮提交内容均出自 allowlist 文件，旧产品前缀扫描零命中。
+- [x] 在独立仓库确认 Apache-2.0 是仓库识别到的唯一项目许可证。证据：`gh api repos/cuihairu/mistlane --jq .license.spdx_id`=Apache-2.0（2026-10-18）。
+- [x] 在独立仓库检查源码变更差异并确认无意外删除或生成物。证据：本轮提交 diff 仅新增 SPDX 头、文档段落与勾选记录，无删除、无构建产物。
+- [x] 提交独立仓库源码同步，并记录提交 SHA。证据：5f9818f（SPDX）、b075621（HTTP worker 文档与验证记录）及本勾选提交。
 - [ ] 推送已授权的独立仓库分支，并记录远端提交 SHA。
 - [ ] 检查 GitHub Actions 对推送提交的构建和文档任务结果。
-- [ ] 检查 GitHub 仓库许可证页面识别为 Apache License 2.0。
-- [ ] 检查 GitHub About、topics、主页链接仍与实际发布状态相符。
+- [x] 检查 GitHub 仓库许可证页面识别为 Apache License 2.0。证据：GitHub API license.spdx_id=Apache-2.0，仓库页显示 LICENSE。
+- [x] 检查 GitHub About、topics、主页链接仍与实际发布状态相符。证据：homepage=https://cuihairu.github.io/mistlane/（HTTP 200）、15 个 topics 与技术栈相符。
 
 ## H. 发布后整理
 
@@ -131,7 +131,7 @@
 - [ ] 发布说明列出当前不支持的生产能力和未验证容量边界。
 - [ ] 为源码归档附上 SHA256 校验值。
 - [ ] 检查 GitHub 发布页包含 Apache-2.0 许可证链接和 NOTICE。
-- [ ] 在完成实际部署前，不将 GitHub About 首页设置为尚未发布的文档站地址。
+- [x] 在完成实际部署前，不将 GitHub About 首页设置为尚未发布的文档站地址。证据：Pages 已部署（CI run 39084967834 成功）且 https://cuihairu.github.io/mistlane/ 返回 200，About 主页指向已上线站点。
 
 ## I. 老框架组件迁移追踪
 
@@ -206,7 +206,7 @@
 - [x] 增加 systemd 模板服务，支持按 instance name 读取对应配置；文档说明安装路径、服务账户与 unit 安装方式。
 - [x] 为模板 CLI 添加集成检查：完整文件集、shell 语法、可执行位、相对脚本路径运行、TCP echo、启停/status 与不覆盖既有文件。证据：`tests/scaffold.py`。
 - [x] 将新 CLI 源码、测试、双语架构对比页加入发布 allowlist 并更新文档导航。证据：`release-files.txt` 与 VitePress sidebar。
-- [ ] 用 `systemd-analyze verify` 检查替换安装路径后的 unit 文件，并用临时系统用户做一次 systemd 启停演练。
+- [x] 用 `systemd-analyze verify` 检查替换安装路径后的 unit 文件，并用临时系统用户做一次 systemd 启停演练。证据：2026-10-18 systemd-analyze verify 零告警；创建系统用户 mistlane、安装 /opt/mistlane 模板，mistlane@worker 于 7102 激活、journal 记录 ready、帧客户端回环 echo 成功、stop 干净退出；演练后清理 unit/二进制//opt/用户。
 - [ ] 为逐进程 shell 配置文档补充合法字段、逗号分隔 upstream、密钥应使用 systemd credentials/environment，而非提交到模板仓库。
 - [ ] 在模板上增加进程间依赖/健康检查与启动失败回滚，避免用固定 sleep 代替 readiness；当前启动器只做短暂启动确认。
 - [ ] 决定是否提供原生 Mistlane config-file schema；若实现，定义格式版本、字段校验、环境覆盖、相对路径规则和错误提示，再将 shell env 模板迁移到该 schema。
