@@ -9,7 +9,7 @@
 | WebSocket / 安全 WebSocket | 替换 | WS/WSS 由 Drogon/Trantor 处理，不迁移手写握手、掩码或控制帧解析。 |
 | HTTP 服务端 | 替换 | Drogon 处理 HTTP/HTTPS 和 Lua 请求处理器；不保留旧 HTTP API。 |
 | HTTP 客户端 | 替换 | 为 C++ 调用者提供有界同步 libcurl 适配器；不得在事件循环回调中阻塞调用。 |
-| Lua VM 与回调 | 重新实现 | 用模块 table 及明确的 init/start/message/http/tick/stop/shutdown 钩子替代旧全局回调；单 VM 单线程执行。 |
+| Lua VM 与回调 | 重新实现 | 用模块 table 及明确的 init/start/message/http/tick/stop/shutdown 钩子替代旧全局回调，逐项映射见[Lua 回调核对](#旧-lua-回调核对)；单 VM 单线程执行。 |
 | Lua 死循环检测 | 部分替换 | 指令计数 hook 能发现常见失控脚本，但不是硬 CPU 配额或内存沙箱。 |
 | gateway / router / worker 拓扑 | 重新实现 | 有通用 TCP 转发和 worker 执行；没有账号身份、玩家亲和路由或旧服务注册协议。 |
 | 跨服房间路由 | 新的最小实现 | `cross`/`shard` 提供 group/room 固定路由、epoch 检查和本地硬准入；不提供全局配额、服务发现或玩家状态迁移。 |
@@ -41,6 +41,27 @@
 | 退出入口 | `sigwait` 返回后 `shutdown()` 置状态位、停主 server，然后每 100ms 轮询 `serverConns_` 排空，每秒打日志，超过 30 秒强制移除残余连接。 | 信号回调调用 `stop()`：清除就绪位、关闭 acceptor、停 Lua tick、停 Redis 与 web 栈，按顺序停止每个会话，再执行 Lua `shutdown` 回调；每个回调都有包装，单点失败只打日志并继续收尾。 | 重新实现；无固定强杀窗口 |
 | IO/线程收尾 | 排空循环后 post `io_service::stop`，逐个对附加 server 调 `shutdown(0)`，最后 `join_all`。 | 会话先完成取消处理器再销毁 `Node` 状态；io context 自然排空，可选工作线程被 join。 | 顺序等价、机制不同 |
 | 异常路径 | 初始化步骤逐级返回布尔并以 `EXIT_FAILURE` 退出；shutdown 期间的异常没有包装。 | 构造与 CLI 失败在 `main` 捕获后非零退出；web 启动异常被捕获、停机后重抛；stop/shutdown 回调捕获并打日志，不会从循环中抛穿。 | 强于旧实现 |
+
+## 旧 Lua 回调核对
+
+旧 `LuaCallHandler` 全局回调面到 Mistlane `LuaService` 钩子的逐项映射（2026-10-18 双向核对两份源码）：
+
+| 旧全局回调 | 旧签名 | Mistlane 对应项 | 结论 |
+|---|---|---|---|
+| `L_initServer` | `(processIndex)`，启动时按进程编号调用一次 | 模块钩子 `init(context)`；进程身份由 `ServiceContext` table 提供（role、transport、route epoch），没有数字编号 | 契约不同的重新实现 |
+| *启动阶段* | 不存在；监听器启动后直接开始 accept | `start()` 钩子在 bind 之后、首次 accept 之前执行 | 新增的时序能力 |
+| `L_doTick` | `(wallClockMilliseconds)`，周期由调用方掌握 | `tick()` 绑定固定 100ms 的 steady 计时器，无参数 | 重新实现；接口面更窄 |
+| `L_closeServer` | 在退出路径调用 | 拆为停机信号上的 `stop()` 与最终 Lua 收尾的 `shutdown()` | 拆成两个阶段 |
+| `L_ClientMsg` / `L_ServerMsg` / `L_PreMsg` / `L_LoggerMsg` / `L_OMMsg` / `L_PayMsg` / `L_StateMsg` / `L_onRPC` | 按消息来源分派 `(id, payload)`，以整数码表示结果 | 单一 `message(payload, route)` 返回字符串；没有按来源分派，也没有 RPC 通道 | 以更小契约定义替换 |
+| `L_clientOn` / `L_clientOff` / `L_connected` / `L_disConnected` | 带 lightuserdata 连接句柄的会话连接/断开事件 | 未迁移；会话由 C++ `Session` 对象持有，Lua 无逐连接回调 | 未迁移（刻意） |
+| `L_Register` / `L_FirstMsg` / `L_Response` | 基于 lightuserdata 连接的服务间注册、首个报文与响应处理 | 未迁移；上游为直连，无注册协议 | 未迁移（见服务连接注册行） |
+| `L_HttpRequest` | `(uri, params, ip)` 返回字符串，默认 `"{}"` | `http(request)` 返回响应 table（status/headers/body），并带 `before_request`/`on_error` 钩子 | 改为结构化 table |
+| `L_payCallBack` | `(uri, params, ip)` | 排除；支付属于应用域 | 排除 |
+| `L_onUdpClientMsg` / `L_onUdpServerMsg` | UDP 数据报回调 | 未迁移（见 UDP 行） | 未迁移 |
+| `L_SaveTearDown` / `L_OnlineTime` | 退出前存档与在线时长上报 | 未迁移；持久化与运维域均排除 | 未迁移 |
+| VM 与错误模型 | `LuaContext` 配 `debug.traceback` 错误处理器、末位整数码约定、`DeadLoopMonitor` 监视线程、`lua_newthread` 局部上下文 | 单个 VM 持有注册表引用的模块 table，用异常消息替代返回码，指令计数 hook，不使用 Lua 线程 | 替换 |
+| 加载的库 | base、package、table、os，另有 `appendLibPath` | 仅 base、string、table、math | 受限沙箱 |
+| 热重载 | 不存在 | `SIGHUP` 只有在新模块加载并初始化成功才重建替换 VM，否则保留旧 VM | 新能力 |
 
 ## 状态定义
 

@@ -9,7 +9,7 @@ This ledger distinguishes architectural ideas carried forward from code that has
 | WebSocket / secure WebSocket | Replaced | Drogon/Trantor handles WS/WSS; no handwritten handshake, masking or control-frame parser is carried over. |
 | HTTP server | Replaced | Drogon handles HTTP/HTTPS and Lua request handlers. The old HTTP server API is not retained. |
 | HTTP client | Replaced | A bounded synchronous libcurl adapter is provided for C++ callers; it must not block an event-loop callback. |
-| Embedded Lua and callbacks | Reimplemented | A module table and explicit init/start/message/http/tick/stop/shutdown hooks replace fixed legacy global callbacks. The VM remains single-threaded. |
+| Embedded Lua and callbacks | Reimplemented | A module table and explicit init/start/message/http/tick/stop/shutdown hooks replace fixed legacy global callbacks; see the [Lua callback audit](#legacy-lua-callback-audit). The VM remains single-threaded. |
 | Lua infinite-loop detection | Partially replaced | An instruction-count hook catches common runaway scripts. It is not a hard CPU or memory sandbox. |
 | Gateway / router / worker topology | Reimplemented | Generic TCP forwarding and worker execution exist. Account identity, player affinity and old service registration are absent. |
 | Cross-server room routing | New minimal implementation | `cross`/`shard` provides deterministic group/room routing, epoch checks and local hard admission. It is not global admission, service discovery or player-state migration. |
@@ -41,6 +41,27 @@ Item-by-item comparison of the legacy `FogsProcess`/`d_*` mains against Mistlane
 | Shutdown entry | `sigwait` returns and `shutdown()` sets a state flag, stops the main server, then polls every 100 ms for `serverConns_` to drain, logging per second and force-removing leftovers after 30 seconds. | The signal handler calls `stop()`: readiness is cleared, the acceptor closes, the Lua tick stops, Redis and the web stack stop, every session is stopped in order, and the Lua `shutdown` callback runs; each callback is wrapped so one failure logs and shutdown continues. | Reimplemented; no fixed force-kill window |
 | IO/thread teardown | After the drain loop an `io_service::stop` is posted, each extra server gets `shutdown(0)`, then `join_all`. | Sessions finish their cancellation handlers before `Node` state is destroyed; the io context drains and the optional worker thread is joined. | Equivalent ordering via a different mechanism |
 | Exception paths | Initialization steps return booleans and exit with `EXIT_FAILURE`; shutdown-time exceptions are not wrapped. | Constructor and CLI failures are caught in `main` and exit non-zero; web startup errors are captured, stop the node, then rethrown; stop/shutdown callbacks catch and log instead of unwinding out of the loop. | Stronger than legacy |
+
+## Legacy Lua callback audit
+
+Mapping of the legacy `LuaCallHandler` global-callback surface to Mistlane `LuaService` hooks (checked against both sources on 2026-10-18):
+
+| Legacy global callback | Legacy signature | Mistlane counterpart | Verdict |
+|---|---|---|---|
+| `L_initServer` | `(processIndex)` called once at startup with the process index | `init(context)` module hook; process identity is a `ServiceContext` table (role, transport, route epoch), no numeric index | Reimplemented with a different contract |
+| *(start phase)* | None; servers began accepting straight after listener start | `start()` hook runs after binding but before the first accept | New ordering capability |
+| `L_doTick` | `(wallClockMilliseconds)`, interval owned by the caller | `tick()` on a fixed 100 ms steady timer, no argument | Reimplemented; simplified surface |
+| `L_closeServer` | Called from the shutdown path | Split into `stop()` on the stop signal and `shutdown()` for final Lua teardown | Split into two phases |
+| `L_ClientMsg` / `L_ServerMsg` / `L_PreMsg` / `L_LoggerMsg` / `L_OMMsg` / `L_PayMsg` / `L_StateMsg` / `L_onRPC` | `(id, payload)` per message source with an integer return code | Single `message(payload, route)` returning a string; no per-source dispatch and no RPC channel | Replaced with a smaller contract |
+| `L_clientOn` / `L_clientOff` / `L_connected` / `L_disConnected` | Session connect/disconnect events with lightuserdata connection handles | Not migrated; sessions are owned by C++ `Session` objects and Lua has no per-connection callbacks | Not migrated (deliberate) |
+| `L_Register` / `L_FirstMsg` / `L_Response` | Inter-server registration, first packet and response handlers on lightuserdata connections | Not migrated; upstreams are direct connections with no registration protocol | Not migrated (see peer-registration row) |
+| `L_HttpRequest` | `(uri, params, ip)` returning a string, `"{}"` by default | `http(request)` returning a response table (status/headers/body) with `before_request`/`on_error` hooks | Replaced with structured tables |
+| `L_payCallBack` | `(uri, params, ip)` | Excluded; payment belongs to the application domain | Excluded |
+| `L_onUdpClientMsg` / `L_onUdpServerMsg` | UDP datagram callbacks | Not migrated (see UDP row) | Not migrated |
+| `L_SaveTearDown` / `L_OnlineTime` | Save-on-shutdown and uptime reporting | Not migrated; persistence and operations domains are excluded | Not migrated |
+| VM and error model | `LuaContext` with `debug.traceback` handler, last-return-integer code convention, `DeadLoopMonitor` thread, local contexts via `lua_newthread` | Single VM holding a registry-referenced module table, exception messages instead of return codes, an instruction-count hook, no Lua threads | Replaced |
+| Loaded libraries | base, package, table, os plus `appendLibPath` | base, string, table, math only | Restricted sandbox |
+| Hot reload | Not present | `SIGHUP` rebuilds and swaps the VM only when the new module loads and initializes, otherwise the previous VM is retained | New capability |
 
 ## Acceptance meaning
 
