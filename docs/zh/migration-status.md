@@ -25,7 +25,7 @@
 | 指标、进程监控和系统信息 | 部分完成 | 旧系统信息调用点已于 2026-10-18 盘点：`d_common/sysinfo` 的存活面只有六个 main 里的启动布尔 `initSysCounter()` 和给 d_push 阻塞线程池定容的 `gCpuNum`；CPU 利用率采样（`getCpuUtil`）无存活调用方（`gmGetSysInfo` 整体被注释）；`L_StateMsg`/`L_OmMsg` 承载应用状态与运营消息，不是系统指标。Mistlane 因此保留可选私有 `/metrics` 端点（就绪状态、活动会话、准入拒绝、Lua 回调耗时、RSS）作为 Prometheus 面；CPU/内存观测继续交给节点级采集（cgroup、node_exporter），在出现具体仪表盘需求前不引入 OpenTelemetry 适配或进程内 sysinfo API。内部健康端点、完整流量/tick 指标、生产仪表盘和压测仍待完成。 |
 | 崩溃报告 | 部分完成 | 可选启动 Crashpad handler，将转储写入本地数据库并关闭上传。转储生成验证、保留策略、符号归档和生产部署仍待验证。 |
 | 加密、压缩、URL、序列化工具 | 未整体迁移 | 排除游戏专用工具和自定义协议；遇到明确需求时使用维护中的库及显式格式。 |
-| 通用 Lua 工具 | 选择性提取 | 目前只审核并提取 MinHeap；其他工具逐个检查依赖、行为、验证和来源。 |
+| 通用 Lua 工具 | 选择性提取 | 目前只审核并提取 MinHeap。其余 23 个 `game/Util` 候选已于 2026-10-18 逐个筛查：`JSON.lua` 为 GPL 授权的 JSON4Lua（与 Apache-2.0 不兼容，硬性排除）；`Aes.lua`、`Rsa.lua`、`SnapShotDump.lua`、`CacheCode.lua` 依赖外部 Lua 库（luacrypto、lua-openssl、snapshot、sproto `Data` 模块）或在源码中提交密钥；`Logger.lua`、`log.lua`、`SystemUtil.lua`、`Print.lua`、`MessageUtil.lua`、`StringUtil.lua`、`TableUtil.lua`、`Date.lua` 依赖旧 `C_*` 日志/时间全局（`Print` 还覆写全局 `print`）；`DropTableUtil.lua`、`ServerUtil.lua`、`TimeExecute.lua`、`Timer.lua`/`TimerQueue.lua` 属游戏领域、旧拓扑或已定案的 timer 面；`Math.lua` 需要 `bit32`（沙箱不开放）；`VerificationUtil.lua`、`TimeUtil.lua` 为应用层助手。当前不提取任何文件；`Base64`、`StringUtil`、`TableUtil`、`Sort` 等通用形状候选在出现具体消费方时再逐个带测试与来源审查。 |
 | 玩法、账号、支付、寻路、缓存表、运维及 SDK | 排除 | 属于游戏应用、私有部署或第三方集成，不属于通用框架迁移目标。 |
 
 ## 旧生命周期核对
