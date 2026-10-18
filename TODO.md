@@ -139,7 +139,7 @@
 - [x] 检查发布候选内没有以旧产品前缀命名的文件。证据：`rg --files mistlane` 前缀扫描无匹配。
 - [x] 从旧 C++ 生命周期实现中逐项核对 Node 启动、信号处理、退出顺序和异常路径，并更新状态清单。证据：2026-10-18 对照 game-fogs `d_common/common/src/FogsProcess.cpp`、`FogsServer.hpp` 与 `d_gateway/main.cpp` 逐项核对，migration-status.md 双语新增"旧生命周期核对"表（启动入口、线程模型、信号集、热重载、退出入口、IO/线程收尾、异常路径七项），并更新首行状态指向该节；pnpm docs:build 通过。
 - [x] 从旧 Lua 回调实现中逐项核对 init/start/tick/stop/shutdown 映射，并更新状态清单。证据：2026-10-18 对照 game-fogs `d_common/common/src/LuaCallHandler.cpp`（L_initServer/L_doTick/L_closeServer/L_ClientMsg 等 22 个全局回调）与 `LuaContext.hpp` 逐项映射到 LuaService 钩子，migration-status.md 双语新增"旧 Lua 回调核对"表（14 行：init/start/tick/stop/shutdown、消息类、会话事件、注册报文、HTTP、VM/错误模型、库集、热重载），首行状态指向该节；四个锚点在 docs:build 产物中验证存在。
-- [ ] 追踪旧服务连接注册报文及其调用方，决定是否设计新的服务认证/注册接口。
+- [x] 追踪旧服务连接注册报文及其调用方，决定是否设计新的服务认证/注册接口。证据：2026-10-18 追踪 `ServerConnBase::onConnSetup`→`L_FirstMsg`→`ServerService:handShakeToServer`（`sp.pack(Protocol.HandShake,{name,sidx,tarName})`，无认证）、被动方 `handleFirstPacket`→`L_Register`（LoginAP/WorldServer/PushServer/OmServer/HegelServer/DataServer 六处调用）、`L_Response` 后切帧与 2 秒重连；决策为不设计新注册/认证接口：静态 UPSTREAMS + MLC1 epoch 握手已覆盖当前形态，动态发现或不可信互联出现时再一并设计；双语 migration-status.md 行已更新，docs:build 通过。
 - [ ] 追踪旧服务连接重连和发送队列的生产者、消费者与排队字节数，决定是否需要有界可靠投递模块。
 - [ ] 对旧线程池的实际工作负载分类，逐项标记为 Asio I/O、Boost.MySQL 异步 I/O、阻塞任务或已废弃。
 - [ ] 若存在阻塞任务需求，先评估 `boost::asio::thread_pool`；只为其补充任务准入上限、拒绝策略、取消和关闭适配，不另造线程调度器。
