@@ -36,7 +36,7 @@ flowchart TB
   end
 ```
 
-Libraries, owner thread and callbacks are grouped inside the execution process. Clients can connect directly or through gateway. Each process currently selects one --transport; displayed protocols are alternatives, not simultaneous listeners. HTTP workers invoke Lua http, while game WS/WSS invokes Lua message. Mixed HTTP/HTTPS and WS/WSS listeners remain future work. MySQL/curl are C++ interfaces; selected bounded asynchronous Redis APIs are exposed to Lua.
+Libraries, owner thread and callbacks are grouped inside the execution process. Clients can connect directly or through gateway. `--transport` selects the primary listener, and each extra `--listener PROTO://IP:PORT` adds an independent listener, so one process can serve TCP, WS/WSS and HTTP/HTTPS side by side (cleartext and TLS together). Script roles route HTTP requests to Lua http, game WS/WSS to Lua message, and WebSocket upgrades on an HTTP/HTTPS listener to the Lua websocket lifecycle. MySQL/curl are C++ interfaces; selected bounded asynchronous Redis APIs are exposed to Lua.
 
 ## Code layout
 

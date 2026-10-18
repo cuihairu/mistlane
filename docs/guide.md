@@ -159,14 +159,20 @@ Keep secrets out of these files when they live in a version-controlled template:
 The binary also reads a native config format directly, without the shell launcher:
 
 ```bash
-./build/debug/mistlane --config config/instances/gameServer.env --max-connections 512
+cat > gameServer.native.env <<'EOF'
+# mistlane-config 1
+ROLE=gameServer
+LISTEN=127.0.0.1:7102
+SCRIPT=examples/echo.lua
+EOF
+./build/debug/mistlane --config gameServer.native.env --max-connections 512
 ```
 
-- The first non-empty line must be the version marker `# mistlane-config 1`; a file without it is rejected, so a random shell env file is never consumed silently.
+- The first non-empty line must be the version marker `# mistlane-config 1`; a file without it is rejected, so a random shell env file (including the `config/instances/*.env` templates, which omit the marker) is never consumed silently.
 - Remaining lines are `KEY=VALUE`. Blank lines and `#` comments are ignored, empty values are skipped, and a repeated key is an error. Unknown keys are rejected with the file and line number.
 - Keys are the uppercase forms of the CLI options (`ROLE`, `LISTEN`, `TRANSPORT`, `SCRIPT`, `UPSTREAMS` comma-separated, `ROUTE_EPOCH`, `CERT`, `KEY`, `LISTENERS` comma-separated, `REDIS`, `METRICS_LISTEN`, `PROBE_LISTEN`, `OVERLOAD_RATIO`, `READY_HYSTERESIS`, `MAX_CONNECTIONS`, `MEMORY_BUDGET_MIB`, `MAX_ROOM_SESSIONS`, `MAX_GROUP_SESSIONS`, `MAX_SHARD_SESSIONS`, `CRASHPAD_HANDLER`, `CRASHPAD_DATABASE`) plus `ROOT`.
 - Precedence inside one run: file value, then a non-empty `MISTLANE_<KEY>` environment variable, then any explicit flag given after `--config`.
-- `SCRIPT`, `CERT`, `KEY`, `CRASHPAD_HANDLER` and `CRASHPAD_DATABASE` resolve relative paths against the config file's directory, or against `ROOT` when that key is set (itself relative to the config file). This differs from the shell launcher, which resolves against the project root; set `ROOT` to run the generated templates through `--config` unchanged.
+- `SCRIPT`, `CERT`, `KEY`, `CRASHPAD_HANDLER` and `CRASHPAD_DATABASE` resolve relative paths against the config file's directory, or against `ROOT` when that key is set (itself relative to the config file's directory). This differs from the shell launcher, which resolves against the project root. To run a generated `config/instances/*.env` template through `--config`, prepend the version marker line and add `ROOT=../..`; its `SCRIPT` and `CERT` paths then resolve as the launcher would.
 - Secrets still belong in deployment-managed environment (`MISTLANE_*` or systemd `LoadCredential=`), not in a committed file.
 
 
@@ -220,8 +226,11 @@ The pool adapter is not yet wired to Lua message callbacks. Do not execute block
 pnpm install --frozen-lockfile
 pnpm docs:dev
 pnpm docs:build
+pnpm docs:check
 pnpm docs:preview
 ```
+
+`docs:check` renders the built site in a headless browser and asserts every Mermaid diagram renders, that labels are not clipped, and that both locales render at desktop and mobile widths in light and dark themes. It needs a Playwright chromium binary (`npx playwright install chromium`, or `PLAYWRIGHT_CHROMIUM_EXECUTABLE=/path/to/chromium` to reuse an existing one); CI runs it after `docs:build`.
 
 The site contains English and Chinese navigation, local search, and matching pages. Its default base is `/mistlane/`; set `DOCS_BASE=/` when building for a domain root. The build produces `docs/.vitepress/dist` and checks internal links. No hosting deployment is performed by these commands.
 

@@ -4,7 +4,7 @@ C++ owns networking/scheduling; Lua owns application logic. Each gameServer/cros
 
 ## Module contract
 
-Return a table from the script. TCP/WS/WSS workers and shards require message; HTTP/HTTPS workers require http and may omit message. Hooks are plain functions without an implicit self argument: use dot definitions rather than colon methods.
+Return a table from the script. The required hooks follow the listener mix, not the role: any tcp/ws/wss entry requires message, and any http/https listener requires http. A gameServer or apiServer serving both kinds of listener therefore provides both. Hooks are plain functions without an implicit self argument: use dot definitions rather than colon methods.
 
 ```sh
 build/debug/mistlane --role apiServer --listen 127.0.0.1:8080 --transport http --script examples/http.lua
@@ -36,7 +36,7 @@ stateDiagram-v2
 | Script top level | None / module table | Startup and reload; validate required handler for the transport |
 | init | context / ignored | Once after validation; context has role, transport, epoch |
 | start | None / ignored | Listener ready, before ready is published; failure aborts startup/reload |
-| message | payload, context / string | Non-HTTP messages; crossServer context has realm/group/room/epoch, ordinary workers receive nil |
+| message | payload, context / string | Non-HTTP messages; crossServer context has realm/group/room/epoch, the gameServer base context has nil |
 | before_request | req / nil or response | Before HTTP handler; a response short-circuits http |
 | http | req / response table | Main HTTP handler |
 | after_request | req, response / nil or response | After successful handler or short circuit; mutate response or return a replacement |
@@ -44,8 +44,13 @@ stateDiagram-v2
 | tick | None / ignored | After start; approximately 100ms after the last tick completes |
 | stop | None / ignored | Once on normal stop or VM retirement |
 | shutdown | None / ignored | Once after stop, before VM destruction |
+| websocket_open | id, path / ignored | WebSocket upgrade on a script-role HTTP/HTTPS listener; a Lua error closes the session without websocket_close |
+| websocket_message | id, payload / ignored | One call per client frame (≤ 1 MiB); a Lua error closes the session without websocket_close |
+| websocket_close | id / ignored | Disconnect or node shutdown |
 
-All hooks except the transport's required message/http are optional. Nil means absent; other non-function fields fail when called. There are no player connect/disconnect hooks. Legacy Timer, SQLService, C_* globals and gameplay protocols are not migrated.
+`mistlane.websocket.send(id, payload)` pushes to one websocket session and returns true, or false plus a reason. See [HTTP listeners and the WebSocket lifecycle](./http.md#multiple-listeners-and-websocket-lifecycle).
+
+All hooks except the message/http a listener mix requires are optional. Nil means absent; other non-function fields fail when called. There are no player connect/disconnect hooks. Legacy Timer, SQLService, C_* globals and gameplay protocols are not migrated.
 
 On SIGINT/SIGTERM, close the listener, call stop, cancel active sessions, call shutdown and drain cancellation callbacks. This cancels work; it does not drain business requests or flush transactions. A failing stop still permits shutdown. Flags are set before calling hooks to avoid duplicate invocation. A rejected candidate whose init completed also gets best-effort stop/shutdown. Top-level/init failure only destroys that VM; cleanup hooks are not promised for partial initialization. Crashes, SIGKILL and power loss cannot guarantee cleanup.
 
@@ -88,7 +93,7 @@ Responses have status (integer 200–599, default 200), body (string, default em
 
 Flow: before_request → http unless short-circuited → after_request → response. Short circuits still run after_request. Any callback/validation error jumps to on_error without another after_request call. Missing/failing/invalid on_error produces a generic 500 without traceback disclosure; details go to logs. Transport/admission failures can occur before Lua runs.
 
-Lua HTTP workers receive generic paths and select routes in http, explicitly returning 404/405 as needed. GET/POST/PUT/DELETE/PATCH/OPTIONS/HEAD are forwarded; HEAD body handling belongs to HTTP. Raw sockets, streaming, coroutine yields and WebSocket upgrades are not exposed. HTTP gateway mode remains a POST /message body-forwarding adapter; use an apiServer directly or extend the gateway protocol for full HTTP semantics.
+Lua HTTP workers receive generic paths and select routes in http, explicitly returning 404/405 as needed. GET/POST/PUT/DELETE/PATCH/OPTIONS/HEAD are forwarded; HEAD body handling belongs to HTTP. Raw sockets, streaming and coroutine yields are not exposed. On a script-role HTTP/HTTPS listener, a WebSocket upgrade at `/` or `/ws` does not reach the http handler: Drogon delivers it to the websocket lifecycle callbacks instead. HTTP gateway mode remains a POST /message body-forwarding adapter; use an apiServer directly or extend the gateway protocol for full HTTP semantics.
 
 ## SIGHUP replacement
 
@@ -144,7 +149,7 @@ mistlane.stream.read("mail", "workers", "gameServer-1", 20, function(err, entrie
 end)
 ```
 
-`read` fetches up to 100 new entries without `BLOCK`, avoiding head-of-line blocking on the shared Redis connection. Call it from `tick` for polling. `claim(stream, group, consumer, min_idle_ms, start_id, count, callback)` reclaims abandoned pending entries using `XAUTOCLAIM` (Redis 6.2+); pass the previous result's `next` cursor to continue scanning. `ack` removes a processed ID from the pending list. This provides at-least-once delivery: handlers must tolerate duplicates and acknowledge only after their work is durable. `create_group` is idempotent. Entries accept string fields, up to 64 KiB total and 64 field/value pairs; reads and claims cap at 100 entries per call.
+`read` fetches up to 100 new entries without `BLOCK`, avoiding head-of-line blocking on the shared Redis connection. Call it from `tick` for polling. `claim(stream, group, consumer, min_idle_ms, start_id, count, callback)` reclaims abandoned pending entries using `XAUTOCLAIM` (Redis 6.2+); pass the previous result's `next` cursor to continue scanning. `ack` removes a processed ID from the pending list. This provides at-least-once delivery: handlers must tolerate duplicates and acknowledge only after their work is durable. `create_group` is idempotent. Entries accept string fields, up to 64 KiB total across at most 256 field/value pairs (each value up to 64 KiB); reads and claims cap at 100 entries per call.
 
 **Idempotency, retention, retry and dead letters.** Delivery is at-least-once, so consumers deduplicate on `stream + entry.id` after their processing is durable and before `ack`; the framework injects no idempotency key of its own. Nothing trims streams automatically: `publish` uses a plain `XADD` with no `MAXLEN`, and a stream grows until the application decides otherwise — trimming below a group's pending entries would strand them, so trim only after `ack` and treat any future `MAXLEN` option as opt-in with an explicit capacity rationale. Retries stay application-driven through `claim` scanning (`min_idle_ms` plus cursor pagination); there is no automatic retry loop. There is no built-in dead-letter queue: an application that exhausts its retries republishes the entry to a dead-letter stream it names (for example `mistlane:stream:<name>.dead`) and acks the original only after that publish succeeds.
 

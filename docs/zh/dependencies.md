@@ -16,6 +16,8 @@
 | prometheus-cpp | 1.3.0 | `prometheus-cpp::core` 加 `pull` 特性，支撑可选私有 `/metrics` 端点 |
 | crashpad | 2026-07-02 | `crashpad::crashpad`，经随装的 `crashpad_handler` 做本地 minidump 采集 |
 | VitePress | 1.6.4 | pnpm 固定直接版本与 pnpm-lock.yaml |
+| mermaid | 12.2.0 | 文档主题内置的 Markdown 图表渲染 |
+| playwright | 1.64.1 | 无头浏览器校验渲染出的图表、响应式与暗色主题 |
 | Vite | 6.4.4 | workspace override 使用已修复的开发工具链 |
 | pnpm | 10.33.0 | packageManager 固定版本 |
 

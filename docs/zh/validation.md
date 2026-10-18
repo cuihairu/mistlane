@@ -25,7 +25,7 @@
 | 流量与 tick 指标 | `transport.tcp` 抓取实时 `/metrics` 输出，断言收发消息计数非零、tx 字节数超过 1 MiB、请求耗时直方图有观测、事件循环 tick 延迟直方图与运行期最大值非零（等待首个调度 tick 后）、健康 gameServer 的上游错误/超时为零，以及指向死端口的 gateway 至少记录一次上游错误 |
 | 内部探测（PROBE1） | `probe.control` 以裸 TCP 驱动协议：liveness/version/command/malformed/nonce 错误路径、带 `active`/`capacity`/`lag_ms` 的就绪应答、空闲连接截止、`--overload-ratio 0.5 --ready-hysteresis 2` 下饱和驱动的 `ready -> notready -> ready` 翻转并与 `mistlane_ready` 指标一致、`MISTLANE_PROBE_TOKEN` 下的 `err auth`，以及经 `IP:PORT:PROBE` 的 cross 门控（明确 notready 返回 `MLC1 ERR NOT_READY`、探测端口不可达返回 `MLC1 ERR UPSTREAM`、不带探测端口的上游不门控、已建立房间不受影响，被拒加入计入 `mistlane_admission_rejections_total`），另覆盖连续 50 次探测生命周期、300 字节超长请求行被无应答关闭、64 个挂起连接外的第 65 个被拒，以及 `[::1]` 方括号 IPv6 的监听/探测/上游地址（带门控与不门控） |
 | 原生配置文件 | `config.file` 用 `# mistlane-config 1` 文件启动 gameServer（role、listen、相对文件解析的 script、transport、容量上限），拒绝缺失版本行、未知键与重复键并报「文件:行号」，`MISTLANE_MAX_CONNECTIONS` 覆盖文件值、显式参数再覆盖两者，`ROOT=` 支持项目根风格条目，文件中的 `PROBE_LISTEN`/`METRICS_LISTEN` 生效 |
-| 文档站 | 使用 pnpm 10.33.0、VitePress 1.6.4 与修复版 Vite 6.4.4 构建两种语言；10 个页面的语言、导航与仓库链接检查通过 |
+| 文档站 | 使用 pnpm 10.33.0、VitePress 1.6.4 与修复版 Vite 6.4.4 构建两种语言；26 个导航页面（英文 13、中文 13）的语言、导航与仓库链接检查通过 |
 | 文档依赖审计 | Vite 覆盖更新后，pnpm audit 返回零告警 |
 | 源码包 | 白名单与 SHA256 检查通过，无原游戏目录或 Git 历史 |
 
@@ -38,10 +38,12 @@
 ```bash
 cmake --preset linux-debug -DMISTLANE_TEST_LOCAL_DATABASE=ON -DMISTLANE_TEST_LOCAL_REDIS=ON
 cmake --build --preset linux-debug
-ctest --preset linux-debug -R '^mistlane_integration$'
+ctest --preset linux-debug
+python3 tests/integration.py ./build/debug/mistlane .
 python3 tests/mysql_integration.py ./build/debug/mistlane-mysql-probe
 pnpm install --frozen-lockfile
 pnpm docs:build
+pnpm docs:check
 python3 tools/export.py
 ```
 

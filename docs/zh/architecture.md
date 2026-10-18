@@ -36,7 +36,7 @@ flowchart TB
   end
 ```
 
-图中单列执行进程内部的库、线程和回调，避免把 Drogon 当成独立游戏服务。直接连接 gameServer 与经过 gateway 均可；当前每进程只能选择一个 --transport，图中的协议是可选项，不是并行监听。gameServer 的 HTTP 模式走 Lua http，WS/WSS 游戏消息走 Lua message；HTTP/HTTPS 与 WS/WSS 共存仍待实现。MySQL、curl 目前是 C++ 接口；Redis Lua API 已提供部分有界异步能力。
+图中单列执行进程内部的库、线程和回调，避免把 Drogon 当成独立游戏服务。直接连接 gameServer 与经过 gateway 均可。`--transport` 选择主监听，每个额外的 `--listener PROTO://IP:PORT` 再追加一个独立监听，因此同一进程可以同时提供 TCP、WS/WSS 与 HTTP/HTTPS（明文与 TLS 并存）。脚本角色的 HTTP 请求走 Lua http，游戏 WS/WSS 走 Lua message，HTTP/HTTPS 监听上的 WebSocket 升级走 Lua websocket 生命周期。MySQL、curl 目前是 C++ 接口；Redis Lua API 已提供部分有界异步能力。
 
 ## 代码组织
 

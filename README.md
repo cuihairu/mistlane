@@ -90,7 +90,7 @@ Game clients can connect through a WS gateway while the gameServer uses internal
   --transport ws --upstream 127.0.0.1:7102
 ```
 
-Connect to `ws://server:8080/ws`; game messages reach Lua `message(payload)`. Each WS message is one payload with no TCP length header; responses are binary. For WSS select `--transport wss --cert FILE --key FILE` and connect to `wss://certificate-hostname:port/ws`. A gameServer can also listen directly with `--transport ws/wss --script FILE`. Current channels require waiting for each reply; Lua server push and broadcast are not implemented. See the [game connection guide](docs/guide.md) for both topologies, browser code and template certificate configuration.
+Connect to `ws://server:8080/ws`; game messages reach Lua `message(payload)`. Each WS message is one payload with no TCP length header; responses are binary. For WSS select `--transport wss --cert FILE --key FILE` and connect to `wss://certificate-hostname:port/ws`. A gameServer can also listen directly with `--transport ws/wss --script FILE`. Current channels require waiting for each reply; game-session Lua server push and broadcast are not implemented (script-role HTTP listeners expose a separate WebSocket push API). See the [game connection guide](docs/guide.md) for both topologies, browser code and template certificate configuration.
 
 For HTTP/HTTPS, run a gameServer with --transport http/https and examples/http.lua. The Lua handler accepts method/path/query/headers/body and returns status/headers/body. Its before_request, http, after_request, on_error, init, start, tick, stop and shutdown hooks are documented in the [lifecycle guide](docs/lua.md).
 

@@ -102,5 +102,11 @@ docs/.vitepress/theme/mermaid.ts
 tools/check-docs.mjs
 docs/entity-contract.md
 docs/zh/entity-contract.md
+docs/entity-db-mapping-and-philosophy.md
+docs/entity-sync-persistence.md
+docs/mmo-engine-survey.md
+docs/mmo-engine-design-highlights.md
+docs/review/luna-review-2026-10-18.md
+docs/review/luna-review-response-2026-10-18.md
 DESIGN.md
 PRODUCT.md

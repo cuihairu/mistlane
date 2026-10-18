@@ -4,7 +4,7 @@ Mistlane 保留“C++ 管网络与调度，Lua 管应用”的分工。gameServe
 
 ## 模块与运行方式
 
-脚本顶层返回 table。TCP/WS/WSS gameServer 与 crossServer 必须提供 message；HTTP/HTTPS apiServer 必须提供 http，允许不提供 message。钩子用普通函数调用，不隐式传 self；使用 function M.http(req)，不要使用冒号方法定义。
+脚本顶层返回 table。必备钩子由监听组合决定，与角色无关：监听含任一 tcp/ws/wss 就要提供 message，含任一 http/https 监听就要提供 http；同时提供两类监听的 gameServer/apiServer 则两者都要。钩子用普通函数调用，不隐式传 self；使用 function M.http(req)，不要使用冒号方法定义。
 
 ```sh
 build/debug/mistlane --role apiServer --listen 127.0.0.1:8080 --transport http --script examples/http.lua
@@ -44,8 +44,13 @@ stateDiagram-v2
 | tick | 无 / 忽略返回 | start 后，每次完成再等待约 100ms；不是严格实时帧率 |
 | stop | 无 / 忽略返回 | 正常停止或旧 VM 退役时一次；停止应用接收新工作的机会 |
 | shutdown | 无 / 忽略返回 | stop 后尽力清理一次，随后销毁 VM |
+| websocket_open | id、path / 忽略返回 | 脚本角色 HTTP/HTTPS 监听上的 WebSocket 升级；回调内 Lua 报错会关闭该会话且不再触发 websocket_close |
+| websocket_message | id、payload / 忽略返回 | 每个客户端帧调用一次（≤ 1 MiB）；Lua 报错关闭该会话且不触发 websocket_close |
+| websocket_close | id / 忽略返回 | 断连或进程退出 |
 
-除当前传输所需的 message/http 外均可选；nil 表示缺省。字段存在但不是函数会在调用时失败。没有 on_connect/on_disconnect 玩家登录钩子；连接生命周期不等同于业务登录。原游戏全局 Timer、SQLService、C_* 和协议没有直接迁入。
+`mistlane.websocket.send(id, payload)` 向一个 WebSocket 会话定向推送，成功返回 true，失败返回 false 与原因。详见[多监听与 WebSocket 生命周期](./http.md#多监听与-websocket-生命周期)。
+
+除监听组合要求的 message/http 外均可选；nil 表示缺省。字段存在但不是函数会在调用时失败。没有 on_connect/on_disconnect 玩家登录钩子；连接生命周期不等同于业务登录。原游戏全局 Timer、SQLService、C_* 和协议没有直接迁入。
 
 正常 SIGTERM/SIGINT：关闭监听，调用 stop，取消活动会话，调用 shutdown，排空取消回调。当前是取消，不是业务请求排空或事务刷盘。stop 抛错仍尝试 shutdown；标记在调用前设置，避免重复调用。已完成 init 的失败候选也尽力执行 stop/shutdown；顶层或 init 本身失败只销毁 VM，不承诺对部分初始化调用清理钩子。崩溃、SIGKILL、断电不保证任何清理。
 
@@ -95,7 +100,7 @@ req 是独立的请求 table，包含 method、path、query（原始查询串，
 
 请求过程为 before_request → http（如未短路）→ after_request → 响应。前置拒绝也执行 after_request。任何阶段报错会跳至 on_error，不再重复执行 after_request；on_error 缺省、报错或返回非法响应时，返回不暴露 traceback 的通用 500，详细错误写入服务端日志。网络失败或准入拒绝可能在 Lua 之前结束请求。
 
-HTTP 模块匹配通用路径，应用在 http 中选择路径并明确返回 404/405。当前转交 GET/POST/PUT/DELETE/PATCH/OPTIONS/HEAD，HEAD 正文由 HTTP 实现处理；不暴露底层 socket、流式正文、异步 yield 或 WebSocket 升级权限。gateway 的 HTTP 模式仍是 POST /message 的正文转发适配器，需要完整 HTTP 语义时直接使用 apiServer 或自行扩展网关协议。
+HTTP 模块匹配通用路径，应用在 http 中选择路径并明确返回 404/405。当前转交 GET/POST/PUT/DELETE/PATCH/OPTIONS/HEAD，HEAD 正文由 HTTP 实现处理；不暴露底层 socket、流式正文或异步 yield。脚本角色 HTTP/HTTPS 监听上的 WebSocket 升级（`/` 或 `/ws`）不会进入 http 钩子，而是由 Drogon 交给 websocket 生命周期回调处理。gateway 的 HTTP 模式仍是 POST /message 的正文转发适配器，需要完整 HTTP 语义时直接使用 apiServer 或自行扩展网关协议。
 
 ## 热重载：SIGHUP
 
@@ -151,7 +156,7 @@ mistlane.stream.read("mail", "workers", "gameServer-1", 20, function(err, entrie
 end)
 ```
 
-`read` 非阻塞地拉取最多 100 条新消息，避免阻塞共享 Redis 连接；可从 `tick` 钩子轮询。`claim(stream, group, consumer, min_idle_ms, start_id, count, callback)` 使用 `XAUTOCLAIM`（Redis 6.2+）认领消费者异常退出后遗留的 pending 消息；后续分页使用上次返回的 `next` 游标。消息处理持久化成功后再调用 `ack`。这是至少一次投递，业务处理必须能容忍重复；`create_group` 可重复调用。每条消息最多 64 KiB、最多 64 组字段和值；每次 read/claim 最多 100 条。
+`read` 非阻塞地拉取最多 100 条新消息，避免阻塞共享 Redis 连接；可从 `tick` 钩子轮询。`claim(stream, group, consumer, min_idle_ms, start_id, count, callback)` 使用 `XAUTOCLAIM`（Redis 6.2+）认领消费者异常退出后遗留的 pending 消息；后续分页使用上次返回的 `next` 游标。消息处理持久化成功后再调用 `ack`。这是至少一次投递，业务处理必须能容忍重复；`create_group` 可重复调用。每条消息最多 64 KiB，最多 256 组字段和值，单个值最多 64 KiB；每次 read/claim 最多 100 条。
 
 **幂等、保留、重试与死信。** 投递为至少一次：消费方在自己的处理落库之后、`ack` 之前，以 `stream + entry.id` 做去重；框架不注入自己的幂等键。框架不自动裁剪：`publish` 使用不带 `MAXLEN` 的普通 `XADD`，stream 会一直增长，直到应用自行决定——裁剪到消费组 pending 范围以下会把消息困死，因此只在 `ack` 之后裁剪，将来即便提供 `MAXLEN` 选项也必须显式给出容量依据才可开启。重试保持由应用通过 `claim` 扫描驱动（`min_idle_ms` 加游标分页），框架不做自动重试循环。不提供内置死信队列：重试耗尽后，应用把该条消息重新发布到自命名的死信 stream（例如 `mistlane:stream:<name>.dead`），该发布成功后才 `ack` 原消息。
 

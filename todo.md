@@ -80,10 +80,19 @@
   - [ ] 定义属性声明、增量同步、持久化字段、嵌套变更追踪与周期保存；强制保存只有一个入口，明确其持久化确认、失败与重试语义；撤回 self:sync()，方法名和防覆盖机制参见实体契约提案，尚未实现。
 
 - [ ] 设计 C++ 通用 Avatar/Session/迁移/加载保存契约及 Lua 生命周期钩子；覆盖错误、超时、重入、迁移期间操作，不能只提供 message 即视为完成。
-- [ ] 文档时效性清理（2026-10-18 用户令：很多文档已过时）：
+- [x] 文档时效性清理（2026-10-18 用户令：很多文档已过时；2026-10-19 完成）：
       在本轮审核整改完成之后执行，避免与整改冲突。
       1) 通读 README / docs，找出与当前代码不符的描述（能力、配置项、命令、路径、版本）
       2) 以代码为准修正文档；**禁止为对齐文档去改业务代码**
       3) 已废弃但仍留在文档里的功能，明确标注「已移除」或删除，不要留成"看起来还能用"
       4) 命令行示例逐条跑一遍，跑不通的改掉或删掉
       5) 构建通过后 commit+push，回报改动文件清单
+      已完成（2026-10-19）：修正 docs/guide.md 与 docs/zh/guide.md 的 --config 示例
+      （原示例引用无版本头的 shell 实例文件必然失败；ROOT 需从 config 文件目录相对解析）；
+      docs/architecture.md 与 docs/zh/architecture.md 删除「HTTP/HTTPS 与 WS/WSS 共存仍待实现」
+      并写入多监听路由；docs/lua.md 与 docs/zh/lua.md 补 websocket 生命周期钩子、按监听组合改写
+      message/http 必备条件、修正 WebSocket 升级说明与 stream 字段上限（64→256 组）；
+      docs/dependencies.md 与 docs/zh/dependencies.md 补 mermaid 12.2.0 与 playwright 1.64.1；
+      docs/validation.md 与 docs/zh/validation.md 修正失效的 ctest 过滤、补 integration.py 与
+      docs:check 步骤、更新导航页数；README.md 与 README.zh-CN.md 限定推送声明范围；
+      release-files.txt 补 6 个已跟踪但未进源码包的文档。docs:build 与 docs:check 均通过。

@@ -159,14 +159,20 @@ WSS 在 `config/instances/gateway-wss.env` 中设置 `CERT` 和 `KEY`，可填�
 二进制也能不经 shell 启动器直接读原生配置格式：
 
 ```bash
-./build/debug/mistlane --config config/instances/gameServer.env --max-connections 512
+cat > gameServer.native.env <<'EOF'
+# mistlane-config 1
+ROLE=gameServer
+LISTEN=127.0.0.1:7102
+SCRIPT=examples/echo.lua
+EOF
+./build/debug/mistlane --config gameServer.native.env --max-connections 512
 ```
 
-- 首个非空行必须是版本标记 `# mistlane-config 1`；缺失即拒绝，避免把任意 shell env 文件悄悄当作配置。
+- 首个非空行必须是版本标记 `# mistlane-config 1`；缺失即拒绝，避免把任意 shell env 文件（包括缺少该标记的 `config/instances/*.env` 模板）悄悄当作配置。
 - 其余行为 `KEY=VALUE`。空行与 `#` 注释忽略，空值跳过，重复键报错，未知键以「文件:行号」拒绝。
 - 键为 CLI 选项的大写形式（`ROLE`、`LISTEN`、`TRANSPORT`、`SCRIPT`、逗号分隔的 `UPSTREAMS`、`ROUTE_EPOCH`、逗号分隔的 `LISTENERS`、`CERT`、`KEY`、`REDIS`、`METRICS_LISTEN`、`PROBE_LISTEN`、`OVERLOAD_RATIO`、`READY_HYSTERESIS`、`MAX_CONNECTIONS`、`MEMORY_BUDGET_MIB`、`MAX_ROOM_SESSIONS`、`MAX_GROUP_SESSIONS`、`MAX_SHARD_SESSIONS`、`CRASHPAD_HANDLER`、`CRASHPAD_DATABASE`），另有 `ROOT`。
 - 同一次运行的优先级：文件值 < 非空的 `MISTLANE_<KEY>` 环境变量 < `--config` 之后给出的显式参数。
-- `SCRIPT`、`CERT`、`KEY`、`CRASHPAD_HANDLER`、`CRASHPAD_DATABASE` 的相对路径按配置文件所在目录解析；设置 `ROOT` 时改按 `ROOT`（其本身相对配置文件目录）。这与 shell 启动器按项目根目录解析不同；想让生成的模板直接走 `--config`，设置 `ROOT` 即可。
+- `SCRIPT`、`CERT`、`KEY`、`CRASHPAD_HANDLER`、`CRASHPAD_DATABASE` 的相对路径按配置文件所在目录解析；设置 `ROOT` 时改按 `ROOT`（其本身相对配置文件所在目录）。这与 shell 启动器按项目根目录解析不同。要让生成的 `config/instances/*.env` 模板直接走 `--config`，需先在文件首行补版本标记并加 `ROOT=../..`，其 `SCRIPT`/`CERT` 路径才会像启动器一样解析。
 - 机密仍应放在部署方管理的环境（`MISTLANE_*` 或 systemd `LoadCredential=`），不提交到文件。
 
 
@@ -220,8 +226,11 @@ python3 tests/mysql_integration.py ./build/debug/mistlane-mysql-probe
 pnpm install --frozen-lockfile
 pnpm docs:dev
 pnpm docs:build
+pnpm docs:check
 pnpm docs:preview
 ```
+
+`docs:check` 用无头浏览器渲染构建产物，断言每个 Mermaid 图都渲染成功、标签没有被裁切，并在桌面/移动宽度、亮色/暗色主题下检查两种语言。它需要一个 Playwright chromium 二进制（`npx playwright install chromium`，或设 `PLAYWRIGHT_CHROMIUM_EXECUTABLE=/path/to/chromium` 复用现有浏览器）；CI 在 `docs:build` 之后运行它。
 
 文档提供中英文导航、本地搜索和成对页面。默认 base 为 /mistlane/；部署到域名根目录时可设置 DOCS_BASE=/。构建会检查内部链接并生成 docs/.vitepress/dist，以上命令不执行托管发布。
 
