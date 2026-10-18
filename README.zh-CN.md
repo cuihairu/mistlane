@@ -2,7 +2,7 @@
   <img src="docs/public/logo.svg" alt="Mistlane logo" width="64" height="64">
 </p>
 
-# Mistlane
+<h1 align="center">Mistlane</h1>
 
 <p align="center">
   <a href="https://github.com/cuihairu/mistlane/actions/workflows/ci.yml"><img src="https://github.com/cuihairu/mistlane/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
