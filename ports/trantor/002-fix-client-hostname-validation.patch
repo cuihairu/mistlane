@@ -1,0 +1,14 @@
+--- a/trantor/net/inner/tlsprovider/OpenSSLProvider.cc
++++ b/trantor/net/inner/tlsprovider/OpenSSLProvider.cc
+@@ -623,10 +623,7 @@
+                         cert,
+                         policyPtr_->getHostname(),
+                         policyPtr_->getAllowBrokenChain(),
+-                        !contextPtr_
+-                             ->isServer);  // From the server's point of view,
+-                                           // the client certificate is verified
+-                                           // and vice versa
++                        contextPtr_->isServer);
+                     if (!valid)
+                     {
+                         LOG_TRACE

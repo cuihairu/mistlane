@@ -35,6 +35,10 @@
       "default-features": false
     },
     {
+      "name": "trantor",
+      "version>=": "1.5.28"
+    },
+    {
       "name": "curl",
       "version>=": "8.23.0",
       "default-features": false,
