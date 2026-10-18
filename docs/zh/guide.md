@@ -138,6 +138,23 @@ MISTLANE_BIN=/path/to/mistlane ./ops/cluster.sh start worker router gateway-ws
 
 WSS 在 `config/instances/gateway-wss.env` 中设置 `CERT` 和 `KEY`，可填绝对路径或相对项目根目录的路径，然后启动 `gateway-wss`。脚本会检查证书文件并传给 `--cert`/`--key`；不会生成或提交私钥。systemd 对应实例为 `mistlane@gateway-wss.service`。
 
+### 实例配置字段
+
+`config/instances/<name>.env` 由 `ops/run-instance.sh` 以 shell 赋值方式 source，属于项目所有者手写的受信部署配置，不是不受信输入。启动器只消费下列字段；文件中的其他变量一律忽略。
+
+| 字段 | 必填 | 启动器行为 |
+|---|---|---|
+| `ROLE` | 必填 | 作为 `--role` 传入；`cluster.sh` 还用它匹配就绪行（`ready <ROLE> <LISTEN>`），匹配成功才报告实例已启动。 |
+| `LISTEN` | 必填 | `IP:PORT` 作为 `--listen` 传入。 |
+| `TRANSPORT` | 可选 | `tcp` 为默认值，不出现在命令行；`ws`、`wss`、`http`、`https` 原样传入。`wss`/`https` 在 `CERT` 和 `KEY` 不可读时拒绝启动。 |
+| `SCRIPT` | 可选 | Lua 入口作为 `--script` 传入；相对路径按项目根目录解析。gateway 和 router 留空。 |
+| `UPSTREAMS` | 可选 | 逗号分隔的 `IP:PORT` 列表；每个条目展开为一个 `--upstream` 参数。 |
+| `ROUTE_EPOCH` | 可选 | cross/shard 纪元作为 `--route-epoch` 传入；留空则省略该参数。 |
+| `CERT`、`KEY` | 仅 wss/https | 证书链与私钥，绝对路径或项目根目录相对路径；启动器先确认两者可读。 |
+
+实例文件随模板仓库一起提交时不要放任何机密：初始化器不生成证书材料，`gateway-wss.env` 只带 `certs/` 占位路径。私钥等文件应放在仓库之外或由部署方管理的 `certs/` 目录；其他凭据通过安装后的 systemd unit（`Environment=`、`LoadCredential=`）或部署工具注入，而不是写进 `config/instances/` 提交。
+
+
 ## HTTP worker
 
 除了基于帧 TCP/WS 的 Lua `message` 模式，worker 还可以直接提供 HTTP 服务。用 `--transport http`（或 `https`）配合 HTTP 脚本（如 `examples/http.lua`）启动：

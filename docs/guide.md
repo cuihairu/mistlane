@@ -138,6 +138,23 @@ MISTLANE_BIN=/path/to/mistlane ./ops/cluster.sh start worker router gateway-ws
 
 For WSS, set `CERT` and `KEY` in `config/instances/gateway-wss.env` to absolute paths or paths relative to the project root, then start `gateway-wss`. The launcher checks both files and forwards them as `--cert`/`--key`; it does not generate or commit a private key. The systemd instance is `mistlane@gateway-wss.service`.
 
+### Instance configuration fields
+
+Each `config/instances/<name>.env` file is sourced as shell assignments by `ops/run-instance.sh`, so treat it as trusted deployment configuration written by the project owner, not as untrusted input. The launcher consumes exactly these fields; anything else in the file is ignored.
+
+| Field | Required | Launcher behavior |
+|---|---|---|
+| `ROLE` | always | Passed as `--role`; `cluster.sh` also matches its readiness line (`ready <ROLE> <LISTEN>`) before reporting the instance started. |
+| `LISTEN` | always | `IP:PORT` passed as `--listen`. |
+| `TRANSPORT` | optional | `tcp` is the default and is omitted from the command line; `ws`, `wss`, `http` and `https` are passed through. `wss` and `https` refuse to start unless readable `CERT` and `KEY` are configured. |
+| `SCRIPT` | optional | Lua entrypoint passed as `--script`; relative paths resolve against the project root. Gateways and routers leave it empty. |
+| `UPSTREAMS` | optional | Comma-separated `IP:PORT` list; each entry becomes one `--upstream` flag. |
+| `ROUTE_EPOCH` | optional | Cross/shard epoch passed as `--route-epoch`; an empty value omits the flag. |
+| `CERT`, `KEY` | `wss`/`https` only | Certificate chain and private key, absolute or project-root relative; the launcher verifies both are readable. |
+
+Keep secrets out of these files when they live in a version-controlled template: the initializer creates no certificate material, and `gateway-wss.env` only ships placeholder `certs/` paths. Provision key files outside the repository or under a deployment-managed `certs/` directory, and inject any other credentials through the installed systemd unit (`Environment=`, `LoadCredential=`) or your deployment tooling instead of committing them to `config/instances/`.
+
+
 ## HTTP worker
 
 Besides the Lua `message` mode over framed TCP/WS, a worker can serve HTTP directly. Run it with `--transport http` (or `https`) and an HTTP script such as `examples/http.lua`:

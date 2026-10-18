@@ -207,7 +207,7 @@
 - [x] 为模板 CLI 添加集成检查：完整文件集、shell 语法、可执行位、相对脚本路径运行、TCP echo、启停/status 与不覆盖既有文件。证据：`tests/scaffold.py`。
 - [x] 将新 CLI 源码、测试、双语架构对比页加入发布 allowlist 并更新文档导航。证据：`release-files.txt` 与 VitePress sidebar。
 - [x] 用 `systemd-analyze verify` 检查替换安装路径后的 unit 文件，并用临时系统用户做一次 systemd 启停演练。证据：2026-10-18 systemd-analyze verify 零告警；创建系统用户 mistlane、安装 /opt/mistlane 模板，mistlane@worker 于 7102 激活、journal 记录 ready、帧客户端回环 echo 成功、stop 干净退出；演练后清理 unit/二进制//opt/用户。
-- [ ] 为逐进程 shell 配置文档补充合法字段、逗号分隔 upstream、密钥应使用 systemd credentials/environment，而非提交到模板仓库。
+- [x] 为逐进程 shell 配置文档补充合法字段、逗号分隔 upstream、密钥应使用 systemd credentials/environment，而非提交到模板仓库。证据：2026-10-18 guide.md 与 zh/guide.md 新增"实例配置字段"表（ROLE/LISTEN/TRANSPORT/SCRIPT/UPSTREAMS/ROUTE_EPOCH/CERT/KEY，与 ops/run-instance.sh 逐字段核对），注明 UPSTREAMS 逗号分隔、wss/https 证书拒绝启动行为与机密经 systemd unit 注入；pnpm docs:build 双语构建与内链检查通过。
 - [x] 在模板上增加进程间依赖/健康检查与启动失败回滚，避免用固定 sleep 代替 readiness；当前启动器只做短暂启动确认。证据：2026-10-18 ops/cluster.sh 每个 start 轮询 ready 行（MISTLANE_START_TIMEOUT 默认 5 秒），未就绪即 TERM 并移除 pidfile；start 失败只回滚本次命令启动的实例并保留已有实例，restart 失败反向停止已启动项；scaffold.init 覆盖"就绪门通过 + 坏实例回滚 + 已有实例保留 + 二次失败全停"四条路径。
 - [ ] 决定是否提供原生 Mistlane config-file schema；若实现，定义格式版本、字段校验、环境覆盖、相对路径规则和错误提示，再将 shell env 模板迁移到该 schema。
 - [ ] 按架构比较文档继续补内部 liveness/readiness 探测、Crashpad 转储生成/保留与部署工作流；再依据真实压力测试决定动态 registry、lease/fencing、房间 drain/migration 或容器编排需求。
