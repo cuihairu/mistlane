@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
 """Run the mature MySQL pool against a disposable local MariaDB, no existing DB touched."""
 import os
 from pathlib import Path

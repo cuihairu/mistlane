@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 #include "mistlane/http_client.hpp"
 #include <curl/curl.h>
 #include <memory>

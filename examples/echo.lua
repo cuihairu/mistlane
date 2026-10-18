@@ -1,3 +1,4 @@
+-- SPDX-License-Identifier: Apache-2.0
 -- Only demonstrates the framework lifecycle; no game protocol or data.
 local service = {}
 function service.init() end

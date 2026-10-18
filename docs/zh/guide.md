@@ -4,7 +4,7 @@
 
 ## 环境要求
 
-Linux x64、C++20 编译器、CMake 3.25+、Ninja、Git、curl、zip/unzip、tar、pkg-config、Perl、Python 3.9+ 和 OpenSSL 命令行工具。文档另需 Node.js 20+ 和 package.json 固定版本的 pnpm；使用 Corepack shim 时请先启用。
+Linux x64、C++20 编译器、CMake 3.25+、Ninja、Git、curl、zip/unzip、tar、pkg-config、Perl、Python 3.9+ 和 OpenSSL 命令行工具。文档另需 Node.js 22.12+ 和 package.json 固定版本的 pnpm；使用 Corepack shim 时请先启用。
 
 ## 准备 vcpkg
 
@@ -66,6 +66,18 @@ python3 tools/client.py 'hello mistlane'
 ```
 
 使用自己的证书链和私钥，保存在源码仓库之外。协议细节由 Drogon 处理，WSS 最低 TLS 1.2。响应为二进制 WS 消息。内部 TCP 使用四字节网络序长度头加 payload，上限 1 MiB。
+
+## HTTP worker
+
+除了基于帧 TCP/WS 的 Lua `message` 模式，worker 还可以直接提供 HTTP 服务。用 `--transport http`（或 `https`）配合 HTTP 脚本（如 `examples/http.lua`）启动：
+
+```bash
+./build/debug/mistlane --role worker --listen 127.0.0.1:7500 \
+  --transport http --script examples/http.lua
+curl -s http://127.0.0.1:7500/healthz
+```
+
+HTTPS 需另加 `--cert` 和 `--key`。传给 Lua 的请求表包含 method、path、query、headers 和 body；响应表设置 status、headers 和 body。请求生命周期钩子为 `before_request`、`http`、`after_request`、`on_error`，以及通用的 `init`/`start`/`tick`/`stop`/`shutdown` 回调。HTTP worker 必须提供 `http`，可省略 `message`；帧 worker 必须提供 `message`。限制与钩子契约见 [HTTP 参考](./http.md) 和 [Lua 生命周期](./lua.md)。
 
 ## Lua 服务
 

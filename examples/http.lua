@@ -1,3 +1,4 @@
+-- SPDX-License-Identifier: Apache-2.0
 local M = {}
 local ready = false
 function M.init(context)

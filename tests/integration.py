@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
 """Integration checks against real node processes, using only Python stdlib."""
 import base64
 import http.client

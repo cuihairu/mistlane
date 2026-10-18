@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
 """Smoke-test optional local Crashpad handler startup and clean shutdown."""
 import os
 from pathlib import Path

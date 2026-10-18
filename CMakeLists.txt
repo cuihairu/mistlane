@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 cmake_minimum_required(VERSION 3.25)
 project(mistlane VERSION 0.1.0 LANGUAGES CXX)
 if(NOT CMAKE_SYSTEM_NAME STREQUAL "Linux")

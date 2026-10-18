@@ -1,4 +1,5 @@
 <script setup lang="ts">
+// SPDX-License-Identifier: Apache-2.0
 import { onMounted, ref, watch } from 'vue'
 import { useData } from 'vitepress'
 const props = defineProps<{ source: string }>()

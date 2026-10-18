@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
 """Export only reviewed allowlisted sources; never includes parent Git history."""
 import argparse
 import hashlib

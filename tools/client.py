@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
 """A dependency-free client for the u32-big-endian framed protocol."""
 import argparse
 import socket

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 #include "mistlane/mysql_pool.hpp"
 #include <boost/asio/cancel_after.hpp>
 #include <cstdlib>

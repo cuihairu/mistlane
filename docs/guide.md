@@ -4,7 +4,7 @@ This guide runs the extracted framework for research and learning. It does not d
 
 ## Requirements
 
-Linux x64, a C++20 compiler, CMake 3.25+, Ninja, Git, curl, zip/unzip, tar, pkg-config, Perl, Python 3.9+, and the OpenSSL command-line tool. Documentation also requires Node.js 20+ and the pnpm version pinned by package.json. Enable Corepack when using its pnpm shim.
+Linux x64, a C++20 compiler, CMake 3.25+, Ninja, Git, curl, zip/unzip, tar, pkg-config, Perl, Python 3.9+, and the OpenSSL command-line tool. Documentation also requires Node.js 22.12+ and the pnpm version pinned by package.json. Enable Corepack when using its pnpm shim.
 
 ## Prepare vcpkg
 
@@ -66,6 +66,18 @@ Add `--transport ws` to a gateway to accept WebSocket messages. Each WS message 
 ```
 
 Use your own certificate and private key, kept outside source control. Drogon handles protocol details. WSS requires TLS 1.2 or newer. Responses are binary WS messages. Internal TCP frames use a four-byte big-endian length and a payload, up to 1 MiB.
+
+## HTTP worker
+
+Besides the Lua `message` mode over framed TCP/WS, a worker can serve HTTP directly. Run it with `--transport http` (or `https`) and an HTTP script such as `examples/http.lua`:
+
+```bash
+./build/debug/mistlane --role worker --listen 127.0.0.1:7500 \
+  --transport http --script examples/http.lua
+curl -s http://127.0.0.1:7500/healthz
+```
+
+For HTTPS add `--cert` and `--key`. The request table passed to Lua exposes method, path, query, headers and body; the response table sets status, headers and body. The request lifecycle hooks are `before_request`, `http`, `after_request` and `on_error`, in addition to the shared `init`/`start`/`tick`/`stop`/`shutdown` callbacks. HTTP workers require `http` and may omit `message`; framed workers require `message`. See the [HTTP reference](./http.md) and the [Lua lifecycle](./lua.md) for limits and hook contracts.
 
 ## Lua services
 

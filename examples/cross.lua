@@ -1,3 +1,4 @@
+-- SPDX-License-Identifier: Apache-2.0
 -- Research example: context is routing metadata, not authenticated identity.
 return {
   init = function() end,
