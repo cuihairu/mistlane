@@ -217,3 +217,12 @@ python3 tools/export.py
 ```
 
 归档仅包含 release-files.txt 显式清单中的文件和 SHA256 校验值，不包含父仓库历史、私有配置、原游戏玩法和预编译二进制。
+
+## Crashpad handler 部署
+
+`cmake --install <build-dir> --prefix PREFIX` 会把 `mistlane` 和 Crashpad 的 `crashpad_handler` 并排安装到 `PREFIX/bin`；handler 在 vcpkg 工具目录存在时一并复制。两个二进制只需要系统运行库（glibc、`libstdc++`、`libgcc_s`、`libm`），第三方依赖全部静态链接。
+
+可选 dump 管线的部署约定：
+
+- handler 与服务端放在同一文件系统并显式传入：`--crashpad-handler PREFIX/bin/crashpad_handler --crashpad-database /var/lib/mistlane/crashes`。数据库指向按保留策略定容的本地目录；上传保持关闭，数据不出机器。
+- Linux 崩溃抓取依赖 `ptrace`（handler 需要检查崩溃进程）。容器运行时必须允许它：Docker 默认 seccomp profile 在受支持的内核上放行 `ptrace`，但加固、无特权或自定义 AppArmor/seccomp profile 可能拒绝。`ptrace` 被拒时节点照常启动与服务，只是不会写 minidump——在该环境依赖 dump 前先用一次受控崩溃验证整条链路。

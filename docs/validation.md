@@ -43,4 +43,6 @@ The optional database and Redis checks are registered as `mistlane_mysql_integra
 
 During dependency setup, the environment's temporary filesystem refused a large OpenSSL archive. Rebuilding the vcpkg working tree on the regular disk resolved it. No port source patches or dependency downgrades were introduced for this environment issue.
 
+The install rules were smoke-checked on 2026-10-18: `cmake --install` into a temporary prefix placed `mistlane` and `crashpad_handler` in `bin/`, and the installed handler passed the crashpad startup suite against the freshly built server. Both binaries depend only on the system C/C++ runtime.
+
 Not validated: the original game cluster and business behavior, production load capacity, soak stability, other platforms, full game migration, Oracle MySQL versions. Hosted CI status is available in [GitHub Actions](https://github.com/cuihairu/mistlane/actions). These results support research and learning; they do not establish production readiness.

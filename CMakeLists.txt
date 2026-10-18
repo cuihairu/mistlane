@@ -73,3 +73,12 @@ target_link_libraries(mistlane_http PUBLIC CURL::libcurl)
 add_library(mistlane::http ALIAS mistlane_http)
 add_executable(mistlane-http-probe examples/http_probe.cpp)
 target_link_libraries(mistlane-http-probe PRIVATE mistlane_http)
+
+include(GNUInstallDirs)
+install(TARGETS mistlane RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+# The Crashpad handler ships next to the server binary; both only need the
+# system C/C++ runtime because vcpkg builds static dependencies.
+if(EXISTS "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/tools/crashpad_handler")
+  install(PROGRAMS "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/tools/crashpad_handler"
+    DESTINATION ${CMAKE_INSTALL_BINDIR})
+endif()

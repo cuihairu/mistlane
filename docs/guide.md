@@ -217,3 +217,12 @@ python3 tools/export.py
 ```
 
 The archive uses the explicit `release-files.txt` allowlist and includes SHA256 checksums. It contains no parent repository history, private configuration, original gameplay code, or prebuilt binaries.
+
+## Crashpad handler deployment
+
+`cmake --install <build-dir> --prefix PREFIX` installs `mistlane` and the Crashpad `crashpad_handler` side by side under `PREFIX/bin`; the handler is copied from the vcpkg tool directory when present. Both binaries need only the system runtime (glibc, `libstdc++`, `libgcc_s`, `libm`) because all third-party dependencies are linked statically.
+
+Deployment conventions for the optional dump pipeline:
+
+- Keep the handler on the same filesystem as the server and pass it explicitly: `--crashpad-handler PREFIX/bin/crashpad_handler --crashpad-database /var/lib/mistlane/crashes`. Point the database at a local directory sized by your retention policy; uploads stay disabled and nothing leaves the machine.
+- Linux crash generation requires `ptrace` (the handler inspects the crashed process). Container runtimes must allow it: Docker's default seccomp profile permits `ptrace` on supported kernels, but hardened, unprivileged, or custom AppArmor/seccomp profiles may not. If `ptrace` is denied the node still starts and serves, but no minidump is written — verify the pair with a controlled crash before relying on dumps in that environment.
