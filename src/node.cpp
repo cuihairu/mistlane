@@ -97,7 +97,10 @@ private:
         auto generation = ++generation_;
         timer_.expires_after(std::chrono::seconds(seconds));
         timer_.async_wait([self=shared_from_this(), generation](Error ec) {
-            if (!ec && self->generation_ == generation) self->stop();
+            if (!ec && self->generation_ == generation) {
+                if (self->upstream_) self->diagnostics_.upstream_timeout();
+                self->stop();
+            }
         });
     }
     void next() {
@@ -106,6 +109,9 @@ private:
         client_->read([self=shared_from_this()](Error ec, std::string payload) {
             if (self->closed_) return;
             if (ec || !self->bucket_.consume()) return self->stop();
+            self->diagnostics_.add_message("rx");
+            self->diagnostics_.add_payload_bytes("rx", payload.size());
+            self->request_started_ = std::chrono::steady_clock::now();
             self->deadline(10);
             if ((self->config_.role == "cross" || self->config_.role == "shard") && !self->joined_) {
                 try {
@@ -142,7 +148,7 @@ private:
                 self->upstream_->socket().async_connect(self->endpoint_,
                   [self, payload=std::move(payload)](Error error) mutable {
                     if (self->closed_) return;
-                    if (error) return self->stop();
+                    if (error) { self->diagnostics_.upstream_error(); return self->stop(); }
                     self->forward(std::move(payload));
                   });
             }
@@ -155,13 +161,14 @@ private:
     void forward(std::string payload) {
         upstream_->write(std::move(payload), [self=shared_from_this()](Error ec) {
             if (self->closed_) return;
-            if (ec) return self->stop();
+            if (ec) { self->diagnostics_.upstream_error(); return self->stop(); }
             self->upstream_->read([self](Error error, std::string response) {
                 if (self->closed_) return;
-                if (error) return self->stop();
+                if (error) { self->diagnostics_.upstream_error(); return self->stop(); }
                 if (self->awaiting_join_) {
                     self->awaiting_join_ = false;
                     if (response != "MLC1 OK " + std::to_string(self->config_.route_epoch)) {
+                        self->diagnostics_.upstream_error();
                         if (!response.starts_with("MLC1 ERR ")) return self->reject("UPSTREAM");
                         return self->client_->write(std::move(response), [self](Error) { self->stop(); });
                     }
@@ -171,6 +178,9 @@ private:
         });
     }
     void reply(std::string payload) {
+        diagnostics_.add_message("tx");
+        diagnostics_.add_payload_bytes("tx", payload.size());
+        diagnostics_.observe_request(std::chrono::steady_clock::now() - request_started_);
         client_->write(std::move(payload), [self=shared_from_this()](Error ec) {
             if (self->closed_) return;
             if (ec) self->stop();
@@ -186,6 +196,7 @@ private:
     CrossAdmission& admission_;
     Diagnostics& diagnostics_;
     CrossContext context_;
+    std::chrono::steady_clock::time_point request_started_{};
     bool joined_ = false, awaiting_join_ = false;
     std::function<void(Session*)> on_close_;
     TokenBucket bucket_;
@@ -313,9 +324,12 @@ private:
         });
     }
     void tick() {
-        tick_.expires_after(std::chrono::milliseconds(100));
-        tick_.async_wait([this](Error ec) {
+        const auto scheduled = std::chrono::steady_clock::now() + std::chrono::milliseconds(100);
+        tick_.expires_at(scheduled);
+        tick_.async_wait([this, scheduled](Error ec) {
             if (ec || stopping_) return;
+            // Timestamps only: observing the lag must never block the Lua loop.
+            diagnostics_->observe_event_loop_lag(std::chrono::steady_clock::now() - scheduled);
             if (service_) {
                 try { service_->tick(); }
                 catch (const std::exception& e) { std::cerr << "tick failed: " << e.what() << '\n'; }

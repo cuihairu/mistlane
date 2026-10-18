@@ -6,6 +6,7 @@
 #include "mistlane/http_client.hpp"
 #include "mistlane/token_bucket.hpp"
 #include <curl/curl.h>
+#include <cstdlib>
 #include <cstring>
 #include <iomanip>
 #include <future>
@@ -141,6 +142,33 @@ void transport_tcp() {
     require(samples.status == 200 && samples.body.find("mistlane_ready{role=\"worker\"} 1") != std::string::npos,
         "Prometheus readiness missing");
     require(samples.body.find("mistlane_lua_callback_seconds_count") != std::string::npos, "callback histogram missing");
+    const auto metric_value = [](const std::string& body, const std::string& sample) {
+        const auto at = body.find(sample);
+        require(at != std::string::npos, "missing metric " + sample);
+        return std::strtod(body.c_str() + at + sample.size(), nullptr);
+    };
+    require(metric_value(samples.body, "mistlane_messages_total{role=\"worker\",direction=\"rx\"}") > 0,
+        "rx message counter missing");
+    require(metric_value(samples.body, "mistlane_messages_total{role=\"worker\",direction=\"tx\"}") > 0,
+        "tx message counter missing");
+    require(metric_value(samples.body, "mistlane_payload_bytes_total{role=\"worker\",direction=\"tx\"}") > 1024*1024,
+        "payload byte counter missing");
+    require(metric_value(samples.body, "mistlane_request_seconds_count{role=\"worker\"}") > 0,
+        "request latency histogram missing");
+    require(metric_value(samples.body, "mistlane_request_seconds_sum{role=\"worker\"}") > 0,
+        "request latency not observed");
+    // The first scheduled tick fires at least 100ms after start; wait for it.
+    Http ticks;
+    eventually([&] {
+        ticks = http("http://"+endpoint(metrics)+"/metrics");
+        return metric_value(ticks.body, "mistlane_event_loop_lag_seconds_count{role=\"worker\"}") > 0;
+    });
+    require(metric_value(ticks.body, "mistlane_event_loop_lag_max_seconds{role=\"worker\"}") > 0,
+        "tick lag maximum missing");
+    require(metric_value(samples.body, "mistlane_upstream_errors_total{role=\"worker\"}") == 0,
+        "unexpected upstream errors");
+    require(metric_value(samples.body, "mistlane_upstream_timeouts_total{role=\"worker\"}") == 0,
+        "unexpected upstream timeouts");
     const std::string frame("\0\0\0\5abcde", 9);
     {
         RawSocket raw(gateway);
@@ -162,9 +190,12 @@ void transport_tcp() {
     RawSocket extra(limited);
     require(extra.closed(), "connection admission was not enforced");
     equal(first->request("still-alive"), "still-alive");
-    const auto dead = port(), ingress = port();
-    c.node("gateway", ingress, {"--upstream", endpoint(dead)});
+    const auto dead = port(), ingress = port(), gateway_metrics = port();
+    c.node("gateway", ingress, {"--upstream", endpoint(dead), "--metrics-listen", endpoint(gateway_metrics)});
     must_fail([&] { (void)tcp(ingress)->request("unavailable"); });
+    auto failure = http("http://"+endpoint(gateway_metrics)+"/metrics");
+    require(metric_value(failure.body, "mistlane_upstream_errors_total{role=\"gateway\"}") >= 1,
+        "upstream connect failure not counted");
 }
 void transport_websocket() {
     Context c; c.cert(); write(c.path("echo.lua"), echo);

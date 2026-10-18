@@ -92,4 +92,4 @@ shard 不可用时关闭受影响会话，不自动转移或重放。其他 shar
 | Crashpad | native 崩溃后保留本地 minidump | 启动独立 handler，使用有界本地数据库；默认不配置上传端点。每个构建归档对应符号。 |
 | Profiler | 把 CPU 和内存分配成本归因到代码路径 | 等指标与可复现负载建立后，再提供可选剖析模式；剖析输出不是健康信号。 |
 
-当前可选 `/metrics` 端点导出就绪状态、活动会话、准入拒绝、Lua 回调耗时和 RSS。Crashpad 可显式启用，并将报告保存在关闭上传的本地数据库。内部存活探测、流量/tick 指标、转储生成测试、保留限制和符号工作流仍待补齐。不会因节点暂时未就绪就自动把有状态房间转移到别的 shard。这些诊断能提供过载证据，但仍需目标环境压测才能得出容量结论。
+当前可选 `/metrics` 端点导出就绪状态、活动会话、准入拒绝、Lua 回调耗时、RSS、按方向的收发消息数与字节数（`mistlane_messages_total`、`mistlane_payload_bytes_total`）、客户端请求耗时（`mistlane_request_seconds`）、上游错误与截止超时计数（`mistlane_upstream_errors_total`、`mistlane_upstream_timeouts_total`），以及事件循环 tick 调度延迟（`mistlane_event_loop_lag_seconds` 及运行期最大值）。全部指标只带 role 标签，桶边界固定。Crashpad 可显式启用，并将报告保存在关闭上传的本地数据库。内部存活探测、崩溃转储保留限制和目标环境过载演练仍待补齐。不会因节点暂时未就绪就自动把有状态房间转移到别的 shard。这些诊断能提供过载证据，但仍需目标环境压测才能得出容量结论。

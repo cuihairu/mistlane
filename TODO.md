@@ -179,9 +179,9 @@
 - [x] 实现 Prometheus Registry 与 role 低基数标签，不使用玩家、房间、会话 ID 作为 label。
 - [x] 添加可配置 metrics 监听地址和端口，默认禁用；单独监听，不复用玩家协议端口。
 - [x] 添加 `mistlane_ready`、活动会话 gauge、准入拒绝 counter，并以 role 作为标签；build/version/node identity 指标仍待补。
-- [ ] 为 TCP/cross/shard 添加收发消息数/字节、请求耗时直方图、上游错误和超时计数，并限制直方图桶数与 label 集合。
+- [x] 为 TCP/cross/shard 添加收发消息数/字节、请求耗时直方图、上游错误和超时计数，并限制直方图桶数与 label 集合。证据：2026-10-18 `Diagnostics` 新增 `mistlane_messages_total`/`mistlane_payload_bytes_total`（direction∈{rx,tx}）、`mistlane_request_seconds`（11 桶，客户端收到→回给客户端的整链耗时）、`mistlane_upstream_errors_total`（连接/写/读/握手失败）、`mistlane_upstream_timeouts_total`（带上游会话的截止超时）；全部指标仅 role 标签+direction 闭集，Session 在 rx/tx/reply/forward/连接失败/截止路径埋点；`transport.tcp` 断言 worker 活跃值非零、死端口 gateway 错误≥1、健康节点错误/超时=0，用例 5/5 稳定，完整 ctest 12/12 绿；双语 cross-server/migration-status/validation 更新，docs:build 通过。
 - [x] 为 Lua message/http handler 记录耗时；tick 耗时和错误分类仍待补。
-- [ ] 记录 Asio 100ms tick 的调度延迟直方图/最大值，让事件循环阻塞能被观测；测量本身不得阻塞 Lua loop。
+- [x] 记录 Asio 100ms tick 的调度延迟直方图/最大值，让事件循环阻塞能被观测；测量本身不得阻塞 Lua loop。证据：2026-10-18 `Node::tick` 改用 `expires_at` 并在回调首行以纯时间戳计算 scheduled→fired 延迟（不触碰 Lua，不阻塞事件循环），`mistlane_event_loop_lag_seconds` 直方图（14 桶，0.5ms–10s）+ `mistlane_event_loop_lag_max_seconds` 运行期最大 gauge（原 gauge 从未接线，改为 max 语义）；`transport.tcp` 等待首个调度 tick 后断言 count/max 非零，5/5 稳定；双语文档同步。
 - [x] 每个约 100ms tick 从 Linux procfs 采样 RSS；CPU 指标和采样语义文档仍待补。
 - [x] 为 Prometheus endpoint 添加集成检查：路径、文本 exposition、ready 指标和活动连接数。
 - [ ] 设计独立内部探测协议：独立 control listener、请求 nonce、超时、协议版本和最小身份校验；不与玩家会话共用连接或 Lua handler。
