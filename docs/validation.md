@@ -1,6 +1,6 @@
 # Validation record
 
-Validated on 2026-10-17; Redis additions verified on 2026-10-18. Environment: Linux x64, GCC 15.2.0, CMake 4.2.3, pinned vcpkg baseline `a5f736224e85b32e25a8ffc52562333180396642`.
+Validated on 2026-10-17; Redis additions and the HTTP/HTTPS, Lua HTTP worker and native cross/shard checks were verified on 2026-10-18. Environment: Linux x64, GCC 15.2.0, CMake 4.2.3, pinned vcpkg baseline `a5f736224e85b32e25a8ffc52562333180396642`.
 
 | Item | Actual result |
 |---|---|
@@ -9,6 +9,9 @@ Validated on 2026-10-17; Redis additions verified on 2026-10-18. Environment: Li
 | TCP framing | Passed empty, binary, UTF-8, maximum-size, fragmented, coalesced, and oversized request cases |
 | Concurrent clients and session routing | Passed concurrent requests and per-session upstream affinity |
 | WS / WSS | Passed Drogon handshake, masking, fragmented messages, ping/pong, and CA-trusted TLS echo |
+| HTTP / HTTPS | Passed Drogon requests over both transports, binary bodies, and the curl adapter's certificate/hostname verification, HTTP/HTTPS-only protocol restriction and response-size limit |
+| Lua HTTP worker | Passed request metadata, before_request short-circuit, after_request mutation, on_error fallback, response validation and reload rollback |
+| Native cross/shard | Passed MLC1 handshake, fixed group/room affinity to one shard, final ROOM_FULL admission, lease release on disconnect, EPOCH mismatch and upstream-failure isolation |
 | Lua | Passed successful VM reload, invalid/schematic reload rollback, callback errors, typical infinite-loop interruption, and repeated callbacks |
 | Extracted heap | Passed module isolation and ordered pops using the actual linked Lua runtime |
 | Failure and resource paths | Passed upstream connection failure, connection limit, message-rate limit, invalid CLI arguments, SIGTERM exit |

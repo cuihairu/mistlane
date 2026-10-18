@@ -1,6 +1,6 @@
 # 验证记录
 
-验证日期：2026-10-17；Redis 新增项于 2026-10-18 验证。环境为 Linux x64、GCC 15.2.0、CMake 4.2.3，固定 vcpkg baseline：a5f736224e85b32e25a8ffc52562333180396642。
+验证日期：2026-10-17；HTTP/HTTPS、Lua HTTP worker 与原生 cross/shard 检查同 Redis 新增项于 2026-10-18 验证。环境为 Linux x64、GCC 15.2.0、CMake 4.2.3，固定 vcpkg baseline：a5f736224e85b32e25a8ffc52562333180396642。
 
 | 项目 | 实际结果 |
 |---|---|
@@ -9,6 +9,9 @@
 | TCP 分帧 | 空、二进制、UTF-8、上限长度、拆包、合包与超大报文通过 |
 | 并发与路由 | 并发请求及会话固定上游通过 |
 | WS / WSS | Drogon 握手、掩码、分片、ping/pong、受信任证书 TLS echo 通过 |
+| HTTP / HTTPS | 两种传输下的 Drogon 请求、二进制正文，以及 curl 适配的证书 / 主机名校验、仅允许 HTTP/HTTPS 的协议限制和响应大小上限通过 |
+| Lua HTTP worker | 请求元数据、before_request 短路、after_request 修改、on_error 兜底、响应校验与重载回退通过 |
+| 原生 cross/shard | MLC1 握手、group/room 固定到同一 shard、ROOM_FULL 最终准入、断连释放租约、EPOCH 不匹配与上游失败隔离通过 |
 | Lua | 成功重载、语法 / 接口错误回退、回调错误、典型死循环中断、重复回调通过 |
 | 提取的堆工具 | 在实际链接的 Lua 中验证模块隔离与有序弹出 |
 | 错误和资源路径 | 上游连接失败、连接上限、消息限流、非法参数、SIGTERM 退出通过 |
