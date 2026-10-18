@@ -354,13 +354,19 @@ void probe_control() {
     Context c;
     write(c.path("echo.lua"), echo);
     // Capacity 2 with a 0.5 readiness gate saturates at one session; two ticks flip state.
-    const auto work=port(), probe=port(), guarded=port(), guard_probe=port();
+    const auto work=port(), probe=port(), work_metrics=port(), guarded=port(), guard_probe=port();
     c.node("worker", work, {"--script", c.path("echo.lua").string(), "--max-connections", "2",
-        "--overload-ratio", "0.5", "--ready-hysteresis", "2", "--probe-listen", endpoint(probe)});
+        "--overload-ratio", "0.5", "--ready-hysteresis", "2", "--probe-listen", endpoint(probe),
+        "--metrics-listen", endpoint(work_metrics)});
     const auto ask = [](unsigned listen, const std::string& line) {
         RawSocket raw(listen);
         raw.send(line + "\n");
         return raw.receive_line();
+    };
+    const auto metric_value = [](const std::string& body, const std::string& sample) {
+        const auto at = body.find(sample);
+        require(at != std::string::npos, "missing metric " + sample);
+        return std::strtod(body.c_str() + at + sample.size(), nullptr);
     };
     equal(ask(probe, "PROBE1 n1 liveness"), "PROBE1 n1 ok alive");
     equal(ask(probe, "PROBE9 n2 liveness"), "PROBE1 n2 err version");
@@ -368,6 +374,12 @@ void probe_control() {
     equal(ask(probe, "PROBE1 n4"), "PROBE1 n4 err malformed");
     equal(ask(probe, "PROBE1 bad!n liveness"), "PROBE1 - err malformed");
     equal(ask(probe, "hello world"), "PROBE1 world err version");
+    // Every ask is a fresh connection, so reply buffers and teardown must hold
+    // up across repeated probe lifetimes.
+    for (int i = 0; i < 50; ++i) {
+        const auto nonce = "loop" + std::to_string(i);
+        equal(ask(probe, "PROBE1 " + nonce + " liveness"), "PROBE1 " + nonce + " ok alive");
+    }
     const auto readiness = ask(probe, "PROBE1 n5 readiness");
     require(readiness.starts_with("PROBE1 n5 ok ready active=0 capacity=2 "),
         "unexpected readiness reply: " + readiness);
@@ -383,10 +395,21 @@ void probe_control() {
     eventually([&] {
         return ask(probe, "PROBE1 n6 readiness").find(" ok notready active=1 capacity=2 ") != std::string::npos;
     });
+    // The readiness gauge must follow the admission gate, not just start/stop.
+    {
+        const auto busy = http("http://"+endpoint(work_metrics)+"/metrics");
+        require(metric_value(busy.body, "mistlane_ready{role=\"worker\"} ") == 0,
+            "readiness gauge must drop with the admission gate: " + busy.body);
+    }
     session.reset();
     eventually([&] {
         return ask(probe, "PROBE1 n7 readiness").find(" ok ready active=0 capacity=2 ") != std::string::npos;
     });
+    {
+        const auto recovered = http("http://"+endpoint(work_metrics)+"/metrics");
+        require(metric_value(recovered.body, "mistlane_ready{role=\"worker\"} ") == 1,
+            "readiness gauge must recover with the admission gate: " + recovered.body);
+    }
     {
         // Minimal identity check: a token env makes unauthenticated probes fail.
         ScopedEnv token("MISTLANE_PROBE_TOKEN", "s3cret");
@@ -400,11 +423,12 @@ void probe_control() {
         "unexpected authenticated readiness: " + authenticated);
 
     // Cross consults shard readiness for new rooms; established rooms keep flowing.
-    const auto shard=port(), shard_probe=port(), ingress=port(), ingress2=port(), plain=port(), broken=port();
+    const auto shard=port(), shard_probe=port(), ingress=port(), ingress_metrics=port(),
+        ingress2=port(), plain=port(), broken=port();
     c.node("shard", shard, {"--script", c.path("echo.lua").string(), "--max-connections", "4",
         "--overload-ratio", "0.5", "--ready-hysteresis", "2", "--probe-listen", endpoint(shard_probe)});
     const auto upstream = endpoint(shard) + ":" + std::to_string(shard_probe);
-    c.node("cross", ingress, {"--upstream", upstream});
+    c.node("cross", ingress, {"--upstream", upstream, "--metrics-listen", endpoint(ingress_metrics)});
     c.node("cross", ingress2, {"--upstream", upstream});
     const auto join = [](cli::Client& peer, const std::string& room) {
         return peer.request("MLC1 1 realm g " + room);
@@ -417,6 +441,12 @@ void probe_control() {
     }, 5s, "shard to reach notready at active=2");
     equal(join(*tcp(ingress), "r3"), "MLC1 ERR NOT_READY");
     equal(join(*tcp(ingress2), "r4"), "MLC1 ERR NOT_READY");
+    // Admission rejections include cross-gated joins, not only local limits.
+    {
+        const auto rejects = http("http://"+endpoint(ingress_metrics)+"/metrics");
+        require(metric_value(rejects.body, "mistlane_admission_rejections_total{role=\"cross\"} ") >= 1,
+            "cross admission rejects are not counted: " + rejects.body);
+    }
     room1.reset();
     eventually([&] {
         return ask(shard_probe, "PROBE1 nr2 readiness").find(" ok ready active=1 ") != std::string::npos;
@@ -428,6 +458,44 @@ void probe_control() {
     // A dead probe listener is an upstream failure, not a silent accept.
     c.node("cross", broken, {"--upstream", endpoint(shard) + ":" + std::to_string(port())});
     equal(join(*tcp(broken), "r8"), "MLC1 ERR UPSTREAM");
+
+    // Bracketed IPv6 listen and upstream addresses, gated and ungated.
+    const auto v6_shard=port(), v6_probe=port(), v6_gated=port(), v6_plain=port();
+    auto& v6_node = c.spawn({self().string(), "--role", "shard",
+        "--listen", "[::1]:" + std::to_string(v6_shard),
+        "--script", c.path("echo.lua").string(), "--max-connections", "4",
+        "--overload-ratio", "0.5", "--ready-hysteresis", "2",
+        "--probe-listen", "[::1]:" + std::to_string(v6_probe)});
+    v6_node.ready("ready shard");
+    c.node("cross", v6_gated, {"--upstream",
+        "[::1]:" + std::to_string(v6_shard) + ":" + std::to_string(v6_probe)});
+    equal(join(*tcp(v6_gated), "v1"), "MLC1 OK 1");
+    c.node("cross", v6_plain, {"--upstream", "[::1]:" + std::to_string(v6_shard)});
+    equal(join(*tcp(v6_plain), "v2"), "MLC1 OK 1");
+
+    // An oversized probe request line is closed without any reply bytes.
+    {
+        RawSocket long_line(probe);
+        long_line.send(std::string(300, 'A') + "\n");
+        must_fail([&] { (void)long_line.receive_line(); });
+    }
+    // Concurrent probe connections are capped; rejected sockets close at once.
+    {
+        std::vector<std::unique_ptr<RawSocket>> held;
+        for (int i = 0; i < 64; ++i) held.push_back(std::make_unique<RawSocket>(probe));
+        const auto deadline = std::chrono::steady_clock::now() + 1200ms;
+        bool rejected = false;
+        RawSocket over(probe);
+        while (std::chrono::steady_clock::now() < deadline) {
+            if (over.closed()) { rejected = true; break; }
+            std::this_thread::sleep_for(20ms);
+        }
+        require(rejected, "peer cap did not close the 65th probe connection");
+        held.clear();
+        eventually([&] {
+            return ask(probe, "PROBE1 freed liveness") == "PROBE1 freed ok alive";
+        }, 5s, "probe slots did not free after held peers closed");
+    }
 }
 void config_file() {
     Context c;

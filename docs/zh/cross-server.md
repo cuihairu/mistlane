@@ -79,7 +79,7 @@ shard 不可用时关闭受影响会话，不自动转移或重放。其他 shar
 4. 在场景入口做硬拒绝或外部有界等待队列，返回重试时间并加抖动，禁止满载后随机塞入和无限重连。
 5. 故障演练覆盖 shard 宕机、下游变慢、慢读客户端、突发加入、频繁断连、房间满后恢复；持续观察拒绝数、活跃会话、请求字节、tick 漂移、超时及重连速率。
 
-现有自动化验证只证明路由、配额、释放和错误契约，没有持续压测与线上容量结论。生产指标采集与压力驱动器尚未集成。
+现有自动化验证只证明路由、配额、释放和错误契约，没有持续压测与线上容量结论。内置 `mistlane bot` 可为功能验证提供并发请求负载（见下方运行手册），但持续的生产级压测，以及私有 `/metrics` 之外的运营指标管线，仍待补齐。
 
 ## 内部诊断能力现状
 
@@ -106,6 +106,7 @@ PROBE1 <nonce> readiness   -> PROBE1 <nonce> ok ready|notready active=N capacity
 - `liveness` 证明事件循环仍在推进。`readiness` 额外报告是否接纳新会话：`active` 为已建立会话数，`capacity` 为 `--max-connections` 经内存预算封顶后的值（启动日志 `session admission limit`），`lag_ms` 为最近一次 100ms tick 的调度延迟。
 - 就绪状态带滞回：当 `active >= --overload-ratio * capacity` 视为饱和，且只有连续 `--ready-hysteresis` 个 100ms tick 才在 ready/notready 之间翻转。默认 ratio 0.9、hysteresis 3。
 - 节点环境设置 `MISTLANE_PROBE_TOKEN` 后，请求必须以第四字段携带令牌（`PROBE1 <nonce> <token> readiness`），否则应答 `err auth`；令牌不经过面向玩家的监听器。
+- 该监听器按内部用途设上限：请求行超过 256 字节，或并发探测连接超过 64 个，直接关闭且不作答应答。探测连接不占用玩家流量，也不进入 Lua。
 
 cross 节点的上游写作 `IP:PORT[:PROBE]`。带探测端口时，cross 会话仅在转发首个房间加入前询问一次 shard：明确 `notready` 以 `MLC1 ERR NOT_READY` 拒绝客户端；连接失败或应答非法以 `MLC1 ERR UPSTREAM` 拒绝。已建立房间不会重复探测，shard 未就绪期间继续转发；未带探测端口的上游不做门控。
 
@@ -118,9 +119,9 @@ Profiler 路线决策（2026-10-18）：采用作用于运行进程的外部采�
 可复现的压测不依赖外部工具：起一个 shard 加一个带 `--metrics-listen` 的 cross 节点，用内置压测器驱动，并在压测前、中、后抓取 `/metrics`：
 
 ```
-mistlane bot --url tcp://127.0.0.1:<cross-port> --clients 64 --count 500
+mistlane bot --url tcp://127.0.0.1:<cross-port> --join "MLC1 1 realm g bench" --clients 32 --count 500
 ```
 
-从同一次抓取读取 `mistlane_request_seconds`、`mistlane_messages_total`、`mistlane_event_loop_lag_seconds`、RSS 与准入拒绝数。只有场景脚本、房间布局、上游列表与压测器参数完全一致时数字才可比；否则只是噪声。
+`--join` 每条连接先执行一次 MLC1 握手并期待 `MLC1 OK 1`；不带它时 cross 节点会拒绝所有请求。bot 连接同样占用节点的准入配额（`--max-connections` 经内存预算封顶，启动日志打印），因此 `--clients` 要低于该上限，或先调高节点的 `--max-connections`。从同一次抓取读取 `mistlane_request_seconds`、`mistlane_messages_total`、`mistlane_event_loop_lag_seconds`、RSS 与准入拒绝数。只有场景脚本、房间布局、上游列表与压测器参数完全一致时数字才可比；否则只是噪声。
 
-当前可选 `/metrics` 端点导出就绪状态、活动会话、准入拒绝、Lua 回调耗时、RSS、按方向的收发消息数与字节数（`mistlane_messages_total`、`mistlane_payload_bytes_total`）、客户端请求耗时（`mistlane_request_seconds`）、上游错误与截止超时计数（`mistlane_upstream_errors_total`、`mistlane_upstream_timeouts_total`），以及事件循环 tick 调度延迟（`mistlane_event_loop_lag_seconds` 及运行期最大值）。全部指标只带 role 标签，桶边界固定。Crashpad 可显式启用，并将报告保存在关闭上传的本地数据库。崩溃转储保留限制、CPU/内存 profiler 评估和目标环境过载演练仍待补齐。不会因节点暂时未就绪就自动把有状态房间转移到别的 shard。这些诊断能提供过载证据，但仍需目标环境压测才能得出容量结论。
+当前可选 `/metrics` 端点导出就绪状态、活动会话、准入拒绝、Lua 回调耗时、RSS、按方向的收发消息数与字节数（`mistlane_messages_total`、`mistlane_payload_bytes_total`）、客户端请求耗时（`mistlane_request_seconds`）、上游错误与截止超时计数（`mistlane_upstream_errors_total`、`mistlane_upstream_timeouts_total`），以及事件循环 tick 调度延迟（`mistlane_event_loop_lag_seconds` 及运行期最大值）。`mistlane_ready` 与探测应答使用同一个滞回准入状态，`mistlane_admission_rejections_total` 同时统计连接上限与 cross 准入拒绝。全部指标只带 role 标签，桶边界固定。Crashpad 可显式启用，并将报告保存在关闭上传的本地数据库。崩溃转储保留限制、CPU/内存 profiler 评估和目标环境过载演练仍待补齐。不会因节点暂时未就绪就自动把有状态房间转移到别的 shard。这些诊断能提供过载证据，但仍需目标环境压测才能得出容量结论。

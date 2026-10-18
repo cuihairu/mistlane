@@ -25,6 +25,12 @@ namespace {
 namespace asio = boost::asio;
 using tcp = asio::ip::tcp;
 using Error = boost::system::error_code;
+// IPv6 literals travel bracketed ("[::1]") so that a port can follow them.
+asio::ip::address parse_address(const std::string& text) {
+    if (text.size() >= 2 && text.front() == '[' && text.back() == ']')
+        return asio::ip::make_address(text.substr(1, text.size()-2));
+    return asio::ip::make_address(text);
+}
 // Replaces the old mixed TCP/WebSocket framing. Wire format: u32 BE + payload.
 class TcpChannel : public Channel, public std::enable_shared_from_this<TcpChannel> {
 public:
@@ -78,8 +84,13 @@ private:
 class ProbeServer : public std::enable_shared_from_this<ProbeServer> {
 public:
     using Answer = std::function<std::string(std::string_view command)>;
+    // One request line per connection: enough for the longest nonce plus a
+    // probe secret, small enough that a stalled or hostile client cannot grow
+    // unbounded buffers or exhaust the node's peer slots.
+    static constexpr std::size_t max_peers = 64;
+    static constexpr std::size_t probe_line_cap = 256;
     ProbeServer(asio::io_context& io, const Endpoint& listen, Answer answer)
-      : acceptor_(io, tcp::endpoint(asio::ip::make_address(listen.address), listen.port)),
+      : acceptor_(io, tcp::endpoint(parse_address(listen.address), listen.port)),
         answer_(std::move(answer)) {}
     // Separate from the constructor: accept() needs shared_from_this() ownership.
     void start() { accept(); }
@@ -94,8 +105,8 @@ private:
     public:
         Peer(tcp::socket socket, Answer answer)
           : socket_(std::move(socket)), timer_(socket_.get_executor()), answer_(std::move(answer)) {}
-        void start(const std::shared_ptr<void>& owner) {
-            owner_ = owner;
+        void start(const std::shared_ptr<ProbeServer>& server) {
+            server_ = server;
             read();
             expire();
         }
@@ -109,7 +120,7 @@ private:
             auto self = shared_from_this();
             asio::async_read_until(socket_, buffer_, '\n',
               [self](Error ec, std::size_t) {
-                if (ec) { self->owner_.reset(); return; }
+                if (ec) return self->finish();
                 std::istream line(&self->buffer_);
                 std::string request;
                 std::getline(line, request);
@@ -161,29 +172,44 @@ private:
             return "PROBE1 " + std::string(nonce_text) + " " + answer_(command);
         }
         void reply(std::string text) {
+            // asio::buffer never copies: the reply line must outlive the write.
+            auto line = std::make_shared<std::string>(std::move(text));
+            line->push_back('\n');
             auto self = shared_from_this();
-            asio::async_write(socket_, asio::buffer(text+'\n'),
-              [self, text](Error, std::size_t) {
-                Error ignored;
-                self->timer_.cancel();
-                self->socket_.shutdown(tcp::socket::shutdown_both, ignored);
-                self->socket_.close(ignored);
-                self->owner_.reset();
-            });
+            asio::async_write(socket_, asio::buffer(*line),
+              [self, line](Error, std::size_t) { self->finish(); });
+        }
+        // Releases the peer slot only after the last handler frame: callers hold
+        // their own `self`, so erase() cannot destroy us mid-handler.
+        void finish() {
+            if (finished_) return;
+            finished_ = true;
+            Error ignored;
+            timer_.cancel();
+            socket_.close(ignored);
+            if (auto server = server_) server->retire(shared_from_this());
         }
         tcp::socket socket_;
         asio::steady_timer timer_;
-        asio::streambuf buffer_;
+        // One short request line per connection; oversized input closes the peer.
+        asio::streambuf buffer_{probe_line_cap};
         Answer answer_;
-        std::shared_ptr<void> owner_;
+        std::shared_ptr<ProbeServer> server_;
+        bool finished_ = false;
     };
+    void retire(const std::shared_ptr<Peer>& peer) { peers_.erase(peer); }
     void accept() {
         auto self = shared_from_this();
         acceptor_.async_accept([self](Error ec, tcp::socket socket) {
             if (ec) return;
-            auto peer = std::make_shared<Peer>(std::move(socket), self->answer_);
-            self->peers_.insert(peer);
-            peer->start(self);
+            if (self->peers_.size() >= max_peers) {
+                Error ignored;
+                socket.close(ignored);
+            } else {
+                auto peer = std::make_shared<Peer>(std::move(socket), self->answer_);
+                self->peers_.insert(peer);
+                peer->start(self);
+            }
             self->accept();
         });
     }
@@ -201,7 +227,7 @@ public:
         timer_(client_->executor()), config_(config), admission_(admission), diagnostics_(diagnostics),
         on_close_(std::move(on_close)) {
         if (upstream) {
-            endpoint_ = tcp::endpoint(asio::ip::make_address(upstream->address), upstream->port);
+            endpoint_ = tcp::endpoint(parse_address(upstream->address), upstream->port);
             upstream_ = std::make_shared<TcpChannel>(tcp::socket(client_->executor()));
         }
     }
@@ -254,7 +280,7 @@ private:
                     if (self->config_.role == "shard")
                         return self->reply("MLC1 OK " + std::to_string(self->config_.route_epoch));
                     const auto& endpoint = self->config_.upstreams[index];
-                    self->endpoint_ = tcp::endpoint(asio::ip::make_address(endpoint.address), endpoint.port);
+                    self->endpoint_ = tcp::endpoint(parse_address(endpoint.address), endpoint.port);
                     self->probe_port_ = endpoint.probe_port;
                     self->upstream_ = std::make_shared<TcpChannel>(tcp::socket(self->client_->executor()));
                 } catch (const std::exception&) { return self->reject("INVALID"); }
@@ -286,6 +312,7 @@ private:
     }
     void reject(const std::string& reason) {
         std::cerr << "cross admission rejected: " << reason << '\n';
+        diagnostics_.reject(reason);
         client_->write("MLC1 ERR " + reason, [self=shared_from_this()](Error) { self->stop(); });
     }
     // A new room only joins a shard the probe just saw ready. Probe failures are
@@ -336,7 +363,9 @@ private:
             if (error || *done) return fail("CONNECT");
             timer->expires_after(std::chrono::seconds(1));
             asio::async_write(*socket, asio::buffer(request),
-              [socket, timer, buffer, done, fail, succeed](Error write_error, std::size_t) {
+              // asio::buffer points into `request`: keep the capture alive until
+              // the write completes instead of letting the outer frame free it.
+              [socket, timer, buffer, done, fail, succeed, request](Error write_error, std::size_t) {
                 if (write_error || *done) return fail("WRITE");
                 asio::async_read_until(*socket, asio::dynamic_buffer(*buffer), '\n',
                   [socket, timer, buffer, done, fail, succeed](Error read_error, std::size_t) mutable {
@@ -434,9 +463,9 @@ public:
             redis_->start();
         }
         if (config_.role == "worker" || config_.role == "shard") service_ = std::make_shared<LuaService>(config_.script, ServiceContext{config_.role, config_.transport, config_.route_epoch}, redis_);
-        for (const auto& e : config_.upstreams) (void)asio::ip::make_address(e.address);
+        for (const auto& e : config_.upstreams) (void)parse_address(e.address);
         if (config_.transport == "tcp") {
-            auto endpoint = tcp::endpoint(asio::ip::make_address(config_.listen.address), config_.listen.port);
+            auto endpoint = tcp::endpoint(parse_address(config_.listen.address), config_.listen.port);
             acceptor_.open(endpoint.protocol());
             acceptor_.set_option(asio::socket_base::reuse_address(true));
             acceptor_.bind(endpoint);
@@ -546,6 +575,9 @@ private:
             healthy_ticks_ = saturated ? 0 : healthy_ticks_+1;
             if (over_ticks_ >= config_.ready_hysteresis) admitting_ = false;
             if (healthy_ticks_ >= config_.ready_hysteresis) admitting_ = true;
+            // The exported readiness must track the gate the probe answers with,
+            // so operators and load balancers see the same state.
+            diagnostics_->set_ready(ready_ && admitting_);
             if (service_) {
                 try { service_->tick(); }
                 catch (const std::exception& e) { std::cerr << "tick failed: " << e.what() << '\n'; }
