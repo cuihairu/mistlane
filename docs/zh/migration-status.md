@@ -14,7 +14,7 @@
 | gateway / router / worker 拓扑 | 重新实现 | 有通用 TCP 转发和 worker 执行；没有账号身份、玩家亲和路由或旧服务注册协议。 |
 | 跨服房间路由 | 新的最小实现 | `cross`/`shard` 提供 group/room 固定路由、epoch 检查和本地硬准入；不提供全局配额、服务发现或玩家状态迁移。 |
 | 服务连接注册、重连和排队投递 | 未迁移 | 当前会话直接连接上游。旧握手已于 2026-10-18 追踪：主动方经 `L_FirstMsg`/`ServerService:handShakeToServer` 发送 `sp.pack(Protocol.HandShake, {name, sidx, tarName})`，被动方把首个原始报文交给 `L_Register`，首个回应后连接切换到帧模式（`L_ServerMsg`），握手前的写请求先排队，重连为固定 2 秒定时器加 `proxyOff` 钩子。该报文只做身份声明、无任何认证，重新实现不会带来安全性。维持静态 `UPSTREAMS` 加 MLC1 epoch 握手；只有出现动态发现或跨不可信网络互联的真实需求时，才一并设计注册与认证。旧发送队列也已追踪：实际生产者是 Lua `net_asyncWrite` 与 C++ `pushData`，向每连接的无界发送链表追加（超过 64 KiB 的载荷拆成带序号的分片，仅打告警），消费者是 `async_write` 链；断线直接销毁链表、不重投；握手前的 `pushQueue` 双端队列在旧代码树中无任何调用方；重连以固定 2 秒定时器无限重试。不引入有界可靠投递模块：旧实现本身没有可移植的投递保证，该模块必须依据具体应用需求再定义，且需明确字节/条数上限与溢出策略。 |
-| 旧线程池 | 可复用现有库 | Boost.Asio 提供固定大小 `thread_pool`。如有阻塞任务，Mistlane 可直接使用；仍需在提交层定义准入/背压，因为线程池本身不替应用决定队列上限和关闭策略。 |
+| 旧线程池 | 可复用现有库 | 旧并发点已于 2026-10-18 分类：`FogsProcess` 线程组属于 Asio I/O（`io_service::run` 加各 `IServer` 循环），`HttpRequestService` 是固定 pthread 池跑阻塞 `curl_easy` 调用，`d_push` 的 `TaskScheduler` 用 CPU 核数的 `ThreadPool` 处理阻塞推送任务，`d_world` 内嵌 Poco HTTP 服务线程池（阻塞），`DeadLoopMonitor` 看门狗线程以指令 hook 取代，旧 MySQL 经 libmysqlclient 在 server 线程上同步调用。Mistlane 热路径全部异步（Asio I/O、Boost.MySQL/Boost.Redis 池）；同步 curl 适配器仅供 CLI 使用并注明禁止在事件循环回调中调用，因此当前不实例化任何阻塞工作池。如出现阻塞任务需求，Boost.Asio `thread_pool` 仍是指定载体，并在提交层定义准入/背压，因为线程池本身不替应用决定队列上限和关闭策略。 |
 | Lua 定时器队列 | 可复用现有库 | Boost.Asio `steady_timer` 提供单调时钟的异步计时器。Lua 的 timeout/interval 适配仍需管理句柄、取消、回调错误和 VM 重载清理；默认不应移植旧时间轮。 |
 | Lua 死循环监视线程 | 部分替换 | 已有指令计数 hook；没有照搬旧监视线程及其停止竞态。 |
 | CPU/内存性能剖析器 | 未迁移 | 老框架和 Mistlane 都没有 CPU 采样、内存分配剖析或 Lua 函数级性能剖析。旧 Lua 超时 hook 不是 profiler。 |
