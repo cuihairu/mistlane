@@ -100,7 +100,7 @@ public:
             }
         }
         // Reap/terminate utility descendants, including optional crash handlers.
-        if (group_ > 0) ::kill(-group_, SIGKILL);
+        if (group_ > 0 && reap_) ::kill(-group_, SIGKILL);
     }
     std::optional<int> poll() {
         if (result_) return result_;
@@ -108,7 +108,7 @@ public:
         const auto n = ::waitpid(pid_, &status, WNOHANG);
         if (n == 0 || (n < 0 && errno == EINTR)) return {};
         if (n < 0) throw std::runtime_error("waitpid failed");
-        if (group_ > 0) ::kill(-group_, SIGKILL);
+        if (group_ > 0 && reap_) ::kill(-group_, SIGKILL);
         group_ = 0;
         pid_ = 0;
         result_ = WIFEXITED(status) ? WEXITSTATUS(status) : 128 + WTERMSIG(status);
@@ -133,8 +133,11 @@ public:
         throw std::runtime_error("child readiness timeout:\n" + output());
     }
     std::string output() const { return read(log_); }
+    // Launcher-style children deliberately leave descendants (daemons) behind;
+    // opt out of the group kill for those.
+    void reap_descendants(bool enabled) { reap_ = enabled; }
 private:
-    pid_t pid_ = 0, group_ = 0;
+    pid_t pid_ = 0, group_ = 0; bool reap_ = true;
     std::optional<int> result_;
     fs::path log_;
 };

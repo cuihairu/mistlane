@@ -342,6 +342,42 @@ void scaffold_init() {
         node.ready(); equal(tcp(listen)->request("template-path-check"),"template-path-check");
         node.signal(SIGTERM); require(node.wait()==0,"generated worker shutdown failed");
     }
+    {
+        // cluster.sh gates each start on the instance reporting readiness and
+        // rolls back instances started by the same command on failure.
+        ScopedEnv real_binary("MISTLANE_BIN",self().string());
+        const auto cluster=(root/"ops/cluster.sh").string();
+        const auto listen=port();
+        write(root/"config/instances/worker.env","ROLE=worker\nLISTEN="+endpoint(listen)+"\nSCRIPT=scripts/echo.lua\nTRANSPORT=tcp\nUPSTREAMS=\nROUTE_EPOCH=\n");
+        const auto router=root/"config/instances/router.env";
+        const auto original_router=read(router);
+        write(router,"ROLE=router\nLISTEN="+endpoint(port())+"\nSCRIPT=scripts/missing.lua\nTRANSPORT=tcp\nUPSTREAMS="+endpoint(listen)+"\nROUTE_EPOCH=\n");
+        auto& started=c.spawn({cluster,"start","worker"});
+        started.reap_descendants(false);  // the daemon must outlive its launcher
+        require(started.wait()==0,"cluster start failed");
+        equal(tcp(listen)->request("ready-gate"),"ready-gate");
+        auto& preserved=c.spawn({cluster,"start","worker","router"});
+        require(preserved.wait()!=0,"broken router instance was accepted");
+        require(preserved.output().find("stopping instances started by this command")!=std::string::npos,
+            "rollback banner missing");
+        auto& preserved_status=c.spawn({cluster,"status","worker","router"});
+        preserved_status.wait();
+        require(preserved_status.output().find("worker running")!=std::string::npos,
+            "pre-existing instance was rolled back");
+        require(preserved_status.output().find("router stopped")!=std::string::npos,
+            "broken instance reported running");
+        auto& stopped=c.spawn({cluster,"stop","worker"});
+        require(stopped.wait()==0,"cluster stop failed");
+        auto& rolled_back=c.spawn({cluster,"start","worker","router"});
+        require(rolled_back.wait()!=0,"broken sequence was accepted");
+        auto& final_status=c.spawn({cluster,"status","worker","router"});
+        final_status.wait();
+        require(final_status.output().find("worker stopped")!=std::string::npos,
+            "freshly started instance survived rollback");
+        require(final_status.output().find("router stopped")!=std::string::npos,
+            "router reported running after failure");
+        write(router,original_router);
+    }
     write(root/"keep.txt","preserve");
     require(c.command({self().string(),"init",root.string()})!=0,"initializer overwrote nonempty project");
     equal(read(root/"keep.txt"),"preserve");
