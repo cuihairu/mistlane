@@ -28,6 +28,7 @@ This is an educational framework candidate, not a production deployment recommen
 | HTTP / HTTPS / WS / WSS | Drogon / Trantor and OpenSSL |
 | HTTP client | libcurl C++ adapter |
 | Cross-server | Native cross/shard roles, room affinity and admission |
+| Diagnostics | Optional private `/metrics` (Prometheus) listener, internal PROBE1 liveness/readiness probe, Crashpad local minidumps |
 | MySQL pool | Existing Boost.MySQL connection_pool |
 | Redis data | Optional Boost.Redis Streams and sorted-set leaderboard APIs for Lua |
 | Scripting | Lua module lifecycle and replaceable VMs |
@@ -50,7 +51,7 @@ flowchart LR
   X --> S[shard Lua rooms]
 ```
 
-gateway/router select an upstream per new connection, then keep the session there and process requests serially. Drogon/Trantor handles HTTP, HTTPS, WS and WSS; Asio owns internal TCP and Lua callbacks, with a bounded bridge between event loops. HTTP workers expose Lua request hooks. Start a Lua worker with `--redis IP:PORT` to enable asynchronous Redis Streams publish, consume groups, ACK and pending recovery; requests are bounded and credentials can come from environment variables. Native cross/shard roles route group/room pairs and enforce connection admission without restoring game logic. Boost.MySQL and libcurl remain C++ interfaces without Lua bindings. See [architecture](docs/architecture.md), [Lua lifecycle](docs/lua.md) and [cross-server design](docs/cross-server.md).
+gateway/router select an upstream per new connection, then keep the session there and process requests serially. Drogon/Trantor handles HTTP, HTTPS, WS and WSS; Asio owns internal TCP and Lua callbacks, with a bounded bridge between event loops. HTTP workers expose Lua request hooks. Start a Lua worker with `--redis IP:PORT` to enable asynchronous Redis Streams publish, consume groups, ACK and pending recovery; requests are bounded and credentials can come from environment variables. Native cross/shard roles route group/room pairs and enforce connection admission without restoring game logic. Workers can expose an optional private Prometheus endpoint with `--metrics-listen IP:PORT` and an internal liveness/readiness probe with `--probe-listen IP:PORT`; cross upstreams take `IP:PORT[:PROBE]` to gate new joins on shard readiness (see the [cross-server design](docs/cross-server.md)). Boost.MySQL and libcurl remain C++ interfaces without Lua bindings. See [architecture](docs/architecture.md), [Lua lifecycle](docs/lua.md) and [cross-server design](docs/cross-server.md).
 
 ## Build
 

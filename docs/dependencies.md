@@ -13,6 +13,8 @@ Pinned baseline: `a5f736224e85b32e25a8ffc52562333180396642`, checked on 2026-10-
 | boost-mysql | 1.92.0 | Boost::mysql, asynchronous connection_pool |
 | lua | 5.5.1 | CMake FindLua include/library variables |
 | openssl | 3.6.5#2 | OpenSSL::SSL and OpenSSL::Crypto |
+| prometheus-cpp | 1.3.0 | prometheus-cpp::core plus the `pull` feature, backing the optional private `/metrics` listener |
+| crashpad | 2026-07-02 | crashpad::crashpad, local minidump capture through the installed `crashpad_handler` |
 | VitePress | 1.6.4 | pnpm exact direct version and pnpm-lock.yaml |
 | Vite | 6.4.4 | Explicit workspace override for patched development tooling |
 | pnpm | 10.33.0 | packageManager pin |

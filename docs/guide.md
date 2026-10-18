@@ -148,7 +148,7 @@ Each `config/instances/<name>.env` file is sourced as shell assignments by `ops/
 | `LISTEN` | always | `IP:PORT` passed as `--listen`. |
 | `TRANSPORT` | optional | `tcp` is the default and is omitted from the command line; `ws`, `wss`, `http` and `https` are passed through. `wss` and `https` refuse to start unless readable `CERT` and `KEY` are configured. |
 | `SCRIPT` | optional | Lua entrypoint passed as `--script`; relative paths resolve against the project root. Gateways and routers leave it empty. |
-| `UPSTREAMS` | optional | Comma-separated `IP:PORT` list; each entry becomes one `--upstream` flag. |
+| `UPSTREAMS` | optional | Comma-separated `IP:PORT` (or `IP:PORT:PROBE`, so cross nodes gate new joins on the peer's internal readiness probe) list; each entry becomes one `--upstream` flag. |
 | `ROUTE_EPOCH` | optional | Cross/shard epoch passed as `--route-epoch`; an empty value omits the flag. |
 | `CERT`, `KEY` | `wss`/`https` only | Certificate chain and private key, absolute or project-root relative; the launcher verifies both are readable. |
 

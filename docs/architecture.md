@@ -83,7 +83,7 @@ The heap retains the original bounded-selection behavior: when full, smaller inc
 
 ## Current limitations
 
-Original login, account routing, player migration, legacy cross-server gameplay, navigation, caches, and operational features are excluded. This version also lacks service discovery, health-based routing, shared-connection multiplexing, request correlation, automatic reconnect, durable replay, distributed consistency, global backpressure, production metrics, and measured capacity limits.
+Original login, account routing, player migration, legacy cross-server gameplay, navigation, caches, and operational features are excluded. This version also lacks service discovery, discovery-based health routing (cross nodes do gate new joins on the static PROBE1 readiness of their configured upstreams), shared-connection multiplexing, request correlation, automatic reconnect, durable replay, distributed consistency, global backpressure, production metrics collection, and measured capacity limits.
 
 Scripts are trusted application code. The instruction hook helps with typical infinite loops but is not an unbypassable CPU budget or a memory quota. Database integration is a separate C++ adapter and example; a general asynchronous Lua database bridge is not implemented. Successful network delivery does not imply transaction durability.
 

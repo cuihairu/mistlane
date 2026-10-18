@@ -148,7 +148,7 @@ WSS 在 `config/instances/gateway-wss.env` 中设置 `CERT` 和 `KEY`，可填�
 | `LISTEN` | 必填 | `IP:PORT` 作为 `--listen` 传入。 |
 | `TRANSPORT` | 可选 | `tcp` 为默认值，不出现在命令行；`ws`、`wss`、`http`、`https` 原样传入。`wss`/`https` 在 `CERT` 和 `KEY` 不可读时拒绝启动。 |
 | `SCRIPT` | 可选 | Lua 入口作为 `--script` 传入；相对路径按项目根目录解析。gateway 和 router 留空。 |
-| `UPSTREAMS` | 可选 | 逗号分隔的 `IP:PORT` 列表；每个条目展开为一个 `--upstream` 参数。 |
+| `UPSTREAMS` | 可选 | 逗号分隔的 `IP:PORT`（或 `IP:PORT:PROBE`，使 cross 按对端内部就绪探测挡住新加入）列表；每个条目展开为一个 `--upstream` 参数。 |
 | `ROUTE_EPOCH` | 可选 | cross/shard 纪元作为 `--route-epoch` 传入；留空则省略该参数。 |
 | `CERT`、`KEY` | 仅 wss/https | 证书链与私钥，绝对路径或项目根目录相对路径；启动器先确认两者可读。 |
 

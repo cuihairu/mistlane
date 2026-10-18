@@ -13,6 +13,8 @@
 | boost-mysql | 1.92.0 | `Boost::mysql`，成熟异步连接池 |
 | lua | 5.5.1 | CMake FindLua 提供 include 与 libraries |
 | openssl | 3.6.5#2 | `OpenSSL::SSL` / `OpenSSL::Crypto` |
+| prometheus-cpp | 1.3.0 | `prometheus-cpp::core` 加 `pull` 特性，支撑可选私有 `/metrics` 端点 |
+| crashpad | 2026-07-02 | `crashpad::crashpad`，经随装的 `crashpad_handler` 做本地 minidump 采集 |
 | VitePress | 1.6.4 | pnpm 固定直接版本与 pnpm-lock.yaml |
 | Vite | 6.4.4 | workspace override 使用已修复的开发工具链 |
 | pnpm | 10.33.0 | packageManager 固定版本 |

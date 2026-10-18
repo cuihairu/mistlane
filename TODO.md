@@ -191,7 +191,7 @@
 - [x] 增加探测功能测试：响应 nonce、错误版本、超时、事件循环阻塞、readiness 转换迟滞、关闭清理及多个 cross 观测同一 shard。证据：新增 `probe.control` 用例（CTest `mistlane_probe_control`，共 13 项）以裸 TCP 覆盖 nonce 回显、version/command/malformed/nonce 非法、readiness 行格式与 lag_ms 字段、空闲连接 2s 截止、`--overload-ratio 0.5 --ready-hysteresis 2` 下容量 2 与 4 节点的饱和翻转 notready→ready 迟滞、`MISTLANE_PROBE_TOKEN` 的 err auth 与带 token 成功、四个 cross 观测同一 shard（NOT_READY 拒绝、恢复后可加入、无探测端口不门控、死探测端口 UPSTREAM）、节点退出时 ProbeServer 随 io 排空关闭；用例 4/4 稳定，完整 ctest 13/13 绿；双语 cross-server/validation 更新。
 - [x] 对 profiler 做 vcpkg 可用性与采样开销评估，选择可选外部采样器/工具集成路线；不在服务热路径自行实现采样器。证据：2026-10-18 决策为外部采样器路线并写入双语 cross-server「剖析与压测运行手册」：进程内采样器与 gperftools（vcpkg 有 port）均因自我采样消耗被测 CPU 预算而排除，仅当目标主机也封锁外部采样时才以可选诊断构建重评；当前开发沙箱实测无法采集任何开销数字——perf 7.0.14 已装但 `perf_event_paranoid=4` 且无 CAP_PERFMON 打不开事件、`strace -c -p` 报 `Operation not permitted`、`eu-stack`/`pprof` 未安装，因此不声称开销数字，留给目标环境演练采集；目标主机工作流已记录（`perf record -F 99 -g -p PID -- sleep 30` + build id 符号匹配）；压测场景用内置 `mistlane bot --url tcp://... --clients 64 --count 500`（已实测 80/80 请求成功且 `/metrics` 计数对齐）。
 - [ ] 为 profiler 工作流提供可重复的跨服压测场景和符号化步骤，记录采样对吞吐、P99 和 RSS 的影响。
-- [ ] 同步更新双语 README、依赖页、架构页、迁移状态、跨服排障页和验证记录，标清哪些能力已实现、哪些只是依赖声明。
+- [x] 同步更新双语 README、依赖页、架构页、迁移状态、跨服排障页和验证记录，标清哪些能力已实现、哪些只是依赖声明。证据：2026-10-18 双语 README/README.zh-CN 组件表新增 Diagnostics 行并在 Run 段记录 `--metrics-listen`/`--probe-listen`/`IP:PORT[:PROBE]` 用法；依赖页补此前缺失的 prometheus-cpp 1.3.0 与 crashpad 2026-07-02 行；架构页与架构对比页修正过时声明（本地就绪门控已存在、"readiness-aware routing" 移出缺失清单、转储验证已完成、下一步增量改为目标环境演练）；迁移状态页记录 PROBE1 交付并在退出序列加入探测监听器；跨服页与验证记录当日已随功能提交更新；docs:build 通过。
 - [ ] 在目标 Linux/容器环境执行崩溃演练、监控抓取、探针过载演练和压力剖析；未测试前不宣称已解决历史跨服卡死或容量问题。
 
 ## K. 项目初始化 CLI 与进程运维模板

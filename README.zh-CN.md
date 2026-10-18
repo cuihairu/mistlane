@@ -26,6 +26,7 @@
 - Drogon / Trantor：HTTP/HTTPS、WS/WSS；HTTP worker 支持 Lua handler 及完整生命周期。
 - libcurl：有超时、证书校验与响应大小上限的 C++ HTTP 客户端。
 - 原生 cross/shard：固定房间路由和硬准入，剥离旧跨服玩法。
+- 诊断：可选私有 `/metrics`（Prometheus）端点、内部 PROBE1 存活/就绪探测、Crashpad 本地 minidump。
 - Boost.MySQL：`connection_pool`，负责连接分配、归还、重置、健康检查与重连。
 - Boost.Redis：可选 Asio 原生连接，向 Lua 提供异步 Redis Streams 消费组 API。
 - Redis 排行榜：Lua 可调用 sorted-set 增分、名次、分页和删除 API。
@@ -46,7 +47,7 @@ flowchart LR
   X --> S[shard Lua 房间]
 ```
 
-gateway/router 通过新连接轮询上游；每条会话固定到一个上游并串行请求 / 响应。Drogon/Trantor 负责 HTTP、HTTPS、WS、WSS，Asio 线程运行内部 TCP 与 Lua；有界桥接隔离两个事件循环。HTTP worker 使用 Lua handler 和请求钩子。worker 使用 `--redis IP:PORT` 可启用 Redis Streams Lua API，支持发布、消费组、ACK 和 pending 恢复；请求数有界，凭据可从环境变量读取。原生 cross/shard 对 group/room 固定路由并执行连接数硬准入，不包含旧游戏玩法。Boost.MySQL 与 libcurl 是 C++ 扩展，尚未绑定 Lua。
+gateway/router 通过新连接轮询上游；每条会话固定到一个上游并串行请求 / 响应。Drogon/Trantor 负责 HTTP、HTTPS、WS、WSS，Asio 线程运行内部 TCP 与 Lua；有界桥接隔离两个事件循环。HTTP worker 使用 Lua handler 和请求钩子。worker 使用 `--redis IP:PORT` 可启用 Redis Streams Lua API，支持发布、消费组、ACK 和 pending 恢复；请求数有界，凭据可从环境变量读取。原生 cross/shard 对 group/room 固定路由并执行连接数硬准入，不包含旧游戏玩法。worker 可用 `--metrics-listen IP:PORT` 开启私有 Prometheus 端点、用 `--probe-listen IP:PORT` 开启内部存活/就绪探测；cross 上游可写 `IP:PORT[:PROBE]`，按 shard 就绪状态挡住新加入（见[跨服设计](docs/zh/cross-server.md)）。Boost.MySQL 与 libcurl 是 C++ 扩展，尚未绑定 Lua。
 
 ## 构建
 
