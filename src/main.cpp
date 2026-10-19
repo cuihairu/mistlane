@@ -96,6 +96,8 @@ std::vector<std::pair<std::string, std::string>> config_flags(const std::filesys
     struct Field { const char* key; const char* flag; bool path; bool list; bool root; };
     static constexpr Field fields[] = {
         {"ROLE","--role",0,0,0}, {"ROUTING","--routing",0,0,0}, {"LISTEN","--listen",0,0,0}, {"TRANSPORT","--transport",0,0,0},
+        {"SERVICE_TOKEN","--service-token",0,0,0}, {"UPSTREAM_TOKEN","--upstream-token",0,0,0},
+        {"SERVICE_NAME","--service-name",0,0,0},
         {"SCRIPT","--script",1,0,0}, {"UPSTREAMS","--upstream",0,1,0}, {"CERT","--cert",1,0,0},
         {"KEY","--key",1,0,0}, {"LISTENERS","--listener",0,1,0}, {"REDIS","--redis",0,0,0},
         {"METRICS_LISTEN","--metrics-listen",0,0,0}, {"PROBE_LISTEN","--probe-listen",0,0,0},
@@ -213,6 +215,9 @@ int main(int argc, char** argv) {
                              "  gameServer/crossServer/apiServer: --script FILE\n"
                              "  gateway: --upstream IP:PORT (repeat for session round robin)\n"
                              "  --routing session|cross (gateway only; default session)\n"
+                             "  service identity (session routing only; cross keeps MLC1):\n"
+                             "    --service-token TOKEN (accept only peers presenting MLS1),\n"
+                             "    --upstream-token TOKEN --service-name NAME (present MLS1 to each upstream)\n"
                              "  --transport tcp|ws|wss|http|https (wss/https require --cert FILE --key FILE)\n"
                              "  --listener PROTO://IP:PORT (repeat; independent extra listener, mixed\n"
                              "    plaintext/TLS allowed; wss/https may add ?cert=FILE&key=FILE overrides)\n"
@@ -236,6 +241,9 @@ int main(int argc, char** argv) {
             std::string value = tokens[i];
             if (key == "--role") config.role = value;
             else if (key == "--listen") config.listen = endpoint(value);
+            else if (key == "--service-token") config.service_token = value;
+            else if (key == "--upstream-token") config.upstream_token = value;
+            else if (key == "--service-name") config.service_name = value;
             else if (key == "--upstream") config.upstreams.push_back(upstream(value));
             else if (key == "--routing") config.routing = value;
             else if (key == "--transport") { config.transport = value; transport_selected = true; }
@@ -279,6 +287,13 @@ int main(int argc, char** argv) {
         } else if (config.upstreams.empty() || !config.script.empty()) {
             throw std::invalid_argument("gateway requires upstream and no script");
         }
+        // Cross routing keeps its own MLC1 join as the identity; accepting the
+        // token flags there would silently skip the handshake instead of
+        // surfacing the misconfiguration.
+        if (!config.service_token.empty() && (config.routing == "cross" || config.role == "crossServer"))
+            throw std::invalid_argument("--service-token does not apply to cross routing");
+        if (!config.upstream_token.empty() && config.routing == "cross")
+            throw std::invalid_argument("--upstream-token does not apply to cross routing");
         // The primary listener comes from --listen/--transport; --listener entries follow.
         mistlane::Listener primary;
         primary.protocol = config.transport;

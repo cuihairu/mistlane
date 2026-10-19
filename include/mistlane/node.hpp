@@ -20,6 +20,11 @@ struct Config {
     std::string routing = "session"; // gateway policy: session or cross
     Endpoint listen{"127.0.0.1", 7102};
     std::vector<Endpoint> upstreams;
+    // MLS1 service identity: a non-empty service_token makes the node accept
+    // only peers presenting "MLS1 <role> <instance> <token>"; a non-empty
+    // upstream_token makes the gateway present itself to each upstream.
+    // Cross routing keeps its own MLC1 join as the identity.
+    std::string service_token, upstream_token, service_name;
     std::string script;
     Endpoint redis{"127.0.0.1", 6379};
     Endpoint metrics_listen{"127.0.0.1", 9090};

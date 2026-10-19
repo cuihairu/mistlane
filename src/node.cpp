@@ -48,6 +48,15 @@ std::string correlated_frame(std::uint64_t request, std::string_view payload) {
     frame.append(payload);
     return frame;
 }
+// The service identity frame: "MLS1 <role> <instance> <token>", four single
+// words with no quoting. role and instance only label the peer's logs; the
+// token is the whole of the authority.
+bool service_fields(std::string_view payload, std::string& role,
+                    std::string& instance, std::string& token) {
+    std::istringstream in{std::string(payload)};
+    std::string magic, extra;
+    return (in >> magic >> role >> instance >> token) && magic == "MLS1" && !(in >> extra);
+}
 class TcpChannel : public Channel, public std::enable_shared_from_this<TcpChannel> {
 public:
     explicit TcpChannel(tcp::socket socket) : socket_(std::move(socket)) {}
@@ -380,13 +389,24 @@ private:
         });
     }
     void route(std::string payload) {
-        if (fresh_) {
-            fresh_ = false;
-            // Correlation is a local-session mode; a plain gateway relays the
-            // handshake (and its verdict) upstream like any other frame, and
-            // cross routing keeps its own MLC1 handshake exclusive.
-            if (!upstream_ && !config_.is_cross_gateway() && config_.role != "crossServer"
-                && payload == "MLC2") {
+        // Handshake window: MLS1 identifies an internal peer and MLC2 turns on
+        // correlation, both only until the first business payload routes.
+        // Cross routing keeps its own MLC1 join as the identity; a plain
+        // gateway relays MLC2 upstream like any other frame.
+        if (!routed_ && !config_.is_cross_gateway() && config_.role != "crossServer") {
+            if (!config_.service_token.empty() && !service_ok_) {
+                // The first frame must carry the identity; afterwards the
+                // session is business traffic (MLC2 may stack on acceptance).
+                if (!payload.starts_with("MLS1")) return refuse_service("TOKEN");
+                std::string role, instance, token;
+                if (!service_fields(payload, role, instance, token)) return refuse_service("INVALID");
+                if (token != config_.service_token) return refuse_service("TOKEN");
+                service_ok_ = true;
+                return reply("MLS1 OK");
+            }
+            if (config_.service_token.empty() && payload.starts_with("MLS1"))
+                return refuse_service("UNEXPECTED"); // surfaces a stray token config
+            if (!upstream_ && payload == "MLC2") {
                 reply("MLC2 OK"); // queued unprefixed while correlation is still off
                 correlated_ = true;
                 if (registry_ && context_.session) registry_->set_correlated(context_.session);
@@ -411,6 +431,7 @@ private:
                 upstream_ = std::make_shared<TcpChannel>(tcp::socket(client_->executor()));
             } catch (const std::exception&) { return reject("INVALID"); }
         }
+        routed_ = true; // the handshake window ends at the first business payload
         if (!upstream_) {
             // Correlated requests carry their id in the first payload bytes;
             // the reply echoes it, pushes answer with id 0.
@@ -422,15 +443,14 @@ private:
             payload.erase(0, 4);
             return serve_local(std::move(payload), request);
         }
-        if (awaiting_join_) deadline(10); // the join verdict is bounded, not the session
+        if (awaiting_join_ || awaiting_mls1_) deadline(10); // a verdict is bounded, not the session
         if (upstream_->socket().is_open()) return forward_upstream(std::move(payload));
         if (probe_port_ && !probed_) return probe(std::move(payload));
         upstream_->socket().async_connect(endpoint_,
           [self=shared_from_this(), payload=std::move(payload)](Error error) mutable {
             if (self->closed_) return;
             if (error) { self->diagnostics_.upstream_error(); return self->stop(); }
-            self->pump_upstream(); // pushes may arrive before any reply
-            self->forward_upstream(std::move(payload));
+            self->open_upstream(std::move(payload));
           });
     }
     // Local script path: one Lua call per frame; a handler that returns nil
@@ -453,6 +473,14 @@ private:
         std::cerr << "cross admission rejected: " << reason << '\n';
         diagnostics_.reject(reason);
         client_->write("MLC1 ERR " + reason, [self=shared_from_this()](Error) { self->stop(); });
+    }
+    // A refused service handshake closes the connection after the verdict:
+    // INVALID means a malformed frame, TOKEN a missing or wrong secret,
+    // UNEXPECTED a server that asks for no MLS1 at all.
+    void refuse_service(const char* reason) {
+        std::cerr << "service handshake rejected: " << reason << '\n';
+        client_->write("MLS1 ERR " + std::string(reason),
+            [self=shared_from_this()](Error) { self->stop(); });
     }
     // A new room only joins a shard the probe just saw ready. Probe failures are
     // conservative: an explicit notready rejects with NOT_READY, anything else
@@ -490,8 +518,7 @@ private:
               [self, payload=std::move(payload)](Error error) mutable {
                 if (self->closed_) return;
                 if (error) { self->diagnostics_.upstream_error(); return self->stop(); }
-                self->pump_upstream(); // pushes may arrive before any reply
-                self->forward_upstream(std::move(payload));
+                self->open_upstream(std::move(payload));
               });
         };
         timer->expires_after(std::chrono::seconds(1));
@@ -535,6 +562,10 @@ private:
             if (self->closed_) return;
             if (ec) { self->diagnostics_.upstream_error(); return self->stop(); }
             self->deadline(60);
+            if (self->awaiting_mls1_) {
+                self->awaiting_mls1_ = false;
+                return self->handle_service_verdict(std::move(frame));
+            }
             if (self->awaiting_join_) {
                 self->awaiting_join_ = false;
                 return self->handle_join(std::move(frame));
@@ -559,6 +590,39 @@ private:
             self->pump_upstream();
             self->pump_client();
         });
+    }
+    // The upstream leg opens either into the MLS1 handshake (when the gateway
+    // carries a token) or straight into relaying. Business frames queue behind
+    // MLS1 in wire order; a refused verdict kills the session and everything
+    // queued with it, and the reason stays on the operator's side.
+    void open_upstream(std::string payload) {
+        pump_upstream(); // the verdict may arrive before any reply
+        if (!config_.upstream_token.empty() && !config_.is_cross_gateway() && !awaiting_mls1_) {
+            awaiting_mls1_ = true;
+            deadline(10); // the verdict is bounded, not the session
+            forward_upstream(service_hello());
+        }
+        forward_upstream(std::move(payload));
+    }
+    // The presented identity: role plus --service-name, else the listen
+    // endpoint. It only labels the peer's logs; the token is the authority.
+    std::string service_hello() const {
+        const std::string instance = !config_.service_name.empty() ? config_.service_name
+            : config_.listen.address + ":" + std::to_string(config_.listen.port);
+        return "MLS1 " + config_.role + " " + instance + " " + config_.upstream_token;
+    }
+    // Only the gateway leg sees the MLS1 verdict: success settles into the
+    // normal idle cadence, anything else closes the session (the client saw
+    // nothing service-level and cannot cause or fix the failure).
+    void handle_service_verdict(std::string verdict) {
+        if (verdict != "MLS1 OK") {
+            diagnostics_.upstream_error();
+            std::cerr << "service handshake failed: " << verdict << '\n';
+            return stop();
+        }
+        deadline(60);
+        pump_upstream();
+        pump_client();
     }
     void forward_to_client(std::string frame) {
         diagnostics_.add_message("tx");
@@ -603,7 +667,9 @@ private:
     std::uint16_t probe_port_ = 0;
     bool probed_ = false, joined_ = false, awaiting_join_ = false;
     bool client_reading_ = false, upstream_reading_ = false;
-    bool fresh_ = true, correlated_ = false;
+    // routed_ replaces "first frame": MLS1 and MLC2 stay valid until the first
+    // business payload routes, so MLC2 can stack on an accepted MLS1 session.
+    bool routed_ = false, correlated_ = false, service_ok_ = false, awaiting_mls1_ = false;
     std::function<void(Session*)> on_close_;
     TokenBucket bucket_;
     std::uint64_t generation_ = 0;

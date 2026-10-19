@@ -127,6 +127,12 @@ socket.onopen = () => socket.send(new TextEncoder().encode('hello mistlane'))
 
 一个进程也可以同时服务多种协议：`--transport` 仍为单一选择、作用于主监听；每个 `--listener PROTO://IP:PORT` 追加一个独立监听（明文与 TLS 可并存；`wss`/`https` 条目可追加 `?cert=FILE&key=FILE` 绑定自己的证书）。WS/WSS 监听照旧承载游戏会话，同一个 gameServer 可以在不同端口同时暴露原生客户端的帧式 TCP 和浏览器用的 WS/WSS。HTTP 侧见[HTTP 多监听与 WebSocket 生命周期](./http.md#多监听与-websocket-生命周期)。
 
+### 内部服务身份（MLS1）
+
+玩家连接保持匿名，但内部链路可以要求服务身份，让开放在可达网络上的 gameServer 端口不被无关方悄悄使用。给 gameServer 配置 `--service-token TOKEN`：此后每条连接的首帧必须为 `MLS1 <role> <instance> <token>`，收到 `MLS1 OK` 后会话恢复正常。gateway 一侧成对配置 `--upstream-token TOKEN`（同一秘钥）与 `--service-name NAME`（供对端日志识别的实例名，省略时用监听地址）——握手只发生在两个进程之间，客户端全程不可见。
+
+失败是刻意且显式的：缺秘钥或秘钥错误回复 `MLS1 ERR TOKEN`，格式错误回复 `MLS1 ERR INVALID`，未配置令牌的普通服务端对携带令牌的 gateway 回复 `MLS1 ERR UNEXPECTED`。每次拒绝都关闭连接；自身握手被拒的 gateway 关闭客户端会话且不透传原因。两令牌参数作用于 cross 路由时直接拒绝启动（cross 以 `MLC1` 加入为身份）；已通过 `MLS1` 的会话仍可在下一帧切换 `MLC2` 关联模式。这是用于暴露配置错误的明文共享秘钥比对，不是 mTLS——传输层认证请使用 TLS 监听。
+
 ### 初始化模板中的配置
 
 `mistlane init` 会生成可选的 `gateway-ws.env` 和 `gateway-wss.env`，默认集群仍启动 TCP 网关。WS 示例监听 `127.0.0.1:8080`；远程接入时修改对应文件中的 `LISTEN`。`gameServer-mixed.env` 演示同一个 gameServer 通过 `LISTENERS` 在 7102 提供帧式 TCP、在 7082 提供 WS 监听。
@@ -170,7 +176,7 @@ EOF
 
 - 首个非空行必须是版本标记 `# mistlane-config 1`；缺失即拒绝，避免把任意 shell env 文件（包括缺少该标记的 `config/instances/*.env` 模板）悄悄当作配置。
 - 其余行为 `KEY=VALUE`。空行与 `#` 注释忽略，空值跳过，重复键报错，未知键以「文件:行号」拒绝。
-- 键为 CLI 选项的大写形式（`ROLE`、`LISTEN`、`TRANSPORT`、`SCRIPT`、逗号分隔的 `UPSTREAMS`、`ROUTE_EPOCH`、逗号分隔的 `LISTENERS`、`CERT`、`KEY`、`REDIS`、`METRICS_LISTEN`、`PROBE_LISTEN`、`OVERLOAD_RATIO`、`READY_HYSTERESIS`、`MAX_CONNECTIONS`、`MEMORY_BUDGET_MIB`、`MAX_ROOM_SESSIONS`、`MAX_GROUP_SESSIONS`、`MAX_SHARD_SESSIONS`、`CRASHPAD_HANDLER`、`CRASHPAD_DATABASE`），另有 `ROOT`。
+- 键为 CLI 选项的大写形式（`ROLE`、`LISTEN`、`TRANSPORT`、`SCRIPT`、逗号分隔的 `UPSTREAMS`、`ROUTE_EPOCH`、`SERVICE_TOKEN`、`UPSTREAM_TOKEN`、`SERVICE_NAME`、逗号分隔的 `LISTENERS`、`CERT`、`KEY`、`REDIS`、`METRICS_LISTEN`、`PROBE_LISTEN`、`OVERLOAD_RATIO`、`READY_HYSTERESIS`、`MAX_CONNECTIONS`、`MEMORY_BUDGET_MIB`、`MAX_ROOM_SESSIONS`、`MAX_GROUP_SESSIONS`、`MAX_SHARD_SESSIONS`、`CRASHPAD_HANDLER`、`CRASHPAD_DATABASE`），另有 `ROOT`。
 - 同一次运行的优先级：文件值 < 非空的 `MISTLANE_<KEY>` 环境变量 < `--config` 之后给出的显式参数。
 - `SCRIPT`、`CERT`、`KEY`、`CRASHPAD_HANDLER`、`CRASHPAD_DATABASE` 的相对路径按配置文件所在目录解析；设置 `ROOT` 时改按 `ROOT`（其本身相对配置文件所在目录）。这与 shell 启动器按项目根目录解析不同。要让生成的 `config/instances/*.env` 模板直接走 `--config`，需先在文件首行补版本标记并加 `ROOT=../..`，其 `SCRIPT`/`CERT` 路径才会像启动器一样解析。
 - 机密仍应放在部署方管理的环境（`MISTLANE_*` 或 systemd `LoadCredential=`），不提交到文件。

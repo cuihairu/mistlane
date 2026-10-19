@@ -630,6 +630,138 @@ void transport_correlate() {
     }
     require(node.output().find("callback failed") == std::string::npos, "correlation path logged Lua failures");
 }
+// MLS1 identifies internal legs: a node with --service-token only serves
+// peers that present "MLS1 <role> <instance> <token>", a gateway with
+// --upstream-token presents itself before any business frame, and every
+// refusal closes the connection with a reason instead of leaking frames into
+// the script.
+void transport_identity() {
+    Context c;
+    write(c.path("correlate.lua"), correlate_lua);
+    const auto gameServer = port(), open_server = port(), gateway = port(),
+              no_token = port(), wrong_token = port(), mismatched = port();
+    auto& node = c.spawn({self().string(), "--role", "gameServer", "--listen", endpoint(gameServer),
+        "--script", c.path("correlate.lua").string(), "--service-token", "s3cret",
+        "--service-name", "game-1"});
+    auto& open_node = c.spawn({self().string(), "--role", "gameServer", "--listen", endpoint(open_server),
+        "--script", c.path("correlate.lua").string()});
+    c.node("gateway", gateway, {"--upstream", endpoint(gameServer),
+        "--upstream-token", "s3cret", "--service-name", "gwy-1"});
+    c.node("gateway", no_token, {"--upstream", endpoint(gameServer)});
+    c.node("gateway", wrong_token, {"--upstream", endpoint(gameServer), "--upstream-token", "nope"});
+    c.node("gateway", mismatched, {"--upstream", endpoint(open_server), "--upstream-token", "s3cret"});
+    const auto send_frame = [](RawSocket& raw, std::string_view payload) {
+        std::string frame(4, '\0');
+        auto length = static_cast<std::uint32_t>(payload.size());
+        for (int i = 3; i >= 0; --i) { frame[i] = static_cast<char>(length & 255); length >>= 8; }
+        raw.send(frame+std::string(payload));
+    };
+    const auto read_frame = [](RawSocket& raw) {
+        const auto header = raw.receive(4);
+        std::size_t length = 0;
+        for (unsigned char ch : header) length = (length << 8) | ch;
+        return raw.receive(length);
+    };
+    const auto tagged = [](std::uint32_t id, std::string_view payload) {
+        std::string frame(4, '\0');
+        for (int i = 3; i >= 0; --i) { frame[i] = static_cast<char>(id & 255); id >>= 8; }
+        return frame+std::string(payload);
+    };
+    std::uint32_t id = 0;
+    std::string body;
+    const auto split = [&id, &body](const std::string& frame) {
+        require(frame.size() >= 4, "correlated frame too short");
+        id = 0;
+        for (int i = 0; i < 4; ++i) id = (id<<8) | static_cast<unsigned char>(frame[i]);
+        body = frame.substr(4);
+    };
+    const auto expect_close = [](RawSocket& raw) {
+        for (int i = 0; i < 40 && !raw.closed(); ++i) std::this_thread::sleep_for(50ms);
+        require(raw.closed(), "connection stayed open after a refusal");
+    };
+    // An unauthenticated first frame never reaches the script.
+    RawSocket anonymous(gameServer);
+    send_frame(anonymous, "self");
+    equal(read_frame(anonymous), "MLS1 ERR TOKEN");
+    expect_close(anonymous);
+    // Malformed handshakes report the shape, not the secret.
+    for (const auto& hello : {"MLS1 onlyrole", "MLS1 a b c d"}) {
+        RawSocket malformed(gameServer);
+        send_frame(malformed, hello);
+        equal(read_frame(malformed), "MLS1 ERR INVALID");
+        expect_close(malformed);
+    }
+    RawSocket refused(gameServer);
+    send_frame(refused, "MLS1 gateway inst-9 nope");
+    equal(read_frame(refused), "MLS1 ERR TOKEN");
+    expect_close(refused);
+    // Correct credentials admit the session; the handshake stays invisible after.
+    RawSocket joined(gameServer);
+    send_frame(joined, "MLS1 gateway inst-9 s3cret");
+    equal(read_frame(joined), "MLS1 OK");
+    send_frame(joined, "self");
+    body = read_frame(joined);
+    require(body.starts_with("session=") && body.ends_with(":req=nil"), "handshaken session broken: "+body);
+    // MLC2 stacks on the accepted handshake: both close at the first payload.
+    RawSocket correlated(gameServer);
+    send_frame(correlated, "MLS1 gateway inst-9 s3cret");
+    equal(read_frame(correlated), "MLS1 OK");
+    send_frame(correlated, "MLC2");
+    equal(read_frame(correlated), "MLC2 OK");
+    send_frame(correlated, tagged(9, "self"));
+    split(read_frame(correlated));
+    require(id == 9 && body.ends_with(":req=9"), "correlation lost after the handshake: "+body);
+    // A token-bearing gateway shows no handshake at either end.
+    RawSocket via(gateway);
+    send_frame(via, "MLC2");
+    equal(read_frame(via), "MLC2 OK");
+    send_frame(via, tagged(3, "ping"));
+    split(read_frame(via));
+    require(id == 3 && body == "ping", "gateway handshake leaked into the relay: "+body);
+    RawSocket plain_via(gateway);
+    send_frame(plain_via, "self");
+    body = read_frame(plain_via);
+    require(body.starts_with("session=") && body.ends_with(":req=nil"), "gateway session broke: "+body);
+    // An upstream refusal ends the session without relaying the verdict.
+    RawSocket silent(wrong_token);
+    send_frame(silent, "ping");
+    std::this_thread::sleep_for(300ms);
+    require(!silent.pending(), "upstream verdict leaked to the client");
+    expect_close(silent);
+    // A gateway without a token cannot hide the mismatch, so it relays the reason.
+    RawSocket relayed(no_token);
+    send_frame(relayed, "ping");
+    equal(read_frame(relayed), "MLS1 ERR TOKEN");
+    expect_close(relayed);
+    // A server that needs no handshake refuses the stray one.
+    RawSocket to_plain(open_server);
+    send_frame(to_plain, "MLS1 gateway inst-9 s3cret");
+    equal(read_frame(to_plain), "MLS1 ERR UNEXPECTED");
+    expect_close(to_plain);
+    RawSocket via_open(mismatched);
+    send_frame(via_open, "ping");
+    std::this_thread::sleep_for(300ms);
+    require(!via_open.pending(), "server refusal leaked to the client");
+    expect_close(via_open);
+    // ...and keeps serving anonymous clients.
+    RawSocket open_client(open_server);
+    send_frame(open_client, "hello");
+    equal(read_frame(open_client), "hello");
+    // Cross routing keeps its own identity, so the token flags refuse to start.
+    const auto cross_arg = std::vector<std::string>{"--routing", "cross"};
+    for (const auto& extra : {std::vector<std::string>{"--service-token", "s3cret"},
+                              std::vector<std::string>{"--upstream-token", "s3cret"}}) {
+        auto args = std::vector<std::string>{self().string(), "--role", "gateway",
+            "--listen", endpoint(port()), "--upstream", endpoint(gameServer)};
+        args.insert(args.end(), cross_arg.begin(), cross_arg.end());
+        args.insert(args.end(), extra.begin(), extra.end());
+        auto& child = c.spawn(args);
+        require(child.wait() != 0 && child.output().find("does not apply to cross routing") != std::string::npos,
+                "token flags accepted on cross routing");
+    }
+    for (const auto& node_output : {node.output(), open_node.output()})
+        require(node_output.find("callback failed") == std::string::npos, "handshake path logged Lua failures");
+}
 void transport_push() {
     Context c;
     write(c.path("push.lua"), push_lua);

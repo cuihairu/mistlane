@@ -65,6 +65,8 @@ A session reads frames as they arrive and keeps one frame in flight toward each 
 
 TCP frames use a four-byte big-endian payload length. A WS message is one payload without that header. Empty and binary payloads are supported, with a 1 MiB limit. WS responses are binary. The base protocol has no business message ID, account ID, or registration schema. An optional correlation mode adds one: the first frame `MLC2` switches the session to a four-byte big-endian request id carried inside each frame payload (`id | payload`); replies echo the id, unsolicited pushes carry id 0, and `MLC2` is honored only as the first frame — cross routing (`MLC1`) stays exclusive and rejects it. Sessions without the handshake keep the plain framing.
 
+Internal legs can require a service identity: with `--service-token TOKEN`, a session-role node accepts only connections whose first frame is `MLS1 <role> <instance> <token>` and answers `MLS1 OK`; a missing or wrong secret gets `MLS1 ERR TOKEN`, a malformed frame `MLS1 ERR INVALID`, and a plain node that needs no identity answers `MLS1 ERR UNEXPECTED` — every refusal closes the connection. A gateway with `--upstream-token TOKEN --service-name NAME` presents that handshake to each upstream before any business frame and consumes the verdict itself, so clients never see it; `MLC2` may stack on an accepted handshake. This is a plain token comparison that surfaces deliberate misconfiguration, not mTLS; the flags refuse to start on cross routing, where `MLC1` is the identity.
+
 | Control | Current behavior |
 |---|---|
 | Connections | Minimum of --max-connections and conservative memory admission; default effective cap 42 |
@@ -99,7 +101,7 @@ The heap retains the original bounded-selection behavior: when full, smaller inc
 
 ## Current limitations
 
-Original login, account routing, player migration, legacy cross-server gameplay, navigation, caches, and operational features are excluded. This version also lacks service discovery, discovery-based health routing (cross nodes do gate new joins on the static PROBE1 readiness of their configured upstreams), shared-connection multiplexing, request correlation, automatic reconnect, durable replay, distributed consistency, global backpressure, production metrics collection, and measured capacity limits.
+Original login, account routing, player migration, legacy cross-server gameplay, navigation, caches, and operational features are excluded. This version also lacks service discovery, discovery-based health routing (cross nodes do gate new joins on the static PROBE1 readiness of their configured upstreams), shared-connection multiplexing, automatic reconnect, durable replay, distributed consistency, global backpressure, production metrics collection, and measured capacity limits.
 
 Scripts are trusted application code. The instruction hook helps with typical infinite loops but is not an unbypassable CPU budget or a memory quota. Database integration is a separate C++ adapter and example; a general asynchronous Lua database bridge is not implemented. Successful network delivery does not imply transaction durability.
 
