@@ -24,8 +24,8 @@
 
 | 类 BigWorld 组成/老项目证据 | Mistlane 证据与现状 | 分类 |
 |---|---|---|
-| 实体定义；KBEngine `.def`/XML 与 game-fogs 未恢复的 sproto schema | XML 实体/类型契约原型校验 ID、生成项目 XSD 和发布锁；尚无 sproto 输出或运行时接线。[实体契约](./entity-contract.md#one-contract) | **已演化** — 已有明确的实体源契约；这不是恢复出的老 schema。 |
-| 消息目录与二进制 codec；game-fogs `.spb` + `sp.lua` | 已选 sproto 作为 codec 后端，提案 Server bundle 包含 schema 输出；Mistlane 没有生成 schema/codec 运行时。[生成产物](./entity-contract.md#generated-artifacts)、[老链路](./player-scene-model.md#protocol-and-method-contracts-before-abstraction) | **演化中** — 后端决策和产物边界存在；生成与执行尚无。 |
+| 实体定义；KBEngine `.def`/XML 与 game-fogs 未恢复的 sproto schema | XML 实体/类型契约校验 ID，生成项目 XSD、发布锁和确定性的 `.sproto` schema；尚无运行时接线。[实体契约](./entity-contract.md#one-contract) | **已演化** — 已有明确的实体源契约；这不是恢复出的老 schema。 |
+| 消息目录与二进制 codec；game-fogs `.spb` + `sp.lua` | 已有 sproto schema 生成和 fixture 黄金向量；尚无标准 sproto 运行时/codec 接入。[生成产物](./entity-contract.md#generated-artifacts)、[老链路](./player-scene-model.md#protocol-and-method-contracts-before-abstraction) | **演化中** — schema 生成已存在；运行时执行尚无。 |
 | 数据包帧/网络适配 | Mistlane 有 TCP 长度帧、WS 载荷映射、HTTP 监听器，以及分别定义的 MLC2/MLS1/MLM1 控制层。这些是传输/运行时契约，不是 sproto RPC 接入。[协议分析](./protocol-analysis.md#protocol-surface-inventory)、[架构](./architecture.md#execution-and-connection-model) | **演化中** — 通用传输已有；codec 分发、协商和客户端协议链路未有。 |
 | Login/Gate/Base/Cell 消息转发；老项目 Gate 路由与 handler 分发 | Mistlane 有 gateway、login/data 角色、MLR1 注册/分配/路由和 crossServer 转发；没有完整实体调用链或等价 Base/Cell 拆分。[进程职责](./process-roles.md#current-implementation)、[架构对照](./architecture-comparison.md) | **演化中** — 服务路由存在，但未复现老 handler 语义和完整实体调用。 |
 | 观察者/AOI 属性同步；老项目 `SC_CharDataUpdate=4005` 与手工 dirty 行为 | 实体属性复制有设计，但没有 Avatar 运行时、接收者集合、变更追踪或 sproto 通知。[实体契约](./entity-contract.md#automatic-property-replication)、[老链路](./player-scene-model.md#protocol-and-method-contracts-before-abstraction) | **演化中** — 目标语义已有文档；运行时缺失。 |
@@ -37,18 +37,24 @@
 
 ## sproto 实现路线
 
-决策：实体/RPC 消息编码使用 sproto。XML `.def` 和类型文件继续作为手写契约，sproto 是生成物。按[实体契约](./entity-contract.md#design-choice)，规划中的 Server bundle 已包含 sproto schema、Lua bindings 和 digests。但这只是设计，不是当前构建产物：目前原型只做 XML 解析/语义检查、XSD 和 release lock；它没有 sproto 输出、Lua 绑定、实体调用编码或 SDK 构建。
+决策：实体/RPC 消息编码使用 sproto。XML `.def` 和类型文件继续作为手写契约，sproto 是生成物。按[实体契约](./entity-contract.md#design-choice)，规划中的 Server bundle 包含 sproto schema、Lua bindings 和 digests。当前构建已生成经过校验的确定性 schema，以及 XSD、release lock 和 digest；尚无 Lua 绑定、实体调用运行时或 SDK 构建。
 
 | 阶段 | 具体工作 | 验收证据形态 |
 |---|---|---|
-| 1. 恢复并规范化源契约 | 保留现有 `.def`/XML 与 game-fogs 协议证据；将原始 sproto 文本源缺失标为未恢复。把类型/成员 ID、方向、调用方权限、request/response 和通知语义规范化进现有 XML 模型。拒绝隐式或冲突 ID。 | 有出处的源材料清单；构建断言检查必需 ID、方向和引用；报告区分恢复事实与新分配定义。 |
-| 2. 生成 sproto schema | 先解析 XML 类型；将结构映射为生成类型，将 RPC 映射为 request/response 或单向 protocol。采用已有的唯一内部名和 bundle 级 tag 表（如 `E<type>_Server_<method>`）；输出确定性 schema 与 digest。实体方法 ID 与 sproto tag 分离，并在 release lock 中持久记录映射。 | 重复构建得到逐字节相同 schema、tags 和 digest；测试检查类型/protocol tag 不重复、不复用保留 ID、不含非法 sproto 名或不支持类型映射；生成 schema 可由上游 `sprotoparser` 解析。 |
-| 3. Codec 与线向量 | 加载编译 schema，编解码 request、response、notification 和嵌套类型；单独定义外层帧边界。规定整数范围、nil/empty、未知字段、畸形/截断载荷、大小限制和错误映射。不能把 sproto 0-packing 当作 TCP 帧。 | request/response/push 黄金字节向量；所选 native 和 Lua codec 的往返与坏输入测试；有帧+载荷实例的文档。 |
-| 4. Lua 绑定与分发 | 从 schema 生成 Lua 方法描述/桩，显式绑定实现名；解析实体引用与调用上下文，检查权限/截止时间/关联 ID，并按生成协议映射分发。request 返回类型化响应，notification 不返回业务响应。 | 可运行 Lua 原型注册一个服务端方法与客户端方法；request 得到类型化响应、notification 无业务响应、越权/未知方法被拒绝；生成 binding manifest 与 schema digest 一致。 |
-| 5. RPC 生命周期与运行时路由 | 定义请求/session 关联、超时/取消、重复策略、响应归属，以及传输关联与实体关联的分离。仅在授权且 incarnation/generation 有效后路由 EntityRef。 | 进程内及双进程 harness 展示 request/response、单向 push、超时、过期引用、错误调用方、断连和重复处理；断言 MLC2 与 entity correlation ID 不混用。 |
-| 6. 客户端 SDK 生成与兼容闸门 | 从同一 schema bundle 生成 JS/C# proxies、DTO、通知分发、校验、声明文件和 codec 描述；对照已发布 lock 和支持的客户端版本。 | 干净环境生成可复现；JS/C# 对同一黄金向量编解码一致；兼容报告阻断已发布 ID 的删除/重编号/重类型，并指出需重新生成的名称变更。 |
+| 1. XML 契约生成 sproto schema | `.def` 保持源契约；先运行既有语义校验，再生成。保留来源说明，将 game-fogs 原始 sproto 文本标为未恢复。映射类型、字段、方法及 request/response 或单向通知；内部名固定为 `E{entityId}_{Server|Client}_{methodId}`。协议 tag 为 `entityId * 131072 + side * 65536 + methodId`，范围为 entity id ≤16383、method id ≤65535。 | `contract.tool` 检查类型映射、稳定命名和重复输出；CLI 在全部输入通过后生成 XSD、lock、digest 和 schema。 |
+| 2. 编解码边界与黄金向量 | 外层传输帧与载荷编码分开；用 fixture 专用规范 TLV 向量固定标量、数组、嵌套和边界值，并检查往返。 | `sproto.golden` 逐字节检查 fixture 向量。这些**不是上游 sproto 线格式**；后续以标准 sproto 替换测试适配器。 |
+| 3. Lua 原型与分发 | 生成/绑定 Lua 方法描述，解析实体与调用方上下文，分发 request/response 或单向方法。 | 可运行 Lua 原型覆盖服务端和客户端方法、类型化结果与拒绝场景。 |
+| 4. RPC harness 与生命周期 | 定义关联 ID、超时/取消、重复处理、响应归属和过期实体代次行为。 | 进程内及双进程 harness 覆盖请求/响应、push、超时、过期引用、错误调用方、断连和重复处理。 |
+| 5. SDK 兼容 | 从共享 schema 生成 JS/C# 绑定，并核对支持的客户端版本。 | JS/C# 编解码标准黄金向量；兼容检查发现已发布 ID 删除、重编号或改类型。 |
+| 6. 发布锁与发布闸门 | 在发布锁中持久记录协议 tag 和 schema digest，并与已发布 bundle 比较兼容性。 | 可复现 bundle 和兼容报告在发布前阻断破坏性变更。 |
 
 这是研究闸门，不是时间表或产品承诺。阶段是否完成以证据为准；仅有生成文件不能作为后续阶段完成的依据。
+
+## 已实现状态与证据
+
+前两个阶段**部分落地**：`mistlane contract build` 先执行既有 XML 语义校验，再生成 XSD、lock、digest 和确定性的 `.sproto`。`examples/contracts/avatar.def` 是新构造的最小 fixture，并非恢复出的 game-fogs 源文件。RPC 内部名采用稳定规则 `E{entityId}_{Server|Client}_{methodId}`。`contract.tool` 检查生成物稳定性和命名；`sproto.golden` 逐字节检查标量、数组、嵌套和边界 fixture 向量。fixture 编码器是项目自用测试格式，不是 sproto 序列化；没有引入第三方 sproto 代码。
+
+阶段 3–6 尚未实现：Lua 原型/分发、RPC 生命周期 harness、SDK 兼容、发布锁闸门。上游 parser 验证和标准 sproto 线上黄金向量也仍未完成。
 
 ## 范围与排除项
 

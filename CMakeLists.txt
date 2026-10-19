@@ -42,7 +42,7 @@ add_executable(mistlane-mysql-probe examples/mysql_probe.cpp)
 target_link_libraries(mistlane-mysql-probe PRIVATE mistlane_mysql)
 include(CTest)
 if(BUILD_TESTING)
-  foreach(test_case IN ITEMS core.contracts contract.tool core.roles transport.tcp transport.websocket transport.http
+  foreach(test_case IN ITEMS core.contracts contract.tool sproto.golden core.roles transport.tcp transport.websocket transport.http
       transport.push transport.correlate transport.identity transport.multiplex coordinator.registry
       coordinator.placement coordinator.routes lua.lifecycle lua.http
       cross.admission cross.record probe.control scaffold.init config.file cli.bot)

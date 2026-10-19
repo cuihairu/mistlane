@@ -1,0 +1,14 @@
+<Contracts>
+  <Types>
+    <Item><itemId id="0" type="UINT32"/><count id="1" type="UINT32" default="1"/></Item>
+    <Inventory><capacity id="0" type="UINT16"/><items id="1" type="ARRAY" of="Item"/></Inventory>
+  </Types>
+  <Entity name="Avatar" id="1">
+    <Properties><level id="1" type="UINT16"/><inventory id="2" type="Inventory"/></Properties>
+    <ServerMethods>
+      <Method name="attack" id="1" mode="notify" caller="owner"><Arg name="target" id="0" type="EntityRef"/></Method>
+      <Method name="getProfile" id="2" mode="request" caller="server"><Returns><Field name="level" id="0" type="UINT16"/></Returns></Method>
+    </ServerMethods>
+    <ClientMethods><Method name="onReward" id="1" mode="notify" audience="owner"><Arg name="itemId" id="0" type="UINT32"/></Method></ClientMethods>
+  </Entity>
+</Contracts>

@@ -1,8 +1,8 @@
 # 实体契约与代码生成设计
 
-> 暂缓实现：本页保留为设计草稿。本轮优先实现已确定的旧游戏进程职责与调用关系；不启动独立契约库、代码生成或属性同步开发。
+> 研究设计笔记。构建期契约校验器和确定性 sproto schema 生成器已经实现；运行时加载、实体执行和属性同步仍不在当前范围。
 
-状态：设计提案；格式本身已由构建期原型固定。`include/mistlane/entity_contract.hpp` 解析 XML 子集并执行本页的语义规则（显式稳定 id、封闭词表、带类型默认值、数组/结构引用解析、递归拒绝、DOCTYPE/实体拒绝），在 `Reserved` 组声明已退役编号，并产出发布流程需要的两份产物：项目专用 XSD（逐成员钉死 id 与类型）和发布锁（全部编号分配加模型摘要）。由 `core.contracts` 单元断言覆盖；`mistlane contract check|build` 命令（`src/contract_tool.cpp`，用例 `contract.tool`）校验 `.def` 文档，且仅在全部文件通过后一次性产出项目 XSD、发布锁与摘要工件。仍缺：sproto 输出、发布兼容报告、服务端 bundle 加载与任何运行时。适用 Mistlane，不调整 Apollo 架构或进程命名。客户端目标为 JavaScript 和 C#；客户端随契约重新生成、构建和发布，服务器的业务契约更新不重新编译 C++ 二进制。除原型范围之外，本文中的目录、命令和 API 仍为拟实现接口。
+状态：研究设计及构建期实现。`include/mistlane/entity_contract.hpp` 解析 XML 子集并校验显式稳定 id、封闭词表、类型默认值、数组/结构引用、递归和 DOCTYPE/实体；生成项目 XSD、发布锁、模型摘要和确定性的 sproto schema。`mistlane contract build` 先用既有语义校验器检查全部输入，再写出生成物。类型映射为 `BOOL`→`boolean`、整数及 `EntityRef`→`integer`、`STRING`→`string`、`BYTES`→`binary`、结构按名称引用、数组使用 `*`。RPC 名采用 `E{entityId}_{Server|Client}_{methodId}`；数值协议 tag 由实体 id、调用侧和方法 id确定性组合，entity id 最大 16383、method id 最大 65535。详见[路线及验收证据](./bigworld-like-protocol.md#已实现状态与证据)。仍缺上游 parser 验证、标准 sproto 线上向量、发布兼容报告、服务端 bundle 加载和运行时。适用 Mistlane，不调整 Apollo 架构或进程命名。客户端目标为 JavaScript 和 C#；客户端随契约重新生成、构建和发布，服务器的业务契约更新不重新编译 C++ 二进制。
 
 ## 设计选择
 

@@ -2020,9 +2020,13 @@ void contract_tool() {
     <Properties>
       <level id="1" type="UINT16" default="1" flags="OWN_CLIENT" persistent="true"/>
       <gold id="2" type="INT64" default="-5" flags="OWN_CLIENT" persistent="true"/>
+      <inventory id="3" type="Inventory" flags="OWN_CLIENT"/>
+      <active id="4" type="BOOL" default="true"/>
     </Properties>
     <ServerMethods><Method name="attack" id="1" mode="notify" caller="owner">
       <Arg name="target" id="0" type="EntityRef"/>
+    </Method><Method name="getProfile" id="2" mode="request" caller="server">
+      <Returns><Field name="level" id="0" type="UINT16"/></Returns>
     </Method></ServerMethods>
     <ClientMethods><Method name="onReward" id="1" mode="notify" audience="owner"/></ClientMethods>
   </Entity>
@@ -2042,7 +2046,7 @@ void contract_tool() {
     const auto one = c.path("bundle");
     require(c.command({self().string(), "contract", "build", "--out", one.string(), good.string()}) == 0,
             "build failed on a valid document");
-    for (const auto& name : {"avatar.xsd", "avatar.lock", "avatar.digest"})
+    for (const auto& name : {"avatar.xsd", "avatar.lock", "avatar.digest", "avatar.sproto"})
         require(fs::is_regular_file(one/name), std::string("missing artifact: ")+name);
     const auto two = c.path("rebuild");
     require(c.command({self().string(), "contract", "build", "--out", two.string(), good.string()}) == 0,
@@ -2050,6 +2054,13 @@ void contract_tool() {
     equal(read(one/"avatar.xsd"), read(two/"avatar.xsd"));
     equal(read(one/"avatar.lock"), read(two/"avatar.lock"));
     equal(read(one/"avatar.digest"), read(two/"avatar.digest"));
+    equal(read(one/"avatar.sproto"), read(two/"avatar.sproto"));
+    require(read(one/"avatar.sproto").find("E1_Server_1 ") != std::string::npos &&
+            read(one/"avatar.sproto").find("E1_Client_1 ") != std::string::npos &&
+            read(one/"avatar.sproto").find("items 1 : *Item") != std::string::npos &&
+            read(one/"avatar.sproto").find("active 4 : boolean") != std::string::npos &&
+            read(one/"avatar.sproto").find("E1_Server_2 131074") != std::string::npos,
+            "sproto schema lost stable E1 side/method identifiers");
     // The lock's digest line, the digest file and the library digest agree.
     const auto lock_text = read(one/"avatar.lock");
     const auto at = lock_text.find("# digest ");
@@ -2072,6 +2083,40 @@ void contract_tool() {
             "unknown verb accepted");
     require(c.command({self().string(), "contract", "build", good.string()}) != 0,
             "build without --out accepted");
+}
+void sproto_golden() {
+    // Fixture-only canonical TLV vectors. These intentionally are NOT sproto
+    // wire bytes; they lock value shape/widths until an upstream codec replaces
+    // this adapter. Each record is tag:u8, kind:u8, length:u16be, bytes.
+    auto record = [](unsigned tag, unsigned kind, std::string_view value) {
+        std::string out{static_cast<char>(tag), static_cast<char>(kind),
+            static_cast<char>((value.size() >> 8) & 255), static_cast<char>(value.size() & 255)};
+        out.append(value); return out;
+    };
+    auto hex = [](std::string_view bytes) {
+        constexpr char digits[]="0123456789abcdef"; std::string out;
+        for (unsigned char b : bytes) { out.push_back(digits[b>>4]); out.push_back(digits[b&15]); }
+        return out;
+    };
+    const auto scalar = record(0, 1, std::string("\x7f\xff\xff\xff", 4));
+    const auto array = record(1, 2, std::string("\x00\x02\x00\x00\xff\xff", 6));
+    const auto nested = record(2, 3, record(0, 1, std::string("\x00\x00\x00\x01", 4)));
+    const auto boundary = record(3, 1, std::string("\x80\x00\x00\x00", 4));
+    equal(hex(scalar), "000100047fffffff");
+    equal(hex(array), "0102000600020000ffff");
+    equal(hex(nested), "020300080001000400000001");
+    equal(hex(boundary), "0301000480000000");
+    // The length parser is the decoding seam: decode and re-encode exactly.
+    auto roundtrip = [&](const std::string& bytes) {
+        require(bytes.size() >= 4, "truncated vector header");
+        const auto len = (static_cast<unsigned char>(bytes[2]) << 8) |
+            static_cast<unsigned char>(bytes[3]);
+        require(bytes.size() == len + 4, "vector length mismatch");
+        return record(static_cast<unsigned char>(bytes[0]), static_cast<unsigned char>(bytes[1]),
+                      std::string_view(bytes).substr(4));
+    };
+    equal(roundtrip(scalar), scalar); equal(roundtrip(array), array);
+    equal(roundtrip(nested), nested); equal(roundtrip(boundary), boundary);
 }
 
 void scaffold_init() {

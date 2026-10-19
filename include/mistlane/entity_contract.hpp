@@ -11,11 +11,11 @@
 #include <utility>
 #include <vector>
 namespace mistlane {
-// Entity contract prototype: the first phase of the entity-contract chain
+// Entity contract prototype: definition-time phase of the entity-contract chain
 // (docs/entity-contract.md) — parse the handwritten XML subset and enforce
-// its semantic rules. It is a definition/build-time library only: no runtime
-// wiring, no code generation, no sproto emission, no persistence. Wire
-// messages stay binary; this header never sees one.
+// its semantic rules. It is a definition/build-time library only: it emits
+// project artifacts and sproto schema, but has no runtime wiring or
+// persistence. Wire messages stay binary; this header never sees one.
 //
 //   <Contracts>
 //     <Types>
@@ -166,6 +166,60 @@ public:
         }
         for (const auto& e : entities_) entity_element(out, e);
         out << "</xs:sequence></xs:complexType></xs:element>\n</xs:schema>\n";
+        return out.str();
+    }
+    // Deterministic sproto schema emitter. The source XML is validated by this
+    // class before emission; this method only maps the already-resolved model.
+    std::string sproto() const {
+        auto ident = [](const std::string& s) {
+            auto alpha = [](unsigned char c) { return (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z'); };
+            auto digit = [](unsigned char c) { return c >= '0' && c <= '9'; };
+            if (s.empty() || !(alpha(static_cast<unsigned char>(s[0])) || s[0] == '_'))
+                throw ContractError("invalid sproto identifier: " + s);
+            for (unsigned char c : s)
+                if (!(alpha(c) || digit(c) || c == '_'))
+                    throw ContractError("invalid sproto identifier: " + s);
+        };
+        auto type_name = [&](const std::string& name) {
+            ident(name);
+            return name;
+        };
+        std::function<std::string(const std::string&, const std::string&)> field_type;
+        field_type = [&](const std::string& type, const std::string& of) {
+            if (type == "ARRAY") return std::string("*") + field_type(of, {});
+            if (type == "BOOL") return std::string("boolean");
+            if (type == "INT32" || type == "UINT16" || type == "UINT32" ||
+                type == "INT64" || type == "EntityRef") return std::string("integer");
+            if (type == "STRING") return std::string("string");
+            if (type == "BYTES") return std::string("binary");
+            return type_name(type);
+        };
+        std::ostringstream out;
+        auto fields = [&](const ContractArgs& list) {
+            for (const auto& f : list) { ident(f.name); out << "\t" << f.name << " " << f.id << " : " << field_type(f.type, f.of) << '\n'; }
+        };
+        for (const auto& [name, members] : structs_) {
+            type_name(name); out << name << " {\n"; fields(members); out << "}\n\n";
+        }
+        for (const auto& e : entities_) {
+            type_name(e.name); out << e.name << " {\n";
+            for (const auto& p : e.properties) { ident(p.name); out << "\t" << p.name << " " << p.id << " : " << field_type(p.type, p.of) << '\n'; }
+            out << "}\n\n";
+            auto methods = [&](const char* side, const std::vector<ContractMethod>& list) {
+                for (const auto& m : list) {
+                    ident(m.name);
+                    if (e.id > 16383 || m.id > 65535)
+                        throw ContractError("sproto protocol tag range exceeded for " + e.name + "." + m.name);
+                    const unsigned long long side_id = std::string_view(side) == "Client" ? 1ull : 0ull;
+                    const unsigned long long tag = static_cast<unsigned long long>(e.id) * 131072ull + side_id * 65536ull + m.id;
+                    const auto protocol = "E" + std::to_string(e.id) + "_" + side + "_" + std::to_string(m.id);
+                    out << protocol << " " << tag << " {\n\trequest {\n"; fields(m.args); out << "\t}\n";
+                    if (m.mode == "request") { out << "\tresponse {\n"; fields(m.returns); out << "\t}\n"; }
+                    out << "}\n\n";
+                }
+            };
+            methods("Server", e.server_methods); methods("Client", e.client_methods);
+        }
         return out.str();
     }
     // Well-formedness of any XML document in this reader's dialect, without
