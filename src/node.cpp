@@ -6,6 +6,7 @@
 #include "mistlane/token_bucket.hpp"
 #include "mistlane/transport.hpp"
 #include "mistlane/roles.hpp"
+#include "mistlane/record.hpp"
 #include <utility>
 #include <boost/asio.hpp>
 #include <algorithm>
@@ -572,11 +573,11 @@ public:
             Diagnostics& diagnostics, GameSessions* registry,
             std::function<void(Session*)> on_close, MuxLinks* mux_links = nullptr,
             std::function<void(std::shared_ptr<Channel>)> mux_upgrade = {},
-            bool internal = false)
+            bool internal = false, RecordStore* records = nullptr)
       : client_(std::move(client)), service_(service),
         timer_(client_->executor()), config_(config), admission_(admission), diagnostics_(diagnostics),
         registry_(registry), on_close_(std::move(on_close)), mux_upgrade_(std::move(mux_upgrade)),
-        internal_(internal) {
+        internal_(internal), records_(records) {
         if (upstream) {
             endpoint_ = tcp::endpoint(parse_address(upstream->address), upstream->port);
             // Multiplexing keeps one socket per upstream: the link owns the
@@ -642,6 +643,17 @@ private:
         });
     }
     void route(std::string payload) {
+        // Record frames belong to the framework at any point of the session:
+        // the data role is the home side of the cross return protocol, and
+        // the fence plus the sequence discipline live here, not in the
+        // script. Identity still comes first — a tokened node refuses MLD1
+        // like any other frame until MLS1 is presented (a logical session
+        // rides the hub's identity and is not asked again).
+        if (records_ && payload.starts_with("MLD1")) {
+            if (!internal_ && !config_.service_token.empty() && !service_ok_)
+                return refuse_service("MLS1", "TOKEN");
+            return serve_record(std::move(payload));
+        }
         // Handshake window: MLS1 identifies an internal peer, MLC2 turns on
         // correlation and MLM1 upgrades an identified leg to the shared link,
         // all only until the first business payload routes. A logical session
@@ -737,6 +749,14 @@ private:
         std::cerr << "cross admission rejected: " << reason << '\n';
         diagnostics_.reject(reason);
         client_->write("MLC1 ERR " + reason, [self=shared_from_this()](Error) { self->stop(); });
+    }
+    // Record legs are long-lived: one MLS1-identified peer submits and loads
+    // many times over, so every verdict re-arms the client pump.
+    void serve_record(std::string payload) {
+        std::string_view result;
+        auto verdict = records_->handle(payload, result);
+        diagnostics_.record_result(result);
+        reply(std::move(verdict));
     }
     // A refused service handshake closes the connection after the verdict:
     // INVALID means a malformed frame, TOKEN a missing or wrong secret,
@@ -946,6 +966,7 @@ private:
     CrossAdmission& admission_;
     Diagnostics& diagnostics_;
     GameSessions* registry_;
+    RecordStore* records_ = nullptr;
     CrossContext context_;
     std::chrono::steady_clock::time_point request_started_{};
     std::uint16_t probe_port_ = 0;
@@ -1846,7 +1867,8 @@ private:
                     if (i->get() == ptr) { sessions_.erase(i); break; }
                 publish_active();
             },
-            config_.upstream_multiplex ? &mux_links_ : nullptr, std::move(mux_upgrade));
+            config_.upstream_multiplex ? &mux_links_ : nullptr, std::move(mux_upgrade),
+            false, config_.role == "data" ? &records_ : nullptr);
         sessions_.insert(session);
         publish_active();
         session->start();
@@ -1891,7 +1913,7 @@ private:
                     for (auto i = sessions_.begin(); i != sessions_.end(); ++i)
                         if (i->get() == ptr) { sessions_.erase(i); break; }
                     publish_active();
-                }, nullptr, nullptr, true);
+                }, nullptr, nullptr, true, config_.role == "data" ? &records_ : nullptr);
             sessions_.insert(session);
             publish_active();
             session->start();
@@ -2025,6 +2047,9 @@ private:
     std::shared_ptr<RegistryMember> member_;
     std::size_t cursor_ = 0;
     CrossAdmission admission_;
+    // Only the data role routes frames into this; every other role passes
+    // nullptr and keeps MLD1 as plain script traffic.
+    RecordStore records_;
     std::unique_ptr<Diagnostics> diagnostics_;
     std::shared_ptr<ProbeServer> probe_;
     std::exception_ptr startup_error_;

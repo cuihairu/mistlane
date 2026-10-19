@@ -21,6 +21,7 @@ void coordinator_placement();
 void lua_lifecycle();
 void lua_http();
 void cross_admission();
+void cross_record();
 void probe_control();
 void scaffold_init();
 void config_file();
@@ -90,6 +91,7 @@ int run_tests(int argc, char** argv) {
         {"lua.lifecycle","lua",test::lua_lifecycle},
         {"lua.http","lua",test::lua_http},
         {"cross.admission","cross",test::cross_admission},
+        {"cross.record","cross",test::cross_record},
         {"probe.control","probe",test::probe_control},
         {"scaffold.init","scaffold",test::scaffold_init},
         {"config.file","config",test::config_file},

@@ -234,6 +234,8 @@ int main(int argc, char** argv) {
                              "      MLS1 when the coordinator requires identity)\n"
                              "  login: --coordinator IP:PORT [--scope NAME] enables mistlane.place(role,\n"
                              "      scope?, callback) placement lookups (no registration)\n"
+                             "  data: answers MLD1 LOAD/SUBMIT record frames on framed TCP (receipt only;\n"
+                             "      no durable ack until a persistence chain exists)\n"
                              "  --transport tcp|ws|wss|http|https (wss/https require --cert FILE --key FILE)\n"
                              "  --listener PROTO://IP:PORT (repeat; independent extra listener, mixed\n"
                              "    plaintext/TLS allowed; wss/https may add ?cert=FILE&key=FILE overrides)\n"

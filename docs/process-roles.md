@@ -44,7 +44,7 @@ Each scope needs an explicit authority for ownership changes. Election, recovery
 
 Entering crossServer changes execution placement, not the account, character identity or home data domain. Validated transfer context includes origin, character identity, hosting generation and return information. Current placement is resolved through coordinator; orders and durable records must not pin a gameServer address.
 
-The target keeps permanent data in its home region while moving character execution to crossServer. Cross-region changes return through home-side services to home data; crossServer need not hold every region's database addresses. The old CrossWorld → home World → Data/Cache path and its limits are documented in [players, scenes and cross-region execution](./player-scene-model.md); the decided participant-context, single-writer and MLD1 confirmation design is in the [cross return protocol](./cross-return-protocol.md), still unimplemented. Data edges denote that service path, not direct cross-region database writes or concurrent character writers.
+The target keeps permanent data in its home region while moving character execution to crossServer. Cross-region changes return through home-side services to home data; crossServer need not hold every region's database addresses. The old CrossWorld → home World → Data/Cache path and its limits are documented in [players, scenes and cross-region execution](./player-scene-model.md); the participant-context, single-writer and MLD1 confirmation design is in the [cross return protocol](./cross-return-protocol.md) — the participant context and the data-side MLD1 endpoint are implemented, the sender and persistence chain are not. Data edges denote that service path, not direct cross-region database writes or concurrent character writers.
 
 ## Legacy correspondence
 
@@ -69,7 +69,8 @@ The old `requesthegel2hegel` transfer passes through Gate to change the route an
 | `crossServer` | TCP cross context, Lua execution and final connection admission | Character transfer, cross-region scenes and home-data updates |
 | `apiServer` | Lua HTTP/HTTPS hooks, HTTP by default, optional WS/WSS message transport | Platform business callbacks, reliable internal calls and multiple listeners |
 | `coordinator` | TCP-only registry: members register, heartbeat readiness and load, QUERY/PLACE answer in a named scope, disconnect retires the member | Placement and ownership states, region/group scope authority, transfer handshake, high availability and recovery |
-| `login`, `data` | Runnable as script-backed services (framed sessions, standard Lua hooks); the service flows (placement, load, persistence) remain contract-only — wire-level contracts in the [service contracts](./service-contracts.md) | Authentication, home-data services and integration |
+| `login` | Runnable as a script-backed service (framed sessions, standard Lua hooks); `--coordinator` wires the registry client behind Lua `mistlane.place` placement lookups | Authentication design, character list and the full entry flow |
+| `data` | Runnable as a script-backed service; `MLS1` on every leg with `--service-token`; the MLD1 record endpoint answers LOAD/SUBMIT with the generation fence, per-character sequence discipline and receipt-only verdicts (no durable ack today) | Persistence chain and `ACK durable`, the durable load path, saves |
 
 The single executable remains mistlane. Existing roles have migrated; the independent generic forwarding role is removed and static cross ingress is a gateway routing policy, not a complete coordinator. Old CLI aliases are rejected. MLC1/PROBE1, room/group keys and max-shard-sessions quota retain their protocol meanings; they do not introduce process roles.
 

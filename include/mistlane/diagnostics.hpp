@@ -3,7 +3,9 @@
 
 #include <chrono>
 #include <cstddef>
+#include <map>
 #include <memory>
+#include <string>
 #include <string_view>
 
 namespace crashpad { class CrashpadClient; class CrashReportDatabase; }
@@ -28,6 +30,7 @@ public:
     void set_active_sessions(std::size_t count);
     void set_registry_members(std::size_t count);
     void reject(std::string_view reason);
+    void record_result(std::string_view result);
     void add_message(std::string_view direction);
     void add_payload_bytes(std::string_view direction, std::size_t bytes);
     void observe_lua_callback(std::string_view hook, std::chrono::steady_clock::duration elapsed);
@@ -48,6 +51,7 @@ private:
     prometheus::Gauge* event_loop_lag_max_ = nullptr;
     prometheus::Gauge* process_rss_ = nullptr;
     prometheus::Counter* rejected_ = nullptr;
+    std::map<std::string, prometheus::Counter*> record_results_;
     prometheus::Counter* messages_rx_ = nullptr;
     prometheus::Counter* messages_tx_ = nullptr;
     prometheus::Counter* rx_bytes_ = nullptr;

@@ -37,6 +37,12 @@ Diagnostics::Diagnostics(const Config& config) {
             .Help("Resident memory reported by procfs.").Labels(labels).Register(*registry_).Add({});
         rejected_ = &prometheus::BuildCounter().Name("mistlane_admission_rejections_total")
             .Help("Sessions rejected by admission control.").Labels(labels).Register(*registry_).Add({});
+        // The result set is a closed list of verdict words, so one family with
+        // a result label stays low-cardinality.
+        auto& record_family = prometheus::BuildCounter().Name("mistlane_record_results_total")
+            .Help("Record endpoint verdicts on the data role.").Labels(labels).Register(*registry_);
+        for (const auto* result : {"loaded", "empty", "accepted", "duplicate", "stale", "seq", "invalid", "full"})
+            record_results_[result] = &record_family.Add({{"result", result}});
         auto& messages = prometheus::BuildCounter().Name("mistlane_messages_total")
             .Help("Messages read from or written to clients.").Labels(labels).Register(*registry_);
         messages_rx_ = &messages.Add({{"direction", "rx"}});
@@ -93,6 +99,10 @@ void Diagnostics::set_registry_members(std::size_t count) {
     if (registry_members_) registry_members_->Set(static_cast<double>(count));
 }
 void Diagnostics::reject(std::string_view) { if (rejected_) rejected_->Increment(); }
+void Diagnostics::record_result(std::string_view result) {
+    if (auto it = record_results_.find(std::string(result)); it != record_results_.end())
+        it->second->Increment();
+}
 void Diagnostics::add_message(std::string_view direction) {
     if (direction == "tx") { if (messages_tx_) messages_tx_->Increment(); }
     else if (messages_rx_) messages_rx_->Increment();

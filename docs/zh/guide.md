@@ -145,6 +145,12 @@ coordinator 是注册表，不是转发面。用 `--role coordinator --listen AD
 
 两条只读命令在各自的短连接上应答后即关闭：`MLR1 QUERY [role] [scope]` 列出成员及其就绪与负载，`MLR1 PLACE <role> <scope>` 挑选一个——就绪优先，再取 active/capacity 最低者，最后按实例名——应答 `MLR1 PLACE <instance> <listen> <probe> ready <active>/<capacity>` 或 `MLR1 EMPTY`。以 `--coordinator ADDR:PORT`（可选 `--scope NAME`，即默认查询作用域）启动的 login 是注册表客户端而非成员：Lua 调用 `mistlane.place(role, scope?, callback)`，每次查询独占一条连接，回调稍后以（`nil`, 被分配的监听地址）或（`reason`, `nil`）触发——没有就绪成员时为 `EMPTY`，呈递的身份被拒时为 `TOKEN`，传输故障为 `unreachable`/`timeout`。应答在 handler 返回之后才到达，脚本须在回调里经 `mistlane.session.send` 回答，而不是通过返回值。coordinator 上的任何非 MLR1 帧都会得到 `MLR1 ERR UNEXPECTED`；带 `--service-token` 的 coordinator 对未通过 `MLS1` 握手前的所有帧回复 `MLS1 ERR TOKEN`，成员侧 `--upstream-token` 的用法与任何内部链路一致。注册表只回答当前状态：不持有归属与迁移状态、不搬运角色、也没有故障转移——拿到 PLACE 地址之后做什么由调用方自己决定。
 
+### 记录端点（MLD1）
+
+`data` 角色拥有跨服回传协议的归属侧记录端点，由框架而不是脚本应答：`MLD1 LOAD <realm> <character>` 应答 `MLD1 EMPTY` 或 `MLD1 STATE gen <n> seq <m> [<payload>]`，`MLD1 SUBMIT <realm> <character> gen <n> seq <m> [<payload>]` 应答 `MLD1 RECEIVED gen <n> seq <m>`。栅栏按承载版本判定——更低的版本得到 `MLD1 ERR STALE gen <当前版本>`；序号按角色标识单调且跨代连续——下一序号必须恰好比已存序号大一（否则得到 `MLD1 ERR SEQ seq <期望值>`），对已存序号的重发去重为第二次回执且不改动已存变更集。格式错误回复 `MLD1 ERR INVALID`，存满后的新记录回复 `MLD1 ERR FULL`；`mistlane_record_results_total{role="data",result=...}` 按闭集结果词（loaded/empty/accepted/duplicate/stale/seq/invalid/full）统计每次裁决。
+
+`RECEIVED` 是回执而非持久性声明：data 侧持久化链尚未实现，记录仅存在于 data 进程内，重启后同样回复 `MLD1 EMPTY`——今天任何地方都不会发出 `ACK durable`。存储只保留每个角色标识最新被接受的变更集；把变更集合并入实体状态是暂缓的实体契约工作。同一连接上的任何非 `MLD1` 帧仍是脚本流量；带 `--service-token` 启动的 data 在任何记录帧之前仍要求 `MLS1` 握手（否则 `MLS1 ERR TOKEN`）。只有 data 角色解释 `MLD1`——其他角色看到的就是普通脚本 payload。
+
 ### 初始化模板中的配置
 
 `mistlane init` 会生成可选的 `gateway-ws.env` 和 `gateway-wss.env`，默认集群仍启动 TCP 网关。WS 示例监听 `127.0.0.1:8080`；远程接入时修改对应文件中的 `LISTEN`。`gameServer-mixed.env` 演示同一个 gameServer 通过 `LISTENERS` 在 7102 提供帧式 TCP、在 7082 提供 WS 监听。

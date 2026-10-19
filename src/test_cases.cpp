@@ -3,6 +3,7 @@
 #include "test_fixtures.hpp"
 #include "test_resources.hpp"
 #include "mistlane/cross.hpp"
+#include "mistlane/record.hpp"
 #include "mistlane/http_client.hpp"
 #include "mistlane/token_bucket.hpp"
 #include "mistlane/transport.hpp" // max_frame bounds the flood sizing
@@ -268,6 +269,49 @@ void core_contracts() {
         "MLC1 1 realm group room ch hero gen 12 ret home arena r1 extra",
         "MLC1 1 realm group room ch her!o gen 12 ret home arena r1"})
         must_fail([&] { (void)cross_context(partial); });
+    // MLD1 record grammar: load and submit both parse, and every partial or
+    // out-of-shape declaration is refused.
+    auto load = parse_record("MLD1 LOAD home hero-7");
+    equal(load.realm+"/"+load.character, "home/hero-7");
+    require(load.type == RecordRequest::Type::Load, "record load mislabeled");
+    auto submit = parse_record("MLD1 SUBMIT home hero-7 gen 12 seq 3 {\"hp\":5}");
+    require(submit.type == RecordRequest::Type::Submit && submit.generation == 12
+            && submit.sequence == 3, "record submit header lost");
+    equal(submit.payload, "{\"hp\":5}");
+    equal(parse_record("MLD1 SUBMIT home hero-7 gen 12 seq 3").payload, "");
+    for (const auto& broken : std::vector<std::string>{
+        "MLD1", "MLD1 LOAD home", "MLD1 LOAD home hero extra",
+        "MLD1 SUBMIT home hero gen 12", "MLD1 SUBMIT home hero gen 12 seq",
+        "MLD1 SUBMIT home hero gen 0 seq 1", "MLD1 SUBMIT home hero gen 12 seq 0",
+        "MLD1 SUBMIT home hero gen x seq 1", "MLD1 SUBMIT home hero gen 12 seq 99999999999",
+        "MLD1 SUBMIT ho/me hero gen 12 seq 1", "MLD1 SUBMIT home her!o gen 12 seq 1",
+        std::string("MLD1 SUBMIT home hero gen 12 seq 1 ")+std::string(1024*1024+1, 'x')})
+        must_fail([&] { (void)parse_record(broken); });
+    // The home side owns the fence and the sequence discipline.
+    RecordStore records;
+    std::string_view result;
+    equal(records.handle("MLD1 LOAD home hero", result), "MLD1 EMPTY");
+    require(result == "empty", "record load mislabeled as " + std::string(result));
+    equal(records.handle("MLD1 SUBMIT home hero gen 5 seq 1 hp=10", result), "MLD1 RECEIVED gen 5 seq 1");
+    require(result == "accepted", "first submit was not accepted");
+    equal(records.handle("MLD1 LOAD home hero", result), "MLD1 STATE gen 5 seq 1 hp=10");
+    require(result == "loaded", "record load after submit mislabeled");
+    // A resend dedups to a second receipt and never overwrites the record.
+    equal(records.handle("MLD1 SUBMIT home hero gen 5 seq 1 hp=99", result), "MLD1 RECEIVED gen 5 seq 1");
+    require(result == "duplicate", "resend was not deduplicated");
+    equal(records.handle("MLD1 LOAD home hero", result), "MLD1 STATE gen 5 seq 1 hp=10");
+    equal(records.handle("MLD1 SUBMIT home hero gen 5 seq 3 gap", result), "MLD1 ERR SEQ seq 2");
+    require(result == "seq", "sequence gap mislabeled");
+    equal(records.handle("MLD1 SUBMIT home hero gen 4 seq 2 late", result), "MLD1 ERR STALE gen 5");
+    require(result == "stale", "generation fence mislabeled");
+    equal(records.handle("MLD1 SUBMIT home hero gen 6 seq 2 taken", result), "MLD1 RECEIVED gen 6 seq 2");
+    equal(records.handle("MLD1 SUBMIT home hero gen 7 seq 9 jump", result), "MLD1 ERR SEQ seq 3");
+    equal(records.handle("MLD1 SUBMIT home hero gen 7 seq 3", result), "MLD1 RECEIVED gen 7 seq 3");
+    equal(records.handle("MLD1 LOAD home hero", result), "MLD1 STATE gen 7 seq 3");
+    // Records are independent per character, and a fresh record starts at one.
+    equal(records.handle("MLD1 SUBMIT home other gen 1 seq 2", result), "MLD1 ERR SEQ seq 1");
+    equal(records.handle("MLD1 NOPE", result), "MLD1 ERR INVALID");
+    require(result == "invalid", "malformed frame mislabeled");
     CrossAdmission admission(1, 1, 1, 1);
     int a = 0, b = 0;
     require(admission.acquire(&a, context, 0).empty(), "first admission failed");
@@ -1321,6 +1365,82 @@ void cross_admission() {
     must_fail([&] { auto failed=tcp(ingress); (void)join(*failed,"a",rooms[0]); });
     auto healthy=tcp(ingress); equal(join(*healthy,"a",rooms[1]),"MLC1 OK 1");
     equal(healthy->request("ok"),"a(anon):g/"+rooms[1]+":ok");
+}
+void cross_record() {
+    Context c;
+    write(c.path("echo.lua"), echo);
+    const auto data = port(), metrics = port(), second = port(), tokened = port(), plain = port();
+    c.node("data", data, {"--script", c.path("echo.lua").string(), "--metrics-listen", endpoint(metrics)});
+    const auto send_frame = [](RawSocket& raw, std::string_view payload) {
+        std::string frame(4, '\0');
+        auto length = static_cast<std::uint32_t>(payload.size());
+        for (int i = 3; i >= 0; --i) { frame[i] = static_cast<char>(length & 255); length >>= 8; }
+        raw.send(frame + std::string(payload));
+    };
+    const auto read_frame = [](RawSocket& raw) {
+        std::size_t length = 0;
+        for (unsigned char ch : raw.receive(4)) length = (length << 8) | ch;
+        return raw.receive(length);
+    };
+    const auto ask = [&send_frame, &read_frame](RawSocket& raw, std::string_view payload) {
+        send_frame(raw, payload);
+        return read_frame(raw);
+    };
+    // One leg loads and submits many times over; the verdicts re-arm it.
+    RawSocket leg(data);
+    equal(ask(leg, "MLD1 LOAD home hero"), "MLD1 EMPTY");
+    equal(ask(leg, "MLD1 SUBMIT home hero gen 5 seq 1 hp=10 mp=5"), "MLD1 RECEIVED gen 5 seq 1");
+    equal(ask(leg, "MLD1 LOAD home hero"), "MLD1 STATE gen 5 seq 1 hp=10 mp=5");
+    equal(ask(leg, "MLD1 SUBMIT home hero gen 5 seq 1 hp=99"), "MLD1 RECEIVED gen 5 seq 1");
+    equal(ask(leg, "MLD1 LOAD home hero"), "MLD1 STATE gen 5 seq 1 hp=10 mp=5");
+    equal(ask(leg, "MLD1 SUBMIT home hero gen 5 seq 3 gap"), "MLD1 ERR SEQ seq 2");
+    equal(ask(leg, "MLD1 SUBMIT home hero gen 4 seq 2 late"), "MLD1 ERR STALE gen 5");
+    equal(ask(leg, "MLD1 SUBMIT home hero gen 6 seq 2 taken"), "MLD1 RECEIVED gen 6 seq 2");
+    equal(ask(leg, "MLD1 SUBMIT home hero gen 7 seq 9 jump"), "MLD1 ERR SEQ seq 3");
+    // A record leg also carries plain script frames under the same session.
+    equal(ask(leg, "ping"), "ping");
+    equal(ask(leg, "MLD1 NOPE"), "MLD1 ERR INVALID");
+    // Every verdict lands on the closed result label set, and nothing else.
+    const auto results = [&](const char* sample) {
+        const auto body = http("http://"+endpoint(metrics)+"/metrics").body;
+        const auto needle = std::string("mistlane_record_results_total{role=\"data\",result=\"")
+            + sample + "\"} ";
+        const auto at = body.find(needle);
+        require(at != std::string::npos, std::string("missing metric ")+sample);
+        return std::strtod(body.c_str()+at+needle.size(), nullptr);
+    };
+    require(results("accepted") == 2, "accepted counter mismatch");
+    require(results("loaded") == 2, "loaded counter mismatch");
+    require(results("duplicate") == 1, "duplicate counter mismatch");
+    require(results("seq") == 2, "seq counter mismatch");
+    require(results("stale") == 1, "stale counter mismatch");
+    require(results("invalid") == 1, "invalid counter mismatch");
+    require(results("empty") == 1, "empty counter mismatch");
+    // Records are process-local until a persistence chain exists: a fresh
+    // data process answers EMPTY, never a copied state.
+    c.node("data", second, {"--script", c.path("echo.lua").string()});
+    {
+        RawSocket fresh(second);
+        equal(ask(fresh, "MLD1 LOAD home hero"), "MLD1 EMPTY");
+    }
+    // A tokened data node gates the record leg behind MLS1; a refused
+    // handshake closes the leg, so the identified path takes a new one.
+    c.node("data", tokened, {"--script", c.path("echo.lua").string(), "--service-token", "s3cret"});
+    {
+        RawSocket raw(tokened);
+        equal(ask(raw, "MLD1 SUBMIT home hero gen 1 seq 1 x"), "MLS1 ERR TOKEN");
+    }
+    {
+        RawSocket raw(tokened);
+        equal(ask(raw, "MLS1 gameServer gs-1 s3cret"), "MLS1 OK");
+        equal(ask(raw, "MLD1 SUBMIT home hero gen 1 seq 1 x"), "MLD1 RECEIVED gen 1 seq 1");
+    }
+    // Other roles keep MLD1 as script traffic; only data owns the endpoint.
+    c.node("gameServer", plain, {"--script", c.path("echo.lua").string()});
+    {
+        RawSocket game(plain);
+        equal(ask(game, "MLD1 LOAD home hero"), "MLD1 LOAD home hero");
+    }
 }
 void probe_control() {
     Context c;

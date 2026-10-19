@@ -6,7 +6,7 @@ Status: contract design (2026-10-19); implementation as noted per section. This 
 
 - **The home-side endpoint for MLD1 is the `data` role itself.** A home-region gateway may front it for transport, but the durable-ack authority is the data service — not a coordinator, not a gameServer. This closes the open question on the return-protocol page.
 - **All three roles reuse the existing runtime surface** — framed TCP sessions with optional `MLS1` identity, the Lua `message`/`http` hooks, `MLR1` registry access, and the existing HTTP stack for apiServer. No new transport layer is introduced for them.
-- **login and data run as plain script services today** (`--role login`/`--role data` start with `--script`, the standard hooks and framed sessions, like a gameServer without scenes); their service flows — placement, load and persistence — remain contract-only. apiServer is already running and gains contract documentation, not new code.
+- **login and data run as plain script services** (`--role login`/`--role data` start with `--script`, the standard hooks and framed sessions, like a gameServer without scenes). Login's placement lookup and the data-side MLD1 record endpoint are implemented; the authentication, durable load and persistence flows remain contract-only. apiServer is already running and gains contract documentation, not new code.
 
 ## login
 
@@ -37,7 +37,7 @@ data owns the durable character store of its home region: the only writer of rec
 | Until persistence lands | The data-side persistence chain (entity-contract item) is not implemented. Until it exists, data cannot emit truthful durable acks; an interim implementation must not send `ACK durable` at all, so senders stay in their retry/read-only state — an honest degradation, not a shortcut |
 | Excluded | Business schemas, SQL, cache-table semantics; the storage engine and dirty-tracking belong to the entity-contract chain |
 
-Wiring status: the role shell starts (`--role data` with `--script`), and `--service-token` already enforces `MLS1` identity on every leg. Not implemented: the load path, the MLD1 endpoint and the persistence chain — MLD1 acks wait for the persistence chain.
+Wiring status: the role shell starts (`--role data` with `--script`), `--service-token` enforces `MLS1` identity on every leg, and the MLD1 endpoint now runs (`MLD1 LOAD`/`SUBMIT` over framed TCP): the generation fence, the per-character sequence discipline and resend dedup are implemented in the framework, and the endpoint answers `MLD1 RECEIVED` — a receipt, never a durability claim, so senders keep their retry queue exactly as the protocol requires. Still not implemented: the persistence chain, therefore no `ACK durable` anywhere today and records are process-local (a restart answers `MLD1 EMPTY`); the durable load path answers from the same in-memory record and no further.
 
 ## apiServer
 

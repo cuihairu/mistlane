@@ -1,6 +1,6 @@
 # Cross return and single-writer protocol
 
-Status: decided design (2026-10-19); the participant context is wired into cross admission, MLD1 and single-writer enforcement are pending. This page fixes the contracts named as the first gate of the crossServer migration item — the return and persistence-confirmation protocol and single-writer authority — before any transfer, settlement, retry, offline or failed-return implementation begins. It targets the responsibilities in [process roles](./process-roles.md); the observed legacy path and its gaps are on the [model page](./player-scene-model.md). The participant section is implemented; the remaining sections are not, and no unimplemented claim below changes CLI behavior today.
+Status: decided design (2026-10-19); the participant context is wired into cross admission and the MLD1 endpoint now runs on the `data` role answering receipts only. This page fixes the contracts named as the first gate of the crossServer migration item — the return and persistence-confirmation protocol and single-writer authority — before any transfer, settlement, retry, offline or failed-return implementation begins. It targets the responsibilities in [process roles](./process-roles.md); the observed legacy path and its gaps are on the [model page](./player-scene-model.md). The participant context and the endpoint are implemented; the sender side and single-writer enforcement are not, and no unimplemented claim below changes CLI behavior today.
 
 ## Participant and return context
 
@@ -43,6 +43,20 @@ sequenceDiagram
 - **Ordering:** sequence numbers let the home side accept out-of-order arrivals and reject gaps it cannot fill; a gap that persists past the retry budget surfaces as a failed return, not as silent data loss.
 - **Return:** leaving the cross scope is complete only when the character's final change-set is acknowledged durably. Until then the character remains a cross participant of record; a forced route change before acknowledgement is a failed return (below).
 
+The wire format is the shared u32 BE length frame with no per-message prefix, and it is implemented on the `data` role (see the [service contracts](./service-contracts.md)):
+
+```text
+MLD1 LOAD <realm> <character>
+MLD1 SUBMIT <realm> <character> gen <n> seq <m> [<payload>]
+
+MLD1 EMPTY
+MLD1 STATE gen <n> seq <m> [<payload>]
+MLD1 RECEIVED gen <n> seq <m>
+MLD1 ERR INVALID | MLD1 ERR STALE gen <n> | MLD1 ERR SEQ seq <n> | MLD1 ERR FULL
+```
+
+The endpoint enforces the fence (`STALE` when the submitted generation is lower than the stored one), the per-character sequence discipline (the next sequence must be exactly one past the stored one; resends of the stored sequence dedup to a second `RECEIVED` without changing the stored change-set, and a fresh record starts at one), and answers nothing here that reads as durable: **`RECEIVED` is a receipt, not the acknowledgement this protocol means** — a sender must treat it exactly like no answer and keep the change-set queued. Today records live in the data process only and a restart answers `EMPTY` again; the framework keeps the newest accepted change-set per character, while merging change-sets into entity state stays the deferred entity-contract work. The crossServer sender — the bounded retry queue, the read-only transition when it fills, and return completion — is not implemented yet.
+
 ## Failure handling
 
 | Failure | Rule |
@@ -57,9 +71,9 @@ sequenceDiagram
 
 ## Deliberately not decided here
 
-- Wire format and framing of MLD1: bound to the implementation slice. The home-side endpoint itself is now decided — the `data` role owns it; see the [service contracts](./service-contracts.md).
+- Wire format and framing of MLD1: decided with the implemented endpoint — the grammar and reply vocabulary are in the section above; framing is the shared u32 BE length frame.
 - Settlement, reward and ranking business rules, cross-scene templates, and the actual Avatar/scene runtime: later crossServer slices and the entity-contract chain.
 - Lease duration numbers, queue bounds and retry budgets: configuration named at implementation time with defaults justified by measurement, not by this page.
 - Whether the entry ticket is signed, and by whom: an authentication design gated on the login contract.
 
-The participant context is in the cross admission path with tests (validation record: cross routing row); the next slice is MLD1 against the data endpoint fixed by the [service contracts](./service-contracts.md).
+The participant context and the MLD1 endpoint are in the paths with tests (validation records: the cross routing and record endpoint rows); the next slice is the crossServer sender — the bounded retry queue and the return-completion rule — which only makes sense once the data-side persistence chain exists.
