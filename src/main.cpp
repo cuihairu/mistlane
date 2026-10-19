@@ -106,6 +106,7 @@ std::vector<std::pair<std::string, std::string>> config_flags(const std::filesys
         {"ROLE","--role",0,0,0}, {"ROUTING","--routing",0,0,0}, {"LISTEN","--listen",0,0,0}, {"TRANSPORT","--transport",0,0,0},
         {"SERVICE_TOKEN","--service-token",0,0,0}, {"UPSTREAM_TOKEN","--upstream-token",0,0,0},
         {"SERVICE_NAME","--service-name",0,0,0}, {"UPSTREAM_MULTIPLEX","--upstream-multiplex",0,0,0},
+        {"COORDINATOR","--coordinator",0,0,0}, {"SCOPE","--scope",0,0,0},
         {"SCRIPT","--script",1,0,0}, {"UPSTREAMS","--upstream",0,1,0}, {"CERT","--cert",1,0,0},
         {"KEY","--key",1,0,0}, {"LISTENERS","--listener",0,1,0}, {"REDIS","--redis",0,0,0},
         {"METRICS_LISTEN","--metrics-listen",0,0,0}, {"PROBE_LISTEN","--probe-listen",0,0,0},
@@ -194,7 +195,7 @@ int main(int argc, char** argv) {
             if (scaffold_result >= 0) return scaffold_result;
         }
         mistlane::Config config;
-        bool transport_selected = false;
+        bool transport_selected = false, scope_selected = false;
         // --config entries expand in place: file values first, MISTLANE_<KEY>
         // environment overrides inside the reader, then any explicit flag after.
         std::vector<std::string> tokens;
@@ -213,7 +214,7 @@ int main(int argc, char** argv) {
         for (std::size_t i = 0; i < tokens.size(); ++i) {
             std::string key = tokens[i];
             if (key == "--help") {
-                std::cout << "mistlane --role gateway|gameServer|crossServer|apiServer --listen IP:PORT\n"
+                std::cout << "mistlane --role gateway|gameServer|crossServer|coordinator|apiServer --listen IP:PORT\n"
                              "mistlane init [DIRECTORY]  Create a multi-role starter project\n"
                              "mistlane test [--list|--suite NAME|--case NAME]  Run native C++ cases\n"
                              "mistlane bot --url URL [--clients N --count N]  Simulate game requests\n"
@@ -228,6 +229,9 @@ int main(int argc, char** argv) {
                              "    --upstream-token TOKEN --service-name NAME (present MLS1 to each upstream)\n"
                              "    --upstream-multiplex on|off (gateway shares one upstream connection\n"
                              "      across sessions; requires --upstream-token, which identifies the peer)\n"
+                             "  gameServer/crossServer: --coordinator IP:PORT [--scope NAME] registers with\n"
+                             "      the coordinator and heartbeats readiness/load (--upstream-token presents\n"
+                             "      MLS1 when the coordinator requires identity)\n"
                              "  --transport tcp|ws|wss|http|https (wss/https require --cert FILE --key FILE)\n"
                              "  --listener PROTO://IP:PORT (repeat; independent extra listener, mixed\n"
                              "    plaintext/TLS allowed; wss/https may add ?cert=FILE&key=FILE overrides)\n"
@@ -244,7 +248,10 @@ int main(int argc, char** argv) {
                              "  cross routing/crossServer: --route-epoch N --max-room-sessions N\n"
                              "    --max-group-sessions N --max-shard-sessions N\n"
                              "SIGHUP: transactional script reload (state is reset)\n"
-                             "Planned, not runnable: login, coordinator, data\n";
+                             "  coordinator: --service-token TOKEN (require member identity); registry\n"
+                             "    members connect with --coordinator IP:PORT [--scope NAME] and heartbeat\n"
+                             "    MLR1 REGISTER/QUERY/PLACE over framed TCP\n"
+                             "Planned, not runnable: login, data\n";
                 return 0;
             }
             if (++i >= tokens.size()) throw std::invalid_argument("missing value for "+key);
@@ -255,6 +262,8 @@ int main(int argc, char** argv) {
             else if (key == "--upstream-token") config.upstream_token = value;
             else if (key == "--service-name") config.service_name = value;
             else if (key == "--upstream-multiplex") config.upstream_multiplex = switch_value(value);
+            else if (key == "--coordinator") { config.coordinator = endpoint(value); config.coordinator_enabled = true; }
+            else if (key == "--scope") { config.scope = value; scope_selected = true; }
             else if (key == "--upstream") config.upstreams.push_back(upstream(value));
             else if (key == "--routing") config.routing = value;
             else if (key == "--transport") { config.transport = value; transport_selected = true; }
@@ -295,9 +304,22 @@ int main(int argc, char** argv) {
         if (role->script) {
             if (config.script.empty() || !config.upstreams.empty())
                 throw std::invalid_argument(config.role + " requires --script and no upstream");
-        } else if (config.upstreams.empty() || !config.script.empty()) {
-            throw std::invalid_argument("gateway requires upstream and no script");
+        } else if (config.role == "gateway") {
+            if (config.upstreams.empty() || !config.script.empty())
+                throw std::invalid_argument("gateway requires upstream and no script");
+        } else if (!config.script.empty() || !config.upstreams.empty()) {
+            // The registry is state, not a forwarding or scripting plane.
+            throw std::invalid_argument("coordinator requires no script and no upstream");
         }
+        // Registration is a member duty; gateways route, coordinators collect.
+        if (config.coordinator_enabled && config.role != "gameServer" && config.role != "crossServer")
+            throw std::invalid_argument("--coordinator applies to gameServer and crossServer");
+        if (!config.coordinator_enabled && scope_selected)
+            throw std::invalid_argument("--scope requires --coordinator");
+        if (!config.coordinator_enabled && !config.upstream_token.empty() && config.role != "gateway")
+            // Members present this identity when they register; anywhere else
+            // the flag would silently do nothing.
+            throw std::invalid_argument("--upstream-token applies to gateway or coordinator members");
         // Cross routing keeps its own MLC1 join as the identity; accepting the
         // token flags there would silently skip the handshake instead of
         // surfacing the misconfiguration.
@@ -342,7 +364,7 @@ int main(int argc, char** argv) {
             throw std::invalid_argument("apiServer requires http, https, ws or wss transport");
         if (config.crashpad_handler.empty() != config.crashpad_database.empty())
             throw std::invalid_argument("Crashpad requires both --crashpad-handler and --crashpad-database");
-        if ((config.is_cross_gateway() || config.role == "crossServer") && any_non_tcp)
+        if ((config.is_cross_gateway() || config.role == "crossServer" || config.role == "coordinator") && any_non_tcp)
             throw std::invalid_argument("cross routing and crossServer require internal TCP transport");
         return mistlane::run_node(std::move(config));
     } catch (const std::exception& e) {

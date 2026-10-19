@@ -68,7 +68,8 @@ The old `requesthegel2hegel` transfer passes through Gate to change the route an
 | `gameServer` | Lua message execution, lifecycle/reload, direct TCP/WS/WSS with bounded session push/broadcast; existing HTTP adapter retained | Character/scene/instance hosting and persistence chain |
 | `crossServer` | TCP cross context, Lua execution and final connection admission | Character transfer, cross-region scenes and home-data updates |
 | `apiServer` | Lua HTTP/HTTPS hooks, HTTP by default, optional WS/WSS message transport | Platform business callbacks, reliable internal calls and multiple listeners |
-| `login`, `coordinator`, `data` | Names/responsibilities registered; CLI explicitly rejects startup as not implemented | Authentication, placement/ownership, home-data services and integration |
+| `coordinator` | TCP-only registry: members register, heartbeat readiness and load, QUERY/PLACE answer in a named scope, disconnect retires the member | Placement and ownership states, region/group scope authority, transfer handshake, high availability and recovery |
+| `login`, `data` | Names/responsibilities registered; CLI explicitly rejects startup as not implemented | Authentication, home-data services and integration |
 
 The single executable remains mistlane. Existing roles have migrated; the independent generic forwarding role is removed and static cross ingress is a gateway routing policy, not a complete coordinator. Old CLI aliases are rejected. MLC1/PROBE1, room/group keys and max-shard-sessions quota retain their protocol meanings; they do not introduce process roles.
 

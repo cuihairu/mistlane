@@ -28,6 +28,12 @@ struct Config {
     // gateway multiplexes many logical sessions over one upstream connection
     // (MLM1). Internal mode: the peer must accept MLS1 for the upgrade to offer.
     bool upstream_multiplex = false;
+    // Members (gameServer/crossServer) register with a coordinator over MLR1:
+    // heartbeat readiness and load there, learn nothing back yet. scope names
+    // the deployment slice (a region or a cross-group) the member serves.
+    Endpoint coordinator{"127.0.0.1", 7200};
+    bool coordinator_enabled = false;
+    std::string scope = "main";
     std::string script;
     Endpoint redis{"127.0.0.1", 6379};
     Endpoint metrics_listen{"127.0.0.1", 9090};

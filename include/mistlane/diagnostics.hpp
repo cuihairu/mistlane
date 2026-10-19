@@ -26,6 +26,7 @@ public:
 
     void set_ready(bool ready);
     void set_active_sessions(std::size_t count);
+    void set_registry_members(std::size_t count);
     void reject(std::string_view reason);
     void add_message(std::string_view direction);
     void add_payload_bytes(std::string_view direction, std::size_t bytes);
@@ -43,6 +44,7 @@ private:
     std::unique_ptr<prometheus::Exposer> exposer_;
     prometheus::Gauge* ready_ = nullptr;
     prometheus::Gauge* active_sessions_ = nullptr;
+    prometheus::Gauge* registry_members_ = nullptr;
     prometheus::Gauge* event_loop_lag_max_ = nullptr;
     prometheus::Gauge* process_rss_ = nullptr;
     prometheus::Counter* rejected_ = nullptr;

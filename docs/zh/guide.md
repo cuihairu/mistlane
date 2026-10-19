@@ -137,6 +137,14 @@ socket.onopen = () => socket.send(new TextEncoder().encode('hello mistlane'))
 
 默认每个 gateway 会话独占一条上游 TCP 连接；gateway 也可以让同一 upstream 的全部会话共享一条连接：在 `--upstream-token` 之外加 `--upstream-multiplex on`（该开关要求令牌，仅作用于会话路由的 gateway——cross 路由和其他角色带此参数直接拒绝启动）。`MLS1` 握手通过后 gateway 发送 `MLM1`，服务端回复 `MLM1 OK`，此后这条链路上的每帧变为 `u32 id | payload`（big-endian）：每个客户端会话拥有一个从 1 起的 id，未知 id 由服务端按正常准入上限生成逻辑会话，id 0 承载 `CLOSE <id>` 文本控制、任一侧均可用其关闭一条逻辑链路。payload 上限相应减少 4 个 id 字节。关联仍按逻辑会话独立——客户端发送 `MLC2` 时，握手只发生在自己 id 的载荷内，与专用连接完全一致。客户端永远不会自己发送 `MLM1`：作为首帧会得到 `MLM1 ERR UNEXPECTED` 并被关闭。
 
+### 进程注册表（MLR1）
+
+coordinator 是注册表，不是转发面。用 `--role coordinator --listen ADDR:PORT` 启动：仅 TCP（WS/WSS 监听直接拒绝），且带脚本或上游时拒绝启动。成员是配置了 `--coordinator ADDR:PORT` 的 gameServer 或 crossServer 进程，`--scope NAME`（默认 `main`）声明其服务的部署切片——一个区服或一个跨服组。两个参数在其他角色上拒绝启动，`--scope` 脱离 `--coordinator` 也拒绝启动。
+
+每个成员保持一条出站控制连接：先用 `MLR1 REGISTER <role> <instance> <scope> <listen ADDR:PORT> <probe ADDR:PORT|0>` 注册（instance 取 `--service-name`，缺省时为监听地址），此后每 500 ms 心跳一次 `MLR1 <ready|notready> <active> <capacity>`。就绪状态来自成员自身的准入闸门（超载比例与滞回，基于在线会话数和 `--max-connections`）；coordinator 不可达时成员只是重试注册，不会导致进程失败。成员身份随连接存亡：断连即退役，coordinator 上的 `mistlane_registry_members` 指标记录存活成员数。
+
+两条只读命令在各自的短连接上应答后即关闭：`MLR1 QUERY [role] [scope]` 列出成员及其就绪与负载，`MLR1 PLACE <role> <scope>` 挑选一个——就绪优先，再取 active/capacity 最低者，最后按实例名——应答 `MLR1 PLACE <instance> <listen> <probe> ready <active>/<capacity>` 或 `MLR1 EMPTY`。coordinator 上的任何非 MLR1 帧都会得到 `MLR1 ERR UNEXPECTED`；带 `--service-token` 的 coordinator 对未通过 `MLS1` 握手前的所有帧回复 `MLS1 ERR TOKEN`，成员侧 `--upstream-token` 的用法与任何内部链路一致。注册表只回答当前状态：不持有归属与迁移状态、不搬运角色、也没有故障转移——拿到 PLACE 地址之后做什么由调用方自己决定。
+
 ### 初始化模板中的配置
 
 `mistlane init` 会生成可选的 `gateway-ws.env` 和 `gateway-wss.env`，默认集群仍启动 TCP 网关。WS 示例监听 `127.0.0.1:8080`；远程接入时修改对应文件中的 `LISTEN`。`gameServer-mixed.env` 演示同一个 gameServer 通过 `LISTENERS` 在 7102 提供帧式 TCP、在 7082 提供 WS 监听。

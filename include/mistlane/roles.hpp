@@ -9,8 +9,8 @@ inline constexpr std::array role_definitions{
     RoleDefinition{"gameServer", true, true},
     RoleDefinition{"crossServer", true, true},
     RoleDefinition{"apiServer", true, true},
+    RoleDefinition{"coordinator", true, false},
     RoleDefinition{"login", false, false},
-    RoleDefinition{"coordinator", false, false},
     RoleDefinition{"data", false, false},
 };
 inline const RoleDefinition* find_role(std::string_view name) {

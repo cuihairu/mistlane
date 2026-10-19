@@ -7,6 +7,7 @@
 #include "mistlane/transport.hpp"
 #include <utility>
 #include <boost/asio.hpp>
+#include <algorithm>
 #include <array>
 #include <cctype>
 #include <csignal>
@@ -16,6 +17,7 @@
 #include <iostream>
 #include <deque>
 #include <map>
+#include <optional>
 #include <memory>
 #include <set>
 #include <sstream>
@@ -1147,6 +1149,369 @@ private:
     Reader reader_;
     bool closed_ = false;
 };
+// Registry endpoints travel as "IP:PORT" text; "0" means none. Returns false
+// instead of throwing when the text is not a connectable endpoint.
+bool endpoint_text(std::string_view text, std::string& address, unsigned& port) {
+    if (text == "0") { address.clear(); port = 0; return true; }
+    const auto split = text.find_last_of(':');
+    if (split == std::string_view::npos || split+1 >= text.size() || split == 0) return false;
+    const auto raw_address = text.substr(0, split), raw_port = text.substr(split+1);
+    unsigned value = 0;
+    for (char ch : raw_port) {
+        if (!std::isdigit(static_cast<unsigned char>(ch))) return false;
+        value = value*10 + static_cast<unsigned>(ch-'0');
+    }
+    if (value < 1 || value > 65535) return false;
+    try { asio::ip::make_address(std::string(raw_address)); } catch (...) { return false; }
+    address = std::string(raw_address);
+    port = value;
+    return true;
+}
+// Coordinator state: one entry per live member connection. Membership is
+// connection-driven — a member stays registered while its control connection
+// lives, heartbeats only refresh readiness and load. Listing order is ready
+// first, then the lighter share of capacity, then the instance name, so a
+// placement is deterministic for a given snapshot.
+class Registry {
+public:
+    struct Member {
+        std::string role, instance, scope, listen;
+        unsigned probe = 0;
+        bool ready = false;
+        std::size_t active = 0, capacity = 0;
+    };
+    bool upsert(Member member, void* owner) {
+        const auto key = member.scope+'\x1'+member.role+'\x1'+member.instance;
+        auto found = members_.find(key);
+        if (found == members_.end()) {
+            members_.emplace(std::move(key), std::make_pair(std::move(member), owner));
+            return true;
+        }
+        // A duplicate key from another live connection loses: one owner per
+        // (scope, role, instance), and the freshest registration wins nothing.
+        if (found->second.second != owner) return false;
+        found->second.first = std::move(member);
+        return true;
+    }
+    bool retire(const std::string& scope, const std::string& role,
+                const std::string& instance, void* owner) {
+        auto found = members_.find(scope+'\x1'+role+'\x1'+instance);
+        if (found == members_.end() || found->second.second != owner) return false;
+        members_.erase(found);
+        return true;
+    }
+    std::vector<const Member*> list(const std::string& role, const std::string& scope) const {
+        std::vector<const Member*> found;
+        for (const auto& [key, entry] : members_)
+            if ((role.empty() || entry.first.role == role) && (scope.empty() || entry.first.scope == scope))
+                found.push_back(&entry.first);
+        std::sort(found.begin(), found.end(), [](const Member* a, const Member* b) {
+            if (a->ready != b->ready) return a->ready;
+            const auto share = [](const Member* m) { return m->capacity
+                ? static_cast<double>(m->active)/static_cast<double>(m->capacity) : 1.0; };
+            if (share(a) != share(b)) return share(a) < share(b);
+            return a->instance < b->instance;
+        });
+        return found;
+    }
+    std::size_t size() const { return members_.size(); }
+    static std::string line(const Member& member) {
+        std::ostringstream out;
+        out << "member " << member.role << ' ' << member.instance << ' ' << member.scope << ' '
+            << member.listen << ' ' << member.probe << ' '
+            << (member.ready ? "ready" : "notready") << ' '
+            << member.active << '/' << member.capacity;
+        return out.str();
+    }
+private:
+    std::map<std::string, std::pair<Member, void*>> members_;
+};
+// One coordinator control connection: a member registration with its heartbeat
+// channel, or a one-shot list/place query. The coordinator forwards no gameplay
+// frame, so the role cannot quietly drift into being a router.
+class RegistrySession : public std::enable_shared_from_this<RegistrySession> {
+public:
+    RegistrySession(std::shared_ptr<Channel> channel, Registry& registry, const Config& config,
+            Diagnostics& diagnostics, std::function<void(RegistrySession*)> on_close)
+      : channel_(std::move(channel)), timer_(channel_->executor()), registry_(registry),
+        config_(config), diagnostics_(diagnostics), on_close_(std::move(on_close)) {}
+    void start() { channel_->start([self=shared_from_this()](Error) { self->pump(); }); }
+    void stop() {
+        if (closed_) return;
+        closed_ = true;
+        timer_.cancel();
+        if (member_) registry_.retire(member_->scope, member_->role, member_->instance, this);
+        channel_->close();
+        on_close_(this);
+    }
+private:
+    void deadline(int seconds) {
+        const auto generation = ++generation_;
+        timer_.expires_after(std::chrono::seconds(seconds));
+        timer_.async_wait([self=shared_from_this(), generation](Error ec) {
+            if (!ec && self->generation_ == generation) self->stop();
+        });
+    }
+    void pump() {
+        if (closed_ || reading_) return;
+        reading_ = true;
+        deadline(60); // members beat at least every half second
+        channel_->read([self=shared_from_this()](Error ec, std::string payload) {
+            self->reading_ = false;
+            if (self->closed_) return;
+            if (ec) return self->stop();
+            self->dispatch(std::move(payload));
+        });
+    }
+    void reply(std::string payload) {
+        channel_->write(std::move(payload), [self=shared_from_this()](Error ec) {
+            if (ec) return self->stop();
+            self->pump();
+        });
+    }
+    void close_with(std::string payload) {
+        channel_->write(std::move(payload), [self=shared_from_this()](Error) { self->stop(); });
+    }
+    void refuse(std::string_view reason) {
+        std::cerr << "registry refused: " << reason << '\n';
+        close_with("MLR1 ERR " + std::string(reason));
+    }
+    void refuse_service(const char* magic, const char* reason) {
+        std::cerr << "service handshake rejected: " << reason << '\n';
+        close_with(std::string(magic)+" ERR "+reason);
+    }
+    void dispatch(std::string payload) {
+        if (payload.size() > 256) return refuse("INVALID"); // registry lines are tiny
+        std::istringstream in(payload);
+        std::string magic;
+        in >> magic;
+        if (magic == "MLS1") return identity(payload);
+        // A tokened coordinator only serves identified connections: the
+        // handshake has to precede any registry traffic.
+        if (!config_.service_token.empty() && !service_ok_) return refuse_service("MLS1", "TOKEN");
+        if (magic != "MLR1") return refuse("UNEXPECTED");
+        if (!registered_) {
+            if (payload.starts_with("MLR1 REGISTER")) return register_member(payload);
+            return query(payload);
+        }
+        return heartbeat(payload);
+    }
+    // Identity stacks on the registry: the coordinator's MLS1 verdict precedes
+    // the first MLR1 frame, and a stray handshake is refused like anywhere else.
+    void identity(const std::string& payload) {
+        if (service_ok_ || config_.service_token.empty()) return refuse_service("MLS1", "UNEXPECTED");
+        std::string role, instance, token;
+        if (!service_fields(payload, role, instance, token)) return refuse_service("MLS1", "INVALID");
+        if (token != config_.service_token) return refuse_service("MLS1", "TOKEN");
+        service_ok_ = true;
+        reply("MLS1 OK");
+    }
+    void register_member(const std::string& payload) {
+        std::istringstream in(payload);
+        std::string magic, command, role, instance, scope, listen, probe = "0", extra;
+        in >> magic >> command >> role >> instance >> scope >> listen >> probe;
+        if (in >> extra) return refuse("INVALID");
+        if (role != "gameServer" && role != "crossServer") return refuse("INVALID");
+        if (instance.empty() || instance.size() > 64 || scope.empty() || scope.size() > 64)
+            return refuse("INVALID");
+        Registry::Member member;
+        member.role = role;
+        member.instance = instance;
+        member.scope = scope;
+        std::string address;
+        unsigned port = 0;
+        if (!endpoint_text(listen, address, port)) return refuse("INVALID");
+        member.listen = address+':'+std::to_string(port);
+        if (!endpoint_text(probe, address, port)) return refuse("INVALID");
+        member.probe = port;
+        if (!registry_.upsert(member, this)) return refuse("INVALID");
+        member_ = member;
+        registered_ = true;
+        std::cout << "member registered " << role << ' ' << instance << ' ' << scope << std::endl;
+        diagnostics_.set_registry_members(registry_.size());
+        reply("MLR1 OK");
+    }
+    void heartbeat(const std::string& payload) {
+        if (!member_) return refuse("UNEXPECTED");
+        std::istringstream in(payload);
+        std::string magic, state, extra;
+        std::size_t active = 0, capacity = 0;
+        in >> magic >> state;
+        if (!(in >> active >> capacity) || (in >> extra)) return refuse("INVALID");
+        if ((state != "ready" && state != "notready") || capacity == 0 || capacity > 1000000
+                || active > capacity) return refuse("INVALID");
+        member_->ready = state == "ready";
+        member_->active = active;
+        member_->capacity = capacity;
+        if (!registry_.upsert(*member_, this)) return refuse("INVALID");
+        reply("MLR1 OK");
+    }
+    void query(const std::string& payload) {
+        std::istringstream in(payload);
+        std::string magic, command, role, scope, extra;
+        in >> magic >> command >> role >> scope;
+        if (in >> extra) return refuse("INVALID");
+        if (command == "QUERY") {
+            const auto members = registry_.list(role, scope);
+            if (members.empty()) return close_with("MLR1 NONE");
+            std::ostringstream out;
+            out << "MLR1 MEMBERS " << members.size();
+            for (const auto* member : members) out << '\n' << Registry::line(*member);
+            return close_with(out.str());
+        }
+        if (command == "PLACE") {
+            if (role.empty() || scope.empty()) return refuse("INVALID");
+            for (const auto* member : registry_.list(role, scope)) {
+                if (!member->ready) continue;
+                std::ostringstream out;
+                out << "MLR1 PLACE " << member->instance << ' ' << member->listen << ' '
+                    << member->probe << " ready " << member->active << '/' << member->capacity;
+                return close_with(out.str());
+            }
+            return close_with("MLR1 EMPTY");
+        }
+        return refuse("UNEXPECTED");
+    }
+    std::shared_ptr<Channel> channel_;
+    asio::steady_timer timer_;
+    Registry& registry_;
+    const Config& config_;
+    Diagnostics& diagnostics_;
+    std::function<void(RegistrySession*)> on_close_;
+    std::optional<Registry::Member> member_;
+    unsigned generation_ = 0;
+    bool registered_ = false, service_ok_ = false, reading_ = false, closed_ = false;
+};
+// Member side of MLR1: one outbound control connection that registers the
+// process and heartbeats its admission state. The registry informs placement,
+// it does not own this member, so a missing coordinator only re-schedules the
+// registration instead of failing the process.
+class RegistryMember : public std::enable_shared_from_this<RegistryMember> {
+public:
+    RegistryMember(asio::io_context& io, const Config& config, std::function<std::string()> status)
+      : io_(io), config_(config), status_(std::move(status)),
+        endpoint_(parse_address(config.coordinator.address), config.coordinator.port),
+        connect_(io), heartbeat_(io), timer_(io) {}
+    void start() { channel_ = std::make_shared<TcpChannel>(tcp::socket(io_)); connect(); }
+    void stop() {
+        dead_ = true;
+        connect_.cancel();
+        heartbeat_.cancel();
+        timer_.cancel();
+        if (channel_) channel_->close();
+    }
+private:
+    enum class Phase { connecting, identifying, registering, live };
+    void pump() {
+        if (dead_) return;
+        if (!channel_) return;
+        if (phase_ == Phase::connecting) return connect();
+        if (reading_) return;
+        reading_ = true;
+        deadline(phase_ == Phase::live ? 60 : 10);
+        channel_->read([self=shared_from_this()](Error ec, std::string payload) {
+            self->reading_ = false;
+            if (self->dead_) return;
+            if (ec) return self->fail("registry connection");
+            self->dispatch(std::move(payload));
+        });
+    }
+    void connect() {
+        channel_->socket().async_connect(endpoint_, [self=shared_from_this()](Error ec) {
+            if (self->dead_) return;
+            if (ec) return self->reschedule();
+            // Identified members lead with MLS1; the token gates the registry.
+            self->phase_ = self->config_.upstream_token.empty() ? Phase::registering : Phase::identifying;
+            self->deadline(10);
+            if (self->phase_ == Phase::identifying)
+                self->write(service_hello(self->config_), [self](Error) { self->pump(); });
+            else
+                self->write(self->register_line(), [self](Error) { self->pump(); });
+        });
+    }
+    std::string register_line() const {
+        const std::string instance = !config_.service_name.empty() ? config_.service_name
+            : config_.listen.address+':'+std::to_string(config_.listen.port);
+        std::ostringstream out;
+        out << "MLR1 REGISTER " << config_.role << ' ' << instance << ' ' << config_.scope << ' '
+            << config_.listen.address << ':' << config_.listen.port << ' '
+            << (config_.probe_enabled ? config_.probe_listen.address+':'
+                +std::to_string(config_.probe_listen.port) : "0");
+        return out.str();
+    }
+    void dispatch(std::string payload) {
+        if (phase_ == Phase::identifying) {
+            if (payload != "MLS1 OK") {
+                std::cerr << "coordinator identity refused: " << payload << '\n';
+                return reschedule();
+            }
+            phase_ = Phase::registering;
+            deadline(10);
+            return write(register_line(), [self=shared_from_this()](Error) { self->pump(); });
+        }
+        if (payload != "MLR1 OK") {
+            std::cerr << "coordinator verdict: " << payload << '\n';
+            return reschedule();
+        }
+        if (phase_ == Phase::registering) {
+            phase_ = Phase::live;
+            std::cout << "registered with coordinator " << config_.coordinator.address << ':'
+                      << config_.coordinator.port << ' ' << config_.scope << std::endl;
+            beat();
+        }
+        deadline(60);
+        return pump();
+    }
+    void beat() {
+        if (dead_) return;
+        heartbeat_.expires_after(std::chrono::milliseconds(500));
+        heartbeat_.async_wait([self=shared_from_this()](Error ec) {
+            if (ec || self->dead_ || self->phase_ != Phase::live) return;
+            self->write("MLR1 "+self->status_(), [self](Error) { self->pump(); });
+            self->beat();
+        });
+    }
+    void write(std::string payload, Completion completion) {
+        channel_->write(std::move(payload), [self=shared_from_this(), cb=std::move(completion)]
+                (Error ec) mutable {
+            cb(ec);
+            self->pump();
+        });
+    }
+    void deadline(int seconds) {
+        const auto generation = ++generation_;
+        timer_.expires_after(std::chrono::seconds(seconds));
+        timer_.async_wait([self=shared_from_this(), generation](Error ec) {
+            if (!ec && self->generation_ == generation) self->fail("registry idle");
+        });
+    }
+    void fail(const char* why) {
+        if (dead_) return;
+        std::cerr << "coordinator link failed: " << why << '\n';
+        reschedule();
+    }
+    void reschedule() {
+        phase_ = Phase::connecting;
+        timer_.cancel();
+        heartbeat_.cancel();
+        if (channel_) { channel_->close(); channel_.reset(); }
+        connect_.expires_after(std::chrono::milliseconds(500));
+        connect_.async_wait([self=shared_from_this()](Error ec) {
+            if (ec || self->dead_ || self->channel_) return;
+            self->channel_ = std::make_shared<TcpChannel>(tcp::socket(self->io_));
+            self->pump();
+        });
+    }
+    asio::io_context& io_;
+    const Config& config_;
+    std::function<std::string()> status_;
+    tcp::endpoint endpoint_;
+    asio::steady_timer connect_, heartbeat_, timer_;
+    std::shared_ptr<TcpChannel> channel_;
+    Phase phase_ = Phase::connecting;
+    unsigned generation_ = 0;
+    bool reading_ = false, dead_ = false;
+};
 // Lua websocket lifecycle sessions (script roles with an http/https listener).
 // Every method runs on the node's event loop thread, matching the WebsocketSink
 // contract, so no locking is needed. Sessions share max_connections with the
@@ -1278,6 +1643,10 @@ public:
         }
         const bool script_role = config_.role == "gameServer" || config_.role == "crossServer" || config_.role == "apiServer";
         service_context_ = ServiceContext{config_.role, config_.transport, config_.route_epoch, game_sessions, http_service};
+        if (config_.role == "coordinator") registry_ = std::make_unique<Registry>();
+        if (config_.coordinator_enabled)
+            member_ = std::make_shared<RegistryMember>(io_, config_,
+                [this] { return heartbeat_status(); });
         if (script_role && http_service)
             // Holds a reference to service_, so script reloads swap under it freely.
             websockets_ = std::make_shared<WebsocketService>(service_,
@@ -1312,6 +1681,7 @@ public:
             accept();
             diagnostics_->set_ready(true);
             ready_ = true;
+            if (member_) member_->start();
             for (const auto& item : config_.listeners) announce(item);
             io_.run();
         } else {
@@ -1352,13 +1722,19 @@ public:
         }
     }
 private:
-    // Game sessions and Lua websocket sessions share one admission budget.
+    // Game sessions, registry control connections and Lua websocket sessions
+    // share one admission budget.
     std::size_t active_sessions() const {
-        return sessions_.size() + (websockets_ ? websockets_->size() : 0);
+        return sessions_.size() + registry_sessions_.size() + (websockets_ ? websockets_->size() : 0);
     }
     void publish_active() { diagnostics_->set_active_sessions(active_sessions()); }
+    std::string heartbeat_status() const {
+        return std::string(ready_ && admitting_ ? "ready" : "notready")+" "+
+            std::to_string(active_sessions())+" "+std::to_string(config_.max_connections);
+    }
     void attach(std::shared_ptr<Channel> client) {
         if (stopping_ || active_sessions() >= config_.max_connections) return client->close();
+        if (registry_) return attach_registry(std::move(client));
         const Endpoint* upstream = config_.upstreams.empty() || config_.is_cross_gateway() ? nullptr
             : &config_.upstreams[cursor_++ % config_.upstreams.size()];
         // An authenticated peer may upgrade its leg into a shared hub.
@@ -1375,6 +1751,21 @@ private:
             },
             config_.upstream_multiplex ? &mux_links_ : nullptr, std::move(mux_upgrade));
         sessions_.insert(session);
+        publish_active();
+        session->start();
+    }
+    // The registry accepts control connections only; gameplay roles never
+    // reach the coordinator listener's forwarding machinery.
+    void attach_registry(std::shared_ptr<Channel> client) {
+        if (stopping_) { client->close(); return; }
+        auto session = std::make_shared<RegistrySession>(std::move(client), *registry_, config_,
+            *diagnostics_, [this](RegistrySession* ptr) {
+                for (auto i = registry_sessions_.begin(); i != registry_sessions_.end(); ++i)
+                    if (i->get() == ptr) { registry_sessions_.erase(i); break; }
+                diagnostics_->set_registry_members(registry_->size());
+                publish_active();
+            });
+        registry_sessions_.insert(session);
         publish_active();
         session->start();
     }
@@ -1505,6 +1896,10 @@ private:
         // normal Session::stop path, so the drain below only sees leftovers.
         auto hubs = std::move(hubs_);
         for (auto& hub : hubs) hub->stop();
+        // Registry sessions retire their member entries as they close.
+        auto registry_sessions = std::move(registry_sessions_);
+        for (auto& session : registry_sessions) session->stop();
+        if (member_) member_->stop();
         while (!sessions_.empty()) {
             auto session = *sessions_.begin();
             session->stop();
@@ -1528,6 +1923,9 @@ private:
     std::shared_ptr<RedisRuntime> redis_;
     std::set<std::shared_ptr<Session>> sessions_;
     std::set<std::shared_ptr<MuxHub>> hubs_;
+    std::set<std::shared_ptr<RegistrySession>> registry_sessions_;
+    std::unique_ptr<Registry> registry_;
+    std::shared_ptr<RegistryMember> member_;
     std::size_t cursor_ = 0;
     CrossAdmission admission_;
     std::unique_ptr<Diagnostics> diagnostics_;

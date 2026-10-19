@@ -109,7 +109,7 @@ WSS 示例（使用你自己的证书链与私钥）：
 
 证书和私钥不进入源码包。WS/WSS 的实现直接使用 Drogon；内部 TCP payload 为四字节网络序长度加数据，最大 1 MiB，允许空消息和二进制内容。
 
-WSS 客户端连接 `wss://证书对应域名:7443/ws`，远程接入时将上述 WSS 监听地址改为合适的服务端网卡地址。响应是 binary WS 消息；会话全双工，客户端可流水发送，Lua 通过 `mistlane.session.send`/`mistlane.session.broadcast` 向单个或全部游戏会话主动推送（每会话输出积压有界），可选的请求 ID 关联模式（`MLC2`）让响应与推送可区分，内部链路可要求服务身份握手（`MLS1`，`--service-token`/`--upstream-token`）且客户端全程不可见，gateway 还可让全部会话共享一条上游连接（`MLM1`，`--upstream-multiplex on`，按会话分配逻辑 id），脚本角色 HTTP 监听另有独立的 WebSocket 推送 API。浏览器代码、网关/直接 gameServer 两种拓扑及初始化模板的 `CERT`/`KEY` 配置见[游戏接入指南](docs/zh/guide.md)。
+WSS 客户端连接 `wss://证书对应域名:7443/ws`，远程接入时将上述 WSS 监听地址改为合适的服务端网卡地址。响应是 binary WS 消息；会话全双工，客户端可流水发送，Lua 通过 `mistlane.session.send`/`mistlane.session.broadcast` 向单个或全部游戏会话主动推送（每会话输出积压有界），可选的请求 ID 关联模式（`MLC2`）让响应与推送可区分，内部链路可要求服务身份握手（`MLS1`，`--service-token`/`--upstream-token`）且客户端全程不可见，gateway 还可让全部会话共享一条上游连接（`MLM1`，`--upstream-multiplex on`，按会话分配逻辑 id），`--role coordinator` 进程维护存活进程注册表（`MLR1`）：gameServer/crossServer 成员注册并心跳就绪与负载，只读的 `QUERY`/`PLACE` 命令按作用域回答分配查询，脚本角色 HTTP 监听另有独立的 WebSocket 推送 API。浏览器代码、网关/直接 gameServer 两种拓扑及初始化模板的 `CERT`/`KEY` 配置见[游戏接入指南](docs/zh/guide.md)。
 
 ## Lua 扩展
 

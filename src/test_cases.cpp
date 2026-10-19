@@ -273,7 +273,7 @@ void role_names() {
         require(child.wait() != 0, "removed role accepted");
         require(child.output().find("unknown role") != std::string::npos, "removed role was not rejected by name");
     }
-    for (const auto& planned : {"login", "coordinator", "data"}) {
+    for (const auto& planned : {"login", "data"}) {
         auto& child = c.spawn({self().string(), "--role", planned});
         require(child.wait() != 0 && child.output().find("planned but not implemented") != std::string::npos,
                 "planned service was presented as runnable");
@@ -898,6 +898,148 @@ void transport_multiplex() {
                 "multiplex accepted without a service identity");
     }
     require(node.output().find("unexpected frame") == std::string::npos, "hub parsed a malformed frame");
+}
+// The coordinator role (MLR1) keeps a live registry instead of forwarding
+// gameplay: members register with a scope and heartbeat readiness/load, a
+// registry client lists or places against it, disconnects drop entries, and a
+// token-requiring coordinator admits only identified members.
+void coordinator_registry() {
+    Context c;
+    write(c.path("echo.lua"), correlate_lua);
+    const auto registry = port(), metrics = port(), tokened = port(),
+              first = port(), second = port(), third = port();
+    auto& coord = c.node("coordinator", registry, {"--metrics-listen", endpoint(metrics)});
+    c.node("coordinator", tokened, {"--service-token", "s3cret"});
+    const auto send_frame = [](RawSocket& raw, std::string_view payload) {
+        std::string frame(4, '\0');
+        auto length = static_cast<std::uint32_t>(payload.size());
+        for (int i = 3; i >= 0; --i) { frame[i] = static_cast<char>(length & 255); length >>= 8; }
+        raw.send(frame+std::string(payload));
+    };
+    const auto read_frame = [](RawSocket& raw) {
+        const auto header = raw.receive(4);
+        std::size_t length = 0;
+        for (unsigned char ch : header) length = (length << 8) | ch;
+        return raw.receive(length);
+    };
+    const auto expect_close = [](RawSocket& raw) {
+        for (int i = 0; i < 40 && !raw.closed(); ++i) std::this_thread::sleep_for(50ms);
+        require(raw.closed(), "connection stayed open after a refusal");
+    };
+    // The registry is not a forwarding role: unknown traffic is refused.
+    RawSocket stranger(registry);
+    send_frame(stranger, "hello");
+    equal(read_frame(stranger), "MLR1 ERR UNEXPECTED");
+    expect_close(stranger);
+    // Malformed registrations report the shape.
+    for (const auto& bad : {"MLR1 REGISTER", "MLR1 REGISTER data gs-x alpha 127.0.0.1:1 0",
+                            "MLR1 REGISTER gameServer gs-x alpha not-an-endpoint 0"}) {
+        RawSocket malformed(registry);
+        send_frame(malformed, bad);
+        equal(read_frame(malformed), "MLR1 ERR INVALID");
+        expect_close(malformed);
+    }
+    // Members join two scopes; the first saturates under real load.
+    auto& gs_a = c.node("gameServer", first, {"--script", c.path("echo.lua").string(),
+        "--coordinator", endpoint(registry), "--scope", "alpha", "--service-name", "gs-a",
+        "--max-connections", "4", "--overload-ratio", "0.5", "--ready-hysteresis", "1"});
+    auto& gs_b = c.node("gameServer", second, {"--script", c.path("echo.lua").string(),
+        "--coordinator", endpoint(registry), "--scope", "alpha", "--service-name", "gs-b"});
+    auto& gs_c = c.node("gameServer", third, {"--script", c.path("echo.lua").string(),
+        "--coordinator", endpoint(registry), "--scope", "beta", "--service-name", "gs-c"});
+    std::string body;
+    const auto query = [&](const std::string& line) {
+        RawSocket raw(registry);
+        send_frame(raw, line);
+        body = read_frame(raw);
+        expect_close(raw);
+        return body;
+    };
+    const auto place = [&](const std::string& line) {
+        return query(line);
+    };
+    eventually([&] { return query("MLR1 QUERY").find("MLR1 MEMBERS 3") != std::string::npos; },
+        5s, "members never reached the registry");
+    require(body.find("member gameServer gs-a alpha") != std::string::npos &&
+            body.find("member gameServer gs-b alpha") != std::string::npos &&
+            body.find("member gameServer gs-c beta") != std::string::npos,
+            "registry listing lost a member: "+body);
+    // Scope filters narrow the listing and placement.
+    query("MLR1 QUERY gameServer beta");
+    require(body.find("gs-c") != std::string::npos && body.find("gs-a") == std::string::npos,
+            "scope filter leaked another scope: "+body);
+    const auto beta_place = "MLR1 PLACE gs-c 127.0.0.1:"+std::to_string(third)+" 0 ready 0/42";
+    eventually([&] { return place("MLR1 PLACE gameServer beta") == beta_place; },
+        5s, "gs-c never became placeable");
+    equal(place("MLR1 PLACE gameServer beta"), beta_place);
+    equal(place("MLR1 PLACE gameServer gamma"), "MLR1 EMPTY");
+    // Placement prefers the less loaded member once real load differs.
+    {
+        RawSocket load(first);
+        send_frame(load, "ping"); equal(read_frame(load), "ping");
+        eventually([&] { return place("MLR1 PLACE gameServer alpha") ==
+            "MLR1 PLACE gs-b 127.0.0.1:"+std::to_string(second)+" 0 ready 0/42"; },
+            5s, "placement ignored member load");
+        // Saturation flips readiness, and the registry follows the heartbeats.
+        RawSocket full(first);
+        send_frame(full, "ping"); equal(read_frame(full), "ping");
+        eventually([&] { return query("MLR1 QUERY gameServer alpha").find(
+            "member gameServer gs-a alpha 127.0.0.1:"+std::to_string(first)+" 0 notready 2/4")
+            != std::string::npos; }, 5s, "readiness did not follow the heartbeat");
+    }
+    std::this_thread::sleep_for(600ms);
+    eventually([&] { return query("MLR1 QUERY gameServer alpha").find(
+        "member gameServer gs-a alpha 127.0.0.1:"+std::to_string(first)+" 0 ready 0/4")
+        != std::string::npos; }, 5s, "readiness did not recover");
+    // A disconnect drops the member from the registry.
+    gs_c.signal(SIGTERM);
+    eventually([&] { return query("MLR1 QUERY").find("MLR1 MEMBERS 2") != std::string::npos; },
+        5s, "a dead member stayed registered");
+    // The registry gauge follows the live membership.
+    const auto live = http("http://"+endpoint(metrics)+"/metrics").body;
+    require(live.find("mistlane_registry_members{role=\"coordinator\"} 2") != std::string::npos,
+            "registry gauge missing from the exposition");
+    // Identity stacks on the registry: an unnamed member is refused, an
+    // identified one registers normally.
+    RawSocket anonymous(tokened);
+    send_frame(anonymous, "MLR1 REGISTER gameServer gs-x alpha 127.0.0.1:1 0");
+    equal(read_frame(anonymous), "MLS1 ERR TOKEN");
+    expect_close(anonymous);
+    auto& gs_d = c.node("gameServer", port(), {"--script", c.path("echo.lua").string(),
+        "--coordinator", endpoint(tokened), "--upstream-token", "s3cret", "--service-name", "gs-d"});
+    const auto identified = [&]() {
+        RawSocket raw(tokened);
+        send_frame(raw, "MLS1 registryClient query-1 s3cret");
+        equal(read_frame(raw), "MLS1 OK");
+        send_frame(raw, "MLR1 QUERY");
+        body = read_frame(raw);
+        expect_close(raw);
+        return body;
+    };
+    eventually([&] { return identified().find("member gameServer gs-d main") != std::string::npos; },
+        5s, "an identified member never registered");
+    require(gs_a.output().find("registered") != std::string::npos &&
+            gs_d.output().find("registered") != std::string::npos,
+            "member registration not logged");
+    // The coordinator is not a renamed router: it takes neither script nor
+    // upstreams, and the member flags do not leak into other roles.
+    {
+        auto& scripted = c.spawn({self().string(), "--role", "coordinator", "--listen", endpoint(port()),
+            "--script", c.path("echo.lua").string()});
+        require(scripted.wait() != 0 && scripted.output().find("requires no script and no upstream") != std::string::npos,
+                "coordinator accepted a script");
+        auto& routed = c.spawn({self().string(), "--role", "gateway", "--listen", endpoint(port()),
+            "--upstream", endpoint(registry), "--coordinator", endpoint(registry)});
+        require(routed.wait() != 0 && routed.output().find("--coordinator applies to gameServer and crossServer") != std::string::npos,
+                "gateway accepted a coordinator");
+        auto& scoped = c.spawn({self().string(), "--role", "gameServer", "--listen", endpoint(port()),
+            "--script", c.path("echo.lua").string(), "--scope", "alpha"});
+        require(scoped.wait() != 0 && scoped.output().find("--scope requires --coordinator") != std::string::npos,
+                "scope accepted without a coordinator");
+    }
+    for (const auto* member : {&gs_a, &gs_b})
+        require(member->output().find("callback failed") == std::string::npos, "registry member logged Lua failures");
+    require(coord.output().find("unexpected frame") == std::string::npos, "coordinator log noise");
 }
 void transport_push() {
     Context c;
