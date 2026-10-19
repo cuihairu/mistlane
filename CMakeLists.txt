@@ -38,6 +38,7 @@ add_executable(mistlane-sproto-probe
   third_party/lpeg/lpcap.c third_party/lpeg/lpcode.c third_party/lpeg/lpcset.c
   third_party/lpeg/lpprint.c third_party/lpeg/lptree.c third_party/lpeg/lpvm.c)
 target_include_directories(mistlane-sproto-probe PRIVATE third_party/sproto third_party/lpeg ${LUA_INCLUDE_DIR})
+target_include_directories(mistlane-sproto-probe PRIVATE include)
 target_link_libraries(mistlane-sproto-probe PRIVATE ${LUA_LIBRARIES})
 target_compile_options(mistlane-sproto-probe PRIVATE -Wall -Wextra -Wpedantic)
 target_compile_definitions(mistlane-sproto-probe PRIVATE
@@ -60,7 +61,7 @@ add_executable(mistlane-mysql-probe examples/mysql_probe.cpp)
 target_link_libraries(mistlane-mysql-probe PRIVATE mistlane_mysql)
 include(CTest)
 if(BUILD_TESTING)
-  foreach(test_case IN ITEMS core.contracts contract.tool sproto.golden core.roles transport.tcp transport.websocket transport.http
+  foreach(test_case IN ITEMS core.contracts contract.tool sproto.golden rpc.lifecycle core.roles transport.tcp transport.websocket transport.http
       transport.push transport.correlate transport.identity transport.multiplex coordinator.registry
       coordinator.placement coordinator.routes lua.lifecycle lua.http
       cross.admission cross.record probe.control scaffold.init config.file cli.bot)
@@ -73,6 +74,8 @@ if(BUILD_TESTING)
   add_test(NAME mistlane_sproto_wire_golden COMMAND mistlane-sproto-probe golden
     "${CMAKE_CURRENT_BINARY_DIR}/sproto-fixture/avatar.sproto")
   add_test(NAME mistlane_sproto_lua_roundtrip COMMAND mistlane-sproto-probe roundtrip
+    "${CMAKE_CURRENT_BINARY_DIR}/sproto-fixture/avatar.sproto")
+  add_test(NAME mistlane_sproto_dispatch COMMAND mistlane-sproto-probe dispatch
     "${CMAKE_CURRENT_BINARY_DIR}/sproto-fixture/avatar.sproto")
   if(EXISTS "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/tools/crashpad_handler")
     add_test(NAME mistlane_crashpad_startup COMMAND mistlane test --suite crashpad

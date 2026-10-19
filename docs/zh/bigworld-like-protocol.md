@@ -54,7 +54,11 @@
 
 阶段 1 已实现。阶段 2 对当前 fixture 已完成：`mistlane contract build` 校验 XML 并生成确定性 `.sproto`；vendored 上游 parser 可解析；上游 Lua 绑定编码为标准线上字节，并以固定 hex 黄金向量校验后再解码。独立的 `sproto.golden` 仍是项目内部 TLV，未冒充 sproto 字节。`examples/contracts/avatar.def` 是新构造的 fixture，并非恢复出的 game-fogs 源文件。
 
-阶段 3 已有使用生成 schema 和上游绑定的 Lua 编码/解码/重编码原型。C++ `EntityDispatcher` 按契约方法 ID 与方向分派，将 caller 和 target 传给处理器，并用闭合 `EntityError` 集合拒绝无效调用。`contract build` 另生成确定性的 `<stem>.bindings.hpp` caller 调用包装、handler 注册辅助函数及描述符表；业务处理器仍由运行时注册。负向覆盖包括未知方法、字段类型错误、缺必填、编码损坏和 caller 上下文缺失。阶段 3 仍未做：将上游 sproto 二进制解码直接接入调度器、运行时实体路由/生命周期、按字段生成的强类型参数对象。阶段 4–6 未做：RPC 生命周期 harness、JS/C# SDK 兼容、发布锁闸门。证据见 `contract.tool`、三个 `mistlane_sproto_*` CTest 用例及 `examples/sproto_lua.lua`。
+阶段 3 已将 Lua 上游 sproto 请求解码结果接入 C++ `EntityDispatcher`，并实现 fixture 驱动实体路由：重复投递、实体不存在和 incarnation 过期都有确定结果。生成绑定含按字段生成的 C++ 参数结构体；schema 与 bindings 两次生成后逐字节比较。运行时仍限进程内，不负责网络 socket 或持久化实体。
+
+阶段 4 已有进程内 RPC 生命周期 harness：按 caller correlation id 配对、由注入的单调时钟触发超时、丢弃迟到响应、拒绝重复响应、断连时取消在途请求。它是确定性状态机测试，不是生产传输实现。协议对照见 [entity-contract envelope 与错误词表](./entity-contract.md#invocation-envelope-and-error-protocol-decided-unimplemented)：`docs/entity-contract.md:241–252` 为 envelope，`:258–273` 为闭合错误，`:275` 为校验顺序。对应行为：超时=`TIMEOUT`、断连=`CANCELLED`、过期目标=`STALE`、重复投递/响应=`CONFLICT`。
+
+阶段 5–6 仍未做：JS/C# SDK 兼容与发布锁闸门。运行时加载、网络分发、真实传输上的 deadline/cancel、hosting-generation 栅栏、持久化和生产容量限制仍在 harness 范围之外。证据见 `rpc.lifecycle`、`mistlane_sproto_dispatch`、`contract.tool` 及 `examples/sproto_lua.lua`。
 
 ## 范围与排除项
 

@@ -51,6 +51,13 @@ elseif MISTLANE_SPROTO_MODE == "roundtrip" then
   assert(decoded.inventory.items[2].itemId == 2147483647 and decoded.inventory.items[2].count == 1)
   assert(sp:encode("Avatar", decoded) == bytes)
   print("LUA_SPROTO_ROUNDTRIP_OK encode→decode→encode bytes=" .. #bytes)
+elseif MISTLANE_SPROTO_MODE == "dispatch" then
+  local bytes = sp:request_encode("E1_Server_2", { account = 1234 })
+  local decoded = sp:request_decode("E1_Server_2", bytes)
+  assert(decoded and decoded.account == 1234, "upstream request decode lost account field")
+  _G.MISTLANE_DECODED_ACCOUNT = decoded.account
+  _G.MISTLANE_DECODE_OK = true
+  print("UPSTREAM_SPROTO_REQUEST_DECODE_OK E1_Server_2 account=" .. decoded.account .. " bytes=" .. #bytes)
 else
   error("unknown probe mode: " .. tostring(MISTLANE_SPROTO_MODE))
 end

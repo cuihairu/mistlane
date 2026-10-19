@@ -9,6 +9,7 @@ namespace mistlane::test {
 void core_contracts();
 void contract_tool();
 void sproto_golden();
+void rpc_lifecycle();
 void role_names();
 void transport_tcp();
 void transport_websocket();
@@ -82,6 +83,7 @@ int run_tests(int argc, char** argv) {
         {"core.contracts","core",test::core_contracts},
         {"contract.tool","contract",test::contract_tool},
         {"sproto.golden","contract",test::sproto_golden},
+        {"rpc.lifecycle","contract",test::rpc_lifecycle},
         {"core.roles","core",test::role_names},
         {"transport.tcp","transport",test::transport_tcp},
         {"transport.websocket","transport",test::transport_websocket},

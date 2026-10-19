@@ -1,8 +1,8 @@
 # 实体契约与代码生成设计
 
-> 研究设计笔记。构建期契约校验器、确定性 sproto schema/C++ 方法描述符生成器和进程内分发原型已经实现；运行时实体加载/执行和属性同步仍不在当前范围。
+> 研究设计笔记。构建期契约校验器、确定性 sproto schema/按字段 C++ 参数结构体生成器、上游 sproto 解码到分发 fixture、进程内实体路由及 RPC 生命周期 harness 已实现；网络运行时和属性同步仍不在当前范围。
 
-状态：研究设计、构建期实现及进程内 C++ 分发原型。`include/mistlane/entity_contract.hpp` 解析 XML 子集并校验显式稳定 id、封闭词表、类型默认值、数组/结构引用、递归和 DOCTYPE/实体；生成项目 XSD、发布锁、模型摘要、确定性 sproto schema 与 C++ 方法描述符。`EntityDispatcher` 按 entity/side/method 查找方法，检查 caller 策略与类型化字段，将 caller/target 传入处理器，并检查 request/response 与 notify 语义。它接收调用方已经解码的值，尚未接入上游 sproto 二进制解码或实体路由。其余类型映射为 `BOOL`→`boolean`、整数及 `EntityRef`→`integer`、`STRING`→`string`、`BYTES`→`binary`、结构按名称引用、数组使用 `*`。RPC 名采用 `E{entityId}_{Server|Client}_{methodId}`；cloudwu/sproto parser tag 使用 `entityId * 512 + side * 256 + methodId`，entity id ≤63、method id ≤254、tag ≤32766。Avatar fixture 已通过上游 parser 和标准字节向量，并有最小上游 Lua 编码/解码样例。详见[路线及验收证据](./bigworld-like-protocol.md#已实现状态与证据)。仍缺实体运行时加载/路由、发布兼容报告、服务端 bundle 加载和 SDK 生成。适用 Mistlane，不调整 Apollo 架构或进程命名。客户端目标为 JavaScript 和 C#；客户端随契约重新生成、构建和发布，服务器的业务契约更新不重新编译 C++ 二进制。
+状态：构建期实现生成项目 XSD、发布锁、摘要、确定性 sproto schema、方法描述符及按字段 C++ 参数结构体。上游 Lua sproto 请求解码结果传给 `EntityDispatcher`；`EntityRuntime` 提供 fixture 驱动 spawn/route/destroy、重复投递和过期 incarnation 行为。`RpcHarness` 用注入的单调时钟验证关联配对、超时、迟到/重复响应和断连结果。这些均为进程内 harness，不代表已有网络实体运行时或持久化。其余类型映射为 `BOOL`→`boolean`、整数及 `EntityRef`→`integer`、`STRING`→`string`、`BYTES`→`binary`、结构按名称引用、数组使用 `*`。RPC 名采用 `E{entityId}_{Server|Client}_{methodId}`；cloudwu/sproto parser tag 使用 `entityId * 512 + side * 256 + methodId`，entity id ≤63、method id ≤254、tag ≤32766。Avatar fixture 已通过上游 parser 和标准字节向量。详见[路线及验收证据](./bigworld-like-protocol.md#已实现状态与证据)。仍缺网络运行时加载/路由、deadline/cancel 传输传播、hosting-generation 栅栏、发布兼容报告、服务端 bundle 加载、JS/C# SDK 生成及自动属性同步。适用 Mistlane，不调整 Apollo 架构或进程命名。客户端目标为 JavaScript 和 C#；客户端随契约重新生成、构建和发布，服务器的业务契约更新不重新编译 C++ 二进制。
 
 ## 设计选择
 
