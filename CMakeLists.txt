@@ -63,7 +63,8 @@ include(CTest)
 if(BUILD_TESTING)
   foreach(test_case IN ITEMS core.contracts contract.tool sproto.golden rpc.lifecycle core.roles transport.tcp transport.websocket transport.http
       transport.push transport.correlate transport.identity transport.multiplex coordinator.registry
-      coordinator.placement coordinator.routes lua.lifecycle lua.http
+      coordinator.placement coordinator.routes coordinator.migration.commit coordinator.migration.abort
+      coordinator.migration.recover coordinator.migration.stale coordinator.migration.order lua.lifecycle lua.http
       cross.admission cross.record cross.return.queue probe.control scaffold.init config.file cli.bot)
     string(REPLACE "." "_" test_name "${test_case}")
     add_test(NAME mistlane_${test_name} COMMAND mistlane test --case "${test_case}")

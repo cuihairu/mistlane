@@ -66,6 +66,8 @@ MLD1 ERR INVALID | MLD1 ERR STALE gen <n> | MLD1 ERR SEQ seq <n> | MLD1 ERR FULL
 
 归属 data 是 generation 唯一权威。顺序为 `active(g) → requested(g+1) → relinquished/tombstoned(g) → active(g+1)`：coordinator 请求迁移；源端停止新处理器/tick，等已执行处理完成并冲刷最终有序变更；data 持久提交最终序号并栅栏旧 generation；目标端加载持久游标并起租；目标确认后 coordinator 才发布新路由。重复请求/授权拒绝；墓碑后源端晚到写得 `STALE`。在途处理先完成，迁移期间新请求拒绝，Avatar 计时器停止且只有显式序列化者由目标恢复。C++ 状态机已覆盖栅栏时序，尚未接入 coordinator、持久 data 或 Avatar 运行时。
 
+[coordinator 迁移事务第一片](./protocol-analysis.md#coordinator-migration-transaction-first-slice)已复用租约闸门实现独立类型协议模型：prepare/commit、中止/清理、检查点恢复。home 栅栏前可清理目标并恢复源；栅栏后只能等待目标确认并向前提交。内存检查点不提供上述持久权威或运行时接线。
+
 ## 故障处理
 
 | 故障 | 规则 |

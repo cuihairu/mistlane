@@ -1,6 +1,6 @@
 # 协议面分析
 
-状态：2026-10-20 对照 `fe8b2a6` 与下述文档修正重新核查。本文接续实体、服务、跨服回传与验证分析，不把文档契约等同于运行时接线。清单区分线行为、已定设计和缺失的运行时工作。
+状态：2026-10-20 对照 `fe8b2a6`、`b35786a` 与下述迁移事务第一片重新核查。本文接续实体、服务、跨服回传与验证分析，不把文档契约等同于运行时接线。清单区分线行为、已定设计和缺失的运行时工作。
 
 ## 协议面全景
 
@@ -9,7 +9,7 @@
 | 传输与监听 | TCP 使用四字节大端长度帧，载荷上限 1 MiB；WS 消息映射为单个载荷。HTTP/HTTPS 承载请求/响应；WS/WSS 监听器与升级分别进入游戏会话或 Lua HTTP 生命周期。每进程可配置多监听器。 | [architecture.md 执行与连接模型](../architecture.md#execution-and-connection-model)、[http.md 服务端、多监听器](../http.md#server) |
 | 传输控制 | 可选 `MLC2` 在载荷内增加 u32 BE 请求 ID（响应回显、推送用 0）；可选 `MLS1` 认证内部服务链路；可选 `MLM1` 在认证后的上游复用逻辑会话。三者属于不同层；`MLC1` 跨服路由不与 MLC2/MLM1 模式混用。 | [architecture.md:66–70](../architecture.md#execution-and-connection-model)、[validation.md 服务身份/多路复用行](../validation.md) |
 | 路由与跨服 | `MLC1` 是 gateway 跨服路由/准入握手，可选携带全有或全无的参与者后缀（`ch`、`gen`、`ret`）。它选择静态房间/组亲和与准入，不等于动态角色分配或迁移。`PROBE1` 提供就绪/过载检查。 | [cross-server.md](../cross-server.md)、[cross-return-protocol.md 参与者与返回上下文](../cross-return-protocol.md#参与者与返回上下文)、[architecture-comparison.md:53–60](../architecture-comparison.md) |
-| coordinator 控制面 | `MLR1` 在具名作用域内提供成员注册、心跳、QUERY/PLACE 和 ROUTE SET/GET。注册携带就绪/负载；现有路由记录指向当前已注册成员。归属租约与迁移状态机尚未实现。 | [process-roles.md 当前实现](../process-roles.md#当前实现)、todo.md:48–51 |
+| coordinator 控制面 | `MLR1` 在具名作用域内提供成员注册、心跳、QUERY/PLACE 和 ROUTE SET/GET。注册携带就绪/负载；现有路由记录指向当前已注册成员。独立的类型化迁移事务模型已校验 generation、显式承载作用域与发布顺序；尚未接入 MLR1 或共享归属权威。 | [process-roles.md 当前实现](../process-roles.md#当前实现)、todo.md:48–51 |
 | 回传与数据 | `MLD1 LOAD/SUBMIT` 是 `data` 上的帧式 TCP 端点；它执行 generation 栅栏、按 `(realm, character)` 连续序号及重复回执。`RECEIVED` 只是进程内回执；没有持久 ACK 或存储链。每参与者有序发送队列边界已实现但尚未接入 crossServer 运行时。 | [cross-return-protocol.md 回传与持久化确认](../cross-return-protocol.md#回传与持久化确认-mld1)、[service-contracts.md data](../service-contracts.md#data)、[validation.md MLD1 行](../validation.md) |
 | 实体契约与同步 | XML `.def` 已生成 XSD/lock/digest、sproto 及 C++/JS/C# 原型绑定，`contract compat` 比较发布锁。已有上游线向量、派发器与进程内实体/RPC 夹具。完整网络 envelope/error 编码、生产 codec、运行时加载、属性复制与持久化仍开放（缺口 7）。 | [entity-contract.md](./entity-contract.md)、[实现证据](./bigworld-like-protocol.md#已实现状态与证据)、[validation.md 契约/SDK 行](./validation.md) |
 | 服务契约 | `login` 是面向客户端的脚本角色与 MLR1 分配客户端；`data` 是归属侧记录端点；可选 `apiServer` 是外部 HTTP 入口。MLS1 是服务链路身份。login 凭据已决定为 HMAC-SHA256，但签发/验证尚未实现。 | [service-contracts.md](../service-contracts.md)、[process-roles.md 跨区数据归属](../process-roles.md#cross-region-data-ownership) |
@@ -19,7 +19,7 @@
 
 固定沿用原始审计 `a429664` 的编号：4 条矛盾、7 条缺口，含已解项，解决后不重排。原文中**归属权执行是缺口 4，coordinator 路由与归属是缺口 5**；本次两者与缺口 2、6、7 一并核查。A = 改文档消解；B = 改代码消解；C = 保留并写清未来工作。既有 B 实现只记对应提交，不重做。
 
-**终态：矛盾 4 条（已解 4 / 未解 0）；缺口 7 条（已解 2 / 部分 3 / 未解 2）。** 消除矛盾承诺不等于实现崩溃恢复；部分/未解运行时工作仍受下述闸门约束。
+**终态：矛盾 4 条（已解 4 / 未解 0）；缺口 7 条（已解 2 / 部分 4 / 未解 1）。** 消除矛盾承诺不等于实现崩溃恢复；部分/未解运行时工作仍受下述闸门约束。
 
 ### 矛盾
 
@@ -33,12 +33,40 @@
 1. **身份/去重键中的 realm——已解，B（`b46be86`，此前已完成）。** 端点栅栏/去重与发送队列均按 `(realm, character)` 建键。现有状态易失，无在线迁移；未来持久 character-only 键须回填 realm 或解决冲突。证据：`include/mistlane/record.hpp:105–113,244`；`cross.record`、`cross.return.queue` 的跨区隔离断言。
 2. **进入上下文完整性——契约已解，A。** 原文（`fe8b2a6:docs/zh/service-contracts.md:22`）：“来源区服、角色标识与返回路由”。改后：响应补齐归属 data 签发的承载 generation 与 login 凭据。[login 生命周期](./service-contracts.md#login)明确分配 → data 授权 → 凭据/响应 → 接收宿主验证：新键从 1 开始；重新分配/接管须分配严格更大 generation 并按交接顺序栅栏旧授权；中止分配不复用。凭据同时绑定 generation、realm/character/target/expiry/nonce。证据：`include/mistlane/cross.hpp:19,63`、`src/lua_service.cpp:229–234` 已传递 generation；`fe8b2a6` 已定 data 为 generation 权威。授权线消息、密码原语和运行时有效授权校验仍归缺口 4，不冒充已实现。
 3. **持久确认应答格式——部分解，既有 B（`fe8b2a6`）+ C。** 格式/编解码/发送端校验已解：`MLD1 ACK durable <realm> <character> gen <n> seq <m>`，丢 ACK 按原幂等键重放。证据：`include/mistlane/record.hpp:52–69,228–236`；`cross.return.queue`。**未解·原因：**端点仅有易失记录、不发持久 ACK，发送端也不可恢复。**解锁条件：**状态/游标/栅栏原子持久事务，丢响应及 data 重启后重放已提交 ACK，并以崩溃测试覆盖可恢复的发送端重放来源。存储部分按 `fe8b2a6` 原记录继续开放。
-4. **归属权执行与端点检查——部分解，A/C（既有模型 B：`fe8b2a6`）。** [交接设计](./cross-return-protocol.md#写入租约交接)已固定顺序、旧源晚到写、在途工作与计时器；`WriterLease` 仅测试本地转换（`include/mistlane/record.hpp:247–264`、`src/test_cases.cpp:1903–1914`）。**未解·原因：**孤立模型不构成共享权威；MLD1 SUBMIT 仍可凭更大 generation 和下一序号被接受（`record.hpp:121–151`），不查 owner 授权；MLS1 只认服务链路。持久租约/墓碑未接入 coordinator/data/Avatar，授权/撤销/到期消息未编码。**解锁条件：**认证且幂等的授权/撤销/接管线消息与持久 home 权威，Avatar 处理器/计时器闸门接线，以及双宿主竞争、到期、旧/伪造 generation 和各阶段崩溃恢复测试。不得凭模型标全解。
-5. **coordinator 路由与归属——未解，C。原因：**MLR1 SET 仅查在线成员，GET/退役跟随成员状态（`src/node.cpp:1225–1247,1277–1284,1446–1485`）；路由只存 scope/role/instance，没有 generation 或迁移事务。`fe8b2a6` 已定目标确认后发布路由，但未编码或实现 coordinator 提交/中止/恢复交换。**解锁条件：**绑定 generation 的迁移请求 ID 与预期 owner/route 比对、持久 prepare/commit/abort、data 栅栏与目标确认后的路由发布，以及崩溃/重复/退役测试，证明路由不能授权第二写者。MLR1 保持目录职责，home data 保持 generation 权威。
+4. **归属权执行与端点检查——部分解，A/C（既有模型 B：`fe8b2a6`）。** [交接设计](./cross-return-protocol.md#写入租约交接)已固定顺序、旧源晚到写、在途工作与计时器；`WriterLease` 仅测试本地转换（`include/mistlane/record.hpp`（`WriterLease`）、`src/test_cases.cpp`（`cross_return_queue`））。**未解·原因：**孤立模型不构成共享权威；MLD1 SUBMIT 仍可凭更大 generation 和下一序号被接受（`record.hpp:121–151`），不查 owner 授权；MLS1 只认服务链路。持久租约/墓碑未接入 coordinator/data/Avatar，授权/撤销/到期消息未编码。**解锁条件：**认证且幂等的授权/撤销/接管线消息与持久 home 权威，Avatar 处理器/计时器闸门接线，以及双宿主竞争、到期、旧/伪造 generation 和各阶段崩溃恢复测试。不得凭模型标全解。
+5. **coordinator 路由与归属——部分解，B/C（第一片，2026-10-20）。** 原文（`b35786a`）：“路由只存 scope/role/instance，没有 generation 或迁移事务。”改后：[类型化事务协议与模型](#coordinator-migration-transaction-first-slice)绑定 home 键/请求 ID/generation，比对预期 owner/route，实现 prepare/commit、中止/清理与检查点恢复，拒绝在源排空 → home 栅栏 → 目标确认之前发布路由；显式记录区服/跨服组作用域及角色/实例/场景。证据：`include/mistlane/migration.hpp`（`MigrationRequest`、`HomeGenerationAuthority`、`MigrationTransaction`）、`include/mistlane/record.hpp`（`WriterLease`）、`src/test_cases.cpp` 五例 `coordinator.migration.commit/abort/recover/stale/order`。**未解·原因：**这是易失协议聚合模型，仅为测试将 home 事实、源租约与 coordinator journal 放在一起；MLR1 SET/GET 仍无事务/generation。检查点重建不等于持久进程恢复。**解锁条件：**认证线交换、持久 prepare/commit/abort journal 与 home 栅栏/最终序号权威、真实 coordinator/data/Avatar 和路由接线，以及跨服务崩溃/重复/成员退役/目标失效测试。MLR1 保持目录职责，home data 保持 generation 权威；路由不授予写租约。
 6. **apiServer 回调受理——未解，C。原因：**[apiServer 契约](./service-contracts.md#apiserver)仍为可信网络与请求级处理；平台签名/规范字节、密钥轮换、防重放窗口、幂等键作用域、持久受理响应及归属查询/重试消息均未定。login HMAC 决策不能替代 HTTP 回调认证。**解锁条件：**选定平台签名/规范化和重放策略，定义持久去重/受理、响应/错误/重试及 home 查询协议，落实事务并测试坏签名、过期/重放、重复/丢回复、重启与 owner 迁移。HTTP 2xx 不能证明业务持久。
 7. **实体发布闸门——部分解，A/C（既有实现 `3326fd4`、`1048bcd`、`c0d9d82`、`49c59c2`）。** 原文：“没有发布兼容流程”，没有运行时/黄金验收物。改后：`contract build` 已确定性生成 XSD/lock/digest/sproto/C++/JS/C#；`contract compat OLD.lock NEW.lock` 检查新增/删除/改分配（`src/contract_tool.cpp:57–77,123–143`）；已有上游 sproto 向量及派发器/实体/RPC 夹具（`include/mistlane/entity_runtime.hpp:11–72`、[验证记录](./validation.md)）。**未解·原因：**参数/标量向量不覆盖完整 invocation/error envelope；EntityRef 参数仍映射为整数（`entity_dispatch.hpp:74–79`）；网络加载/路由、hosting-generation 校验、完整 JS/C# codec、嵌套复制与持久化仍缺失。**解锁条件：**冻结规范 envelope/error/EntityRef 字节及 C++/Lua/JS/C# 畸形输入向量，将 schema/绑定/锁/向量检查接入强制 bundle-load 闸门；再验证在线路由/deadline/cancel/栅栏及独立的复制/持久化闸门。进程内夹具与通过 lock diff 不能授权生产接入。[实体契约验收顺序](./entity-contract.md#发布与验收顺序)中的过时文字同步修正。
 
-### 命名与语义已对齐（有明确边界）
+## coordinator 迁移事务（第一片） {#coordinator-migration-transaction-first-slice}
+
+2026-10-20 已实现为 `include/mistlane/migration.hpp` 的类型化 C++ 协议，未新增 CLI 或线上动词。这是 todo:48 的最小确定性实现，不含完整 coordinator 运行时或真实负载均衡。`MigrationTransaction` 每对象建模一个参与者；放在一起的源租约、home 事实与 coordinator journal 代表未来不同的服务边界。既有 MLR1 注册/就绪/负载/角色路由继续承担目录职责，router 不改名顶替 coordinator。
+
+### 身份、作用域与 generation
+
+`MigrationRequest` 即 PREPARE：`(归属区服, character)`、不可变请求 `id`、完整 `expected` 路由 `(owner, generation)` 与目标 owner。owner 含 `scope.kind`、`scope.realm`、`scope.cross_group`、`role`、`instance`、`scene`。区服作用域仅填写 `realm` 且角色为 `gameServer`；跨服组作用域仅填写 `cross_group` 且角色为 `crossServer`；实例/场景均为必需标识。参与者的归属区服独立于承载作用域，迁移保持 home data 身份（也不搬 gateway）。这里记录场景归属标识，不创建场景运行时对象。
+
+只有 home data 签发 generation：`HomeGenerationAuthority::reserve` 按 `(realm, character)` 推进高水位，从可信当前授权初始化（新授权按 login 契约从 1 开始）。coordinator 请求分配，不自造版本；中止也消耗已分配 generation。后续每条事件携带 `MigrationToken {key, id, generation}`：错键 `Invalid`，未知 ID 或版本不符 `Stale`，同 ID 换预期 owner/目标 `Conflict`。同参与者仅一条活跃事务；相同 PREPARE（含终态重放）返回 `Duplicate`，不再分配。`write_allowed(owner, generation)` 必须精确匹配 home 当前授权，查到路由不产生写权。复用 `WriterLease` 的准入/计时器/排空闸门并对齐旧 generation 栅栏；没有为现有 MLD1 端点添加 owner 授权校验（缺口 4）。
+
+### 提交、中止与恢复协议
+
+| 阶段 / 类型消息 | 前置条件与效果 | 重试 / 结果 |
+|---|---|---|
+| PREPARE / `prepare(request)` | 完整预期 owner 和路由 generation 同时比对 route 与 home owner；分配下一代，暂停源准入/计时器，暂存目标；`idle` 或终态 → `preparing` | 同 ID/内容 `Duplicate`；并行事务或换内容拒绝 |
+| `SourceDrained` | 所有已准入处理结束，快照/最终有序变更就绪 | 不授权目标或发布路由；重复确认 `Duplicate` |
+| `HomeFence` | 源已排空；未来持久实现提交最终序号及源墓碑；模型交出租约并记录栅栏 | 不可逆，超时/中止均不能恢复旧 generation |
+| `DestinationReady` | home 栅栏已完成，目标加载栅栏状态并确认新代起租 | 模型启用目标租约，路由仍指向旧 owner |
+| COMMIT / `Commit` | 栅栏 + 目标 ACK + 预期路由比对齐备；一起发布目标路由与提交终态 | `committed`；旧 COMMIT 重复不能盖过后续路由 |
+| ABORT / `Abort`，再 `Cleanup` | 仅 home 栅栏前允许：进入 `aborting`，排空剩余处理，丢弃半建目标，恢复源旧代准入/计时器 | `aborted`；处理未排空时清理 `Pending`；保留已消耗的 generation |
+| RECOVER / `Recover` | 读取可信事务/home 检查点；栅栏前完成中止清理；栅栏后进入 `recovering`，等待真实目标 ACK 后提交 | 不猜 ACK、不复活旧授权；重复终态恢复 `Duplicate` |
+
+必须满足的发布顺序是：**源停止/排空 → home data 栅栏旧 generation 并提交最终序号 → 目标加载/起租并 ACK → coordinator CAS 发布路由及提交终态**。允许栅栏到目标起租之间暂不可用。栅栏前中止恢复为原路由值（此前始终未改）；栅栏后恢复必须向前完成。目标无法继续时保持 recovering，退役/换目标须通过 home 显式接管签发更大 generation，不能猜测失败或回滚；接管/退役交换不在本片。
+
+运行时持久契约要求：home 的 generation 预留/最终游标/墓碑与对应 home 事务事实原子记录后才暴露确认，coordinator 意图以及路由/终态持久完成后才确认 COMMIT。重启保留终态 ID 与已消耗 generation。跨服务按同一 token 查询/重放 home 权威事实，coordinator 超时或查不到记录不能证明中止。`Snapshot` 和 home 权威副本只是崩溃切点测试的可信内存检查点，尚无 journal 序列化、磁盘/WAL 存储、网络 codec/认证或进程重启保证。缺失持久证据时须保持不可用直到对账，不能产生第二写者。
+
+五例 `coordinator.migration.commit`、`.abort`、`.recover`、`.stale`、`.order` 分别覆盖正常提交、半途清理与版本不复用、七个崩溃切点重建（含栅栏后等待恢复）、旧版本/旧 COMMIT、提前栅栏/起租/发布及路由 CAS 冲突；均复用现有 `test_cases` 执行器。完整 coordinator/data/Avatar 接线、进程/场景生命周期集成、真实负载均衡和持久崩溃/退役验证继续保留。
+
+## 命名与语义已对齐（有明确边界）
 
 - 调用地址为 `scope/type_id/entity_id/incarnation`；`EntityRef` 使用相同元组。`hosting_generation` 是归属栅栏，不是实体 incarnation（`entity-contract.md:243–254`）。
 - `realm` / “来源区服” / “归属区服或组”指数据归属域；`scope` 是 coordinator 分配作用域，不能混用（`cross-return-protocol.md:11`、`architecture.md:70`）。
@@ -51,7 +79,7 @@
 |---|---|---|
 | crossServer 回传与唯一写入权（`todo.md:54`） | 归属持久事务/ACK/重放、可恢复发送源、有界队列/只读/最终回服接线、共享租约权威与 Avatar 集成 | 矛盾 4 的恢复部分；缺口 3/4 |
 | login/data/apiServer（`todo.md:56`） | C++ 凭据签发/验证、规范凭据传输与 home-data 授权消息；签名/防重放/持久受理回调及归属查询 | 缺口 2（运行时归 4）、4/6 |
-| coordinator 归属/迁移（`todo.md:48`） | generation 绑定的提交/中止/恢复消息及路由发布执行 | 缺口 5 |
+| coordinator 归属/迁移（`todo.md:48`） | 迁移线消息认证、持久 journal/home 权威与真实路由/运行时接线；跨服务崩溃及成员退役/目标失效证据 | 缺口 5（类型协议/模型已实现） |
 | 实体实现链（`todo.md:76+`） | 完整 envelope/error/EntityRef 向量与 bundle-load 闸门、生产 codec/网络运行时、嵌套复制与持久化 | 缺口 7 |
 
 以上均为保留闸门，不是新增实现声明。每个部分/未解项必须连同上面的原因与解锁条件阅读；历史 todo 叙述不能覆盖当前代码证据。

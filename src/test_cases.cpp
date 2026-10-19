@@ -7,6 +7,7 @@
 #include "mistlane/entity_dispatch.hpp"
 #include "mistlane/entity_runtime.hpp"
 #include "mistlane/record.hpp"
+#include "mistlane/migration.hpp"
 #include "mistlane/http_client.hpp"
 #include "mistlane/token_bucket.hpp"
 #include "mistlane/transport.hpp" // max_frame bounds the flood sizing
@@ -1889,6 +1890,179 @@ void cross_record() {
         RawSocket game(plain);
         equal(ask(game, "MLD1 LOAD home hero"), "MLD1 LOAD home hero");
     }
+}
+namespace {
+struct MigrationFixture {
+    MigrationKey key{"home", "hero"};
+    MigrationOwner source{{MigrationScope::Kind::Realm, "home", ""}, "gameServer", "gs-a", "town"};
+    MigrationOwner target{{MigrationScope::Kind::CrossGroup, "", "arena"}, "crossServer", "xs-a", "room-1"};
+    HomeGenerationAuthority home;
+    MigrationFixture() { require(home.seed(key, 8), "home authority seed failed"); }
+    MigrationTransaction transaction() { return MigrationTransaction(home, key, {source, 8}); }
+    MigrationRequest request(std::string id = "move-1") { return {key, std::move(id), {source, 8}, target}; }
+};
+void migration_step(MigrationTransaction& tx, const MigrationToken& token, MigrationEvent event) {
+    require(tx.apply(token, event) == MigrationResult::Applied, "migration step failed: " + std::to_string(static_cast<int>(event)));
+}
+void migration_ready(MigrationTransaction& tx, const MigrationToken& token) {
+    for (auto event : {MigrationEvent::SourceDrained, MigrationEvent::HomeFence, MigrationEvent::DestinationReady})
+        migration_step(tx, token, event);
+}
+}
+void coordinator_migration_commit() {
+    MigrationFixture f;
+    auto tx = f.transaction();
+    require(tx.state() == MigrationState::Idle && tx.begin_request(), "idle source not active");
+    const auto request = f.request();
+    require(tx.prepare(request) == MigrationResult::Applied, "prepare failed");
+    const auto token = tx.entry(request.id)->token;
+    require(token.generation == 9 && !tx.timers_running(), "home generation or source timer gate failed");
+    require(!tx.write_allowed(f.source, 8) && !tx.write_allowed(f.target, 9), "prepare admitted a writer");
+    require(tx.apply(token, MigrationEvent::SourceDrained) == MigrationResult::Order && tx.finish_request(),
+        "source drain ignored in-flight handler");
+    migration_ready(tx, token);
+    require(tx.route() == request.expected && tx.write_allowed(f.target, 9), "target ACK prematurely published route");
+    migration_step(tx, token, MigrationEvent::Commit);
+    require(tx.state() == MigrationState::Committed && tx.route() == MigrationRoute{f.target, 9}
+            && !tx.write_allowed(f.source, 8) && tx.timers_running(), "commit did not publish sole target owner");
+    require(tx.apply(token, MigrationEvent::Commit) == MigrationResult::Duplicate
+            && tx.prepare(request) == MigrationResult::Duplicate && f.home.issued(f.key) == 9, "commit/prepare replay changed generation");
+    // Explicit scope/role/scene checks, and identical character ids in two realms.
+    auto bad = MigrationFixture{}.request();
+    bad.id = "bad-scope"; bad.destination.scope.realm = "home";
+    require(tx.prepare(bad) == MigrationResult::Invalid, "mixed realm/group scope accepted");
+    bad.destination = f.source; bad.destination.role = "crossServer";
+    require(tx.prepare(bad) == MigrationResult::Invalid, "role incompatible with scope accepted");
+    bad.destination = f.target; bad.destination.scene.clear();
+    require(tx.prepare(bad) == MigrationResult::Invalid, "missing scene ownership accepted");
+    const MigrationKey other_key{"other", "hero"};
+    require(f.home.seed(other_key, 1), "realm-isolated seed failed");
+    MigrationTransaction other(f.home, other_key, {f.source, 1});
+    require(other.prepare({other_key, "move-1", {f.source, 1}, f.target}) == MigrationResult::Applied
+            && other.entry("move-1")->token.generation == 2 && f.home.issued(f.key) == 9, "realm generation keys collided");
+    std::cout << "migration.commit: drained -> fenced -> destination ACK -> route gen=9; scoped ownership [PASS]\n";
+}
+void coordinator_migration_abort() {
+    for (bool drained : {false, true}) {
+        MigrationFixture f;
+        auto tx = f.transaction();
+        require(tx.begin_request(), "abort fixture handler missing");
+        require(tx.prepare(f.request()) == MigrationResult::Applied, "abort prepare failed");
+        const auto token = tx.entry("move-1")->token;
+        if (drained) {
+            require(tx.finish_request(), "drain failed");
+            migration_step(tx, token, MigrationEvent::SourceDrained);
+        }
+        migration_step(tx, token, MigrationEvent::Abort);
+        require(tx.state() == MigrationState::Aborting && !tx.write_allowed(f.source, 8), "abort resumed before cleanup");
+        require(tx.apply(token, MigrationEvent::HomeFence) == MigrationResult::Order, "abort raced into fence");
+        if (!drained) {
+            require(tx.apply(token, MigrationEvent::Cleanup) == MigrationResult::Pending && tx.finish_request(),
+                "abort cleanup ignored executing handler");
+        }
+        migration_step(tx, token, MigrationEvent::Cleanup);
+        require(tx.state() == MigrationState::Aborted && tx.route() == f.request().expected
+                && tx.write_allowed(f.source, 8) && !tx.write_allowed(f.target, 9)
+                && tx.timers_running() && !tx.entry("move-1")->destination_staged, "abort left staged target or frozen source");
+        require(tx.apply(token, MigrationEvent::Abort) == MigrationResult::Duplicate, "abort replay failed");
+        require(tx.prepare(f.request("move-2")) == MigrationResult::Applied
+                && tx.entry("move-2")->token.generation == 10, "aborted generation was reused");
+    }
+    std::cout << "migration.abort: half-built target discarded, source gen=8 restored, next gen=10 [PASS]\n";
+}
+void coordinator_migration_recover() {
+    // Crash cuts: prepare, source drain, fence, target ACK, committed,
+    // abort requested, aborted. Restore trusted protocol/home checkpoints;
+    // no test claims that the current data endpoint persists these facts.
+    for (unsigned cut = 0; cut < 7; ++cut) {
+        MigrationFixture f;
+        std::optional<MigrationTransaction::Snapshot> checkpoint;
+        MigrationToken token;
+        {
+            auto crashed = f.transaction();
+            require(crashed.prepare(f.request()) == MigrationResult::Applied, "recover prepare failed");
+            token = crashed.entry("move-1")->token;
+            if (cut >= 1 && cut <= 4) migration_step(crashed, token, MigrationEvent::SourceDrained);
+            if (cut >= 2 && cut <= 4) migration_step(crashed, token, MigrationEvent::HomeFence);
+            if (cut >= 3 && cut <= 4) migration_step(crashed, token, MigrationEvent::DestinationReady);
+            if (cut == 4) migration_step(crashed, token, MigrationEvent::Commit);
+            if (cut >= 5) migration_step(crashed, token, MigrationEvent::Abort);
+            if (cut == 6) migration_step(crashed, token, MigrationEvent::Cleanup);
+            checkpoint = crashed.snapshot();
+        }
+        auto restored_home = f.home;
+        MigrationTransaction restored(restored_home, *checkpoint);
+        auto result = restored.apply(token, MigrationEvent::Recover);
+        if (cut == 2) {
+            require(result == MigrationResult::Pending && restored.state() == MigrationState::Recovering
+                    && !restored.write_allowed(f.source, 8) && !restored.write_allowed(f.target, 9), "recovery invented destination ACK");
+            require(restored.apply(token, MigrationEvent::Abort) == MigrationResult::Order, "post-fence recovery revived source");
+            // A second crash while recovering remains pending until the target ACK.
+            MigrationTransaction again(restored_home, restored.snapshot());
+            require(again.apply(token, MigrationEvent::Recover) == MigrationResult::Pending, "recover replay changed decision");
+            migration_step(again, token, MigrationEvent::DestinationReady);
+            migration_step(again, token, MigrationEvent::Recover);
+            require(again.state() == MigrationState::Committed && again.route() == MigrationRoute{f.target, 9}, "forward recovery did not commit");
+        } else {
+            require(result == MigrationResult::Applied || result == MigrationResult::Duplicate, "recovery failed");
+            const bool forward = cut == 3 || cut == 4;
+            require(restored.state() == (forward ? MigrationState::Committed : MigrationState::Aborted)
+                    && restored.route() == (forward ? MigrationRoute{f.target, 9} : f.request().expected), "wrong crash terminal state");
+            require(restored.apply(token, MigrationEvent::Recover) == MigrationResult::Duplicate, "terminal recovery not idempotent");
+        }
+        require(restored_home.issued(f.key) == 9, "recovery lost reserved generation");
+    }
+    std::cout << "migration.recover: 7 checkpoint cuts -> aborted/committed; fenced recovery waits for ACK [PASS]\n";
+}
+void coordinator_migration_stale() {
+    MigrationFixture f;
+    auto tx = f.transaction();
+    require(tx.prepare(f.request()) == MigrationResult::Applied, "stale prepare failed");
+    const auto first = tx.entry("move-1")->token;
+    auto stale = first; stale.generation = 8;
+    for (auto event : {MigrationEvent::HomeFence, MigrationEvent::DestinationReady, MigrationEvent::Commit,
+                       MigrationEvent::Abort, MigrationEvent::Cleanup, MigrationEvent::Recover})
+        require(tx.apply(stale, event) == MigrationResult::Stale, "late old-generation control event accepted");
+    migration_ready(tx, first);
+    migration_step(tx, first, MigrationEvent::Commit);
+    require(!tx.write_allowed(f.source, 8) && !tx.write_allowed(f.target, 10), "old or unissued writer accepted");
+    require(tx.prepare(f.request("stale-owner")) == MigrationResult::Stale, "stale expected owner/route accepted");
+    require(tx.prepare({f.key, "move-2", tx.route(), f.source}) == MigrationResult::Applied, "return prepare failed");
+    const auto second = tx.entry("move-2")->token;
+    migration_ready(tx, second);
+    migration_step(tx, second, MigrationEvent::Commit);
+    require(tx.apply(first, MigrationEvent::Commit) == MigrationResult::Duplicate
+            && tx.route() == MigrationRoute{f.source, 10} && !tx.write_allowed(f.target, 9), "late commit republished obsolete route");
+    auto wrong_key = second; wrong_key.key.first = "other";
+    require(tx.apply(wrong_key, MigrationEvent::Recover) == MigrationResult::Invalid, "cross-realm event accepted");
+    std::cout << "migration.stale: old generation/control/owner rejected; old commit cannot republish [PASS]\n";
+}
+void coordinator_migration_order() {
+    MigrationFixture f;
+    auto tx = f.transaction();
+    require(tx.prepare(f.request()) == MigrationResult::Applied, "order prepare failed");
+    const auto token = tx.entry("move-1")->token;
+    require(tx.prepare(f.request("concurrent")) == MigrationResult::Conflict, "concurrent migration accepted");
+    auto changed = f.request(); changed.destination.instance = "xs-b";
+    require(tx.prepare(changed) == MigrationResult::Conflict, "request id reused with another target");
+    require(tx.apply(token, MigrationEvent::HomeFence) == MigrationResult::Order
+            && tx.apply(token, MigrationEvent::DestinationReady) == MigrationResult::Order
+            && tx.apply(token, MigrationEvent::Commit) == MigrationResult::Order, "pre-drain publication/grant accepted");
+    migration_step(tx, token, MigrationEvent::SourceDrained);
+    require(tx.apply(token, MigrationEvent::Commit) == MigrationResult::Order, "route published before home fence");
+    migration_step(tx, token, MigrationEvent::HomeFence);
+    require(tx.apply(token, MigrationEvent::Commit) == MigrationResult::Order
+            && tx.apply(token, MigrationEvent::Abort) == MigrationResult::Order
+            && !tx.write_allowed(f.source, 8), "fenced source revived or route published before target ACK");
+    migration_step(tx, token, MigrationEvent::DestinationReady);
+    require(tx.route() == f.request().expected, "route changed before commit");
+    // Simulate a competing directory edit in a trusted checkpoint: CAS fails.
+    auto changed_route = tx.snapshot(); changed_route.route.owner.instance = "gs-other";
+    MigrationTransaction competing(f.home, changed_route);
+    require(competing.apply(token, MigrationEvent::Commit) == MigrationResult::Order, "expected-route CAS bypassed");
+    migration_step(tx, token, MigrationEvent::Commit);
+    require(tx.route() == MigrationRoute{f.target, 9}, "ordered commit did not publish");
+    std::cout << "migration.order: premature fence/activation/publication and route CAS conflict rejected [PASS]\n";
 }
 void cross_return_queue() {
     const DurableAck ack{"realm-a", "same-id", 3, 5};

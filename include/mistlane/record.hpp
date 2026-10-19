@@ -253,6 +253,9 @@ public:
     bool begin_request() { if (!write_allowed(generation_)) return false; ++in_flight_; return true; }
     bool finish_request() { if (state_ != State::Requested || !in_flight_) return false; --in_flight_; return true; }
     bool request(std::uint64_t next) { if (state_ != State::Active || next <= generation_) return false; next_ = next; state_ = State::Requested; timers_running_ = false; return true; }
+    bool drained() const { return state_ == State::Requested && !in_flight_; }
+    // Only a pre-tombstone cancellation may restore the source generation.
+    bool cancel_request() { if (state_ != State::Requested) return false; next_ = 0; state_ = State::Active; timers_running_ = true; return true; }
     bool relinquish() { if (state_ != State::Requested || in_flight_) return false; state_ = State::Relinquished; return true; }
     bool accept(std::uint64_t generation) { if (state_ != State::Relinquished || generation != next_) return false; generation_ = generation; state_ = State::Active; timers_running_ = true; return true; }
     bool write_allowed(std::uint64_t generation) const { return state_ == State::Active && generation == generation_; }

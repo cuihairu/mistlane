@@ -22,6 +22,11 @@ void transport_multiplex();
 void coordinator_registry();
 void coordinator_placement();
 void coordinator_routes();
+void coordinator_migration_commit();
+void coordinator_migration_abort();
+void coordinator_migration_recover();
+void coordinator_migration_stale();
+void coordinator_migration_order();
 void lua_lifecycle();
 void lua_http();
 void cross_admission();
@@ -97,6 +102,11 @@ int run_tests(int argc, char** argv) {
         {"coordinator.registry","coordinator",test::coordinator_registry},
         {"coordinator.placement","coordinator",test::coordinator_placement},
         {"coordinator.routes","coordinator",test::coordinator_routes},
+        {"coordinator.migration.commit","coordinator",test::coordinator_migration_commit},
+        {"coordinator.migration.abort","coordinator",test::coordinator_migration_abort},
+        {"coordinator.migration.recover","coordinator",test::coordinator_migration_recover},
+        {"coordinator.migration.stale","coordinator",test::coordinator_migration_stale},
+        {"coordinator.migration.order","coordinator",test::coordinator_migration_order},
         {"lua.lifecycle","lua",test::lua_lifecycle},
         {"lua.http","lua",test::lua_http},
         {"cross.admission","cross",test::cross_admission},

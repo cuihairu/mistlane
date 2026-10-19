@@ -66,6 +66,8 @@ The endpoint keys both fence and sequence state by `(realm, character)`. It enfo
 
 The home data service is the sole generation authority. The state sequence is `active(g) → requested(g+1) → relinquished/tombstoned(g) → active(g+1)`: coordinator requests the transfer; the source stops admitting handlers and ticks, drains already executing work, freezes and flushes the final ordered changes; home data commits the final sequence and fences generation `g`; only then may the destination load the durable cursor and activate `g+1`; coordinator publishes its route after destination acknowledgement. A duplicate request/grant is idempotently refused once the state advanced. Source writes arriving after tombstone fail `STALE`; timeout before tombstone may abort back to source active, while after tombstone the destination must resume or recovery must issue a newer generation. In-flight handlers complete before request acceptance; queued arrivals are refused during transfer; Avatar timers stop at request and only explicitly serialized timers may be restored by the destination. The current C++ lease model enforces this state order and generation check, but coordinator/data persistence and Avatar runtime are not connected.
 
+The [coordinator migration transaction first slice](./protocol-analysis.md#coordinator-migration-transaction-first-slice) now implements a separate typed protocol model for prepare/commit, abort/cleanup and checkpoint recovery, reusing this lease gate. Before the home fence, abort cleans up the target and restores the source; after the fence recovery waits for target acknowledgement and commits forward. Its in-memory checkpoints do not supply the durable authority or runtime wiring required above.
+
 ## Failure handling
 
 | Failure | Rule |
