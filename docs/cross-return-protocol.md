@@ -57,9 +57,9 @@ sequenceDiagram
 
 ## Deliberately not decided here
 
-- Wire format and framing of MLD1, and whether the home-side endpoint is the `data` role or a home-region gateway in front of it: bound to the login/data service contract item, which this page feeds rather than preempts.
+- Wire format and framing of MLD1: bound to the implementation slice. The home-side endpoint itself is now decided — the `data` role owns it; see the [service contracts](./service-contracts.md).
 - Settlement, reward and ranking business rules, cross-scene templates, and the actual Avatar/scene runtime: later crossServer slices and the entity-contract chain.
 - Lease duration numbers, queue bounds and retry budgets: configuration named at implementation time with defaults justified by measurement, not by this page.
 - Whether the entry ticket is signed, and by whom: an authentication design gated on the login contract.
 
-The first implementation slice must bring the participant context into the cross admission path with tests, then MLD1 against whatever home-side endpoint the service-contract item fixes.
+The first implementation slice must bring the participant context into the cross admission path with tests, then MLD1 against the data endpoint fixed by the [service contracts](./service-contracts.md).
