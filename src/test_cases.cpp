@@ -5,6 +5,7 @@
 #include "mistlane/cross.hpp"
 #include "mistlane/entity_contract.hpp"
 #include "mistlane/entity_dispatch.hpp"
+#include "mistlane/entity_envelope.hpp"
 #include "mistlane/entity_runtime.hpp"
 #include "mistlane/record.hpp"
 #include "mistlane/migration.hpp"
@@ -61,6 +62,69 @@ void rpc_lifecycle() {
     std::cout << "entity.runtime route_dispatch_response: typed level=7 [PASS]\n";
     std::cout << "entity.runtime duplicate_delivery: CONFLICT [PASS]\n";
     std::cout << "entity.runtime stale_incarnation: STALE [PASS]\n";
+}
+void entity_envelope() {
+    const EntityEnvelope envelope{7, 1, 3, 42, kEntitySideServer, 2, 0x1122334455667788ULL, 5, 250, "payload"};
+    const auto bytes = encode_entity_envelope(envelope);
+    require(bytes.size() == kEntityEnvelopeHeader + envelope.payload.size(), "envelope size is not fixed header plus payload");
+    std::ostringstream hex;
+    hex << std::hex << std::setfill('0');
+    for (const auto c : bytes) hex << std::setw(2) << static_cast<int>(static_cast<unsigned char>(c));
+    require(hex.str() == "0000000700000001000000000000002a00000003010002112233445566778800000005000000fa7061796c6f6164",
+            "envelope canonical bytes are not stable");
+    auto decoded = decode_entity_envelope(bytes);
+    require(decoded && *decoded == envelope, "envelope round trip lost fields");
+    std::cout << "entity.envelope canonical_bytes: fixed big-endian header [PASS]\n";
+    for (const std::size_t cut : {std::size_t{0}, std::size_t{1}, std::size_t{19}, std::size_t{20}, std::size_t{22},
+                                  std::size_t{23}, std::size_t{30}, std::size_t{31}, std::size_t{34}, std::size_t{35},
+                                  std::size_t{38}})
+        require(!decode_entity_envelope(bytes.substr(0, cut)), "truncated envelope decoded");
+    auto bad_side = envelope;
+    bad_side.side = 2;
+    require(!decode_entity_envelope(encode_entity_envelope(bad_side)), "unknown side byte decoded");
+    std::cout << "entity.envelope shape: truncation and unknown side rejected [PASS]\n";
+    const EntityEnvelope wide{0xffffffffu, 63, 0xffffffffu, -3, kEntitySideClient, 254, 0xffffffffffffffffULL,
+                              0xfffffffeu, 0xffffffffu, {}};
+    auto wide_decoded = decode_entity_envelope(encode_entity_envelope(wide));
+    require(wide_decoded && *wide_decoded == wide && wide_decoded->entity_id == -3, "extreme field values did not round trip");
+    require(to_entity_invocation(*wide_decoded, {"client", 9}).side == "client", "client side did not map to invocation");
+    std::cout << "entity.envelope extremes: i64 entity id and u64 correlation round trip [PASS]\n";
+    auto returns = decode_entity_reply(encode_entity_reply({false, EntityError::INVALID, {}, "returns"}).value());
+    require(returns && !returns->is_error && returns->payload == "returns", "returns reply did not round trip");
+    require(!encode_entity_reply({true, EntityError::STALE, "not current", {}}), "only INVALID may carry a reason");
+    auto stale = decode_entity_reply(encode_entity_reply({true, EntityError::STALE, {}, {}}).value());
+    require(stale && stale->is_error && stale->error == EntityError::STALE, "error reply did not round trip");
+    auto explained = decode_entity_reply(encode_entity_reply({true, EntityError::INVALID, "bad shape", {}}).value());
+    require(explained && explained->reason == "bad shape", "INVALID reason did not round trip");
+    require(!decode_entity_reply("\x05" "x"), "unknown reply kind decoded");
+    require(!decode_entity_reply("\x01\xc8"), "unknown error code decoded");
+    require(!decode_entity_reply("\x01"), "truncated error reply decoded");
+    require(!decode_entity_reply(""), "empty reply decoded");
+    std::cout << "entity.envelope reply: one of returns or error [PASS]\n";
+    const EntityContract contract(R"(<Contracts><Entity name="Avatar" id="1"><ServerMethods><Method name="get" id="2" mode="request" caller="server"><Arg name="account" id="0" type="INT32"/><Returns><Field name="level" id="1" type="UINT16"/></Returns></Method></ServerMethods></Entity></Contracts>)");
+    EntityRuntime runtime(contract);
+    const EntityTarget target{1, 1, 3, 42};
+    runtime.dispatcher().bind("Avatar", "server", 2, [](const EntityCaller&,const EntityTarget&,const EntityValues&) { return EntityValues{{"level",std::int64_t{7}}}; });
+    require(runtime.spawn(target, 5), "entity spawn with hosting generation failed");
+    const EntityEnvelope internal{1, 1, 3, 42, kEntitySideServer, 2, 10, 5, 0, {}};
+    auto invocation = to_entity_invocation(internal, {"server", 9});
+    invocation.arguments = {{"account", std::int64_t{4}}};
+    auto routed = runtime.deliver(invocation, internal.correlation_id);
+    require(routed.ok && std::get<std::int64_t>(routed.response.at("level").data) == 7, "current-generation internal call did not route");
+    auto late = internal;
+    late.hosting_generation = 4;
+    require(runtime.deliver(to_entity_invocation(late, {"server", 9}), 11).error == EntityError::STALE, "older hosting generation was not fenced");
+    require(runtime.deliver(to_entity_invocation(late, {"server", 9}), 11).error == EntityError::STALE, "fenced call registered a delivery slot");
+    auto retry = runtime.deliver(invocation, 11);
+    require(retry.ok && std::get<std::int64_t>(retry.response.at("level").data) == 7, "fence consumed the correlation slot");
+    auto early = internal;
+    early.hosting_generation = 6;
+    require(runtime.deliver(to_entity_invocation(early, {"server", 9}), 13).error == EntityError::STALE, "unknown hosting generation was not fenced");
+    auto client_origin = invocation;
+    client_origin.hosting_generation = 0;
+    require(runtime.deliver(client_origin, 14).ok, "zero hosting generation was fenced");
+    std::cout << "entity.envelope fence: internal generation asserted, zero bypasses [PASS]\n";
+    std::cout << "entity.envelope fence_before_slot: STALE does not consume correlation [PASS]\n";
 }
 namespace {
 constexpr std::string_view echo = "return {message=function(p) return p end}";

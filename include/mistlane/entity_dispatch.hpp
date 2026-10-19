@@ -27,7 +27,7 @@ struct EntityValue {
  EntityValue(EntityObject v) : data(std::move(v)) {}
 };
 using EntityValues = std::map<std::string, EntityValue>;
-struct EntityInvocation { EntityTarget target; EntityCaller caller; std::string side; unsigned method_id = 0; bool encoded_ok = true; EntityValues arguments; };
+struct EntityInvocation { EntityTarget target; EntityCaller caller; std::string side; unsigned method_id = 0; bool encoded_ok = true; EntityValues arguments; std::uint32_t hosting_generation = 0; };
 struct EntityDispatchResult { EntityError error = EntityError::INVALID; EntityValues response; bool ok = false; };
 
 // A deterministic in-process descriptor dispatcher. The transport sproto codec

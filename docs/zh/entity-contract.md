@@ -238,9 +238,9 @@ flowchart TB
 
 实体引用不向业务暴露固定 IP 或承载进程。跨进程调用需要可更新的当前承载路由；迁移期间通过有界队列/重试或明确错误处理，旧承载代号不能继续写入。相同进程也走一致的权限和调度入口，避免同步重入。第一阶段不承诺 RPC 恰好一次：超时结果不明，禁止对非幂等玩法静默重试，结算使用业务操作 ID 去重。每连接/实体队列、请求数、包大小和执行时间均需上限。
 
-## 调用 envelope 与错误协议（已代决，未实现）
+## 调用 envelope 与错误协议（已代决；规范进程内编解码已实现）
 
-下面的 envelope 固定目标网络调用字段。进程内 `EntityRuntime` 与 `RpcHarness` 夹具已实现寻址及部分生命周期结果；尚无线上动词承载完整 envelope 或序列化错误应答。字段语义已定，规范 envelope/error 字节与真实传输绑定尚未实现。
+下面的 envelope 固定目标网络调用字段。进程内 `EntityRuntime` 与 `RpcHarness` 夹具已实现寻址及部分生命周期结果；规范 envelope 字节与序列化错误应答已实现为进程内编解码（`include/mistlane/entity_envelope.hpp`），但尚无线上动词在真实传输上承载它们。字段语义已定，真实传输绑定尚未实现。
 
 实体调用是现有传输分帧（MLC1/MLC2/MLM1 帧或客户端会话通道）内的一种载荷，不是新的 TCP 协议，仍在 1 MiB 有界帧内。字段顺序：
 
@@ -256,6 +256,8 @@ flowchart TB
 - payload —— sproto 编码的参数；request 应答携带类型化返回。
 
 内层实体 `correlation_id` 与外层传输关联 id 刻意独立：gateway 用自己的有界表把客户端外层关联映射到内层实体 request 再映射回来，因此一条客户端通道可以复用多个实体 request，而不消耗传输关联 id。
+
+规范进程内编解码固定字节形态（`entity.envelope` 用例）：按上述字段顺序的 39 字节定长大端头，其后剩余字节即 payload（`side` 字节 `0`=client、`1`=server；envelope 不携带调用方身份）。一个 request 只应答类型化返回（`0x00` + payload）或封闭 `EntityError` 之一（`0x01` + 错误码字节，仅 `INVALID` 追加长度前缀的 `reason`）。`EntityRuntime` 执行栅栏：内部调用的 `hosting_generation` 不等于实体当前持有代号即应答 `STALE` 且不占用关联槽位，与 MLD1 持久栅栏一致；`0` 表示客户端发起的调用，不做代号断言。
 
 **错误是一个封闭、随契约摘要版本化的集合**（`EntityError`），不是业务自定义的自由体。一个 request 只可能应答其中之一：类型化返回，或单个 `EntityError`。二者不并存，不允许部分返回，该错误就是这个关联 id 的终答。
 
@@ -348,7 +350,7 @@ inventory 及其类型须先在契约中声明；上述为行为示意，不是�
 
 ## 发布与验收顺序
 
-1. 固定 `.def` 的 XSD、类型规则、编号锁文件、兼容规则、协议 envelope 和错误结构。XSD、类型规则与编号锁已实现；envelope 字段与封闭错误词表已定。`mistlane contract compat OLD.lock NEW.lock` 已提供发布兼容检查（新增通过，删除/改分配拒绝）。完整 envelope/error 规范编码及跨语言黄金向量仍开放；参数 codec 与进程内枚举结果不能代替此闸门。见[实现证据与剩余闸门](./protocol-analysis.md#缺口)，缺口 7。
+1. 固定 `.def` 的 XSD、类型规则、编号锁文件、兼容规则、协议 envelope 和错误结构。XSD、类型规则与编号锁已实现；envelope 字段与封闭错误词表已定。`mistlane contract compat OLD.lock NEW.lock` 已提供发布兼容检查（新增通过，删除/改分配拒绝）。envelope/error 规范编码已实现为进程内编解码（`entity.envelope` 用例断言）；跨语言黄金向量仍开放；参数 codec 与进程内枚举结果不能代替此闸门。见[实现证据与剩余闸门](./protocol-analysis.md#缺口)，缺口 7。
 2. 做 C++/Lua、JS、C# 编解码原型；覆盖 INT64 边界、UTF-8、bytes、空值/空数组、嵌套结构、未知字段、截断和畸形输入；共享黄金字节样本。
 3. 实现 bundle 原子加载与生成工具；同一输入可复现相同输出，非法/冲突/缺实现不能发布就绪；客户端产物不包含服务器内部方法和私有属性描述。
 4. 实现 Entity 身份、受控属性、RPC 分发与客户端代理；再接同步基线/增量和持久化，验证重连、离线、写冲突与损坏数据。

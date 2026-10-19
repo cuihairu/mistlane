@@ -27,6 +27,12 @@ public:
      }
      return fail(EntityError::UNROUTED);
    }
+   // Hosting-generation fence (docs/entity-contract.md): internal routing
+   // asserts the entity's current ownership generation; a call from an older
+   // or unknown generation is STALE, matching the MLD1 durable fence. Zero
+   // marks a client-originated call, which asserts no generation. The fence
+   // precedes correlation registration, so a fenced call consumes no slot.
+   if (call.hosting_generation && call.hosting_generation != it->second) return fail(EntityError::STALE);
    if (!delivered_.emplace(a,correlation_id).second) return fail(EntityError::CONFLICT);
    return dispatcher_.dispatch(call);
  }

@@ -234,9 +234,9 @@ An invocation carries scope, target entity ID/incarnation, type and method IDs; 
 
 References hide fixed IPs and hosts. Transfer needs updateable routes, bounded queues/retry rules or explicit errors, and rejection of stale owners. Local calls use the same authorization and scheduling boundary to avoid synchronous reentrancy. RPC does not promise exactly-once execution: timeout can mean an unknown outcome. Do not silently retry non-idempotent gameplay; settlement needs business operation IDs. Bound packet size, outstanding requests, queues and execution time.
 
-## Invocation envelope and error protocol (decided, unimplemented)
+## Invocation envelope and error protocol (decided; canonical in-process codec implemented)
 
-The envelope below fixes the intended network invocation fields. In-process `EntityRuntime` and `RpcHarness` fixtures implement addressing and selected lifecycle outcomes; no network verb carries the complete envelope or serialized error reply yet. Field semantics are decided; canonical envelope/error bytes and live transport binding remain unimplemented.
+The envelope below fixes the intended network invocation fields. In-process `EntityRuntime` and `RpcHarness` fixtures implement addressing and selected lifecycle outcomes; the canonical envelope bytes and the serialized error reply are implemented as an in-process codec (`include/mistlane/entity_envelope.hpp`), but no network verb carries them on a live transport yet. Field semantics are decided; live transport binding remains unimplemented.
 
 An entity invocation is a payload kind inside the existing transport framing (MLC1/MLC2/MLM1 frames or a client session channel), not a new TCP protocol; it stays inside the bounded 1 MiB frame. Fields, in order:
 
@@ -252,6 +252,8 @@ An entity invocation is a payload kind inside the existing transport framing (ML
 - payload — sproto-encoded arguments; request answers carry the typed returns.
 
 The addressing key `(scope, type_id, entity_id, incarnation)` is exactly what `EntityRef` carries (as fixed under [Stable identity](#stable-identity-and-filenames)), so a method argument of type `EntityRef` and a call target share one addressing vocabulary rather than two.
+
+The canonical in-process codec fixes the byte form (`entity.envelope` case): a 39-byte fixed big-endian header in the field order above, followed by the payload as the remainder (`side` byte `0` = client, `1` = server; no caller identity rides the envelope). A request answers with exactly one of the typed returns (`0x00` + payload) or a single closed `EntityError` (`0x01` + code byte, plus a length-prefixed `reason` for `INVALID` only). `EntityRuntime` asserts the fence: an internal call whose `hosting_generation` differs from the entity's current ownership generation answers `STALE` without consuming the correlation slot, matching the MLD1 durable fence; `0` marks a client-originated call and asserts no generation.
 
 The inner entity `correlation_id` is deliberately independent of the outer transport correlation: the gateway maps the client's outer correlation onto the inner entity request and back through its own bounded table, so one client channel can multiplex many entity requests without consuming transport correlation ids.
 
@@ -348,7 +350,7 @@ Breaking updates may still require old clients to upgrade or reconnect. An uncha
 
 ## Implementation and acceptance order
 
-1. Specify XSD, type rules, ID lock, compatibility, invocation envelope and error structures. XSD, type rules and ID lock are implemented; envelope fields and the closed error vocabulary are decided. `mistlane contract compat OLD.lock NEW.lock` supplies the publication compatibility check (additions pass, removals/changed assignments fail). Canonical full-envelope/error encoding and cross-language golden vectors remain open; generated argument codecs and in-process enum results do not close that gate. See [implemented evidence and remaining gates](./protocol-analysis.md#gaps), gap 7.
+1. Specify XSD, type rules, ID lock, compatibility, invocation envelope and error structures. XSD, type rules and ID lock are implemented; envelope fields and the closed error vocabulary are decided. `mistlane contract compat OLD.lock NEW.lock` supplies the publication compatibility check (additions pass, removals/changed assignments fail). Canonical envelope/error encoding is implemented as an in-process codec asserted by the `entity.envelope` case; cross-language golden vectors remain open; generated argument codecs and in-process enum results do not close that gate. See [implemented evidence and remaining gates](./protocol-analysis.md#gaps), gap 7.
 2. Prototype C++/Lua, JS and C# codecs against shared golden bytes: integer boundaries, UTF-8, bytes, absent/empty values, arrays, nested structures, unknown fields and malformed/truncated inputs.
 3. Implement deterministic generation and atomic bundle loading. Invalid/conflicting/missing implementations cannot become ready. Client artifacts exclude server-internal methods and private property descriptors.
 4. Implement Entity identity, controlled properties, RPC and client proxies; then baselines/deltas and persistence. Verify reconnects, offline outcomes, write conflicts and corrupt records.

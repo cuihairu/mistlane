@@ -63,6 +63,7 @@ include(CTest)
 if(BUILD_TESTING)
   foreach(test_case IN ITEMS core.contracts contract.tool sproto.golden rpc.lifecycle core.roles transport.tcp transport.websocket transport.http
       transport.push transport.correlate transport.identity transport.multiplex coordinator.registry
+      entity.envelope
       coordinator.placement coordinator.routes coordinator.migration.commit coordinator.migration.abort
       coordinator.migration.recover coordinator.migration.stale coordinator.migration.order lua.lifecycle lua.http
       api.signature api.tamper api.replay api.acceptance api.ownership
