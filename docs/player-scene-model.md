@@ -101,4 +101,4 @@ Combined Base/Cell responsibilities do not rule out large maps. The observed leg
 
 Mistlane has network channels, serial message/http execution and gateway cross routing/crossServer routing/admission prototypes. Complete Avatar hosting/transfer, map/scene runtime, the home-save chain and seamless partitioning are not implemented. SIGHUP replaces the Lua VM and resets module state; it is not Avatar/scene migration.
 
-The root `todo.md` tracks C++ contracts/Lua hooks, map/scene lifetimes, cross-region home updates and single-writer ownership, followed by implementation/verification. Renaming a role alone cannot complete these tasks.
+The root `todo.md` tracks C++ contracts/Lua hooks, map/scene lifetimes, cross-region home updates and single-writer ownership, followed by implementation/verification. Renaming a role alone cannot complete these tasks. The item-by-item gameServer evaluation (process shape, scene templates/instances, timing, sync, release) is recorded in the [capability assessment](./gameserver-capabilities.md).

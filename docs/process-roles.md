@@ -78,4 +78,4 @@ The single executable remains mistlane. Existing roles have migrated; the indepe
 The root `todo.md` tracks service identity/communication → coordination/ownership → characters/scenes → cross-region transfer/data writes → ingress/tooling. A runtime rename must update validation, Lua ServiceContext, scaffold, help, tests, metric labels and both locales together. Existing review-remediation tasks remain valid.
 
 
-See [players, scenes and cross-region execution](./player-scene-model.md) for map data, scene instances, Session/Avatar and C++/Lua boundaries.
+See [players, scenes and cross-region execution](./player-scene-model.md) for map data, scene instances, Session/Avatar and C++/Lua boundaries, and the [gameServer capability assessment](./gameserver-capabilities.md) for the item-by-item legacy evaluation.

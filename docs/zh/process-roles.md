@@ -78,4 +78,4 @@ coordinator 负责承载决策和注册状态；进程启动、重启与资源�
 任务见仓库根目录 `todo.md`。按服务身份与通信 → 协调与归属 → 角色/场景 → 跨服移交与数据写入 → 入口和工具的依赖推进。任何运行角色改名都同时更新 CLI 校验、Lua ServiceContext、脚手架、帮助、测试、指标标签及中英文文档；当前已有审核整改任务保持有效。
 
 
-地图静态数据、场景实例、Session/Avatar 及 C++/Lua 分工详见[玩家、场景与跨服模型](./player-scene-model.md)。
+地图静态数据、场景实例、Session/Avatar 及 C++/Lua 分工详见[玩家、场景与跨服模型](./player-scene-model.md)；gameServer 逐项旧实现评估见[能力评估](./gameserver-capabilities.md)。
