@@ -3,7 +3,7 @@
 // bindings: encodes the same locked vectors as the Lua/C++/JS goldens and
 // asserts byte-identical output, then decodes them back exactly (including the
 // negative wide value the vendored upstream decoder corrupts), and refuses
-// malformed wire and unsupported field kinds.
+// malformed wire, invalid UTF-8 and unsupported field kinds.
 //
 // Owner-run golden (the build requires no .NET toolchain): compile this file
 // together with the generated avatar.bindings.cs, e.g.
@@ -50,6 +50,19 @@ internal static class Program
             ("int_array64", new Dictionary<string, object> { ["totals"] = new List<long> { -1L, 2147483648L, 4294967296L } }, "02000b0000001900000008ffffffffffffffff00000080000000000000000001000000"),
             ("empty_int_array", new Dictionary<string, object> { ["tags"] = new List<long>() }, "02000900000000000000"),
             ("empty_struct_array", new Dictionary<string, object> { ["inventory"] = new Dictionary<string, object> { ["capacity"] = 0L, ["items"] = new List<Dictionary<string, object>>() } }, "0200030000000a00000002000200000000000000"),
+            ("bool_string_bytes", new Dictionary<string, object> {
+                ["active"] = true,
+                ["name"] = "中文",
+                ["blob"] = new byte[] { 0, 255 },
+                ["flags"] = new List<bool> { true, false, true },
+                ["aliases"] = new List<string> { "latin", "" },
+                ["blobs"] = new List<byte[]> { new byte[] { 1, 2 }, new byte[0] },
+            }, "07000d0004000000000000000000000006000000e4b8ade696870200000000ff030000000100010d000000050000006c6174696e000000000a00000002000000010200000000"),
+            ("bool_false", new Dictionary<string, object> { ["active"] = false }, "02000d000200"),
+            ("all_empty", new Dictionary<string, object> {
+                ["name"] = "", ["blob"] = new byte[0],
+                ["flags"] = new List<bool>(), ["aliases"] = new List<string>(), ["blobs"] = new List<byte[]>(),
+            }, "06000f00000000000000000000000000000000000000000000000000000000000000"),
         };
         foreach (var (label, value, expected) in vectors)
         {
@@ -73,11 +86,24 @@ internal static class Program
         var totals = SprotoCodec.Decode(AvatarSchema.Fields, Unhex("02000b0000001900000008ffffffffffffffff00000080000000000000000001000000"));
         var list = (List<long>)totals["totals"];
         ThrowOn(list[0] != -1L || list[1] != 2147483648L || list[2] != 4294967296L, "int array64 decode");
-        var unknown = SprotoCodec.Decode(AvatarSchema.Fields, Unhex("02000d000200"));
+        var text = SprotoCodec.Decode(AvatarSchema.Fields, Unhex("07000d0004000000000000000000000006000000e4b8ade696870200000000ff030000000100010d000000050000006c6174696e000000000a00000002000000010200000000"));
+        var flags = (List<bool>)text["flags"];
+        var aliases = (List<string>)text["aliases"];
+        var blobs = (List<byte[]>)text["blobs"];
+        ThrowOn(!Equals(text["active"], true) || (string)text["name"] != "中文"
+            || !((byte[])text["blob"]).SequenceEqual(new byte[] { 0, 255 }), "bool/string/bytes decode");
+        ThrowOn(flags.Count != 3 || !flags[0] || flags[1] || !flags[2]
+            || aliases[0] != "latin" || aliases[1] != ""
+            || !blobs[0].SequenceEqual(new byte[] { 1, 2 }) || blobs[1].Length != 0, "bool/string/bytes arrays decode");
+        var allEmpty = SprotoCodec.Decode(AvatarSchema.Fields, Unhex("06000f00000000000000000000000000000000000000000000000000000000000000"));
+        ThrowOn((string)allEmpty["name"] != "" || ((byte[])allEmpty["blob"]).Length != 0
+            || ((List<bool>)allEmpty["flags"]).Count != 0 || ((List<string>)allEmpty["aliases"]).Count != 0
+            || ((List<byte[]>)allEmpty["blobs"]).Count != 0, "empty string/arrays decode");
+        var unknown = SprotoCodec.Decode(AvatarSchema.Fields, Unhex("020019000200"));
         ThrowOn(unknown.Count != 0, "unknown tag skipped");
         var missing = SprotoCodec.Decode(AvatarSchema.Fields, Unhex("020001000400"));
         ThrowOn((long)missing["level"] != 1L || missing.ContainsKey("exp"), "absent field decoded as present");
-        Console.WriteLine("CS_SPROTO_SDK_DECODE scalar+struct+arrays roundtrip unknown_tag=skipped absent=missing [PASS]");
+        Console.WriteLine("CS_SPROTO_SDK_DECODE scalar+struct+arrays+bool/string/bytes roundtrip unknown_tag=skipped absent=missing [PASS]");
     }
     private static void AssertMalformed()
     {
@@ -93,7 +119,13 @@ internal static class Program
         Throws("truncated value", Unhex("02000700000008000000ff"));
         Throws("trailing bytes", Unhex("02000100040000"));
         Throws("bad array layout", Unhex("02000900000003000000"));
-        Console.WriteLine("CS_SPROTO_SDK_DECODE malformed: short/truncated/array-layout rejected [PASS]");
+        // An invalid UTF-8 STRING payload, a boolean-array byte that is neither
+        // 0 nor 1, and a string-array element whose length prefix overruns the
+        // array content all fail closed.
+        Throws("invalid utf8 string", Unhex("02000f00000001000000ff"));
+        Throws("bad boolean array", Unhex("020013000000010000000002"));
+        Throws("bad string-array element", Unhex("020015000000050000000500000061"));
+        Console.WriteLine("CS_SPROTO_SDK_DECODE malformed: short/truncated/array-layout/utf-8/bool rejected [PASS]");
     }
     private static void AssertEncodeRejections()
     {
@@ -110,8 +142,13 @@ internal static class Program
         Throws("not a struct array", new Dictionary<string, object> {
             ["inventory"] = new Dictionary<string, object> { ["capacity"] = 1L, ["items"] = "x" },
         });
-        // Unsupported kinds are emitted into the tables (BOOL/STRING/BYTES until
-        // their wire forms land) but the codec refuses them on both directions.
+        Throws("not a boolean", new Dictionary<string, object> { ["active"] = "yes" });
+        Throws("not a string", new Dictionary<string, object> { ["name"] = 5L });
+        Throws("not bytes", new Dictionary<string, object> { ["blob"] = "x" });
+        Throws("not a boolean array", new Dictionary<string, object> { ["flags"] = new List<string> { "yes" } });
+        // A kind outside the def grammar still cannot slip through: an injected
+        // unknown kind is refused on both directions (the generated tables only
+        // carry known kinds, so this pins the defensive default).
         void ThrowsFields(string label, SprotoField[] fields, IReadOnlyDictionary<string, object> value)
         {
             try { SprotoCodec.Encode(fields, value); }
@@ -130,7 +167,7 @@ internal static class Program
         var unsupported = new SprotoField(0, "zz", SprotoKind.Unsupported);
         ThrowsFields("unsupported kind", new SprotoField[] { unsupported }, new Dictionary<string, object> { ["zz"] = true });
         ThrowsDecode("unsupported in-band decode", new SprotoField[] { unsupported }, Unhex("01000200"));
-        ThrowsDecode("unsupported length-prefixed decode", new SprotoField[] { unsupported }, Unhex("01000000"));
+        ThrowsDecode("unsupported length-prefixed decode", new SprotoField[] { unsupported }, Unhex("0100000000000000"));
         Console.WriteLine("CS_SPROTO_SDK_ENCODE non-integer/shape/unsupported-kind rejected [PASS]");
     }
     public static int Main()
@@ -139,7 +176,7 @@ internal static class Program
         AssertDecode();
         AssertMalformed();
         AssertEncodeRejections();
-        Console.WriteLine("CS_SPROTO_SDK_OK scalar+struct+arrays vectors and decode match the locked bytes");
+        Console.WriteLine("CS_SPROTO_SDK_OK scalar+struct+arrays+bool/string/bytes vectors and decode match the locked bytes");
         return 0;
     }
 }

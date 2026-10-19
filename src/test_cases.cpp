@@ -2596,6 +2596,13 @@ void contract_tool() {
       <inventory id="3" type="Inventory" flags="OWN_CLIENT"/>
       <active id="4" type="BOOL" default="true"/>
       <tags id="5" type="ARRAY" of="UINT32"/>
+      <!-- ids 20-24 keep the compat section's id-6 append and id-8 reservation
+           lines unambiguous, while pinning every non-integer field kind. -->
+      <nick id="20" type="STRING"/>
+      <blob id="21" type="BYTES"/>
+      <flags id="22" type="ARRAY" of="BOOL"/>
+      <aliases id="23" type="ARRAY" of="STRING"/>
+      <certs id="24" type="ARRAY" of="BYTES"/>
     </Properties>
     <ServerMethods><Method name="attack" id="1" mode="notify" caller="owner">
       <Arg name="target" id="0" type="EntityRef"/>
@@ -2644,12 +2651,17 @@ void contract_tool() {
             js_bindings.find("decodeRecord") != std::string::npos &&
             js_bindings.find("sprotoFields") != std::string::npos &&
             // The generated field tables carry the schema-aware kind/of data
-            // the JS/C# codecs recurse through, including the kinds whose wire
-            // forms are still open (BOOL/STRING/BYTES stay refused there).
+            // the JS/C# codecs recurse through — every field kind, including
+            // the BOOL/STRING/BYTES scalar and array shapes.
             js_bindings.find("kind: 'struct', of: 'Inventory'") != std::string::npos &&
             js_bindings.find("kind: 'struct-array', of: 'Item'") != std::string::npos &&
             js_bindings.find("kind: 'int-array'") != std::string::npos &&
-            js_bindings.find("kind: 'bool'") != std::string::npos,
+            js_bindings.find("kind: 'bool'") != std::string::npos &&
+            js_bindings.find("kind: 'string'") != std::string::npos &&
+            js_bindings.find("kind: 'bytes'") != std::string::npos &&
+            js_bindings.find("kind: 'bool-array'") != std::string::npos &&
+            js_bindings.find("kind: 'string-array'") != std::string::npos &&
+            js_bindings.find("kind: 'bytes-array'") != std::string::npos,
             "generated JS field tables lost kind/of");
     const auto cs_bindings = read(one/"avatar.bindings.cs");
     require(cs_bindings.find("record Avatar") != std::string::npos &&
@@ -2658,7 +2670,12 @@ void contract_tool() {
             cs_bindings.find("SprotoKind.Struct, \"Inventory\"") != std::string::npos &&
             cs_bindings.find("SprotoKind.StructArray, \"Item\"") != std::string::npos &&
             cs_bindings.find("SprotoKind.IntArray, null") != std::string::npos &&
-            cs_bindings.find("\"active\", SprotoKind.Unsupported, null") != std::string::npos,
+            cs_bindings.find("\"active\", SprotoKind.Bool, null") != std::string::npos &&
+            cs_bindings.find("\"nick\", SprotoKind.String, null") != std::string::npos &&
+            cs_bindings.find("\"blob\", SprotoKind.Bytes, null") != std::string::npos &&
+            cs_bindings.find("\"flags\", SprotoKind.BoolArray, null") != std::string::npos &&
+            cs_bindings.find("\"aliases\", SprotoKind.StringArray, null") != std::string::npos &&
+            cs_bindings.find("\"certs\", SprotoKind.BytesArray, null") != std::string::npos,
             "generated C# field tables lost kind/sub");
     const auto old_lock = c.path("old.lock"), compatible_lock = c.path("compatible.lock"), breaking_lock = c.path("breaking.lock");
     const auto release_lock = read(one/"avatar.lock");
@@ -2733,6 +2750,11 @@ void contract_tool() {
             read(one/"avatar.sproto").find("E1_Client_1 ") != std::string::npos &&
             read(one/"avatar.sproto").find("items 1 : *Item") != std::string::npos &&
             read(one/"avatar.sproto").find("active 4 : boolean") != std::string::npos &&
+            read(one/"avatar.sproto").find("nick 20 : string") != std::string::npos &&
+            read(one/"avatar.sproto").find("blob 21 : binary") != std::string::npos &&
+            read(one/"avatar.sproto").find("flags 22 : *boolean") != std::string::npos &&
+            read(one/"avatar.sproto").find("aliases 23 : *string") != std::string::npos &&
+            read(one/"avatar.sproto").find("certs 24 : *binary") != std::string::npos &&
             read(one/"avatar.sproto").find("E1_Server_2 514") != std::string::npos,
             "sproto schema lost stable E1 side/method identifiers");
     // The lock's digest line, the digest file and the library digest agree.

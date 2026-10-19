@@ -19,7 +19,11 @@ const expectThrow = (label, fn) => {
 // positive beyond the JS Number-safe range), a struct field whose inventory
 // holds an array of structs, an array of 32-bit integers, and an array of
 // 64-bit integers whose first element needs only 32 bits so the encoder
-// sign-extends the padding of the earlier 8-byte slots.
+// sign-extends the padding of the earlier 8-byte slots. BOOL/STRING/BYTES:
+// booleans ride the integer in-band word (true=4, false=2), strings and bytes
+// are length-prefixed byte objects, boolean arrays are one raw 0/1 byte per
+// element with no intlen byte, and string/bytes arrays are per-element
+// [len][bytes]; "中文" pins multi-byte UTF-8 content.
 const vectors = [
   ['level=1', { level: 1 }, '020001000400'],
   ['int64_negative', { exp: -9007199254740993n }, '02000700000008000000ffffffffffffdfff'],
@@ -30,6 +34,12 @@ const vectors = [
   ['int_array64', { totals: [-1n, 2147483648n, 4294967296n] }, '02000b0000001900000008ffffffffffffffff00000080000000000000000001000000'],
   ['empty_int_array', { tags: [] }, '02000900000000000000'],
   ['empty_struct_array', { inventory: { capacity: 0, items: [] } }, '0200030000000a00000002000200000000000000'],
+  ['bool_string_bytes', {
+    active: true, name: '中文', blob: Uint8Array.of(0, 255),
+    flags: [true, false, true], aliases: ['latin', ''], blobs: [Uint8Array.of(1, 2), Uint8Array.of()],
+  }, '07000d0004000000000000000000000006000000e4b8ade696870200000000ff030000000100010d000000050000006c6174696e000000000a00000002000000010200000000'],
+  ['bool_false', { active: false }, '02000d000200'],
+  ['all_empty', { name: '', blob: Uint8Array.of(), flags: [], aliases: [], blobs: [] }, '06000f00000000000000000000000000000000000000000000000000000000000000'],
 ];
 for (const [label, value, expected] of vectors) {
   const encoded = encodeRecord(sprotoFields.Avatar, value);
@@ -49,6 +59,12 @@ const roundTrips = [
   ['int_array64', { totals: [-1n, 2147483648n, 4294967296n] }],
   ['empty_int_array', { tags: [] }],
   ['empty_struct_array', { inventory: { capacity: 0, items: [] } }],
+  ['bool_string_bytes', {
+    active: true, name: '中文', blob: Uint8Array.of(0, 255),
+    flags: [true, false, true], aliases: ['latin', ''], blobs: [Uint8Array.of(1, 2), Uint8Array.of()],
+  }],
+  ['bool_false', { active: false }],
+  ['all_empty', { name: '', blob: Uint8Array.of(), flags: [], aliases: [], blobs: [] }],
 ];
 for (const [label, value] of roundTrips) {
   const encoded = encodeRecord(sprotoFields.Avatar, value);
@@ -67,7 +83,20 @@ const totals = decodeRecord(sprotoFields.Avatar, unhex('02000b0000001900000008ff
 if (totals.totals[0] !== -1n || totals.totals[1] !== 2147483648n || totals.totals[2] !== 4294967296n) {
   throw new Error(`JS int array64 decode mismatch: ${JSON.stringify(totals)}`);
 }
-console.log('JS_SPROTO_SDK_DECODE scalar+struct+arrays roundtrip exact [PASS]');
+const bytesEqual = (a, b) => a.length === b.length && [...a].every((byte, i) => byte === b[i]);
+const text = decodeRecord(sprotoFields.Avatar, unhex('07000d0004000000000000000000000006000000e4b8ade696870200000000ff030000000100010d000000050000006c6174696e000000000a00000002000000010200000000'));
+if (text.active !== true || text.name !== '中文' || !bytesEqual(text.blob, [0, 255])
+  || !(text.flags.length === 3 && text.flags[0] === true && text.flags[1] === false && text.flags[2] === true)
+  || text.aliases[0] !== 'latin' || text.aliases[1] !== ''
+  || !bytesEqual(text.blobs[0], [1, 2]) || !bytesEqual(text.blobs[1], [])) {
+  throw new Error(`JS bool/string/bytes decode mismatch: ${JSON.stringify(text)}`);
+}
+const allEmpty = decodeRecord(sprotoFields.Avatar, unhex('06000f00000000000000000000000000000000000000000000000000000000000000'));
+if (allEmpty.name !== '' || !bytesEqual(allEmpty.blob, [])
+  || !(allEmpty.flags.length === 0 && allEmpty.aliases.length === 0 && allEmpty.blobs.length === 0)) {
+  throw new Error(`JS empty string/arrays decode mismatch: ${JSON.stringify(allEmpty)}`);
+}
+console.log('JS_SPROTO_SDK_DECODE scalar+struct+arrays+bool/string/bytes roundtrip exact [PASS]');
 
 // Absent fields decode as absent: sproto has no wire defaults, so the
 // contract's definition-time defaults stay an application concern.
@@ -75,33 +104,41 @@ const onlyLevel = decodeRecord(sprotoFields.Avatar, encodeRecord(sprotoFields.Av
 if (onlyLevel.level !== 1n || onlyLevel.exp !== undefined) throw new Error('JS absent field did not decode as missing');
 console.log('JS_SPROTO_SDK_DECODE defaults: absent fields decode missing [PASS]');
 
-// Unknown wire tags are skipped, never misdelivered: gap word to tag 7 (past
-// totals id 6), then an in-band word that decodes into no known field.
-const unknown = decodeRecord(sprotoFields.Avatar, unhex('02000d000200'));
+// Unknown wire tags are skipped, never misdelivered: gap word to tag 13 (past
+// blobs id 12), then an in-band word that decodes into no known field.
+const unknown = decodeRecord(sprotoFields.Avatar, unhex('020019000200'));
 if (unknown.level !== undefined || unknown.exp !== undefined || unknown.totals !== undefined) throw new Error('JS unknown tag was not skipped');
 console.log('JS_SPROTO_SDK_DECODE unknown_tag: skipped, nothing decoded [PASS]');
 
 // Malformed buffers fail closed: short header, tag block overrun, truncated
-// length-prefixed value, trailing bytes, and a struct-array element whose
-// length prefix overruns the array content. Out-of-range and non-integer
+// length-prefixed value, trailing bytes, a struct-array element whose
+// length prefix overruns the array content, an invalid UTF-8 STRING payload,
+// a boolean-array byte that is neither 0 nor 1, and a string-array element
+// whose length prefix overruns the content. Out-of-range and wrongly typed
 // inputs fail on encode.
 expectThrow('short header', () => decodeRecord(sprotoFields.Avatar, unhex('02')));
 expectThrow('short tag block', () => decodeRecord(sprotoFields.Avatar, unhex('03000100')));
 expectThrow('truncated value', () => decodeRecord(sprotoFields.Avatar, unhex('02000700000008000000ff')));
 expectThrow('trailing bytes', () => decodeRecord(sprotoFields.Avatar, unhex('02000100040000')));
 expectThrow('bad array layout', () => decodeRecord(sprotoFields.Avatar, unhex('02000900000003000000')));
+expectThrow('invalid utf8 string', () => decodeRecord(sprotoFields.Avatar, unhex('02000f00000001000000ff')));
+expectThrow('bad boolean array', () => decodeRecord(sprotoFields.Avatar, unhex('020013000000010000000002')));
+expectThrow('bad string-array element', () => decodeRecord(sprotoFields.Avatar, unhex('020015000000050000000500000061')));
 expectThrow('non-integer', () => encodeRecord(sprotoFields.Avatar, { level: 1.5 }));
 expectThrow('int64 overflow', () => encodeRecord(sprotoFields.Avatar, { exp: 2n ** 63n }));
 expectThrow('not an array', () => encodeRecord(sprotoFields.Avatar, { tags: 5 }));
 expectThrow('bad array element', () => encodeRecord(sprotoFields.Avatar, { tags: [1.5] }));
-console.log('JS_SPROTO_SDK_DECODE malformed: short/truncated/array-layout/overflow rejected [PASS]');
+expectThrow('not a boolean', () => encodeRecord(sprotoFields.Avatar, { active: 'yes' }));
+expectThrow('not a string', () => encodeRecord(sprotoFields.Avatar, { name: 5 }));
+expectThrow('not bytes', () => encodeRecord(sprotoFields.Avatar, { blob: 'x' }));
+expectThrow('not a boolean array', () => encodeRecord(sprotoFields.Avatar, { flags: ['yes'] }));
+console.log('JS_SPROTO_SDK_DECODE malformed: short/truncated/array-layout/utf-8/bool rejected [PASS]');
 
-// BOOL/STRING/BYTES kinds are emitted into the field tables but refused by the
-// codecs until their wire-form vectors land (the remaining open item), on both
-// directions: in-band and length-prefixed placements of an unsupported kind.
-// id 0 so the wire tags below actually reach the injected field.
-const unsupported = [{ id: 0, name: 'zz', kind: 'bool' }];
+// A kind outside the def grammar still cannot slip through the codec: the
+// generated tables only carry known kinds, but an injected unknown kind is
+// refused on both directions. id 0 so the wire tags below reach the field.
+const unsupported = [{ id: 0, name: 'zz', kind: 'wat' }];
 expectThrow('unsupported kind', () => encodeRecord(unsupported, { zz: true }));
 expectThrow('unsupported in-band decode', () => decodeRecord(unsupported, unhex('01000200')));
-expectThrow('unsupported length-prefixed decode', () => decodeRecord(unsupported, unhex('01000000')));
+expectThrow('unsupported length-prefixed decode', () => decodeRecord(unsupported, unhex('0100000000000000')));
 console.log('JS_SPROTO_SDK_CODEC unsupported kinds refused [PASS]');

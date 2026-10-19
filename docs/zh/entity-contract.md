@@ -351,7 +351,7 @@ inventory 及其类型须先在契约中声明；上述为行为示意，不是�
 ## 发布与验收顺序
 
 1. 固定 `.def` 的 XSD、类型规则、编号锁文件、兼容规则、协议 envelope 和错误结构。XSD、类型规则与编号锁已实现；envelope 字段与封闭错误词表已定。`mistlane contract compat OLD.lock NEW.lock` 已提供发布兼容检查：两侧锁文本解析进同一共享条目模型，新增保持兼容，删除、改号、含义变化、退役 id 复用与退役留位删除一律拒绝。envelope/error 规范编码已实现为进程内编解码（`entity.envelope` 用例断言）；跨语言黄金向量仍开放；参数 codec 与进程内枚举结果不能代替此闸门。见[实现证据与剩余闸门](./protocol-analysis.md#缺口)，缺口 7。
-2. 做 C++/Lua、JS、C# 编解码原型；覆盖 INT64 边界、UTF-8、bytes、空值/空数组、嵌套结构、未知字段、截断和畸形输入；共享黄金字节样本。进展（2026-10-20）：INT64 边界向量（正负值超出 JS Number 安全域）、缺省字段、未知 tag 跳过与截断/畸形拒绝已在四语言锁定（上游 Lua、C++ probe 独立编解码、JS `bigint`、C# `long`），嵌套结构字段、整数数组（4/8 字节元素）与空数组也已锁定——JS/C# codec 升级为 schema 驱动（字段表携带 `kind`/`of`，decode 递归穿越结构与数组，C# 值模型扩到 `Dictionary<string,object>`）；上游 sproto `todword` 解码缺陷已复现、定位并在独立 codec 中规避（见验证记录）；UTF-8、bytes 与 BOOL 线形态向量仍开放。
+2. 做 C++/Lua、JS、C# 编解码原型；覆盖 INT64 边界、UTF-8、bytes、空值/空数组、嵌套结构、未知字段、截断和畸形输入；共享黄金字节样本。进展（2026-10-20）：INT64 边界向量（正负值超出 JS Number 安全域）、缺省字段、未知 tag 跳过与截断/畸形拒绝已在四语言锁定（上游 Lua、C++ probe 独立编解码、JS `bigint`、C# `long`），嵌套结构字段、整数数组（4/8 字节元素）与空数组也已锁定——JS/C# codec 升级为 schema 驱动（字段表携带 `kind`/`of`，decode 递归穿越结构与数组，C# 值模型扩到 `Dictionary<string,object>`）；上游 sproto `todword` 解码缺陷已复现、定位并在独立 codec 中规避（见验证记录）；UTF-8、bytes 与 BOOL 线形态（布尔 in-band 词、UTF-8 字符串与二进制标量、布尔/字符串/二进制数组及其空变体）也已在全语言锁定。
 3. 实现 bundle 原子加载与生成工具；同一输入可复现相同输出，非法/冲突/缺实现不能发布就绪；客户端产物不包含服务器内部方法和私有属性描述。
 4. 实现 Entity 身份、受控属性、RPC 分发与客户端代理；再接同步基线/增量和持久化，验证重连、离线、写冲突与损坏数据。
 5. 实现代码安全替换和协议版本进程迁移；在新旧 JS/C# 客户端矩阵下验证观察者同步、在途请求、失败恢复与回退。

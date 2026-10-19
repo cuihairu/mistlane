@@ -45,6 +45,26 @@ local totals64 = { totals = { -1, 2147483648, 4294967296 } }
 -- binding reports an empty table as a present-empty array, not as absent.
 local empty_tags = { tags = {} }
 local empty_items = { inventory = { capacity = 0, items = {} } }
+-- BOOL/STRING/BYTES vectors: a boolean rides the integer in-band word
+-- ((v+1)*2, so true=4 and false=2 — never length-prefixed from the encoder),
+-- a string or bytes field is a length-prefixed byte object, an array of
+-- booleans is one raw 0/1 byte per element with no intlen byte, and
+-- string/bytes arrays are per-element [len][bytes] like arrays of structs.
+-- "中文" pins multi-byte UTF-8 content and the blob bytes pin binary safety
+-- through NUL and 0xff.
+local text_set = {
+  active = true,
+  name = "中文",
+  blob = "\0\255",
+  flags = { true, false, true },
+  aliases = { "latin", "" },
+  blobs = { "\1\2", "" },
+}
+local bool_false = { active = false }
+-- Every new shape at its empty form: empty strings are zero-length objects,
+-- empty bool/string/bytes arrays zero content dwords. false pins the in-band
+-- word 2 so a present-false stays distinct from an absent field.
+local all_empty = { name = "", blob = "", flags = {}, aliases = {}, blobs = {} }
 
 if MISTLANE_SPROTO_MODE == "parser" then
   print("UPSTREAM_SCHEMA_PARSE_OK Avatar sproto-bytes=" .. #packed_schema)
@@ -67,6 +87,12 @@ elseif MISTLANE_SPROTO_MODE == "golden" then
   local empty_items_bytes = sp:encode("Avatar", empty_items)
   print("STANDARD_SPROTO_GOLDEN empty_int_array=" .. hex(empty_tags_bytes))
   print("STANDARD_SPROTO_GOLDEN empty_struct_array=" .. hex(empty_items_bytes))
+  local text_bytes = sp:encode("Avatar", text_set)
+  local false_bytes = sp:encode("Avatar", bool_false)
+  local all_empty_bytes = sp:encode("Avatar", all_empty)
+  print("STANDARD_SPROTO_GOLDEN bool_string_bytes=" .. hex(text_bytes))
+  print("STANDARD_SPROTO_GOLDEN bool_false=" .. hex(false_bytes))
+  print("STANDARD_SPROTO_GOLDEN all_empty=" .. hex(all_empty_bytes))
   assert(hex(full_bytes) == "0400010000000000000004000000ffff00002e00000002000000000004000000ffff00001c000000060000000200020002000e00000002000000040004000000ffffff7f04000000ffffff7f",
     "full Avatar standard sproto golden changed")
   assert(hex(empty_bytes) == "03000100020000000a00000002000200000000000000",
@@ -89,15 +115,37 @@ elseif MISTLANE_SPROTO_MODE == "golden" then
     "empty integer array standard sproto golden changed")
   assert(hex(empty_items_bytes) == "0200030000000a00000002000200000000000000",
     "empty struct array standard sproto golden changed")
+  -- BOOL/STRING/BYTES forms: in-band boolean words (true=4, false=2),
+  -- length-prefixed string/bytes objects (binary-safe through NUL and 0xff),
+  -- a boolean array of raw 0/1 bytes with no intlen byte, string/bytes arrays
+  -- as per-element [len][bytes], and the zero-length/empty-array forms.
+  assert(hex(text_bytes) == "07000d0004000000000000000000000006000000e4b8ade696870200000000ff030000000100010d000000050000006c6174696e000000000a00000002000000010200000000",
+    "BOOL/STRING/BYTES standard sproto golden changed")
+  assert(hex(false_bytes) == "02000d000200",
+    "in-band boolean false standard sproto golden changed")
+  assert(hex(all_empty_bytes) == "06000f00000000000000000000000000000000000000000000000000000000000000",
+    "empty string/bool-array/string-array/bytes-array standard sproto golden changed")
+  local text_decoded = sp:decode("Avatar", text_bytes)
+  assert(text_decoded.active == true and text_decoded.name == "中文"
+    and text_decoded.blob == "\0\255"
+    and text_decoded.flags[1] == true and text_decoded.flags[2] == false and text_decoded.flags[3] == true
+    and text_decoded.aliases[1] == "latin" and text_decoded.aliases[2] == ""
+    and text_decoded.blobs[1] == "\1\2" and text_decoded.blobs[2] == "",
+    "BOOL/STRING/BYTES values did not decode back")
+  local empty_decoded = sp:decode("Avatar", all_empty_bytes)
+  assert(empty_decoded.name == "" and empty_decoded.blob == ""
+    and #empty_decoded.flags == 0 and #empty_decoded.aliases == 0 and #empty_decoded.blobs == 0,
+    "empty STRING/arrays did not decode as present-empty")
+  print("STANDARD_SPROTO_GOLDEN bool/string/bytes: wire forms + decode + empties [PASS]")
   -- Absent fields are simply not decoded: sproto has no wire defaults, so the
   -- contract's definition-time defaults stay an application concern.
   local without_exp = sp:decode("Avatar", sp:encode("Avatar", { level = 1 }))
   assert(without_exp.exp == nil and without_exp.level == 1, "absent INT64 did not decode as missing")
   print("STANDARD_SPROTO_GOLDEN defaults: absent fields decode missing [PASS]")
   -- A wire tag outside the schema is skipped, never misdelivered (upstream
-  -- sproto.c findtag miss continues): count 2, a gap word landing on tag 6
-  -- (past totals id 6), then an in-band word that decodes into no field.
-  local unknown = sp:decode("Avatar", "\x02\x00\x0d\x00\x02\x00")
+  -- sproto.c findtag miss continues): count 2, a gap word landing on tag 13
+  -- (past blobs id 12), then an in-band word that decodes into no field.
+  local unknown = sp:decode("Avatar", "\x02\x00\x19\x00\x02\x00")
   assert(unknown ~= nil and next(unknown) == nil, "unknown wire tag was not skipped")
   print("STANDARD_SPROTO_GOLDEN unknown_tag: skipped, nothing decoded [PASS]")
   -- Locked upstream decoder defect, reproduced not hidden: todword() builds a
@@ -146,11 +194,17 @@ elseif MISTLANE_SPROTO_MODE == "roundtrip" then
   -- (see golden mode) never sign-extends. totals64 stays out of this list on
   -- purpose: its 2147483648 element has the 32nd low-dword bit set, so the
   -- upstream decoder misreads it exactly like wide_negative.
-  for name, vec in pairs({ nested = nested, tags32 = tags32, empty_tags = empty_tags }) do
+  for name, vec in pairs({ nested = nested, tags32 = tags32, empty_tags = empty_tags,
+      text_set = text_set, bool_false = bool_false, all_empty = all_empty }) do
     local vec_bytes = sp:encode("Avatar", vec)
     local vec_decoded = sp:decode("Avatar", vec_bytes)
     assert(sp:encode("Avatar", vec_decoded) == vec_bytes, name .. " array/struct vector did not round trip")
   end
+  local text_rt = sp:decode("Avatar", sp:encode("Avatar", text_set))
+  assert(text_rt.active == true and text_rt.name == "中文" and text_rt.blob == "\0\255"
+    and text_rt.flags[2] == false and text_rt.aliases[1] == "latin"
+    and text_rt.blobs[1] == "\1\2" and text_rt.blobs[2] == "",
+    "BOOL/STRING/BYTES roundtrip lost values")
   assert(sp:decode("Avatar", sp:encode("Avatar", nested)).inventory.items[1].itemId == 7
     and sp:decode("Avatar", sp:encode("Avatar", nested)).inventory.items[2].count == 1
     and sp:decode("Avatar", sp:encode("Avatar", tags32)).tags[3] == 2147483647,
