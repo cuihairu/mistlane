@@ -17,12 +17,12 @@ The source material is a legacy game cluster. Everything business-specific was d
 
 ## What works today
 
-See [validation records](./docs/validation.md) for the tested list: framed TCP/WS/WSS transport with bounded pushes, request correlation, service identity and upstream multiplexing, coordinator registry and placement lookups, character route records (`MLR1 ROUTE`), the MLD1 record endpoint on the data role (receipts only), the entity-contract definition-time prototype with its `mistlane contract check`/`build` command and deterministic sproto schema emission, Lua module lifecycle with hot reload, HTTP/HTTPS apiServer with WebSocket lifecycle hooks, Redis Streams/leaderboard integration and crashpad startup.
+See [validation records](./docs/validation.md) for the tested list: framed TCP/WS/WSS transport with bounded pushes, request correlation, service identity and upstream multiplexing, coordinator registry and placement lookups, character route records (`MLR1 ROUTE`), the MLD1 record endpoint on the data role (receipts only), the entity-contract definition-time toolchain (`mistlane contract check`/`build` emitting XSD, release lock, digest, deterministic sproto schema and C++ binding descriptors) validated against the vendored upstream cloudwu/sproto codec with standard wire vectors and Lua round-trips, an in-process entity dispatch/router and RPC lifecycle harness (no networked entity runtime), Lua module lifecycle with hot reload, HTTP/HTTPS apiServer with WebSocket lifecycle hooks, Redis Streams/leaderboard integration and crashpad startup.
 
 ## What is explicitly not here
 
 - **No durable character persistence chain**: the MLD1 endpoint answers receipts, never `ACK durable`; records are process-local and a restart answers empty.
-- **No Avatar/scene/entity runtime**: no Avatar, scene, map or entity types exist; the lifecycle, transfer and big-map designs are documents, not code.
+- **No networked Avatar/scene/entity runtime**: an in-process entity dispatcher, router and RPC lifecycle harness exist as contract test fixtures only — nothing is wired to transport, sessions or persistence; no Avatar, scene or map types exist, and the lifecycle, transfer and big-map designs remain documents.
 - **No crossServer sender**: the bounded retry queue, read-only transition and return completion wait on the persistence chain.
 - **No authentication**: login credential formats, ticket signing and platform-callback authentication are undesigned; identity today is trusted-network plus the optional `MLS1` shared token (plaintext comparison, not mTLS).
 - **No spatial AOI, chunk streaming or seamless partitioning**: requirements only, see the [big map](./docs/big-map.md) page.
