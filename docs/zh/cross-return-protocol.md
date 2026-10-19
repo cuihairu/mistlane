@@ -1,6 +1,6 @@
 # 跨服回传与唯一写入权协议
 
-状态：已定设计（2026-10-19）；参与者上下文、MLD1 端点和按参与者排序的发送队列边界已实现。队列尚未接入 crossServer 运行时，端点仍只回易失性回执。本页固定回传与持久化确认协议及唯一写入权；持久存储、持久 ACK 处理和租约写入权执行仍未实现。目标职责见[进程职责](./process-roles.md)；旧路径的观察与缺口在[模型页](./player-scene-model.md)。
+状态：MLD1 语法、发送端 ACK 处理和确定性租约状态机已实现（2026-10-19）；持久存储与运行时租约权威尚未实现。参与者上下文、端点和有序队列边界已实现，端点仍只回易失性回执。目标职责见[进程职责](./process-roles.md)；旧路径的观察与缺口在[模型页](./player-scene-model.md)。
 
 ## 参与者与返回上下文
 
@@ -43,7 +43,7 @@ sequenceDiagram
 - **顺序：**归属侧对每个 `(realm, character)` 只接受下一序号（`stored + 1`）。发送方按参与者串行提交，后续条目等缺失序号到达后再发；已提交条目在配置预算内重试，耗尽则暴露为回传失败，不静默丢数据。不同 realm 可独立使用相同角色 ID。
 - **返回：**角色的最终变更集获得持久确认之前，离开跨服作用域不算完成；在此之前角色仍是登记在册的跨服参与者。确认前的强制路由变更是回传失败（见下）。
 
-线格式沿用共享的 u32 BE 长度分帧，没有每条消息的前缀，并已在 `data` 角色上实现（见[服务契约](./service-contracts.md)）：
+线格式沿用共享的 u32 BE 长度分帧，没有每条消息前缀。LOAD/SUBMIT/RECEIVED 已在 `data` 角色实现（见[服务契约](./service-contracts.md)）；ACK durable 目前只有编解码和发送端契约：
 
 ```text
 MLD1 LOAD <realm> <character>
@@ -52,12 +52,19 @@ MLD1 SUBMIT <realm> <character> gen <n> seq <m> [<payload>]
 MLD1 EMPTY
 MLD1 STATE gen <n> seq <m> [<payload>]
 MLD1 RECEIVED gen <n> seq <m>
+MLD1 ACK durable <realm> <character> gen <n> seq <m>
 MLD1 ERR INVALID | MLD1 ERR STALE gen <n> | MLD1 ERR SEQ seq <n> | MLD1 ERR FULL
 ```
 
+`ACK durable` 回显精确 `(realm, character)`、generation 与已接受序号。归属 data 仅在同一事务持久提交 payload 和序号后才能发送。发送端匹配当前租约 generation 与下一个持久游标后才删除队列项；`RECEIVED` 只释放传输槽，不清重试队列。畸形字段为 `ERR INVALID`；旧 generation、序号缺口、容量耗尽分别为 `ERR STALE`、`ERR SEQ`、`ERR FULL`。编解码已实现，但持久存储落地前端点不会虚报持久确认。
+
 **键迁移与兼容：**MLD1 已携带 `realm`，当前端点记录只在内存中、重启即清空，因此将内存查找键改为 `(realm, character)` 不需要在线数据迁移。未来若持久表仍只按 `character` 建键，恢复写入前必须回填 realm，并拒绝或显式处理冲突。现有帧语法不变。
 
-端点以 `(realm, character)` 为栅栏和序号键，执行栅栏（提交版本低于已存版本得 `STALE`）与严格序号纪律（下一序号必须恰好比已存序号大一；对已存序号重发去重为第二次 `RECEIVED` 且不改动已存变更集；新键从一开始）。发送队列边界保证每键最多一个在途提交、缺号等待，且只在调用方提供的重试次数内重试。`RECEIVED` 释放传输槽以便发送下一条连续变更，但条目仍保留在重试队列，只有将来的持久 ACK 才能移除。当前记录只在 data 进程内，重启后答 `EMPTY`；变更集合并入实体状态仍属实体契约后续工作。队列尚未接入 crossServer 运行时；持久化、持久 ACK 处理、队列满转只读和回服完成仍未实现。
+端点以 `(realm, character)` 为栅栏和序号键，执行 generation 栅栏和严格连续序号。发送队列每键最多一个在途提交；`RECEIVED` 释放传输槽，但条目保留到 generation 匹配的 durable ACK。当前记录只在 data 进程内，重启后答 `EMPTY`；队列尚未接入 crossServer，持久化、队列满转只读和回服完成仍未实现。
+
+## 写入租约交接
+
+归属 data 是 generation 唯一权威。顺序为 `active(g) → requested(g+1) → relinquished/tombstoned(g) → active(g+1)`：coordinator 请求迁移；源端停止新处理器/tick，等已执行处理完成并冲刷最终有序变更；data 持久提交最终序号并栅栏旧 generation；目标端加载持久游标并起租；目标确认后 coordinator 才发布新路由。重复请求/授权拒绝；墓碑后源端晚到写得 `STALE`。在途处理先完成，迁移期间新请求拒绝，Avatar 计时器停止且只有显式序列化者由目标恢复。C++ 状态机已覆盖栅栏时序，尚未接入 coordinator、持久 data 或 Avatar 运行时。
 
 ## 故障处理
 
@@ -78,4 +85,4 @@ MLD1 ERR INVALID | MLD1 ERR STALE gen <n> | MLD1 ERR SEQ seq <n> | MLD1 ERR FULL
 - 租约时长、队列界与重试预算：实现时以测量依据给出默认值的配置项，不由本页拍数字。
 - 入场凭据是否签名、由谁签发：绑定 login 契约的认证设计。
 
-参与者上下文、端点键与有序队列边界均已有测试（验证记录：跨服路由、记录端点和回传队列）。本片不实现持久 ACK 线格式或完整租约交接时序；它们留给后续切片，与持久化链和运行时接线一并推进。
+参与者上下文、端点键、有序队列、ACK 编解码/门控和租约状态模型均已有测试。持久存储链及 crossServer/coordinator/Avatar 运行时接线仍未完成。

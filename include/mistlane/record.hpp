@@ -47,6 +47,26 @@ inline bool record_decimal(std::string_view s, std::uint64_t& out) {
     out = n;
     return true;
 }
+// Durable confirmation is a separate terminal reply. It is valid only after
+// the home store atomically commits payload and sequence under this fence.
+struct DurableAck { std::string realm, character; std::uint64_t generation = 0, sequence = 0; };
+inline std::string encode_durable_ack(const DurableAck& ack) {
+    if (!record_identifier(ack.realm) || !record_identifier(ack.character) || !ack.generation || !ack.sequence)
+        throw std::invalid_argument("INVALID");
+    return "MLD1 ACK durable " + ack.realm + " " + ack.character + " gen "
+        + std::to_string(ack.generation) + " seq " + std::to_string(ack.sequence);
+}
+inline DurableAck parse_durable_ack(std::string_view frame) {
+    std::istringstream in{std::string(frame)};
+    std::string magic, ack, durable, gen_tag, gen, seq_tag, seq, extra;
+    DurableAck out;
+    if (!(in >> magic >> ack >> durable >> out.realm >> out.character >> gen_tag >> gen >> seq_tag >> seq)
+        || (in >> extra) || magic != "MLD1" || ack != "ACK" || durable != "durable"
+        || gen_tag != "gen" || seq_tag != "seq" || !record_identifier(out.realm)
+        || !record_identifier(out.character) || !record_decimal(gen, out.generation)
+        || !record_decimal(seq, out.sequence)) throw std::invalid_argument("INVALID");
+    return out;
+}
 inline RecordRequest parse_record(std::string_view payload) {
     // The transport already refuses frames past max_frame; this only bounds
     // the header scan, so the change-set payload stays as large as a frame.
@@ -205,6 +225,15 @@ public:
         cursor->second = sequence;
         return true;
     }
+    bool ack_durable(const DurableAck& ack) {
+        const auto key = std::pair{ack.realm, ack.character};
+        const auto current = owner_generation_.find(key);
+        if (current == owner_generation_.end() || current->second != ack.generation) return false;
+        return ack_durable(ack.realm, ack.character, ack.sequence);
+    }
+    void owner_generation(std::string realm, std::string character, std::uint64_t generation) {
+        owner_generation_[{std::move(realm), std::move(character)}] = generation;
+    }
 private:
     using Key = std::pair<std::string, std::string>;
     std::size_t retry_limit_;
@@ -212,5 +241,25 @@ private:
     std::map<Key, std::map<std::uint64_t, Change>> pending_;
     std::map<Key, std::map<std::uint64_t, std::size_t>> attempts_;
     std::map<Key, std::uint64_t> in_flight_;
+    std::map<Key, std::uint64_t> owner_generation_;
+};
+
+// Deterministic lease protocol model. The source fences itself before the
+// destination can become writable; in-flight work is drained and timers stop.
+class WriterLease {
+public:
+    enum class State { None, Active, Requested, Relinquished };
+    bool start(std::uint64_t generation) { if (state_ != State::None || !generation) return false; generation_ = generation; state_ = State::Active; return true; }
+    bool begin_request() { if (!write_allowed(generation_)) return false; ++in_flight_; return true; }
+    bool finish_request() { if (state_ != State::Requested || !in_flight_) return false; --in_flight_; return true; }
+    bool request(std::uint64_t next) { if (state_ != State::Active || next <= generation_) return false; next_ = next; state_ = State::Requested; timers_running_ = false; return true; }
+    bool relinquish() { if (state_ != State::Requested || in_flight_) return false; state_ = State::Relinquished; return true; }
+    bool accept(std::uint64_t generation) { if (state_ != State::Relinquished || generation != next_) return false; generation_ = generation; state_ = State::Active; timers_running_ = true; return true; }
+    bool write_allowed(std::uint64_t generation) const { return state_ == State::Active && generation == generation_; }
+    bool timer_running() const { return timers_running_; }
+    State state() const { return state_; }
+private:
+    State state_ = State::None; std::uint64_t generation_ = 0, next_ = 0;
+    std::size_t in_flight_ = 0; bool timers_running_ = true;
 };
 }

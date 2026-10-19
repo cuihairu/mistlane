@@ -1,6 +1,6 @@
 # Cross return and single-writer protocol
 
-Status: decided design (2026-10-19); the participant context, MLD1 endpoint and a per-participant ordered sender queue boundary are implemented. The queue is not wired into a crossServer runtime and the endpoint still answers volatile receipts only. This page fixes the return and persistence-confirmation protocol and single-writer authority before transfer, settlement and handoff implementation. It targets the responsibilities in [process roles](./process-roles.md); the observed legacy path and its gaps are on the [model page](./player-scene-model.md). Durable storage, durable ACK handling and single-writer lease enforcement remain unimplemented.
+Status: protocol grammar, sender ACK handling and a deterministic lease model are implemented (2026-10-19); persistent storage and runtime lease authority are not. The participant context, MLD1 endpoint and per-participant ordered sender queue boundary are implemented. The endpoint answers volatile receipts only. This page fixes the return and persistence-confirmation protocol and single-writer authority before transfer, settlement and handoff runtime wiring. It targets the responsibilities in [process roles](./process-roles.md); the observed legacy path and its gaps are on the [model page](./player-scene-model.md).
 
 ## Participant and return context
 
@@ -43,7 +43,7 @@ sequenceDiagram
 - **Ordering:** the home side accepts only the next sequence (`stored + 1`) for each `(realm, character)`. The sender serializes submissions per participant and holds later entries until the missing sequence arrives; submitted changes retry within the configured budget, and exhaustion surfaces a failed return, not silent data loss. Different realms may use the same character id independently.
 - **Return:** leaving the cross scope is complete only when the character's final change-set is acknowledged durably. Until then the character remains a cross participant of record; a forced route change before acknowledgement is a failed return (below).
 
-The wire format is the shared u32 BE length frame with no per-message prefix, and it is implemented on the `data` role (see the [service contracts](./service-contracts.md)):
+The wire format uses the shared u32 BE length frame with no per-message prefix. LOAD/SUBMIT/RECEIVED are implemented on the `data` role (see the [service contracts](./service-contracts.md)); ACK durable is currently a defined codec and sender contract only:
 
 ```text
 MLD1 LOAD <realm> <character>
@@ -52,12 +52,19 @@ MLD1 SUBMIT <realm> <character> gen <n> seq <m> [<payload>]
 MLD1 EMPTY
 MLD1 STATE gen <n> seq <m> [<payload>]
 MLD1 RECEIVED gen <n> seq <m>
+MLD1 ACK durable <realm> <character> gen <n> seq <m>
 MLD1 ERR INVALID | MLD1 ERR STALE gen <n> | MLD1 ERR SEQ seq <n> | MLD1 ERR FULL
 ```
 
+`ACK durable` echoes the exact `(realm, character)` key, hosting generation and accepted sequence. It is emitted only after home data atomically commits both payload and sequence durably. The sender validates the key, generation and next durable cursor before deleting a queued change; a mismatched generation is rejected. `RECEIVED` remains a volatile process-memory receipt that only frees the per-key transport slot; it never drains the retry queue. Malformed ACK fields use `MLD1 ERR INVALID`; stale submissions retain `ERR STALE`, sequence gaps `ERR SEQ`, and capacity exhaustion `ERR FULL`. The codec is implemented, but no current endpoint can truthfully emit the durable reply until storage exists.
+
 **Key migration and compatibility:** MLD1 already carries `realm`, and current endpoint records are volatile and reset on restart; switching the in-memory lookup key to `(realm, character)` therefore needs no live data migration. Any future persisted table using only `character` must backfill realm before writes resume and reject or explicitly resolve ambiguous collisions. Existing frame syntax remains unchanged.
 
-The endpoint keys both fence and sequence state by `(realm, character)`. It enforces the fence (`STALE` when the submitted generation is lower than the stored one) and strict sequence discipline (the next sequence must be exactly one past the stored one; resends of the stored sequence dedup to a second `RECEIVED` without changing the stored change-set; a fresh key starts at one). The sender queue boundary allows only one in-flight submission per key, holds gaps, and retries only within its caller-supplied attempt budget. A `RECEIVED` frees the transport slot so the next contiguous change can be sent, but does not remove the change from the retry queue; only a future durable ACK may do that. Today records live in the data process only and a restart answers `EMPTY` again; merging change-sets into entity state stays deferred entity-contract work. The queue is not wired into a crossServer runtime, and persistence, durable ACK handling, queue-full read-only transition and return completion remain unimplemented.
+The endpoint keys both fence and sequence state by `(realm, character)`. It enforces the fence (`STALE` when the submitted generation is lower than the stored one) and strict sequence discipline (the next sequence must be exactly one past the stored one; resends of the stored sequence dedup to a second `RECEIVED` without changing the stored change-set; a fresh key starts at one). The sender queue boundary allows only one in-flight submission per key, holds gaps, and retries only within its caller-supplied attempt budget. A `RECEIVED` frees the transport slot but does not remove the change from the retry queue; a durable ACK removes it only if its generation matches the current lease and its sequence is the next durable cursor. Today records live in the data process only and a restart answers `EMPTY` again; merging change-sets into entity state stays deferred entity-contract work. The queue is not wired into a crossServer runtime, and persistent storage, queue-full read-only transition and return completion remain unimplemented.
+
+## Writer lease handoff
+
+The home data service is the sole generation authority. The state sequence is `active(g) → requested(g+1) → relinquished/tombstoned(g) → active(g+1)`: coordinator requests the transfer; the source stops admitting handlers and ticks, drains already executing work, freezes and flushes the final ordered changes; home data commits the final sequence and fences generation `g`; only then may the destination load the durable cursor and activate `g+1`; coordinator publishes its route after destination acknowledgement. A duplicate request/grant is idempotently refused once the state advanced. Source writes arriving after tombstone fail `STALE`; timeout before tombstone may abort back to source active, while after tombstone the destination must resume or recovery must issue a newer generation. In-flight handlers complete before request acceptance; queued arrivals are refused during transfer; Avatar timers stop at request and only explicitly serialized timers may be restored by the destination. The current C++ lease model enforces this state order and generation check, but coordinator/data persistence and Avatar runtime are not connected.
 
 ## Failure handling
 
@@ -73,9 +80,9 @@ The endpoint keys both fence and sequence state by `(realm, character)`. It enfo
 
 ## Deliberately not decided here
 
-- Wire format and framing of MLD1: decided with the implemented endpoint — the grammar and reply vocabulary are in the section above; framing is the shared u32 BE length frame.
+- Wire format and framing of MLD1: grammar and codec are implemented above; framing is the shared u32 BE length frame.
 - Settlement, reward and ranking business rules, cross-scene templates, and the actual Avatar/scene runtime: later crossServer slices and the entity-contract chain. The Avatar/Session runtime contract is now designed on the [avatar runtime](./avatar-runtime.md) page; the entity property runtime remains the chain's.
 - Lease duration numbers, queue bounds and retry budgets: configuration named at implementation time with defaults justified by measurement, not by this page.
 - Whether the entry ticket is signed, and by whom: an authentication design gated on the login contract.
 
-The participant context, endpoint keying and ordered queue boundary have tests (validation records: cross routing, record endpoint and return queue). This slice does not implement persistent ACK wire format or full lease handoff timing; both remain later work alongside the persistence chain and runtime wiring.
+The participant context, endpoint keying, ordered queue, durable ACK codec/queue gate and lease state model have tests (validation records: cross routing, record endpoint and return queue). The persistent storage chain and crossServer/coordinator/Avatar runtime wiring remain later work.

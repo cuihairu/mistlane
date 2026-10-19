@@ -1891,6 +1891,27 @@ void cross_record() {
     }
 }
 void cross_return_queue() {
+    const DurableAck ack{"realm-a", "same-id", 3, 5};
+    const auto wire = encode_durable_ack(ack);
+    equal(wire, "MLD1 ACK durable realm-a same-id gen 3 seq 5");
+    const auto decoded = parse_durable_ack(wire);
+    require(decoded.realm == ack.realm && decoded.character == ack.character && decoded.generation == 3 && decoded.sequence == 5,
+        "durable ack roundtrip changed fence/key/cursor");
+    for (const auto& bad : {"MLD1 ACK realm-a same-id gen 3 seq 5", "MLD1 ACK durable realm-a same-id gen 0 seq 5",
+                            "MLD1 ACK durable realm-a same-id gen 3 seq 0", "MLD1 ACK durable realm-a same-id gen 3 seq 5 extra"})
+        must_fail([&] { (void)parse_durable_ack(bad); });
+    WriterLease source, destination;
+    require(source.start(8), "lease initial grant failed");
+    require(source.write_allowed(8) && !source.write_allowed(9), "active lease fence failed");
+    require(source.begin_request(), "active in-flight request not admitted");
+    require(source.request(9) && !source.timer_running(), "transfer did not stop timers/drain in-flight work");
+    require(!source.request(10), "duplicate handoff request accepted");
+    require(!source.relinquish() && source.finish_request(), "handoff did not wait for in-flight request completion");
+    require(source.relinquish() && !source.write_allowed(8), "source was not fenced at tombstone");
+    require(!destination.accept(9), "destination accepted before transfer grant");
+    require(destination.start(1) && destination.request(9) && destination.relinquish() && destination.accept(9), "destination lease activation failed");
+    require(!source.write_allowed(8) && destination.write_allowed(9), "late source write was not rejected after handoff");
+    require(!destination.accept(9), "duplicate lease grant accepted");
     ReturnSendQueue queue(2);
     queue.seed("realm-a", "same-id", 4);
     queue.seed("realm-b", "same-id", 0);
@@ -1909,6 +1930,14 @@ void cross_return_queue() {
     require(!queue.next("realm-a", "same-id"), "retry exhaustion resent an item");
     auto other = queue.next("realm-b", "same-id");
     require(other && other->sequence == 1, "realm key interfered with same character id");
+    ReturnSendQueue durable_queue(2);
+    durable_queue.seed("realm-a", "same-id", 4);
+    durable_queue.enqueue({"realm-a", "same-id", 3, 5, "five"});
+    durable_queue.owner_generation("realm-a", "same-id", 3);
+    require(durable_queue.next("realm-a", "same-id").has_value(), "durable test send missing");
+    require(durable_queue.received("realm-a", "same-id", 5), "volatile receipt did not release transport slot");
+    require(!durable_queue.ack_durable(DurableAck{"realm-a", "same-id", 2, 5}), "stale generation durable ack drained queue");
+    require(durable_queue.ack_durable(ack), "durable acknowledgement failed to drain matching change");
 }
 void probe_control() {
     Context c;

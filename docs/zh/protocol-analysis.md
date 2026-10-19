@@ -28,8 +28,8 @@
 ### 缺口（6）
 
 1. **进入上下文不完整：**回传参与者结构有 `generation`；`service-contracts.md:22` 的 login 进入响应只列来源区服、角色标识、返回路由。没有写初始 generation 在哪里签发、返回或递增。
-2. **持久确认应答格式：**设计提到 `ACK durable`，但 MLD1 语法只列 `EMPTY`、`STATE`、`RECEIVED` 和错误（`cross-return-protocol.md:48–55`）。没有带 realm/character/generation/sequence 的版本化应答格式，也未规定丢 ACK 后如何重放。
-3. **归属权执行与端点检查之间有距离：**唯一写入权要求一个可写 Avatar 与显式接管/墓碑；当前 MLD1 只比较 generation 和序号。租约发放/收回/移交消息、过期语义和执行点均未定义。单一 generation 栅栏不等于完整交接协议。
+2. **持久确认应答格式——格式已解，存储部分解：**MLD1 已定义 `ACK durable <realm> <character> gen <n> seq <m>` 与发送端校验；持久存储落地前端点不能发送它。丢 ACK 后按同一幂等键/游标重放。
+3. **归属权执行与端点检查——部分解决：**交接顺序、旧源晚到写栅栏、在途请求及计时器处置已定义并由状态模型覆盖。coordinator/data/Avatar 运行时与持久墓碑执行尚未接线。
 4. **coordinator 路由与归属状态关系不明：**MLR1 ROUTE SET/GET 记录当前在线宿主（`architecture.md:70`、`todo.md:51`）；职责表也把归属/迁移状态列给 coordinator（`process-roles.md:11`）。临时路由、归属侧持久 owner 与迁移状态之间没有编码关系。
 5. **apiServer 回调受理协议未定：**`service-contracts.md:52–54` 说明当前信任网络，回调认证/幂等仍开放；缺少签名校验、防重放窗口、持久受理响应或归属查询消息。HTTP 响应生命周期没有定义业务持久性。
 6. **实体契约阶段闸门不完整：**XSD、ID/保留锁及 envelope/错误语义已写，但 `todo.md:76–90` 中兼容 diff、EntityRef 运行时语义、编译器/SDK 生成、嵌套同步与 data 持久化仍开放。XML 原型能生成 XSD/lock，却没有发布兼容流程；错误 envelope 没有线编码/黄金字节或运行时绑定。格式审定到运行时接入之间缺互通验收物。
@@ -38,6 +38,11 @@
 
 - **序号顺序（原矛盾 1）：**发送队列按参与者只发送连续序号，与端点 `stored + 1` 校验一致。`RECEIVED` 释放发送槽，但变更保留到持久确认。
 - **realm 键（原缺口 1）：**端点栅栏/去重状态和发送队列均使用 `(realm, character)`。端点状态目前仅在内存中，无在线迁移；将来持久化的旧 character-only 键须回填 realm 或明确解决冲突。
+
+### todo:54 第二切片——缺口 3/4
+
+- **持久 ACK 语法：**线格式/编解码/发送端边界已解决；端到端部分解决，因为 data 持久存储尚不存在，端点不会虚报确认。
+- **租约交接时序：**有序设计与确定性状态模型已解决；运行时部分解决，coordinator、归属 data 持久 owner 与 Avatar 生命周期尚未接通。
 
 ### 命名与语义已对齐（有明确边界）
 

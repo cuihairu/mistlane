@@ -28,8 +28,8 @@ Counts below are unresolved findings in this audit, not a count of every repeate
 ### Gaps
 
 1. **Entry context completeness:** the cross-return shape includes `generation`; `service-contracts.md:22` lists only origin realm, character and return route in login's entry response. It does not state where initial generation is issued, returned or advanced.
-2. **Durable response grammar:** design names `ACK durable`, but the MLD1 grammar lists only `EMPTY`, `STATE`, `RECEIVED` and errors (`cross-return-protocol.md:48–55`). There is no versioned wire shape linking durable ack to realm/character/generation/sequence or to replay after lost ack.
-3. **Ownership enforcement vs endpoint checks:** the single-writer section states one writable Avatar and explicit takeover/tombstone, while implemented MLD1 only compares generation and sequence. No owner lease grant/revoke/transfer message, expiry semantics or enforcement point is specified. A generation fence alone is not a complete handoff protocol.
+2. **Durable response grammar — resolved for format, partial for storage:** MLD1 now defines `ACK durable <realm> <character> gen <n> seq <m>` and sender validation; the endpoint still cannot emit it until durable storage exists. Lost ACK replay is the same idempotent key/cursor.
+3. **Ownership enforcement vs endpoint checks — partial:** handoff order, late-source fencing, in-flight request and timer treatment are defined and represented by a tested lease state model. Coordinator/data/Avatar runtime ownership and persistent tombstone enforcement are not wired.
 4. **Coordinator route vs ownership:** MLR1 ROUTE SET/GET records a live host (`architecture.md:70`, `todo.md:51`); coordinator role contract also names ownership/transfer states (`process-roles.md:11`). The relationship between ephemeral route record, durable home owner and transfer state transitions is not encoded.
 5. **API callback acceptance:** `service-contracts.md:52–54` says trusted-network today and callback auth/idempotency remain open; no callback signature, replay window, durable acceptance response or ownership lookup message is specified. HTTP response lifecycle does not define business durability.
 6. **Entity rollout gate:** XSD, ID/reserved lock and envelope/error decisions exist, but `todo.md:76–90` still has compatibility diff, EntityRef runtime semantics, compiler/SDK generation, nested sync and data persistence open. The XML prototype produces XSD/lock artifacts but no release-compatibility procedure, while the error envelope has no wire encoding/golden bytes or runtime binding. This leaves no interoperable artifact gate between format approval and runtime adoption.
@@ -38,6 +38,11 @@ Counts below are unresolved findings in this audit, not a count of every repeate
 
 - **Sequence ordering (former contradiction 1):** the sender queue emits only contiguous sequences serially per participant, matching the endpoint's `stored + 1` check. `RECEIVED` releases the send slot but retains the change until durable acknowledgement.
 - **Realm key (former gap 1):** endpoint fence/dedup state and sender queue use `(realm, character)`. Existing endpoint state is volatile, so no live migration is required; future persisted character-only keys need realm backfill or collision resolution.
+
+### todo:54 second slice — gaps 3/4
+
+- **Durable ACK grammar:** resolved at wire/codec/sender boundary; partial end-to-end because data storage does not exist and the endpoint never emits a false durable claim.
+- **Lease handoff timing:** resolved as an ordered design and deterministic model; partial runtime enforcement because coordinator, durable home owner and Avatar lifecycle are not connected.
 
 ### Naming and semantics aligned (with boundaries)
 
