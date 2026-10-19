@@ -230,9 +230,49 @@ flowchart TB
   runtime --> data["Home data · loading and saving"]
 ```
 
-An invocation carries a contract version, scope, target entity ID/incarnation, type and method IDs. Requests also carry correlation and deadlines; internal routing includes the hosting generation. Authentication comes from trusted connections, not self-reported owner fields. Receivers validate type, exposure, caller ownership and parameters; gameplay validates game rules.
+An invocation carries scope, target entity ID/incarnation, type and method IDs; requests also carry correlation and deadlines, and internal routing carries the hosting generation. The contract digest lives in the client handshake and the internal service identity, not in every invocation, because gateway routing already filters to compatible hosts and repeating a 64-bit digest per call would cost bandwidth for no safety gain. Authentication comes from trusted connections, not self-reported owner fields. Receivers validate type, exposure, caller ownership and parameters; gameplay validates game rules.
 
 References hide fixed IPs and hosts. Transfer needs updateable routes, bounded queues/retry rules or explicit errors, and rejection of stale owners. Local calls use the same authorization and scheduling boundary to avoid synchronous reentrancy. RPC does not promise exactly-once execution: timeout can mean an unknown outcome. Do not silently retry non-idempotent gameplay; settlement needs business operation IDs. Bound packet size, outstanding requests, queues and execution time.
+
+## Invocation envelope and error protocol (decided, unimplemented)
+
+The envelope below pins the transport of an entity invocation. Nothing speaks it yet: the runtime has no entity objects, so the wire verb that carries it does not exist. What is fixed here is the decision.
+
+An entity invocation is a payload kind inside the existing transport framing (MLC1/MLC2/MLM1 frames or a client session channel), not a new TCP protocol; it stays inside the bounded 1 MiB frame. Fields, in order:
+
+- `scope` u32 — scope id resolved from the config's realm/scope list, never a string.
+- `type_id` u32 — entity type id from the contract lock, never a string.
+- `entity_id` i64 — runtime entity id (INT64 maps to JS `bigint`/C# `long`).
+- `incarnation` u32 — generation of this entity instance; routes and snapshots carry it, and a request for a known entity id but an unknown incarnation is answered `STALE`, never misdelivered.
+- `side` u8 — `server` or `client`; it selects which method-id space the descriptor resolves.
+- `method_id` u16 — side-local; the descriptor decides notify versus request.
+- `correlation_id` u64 — caller-assigned, echoed verbatim by the answer; `0` means notify (no answer exists). Bounded: the SDK must not guess or reuse a correlation id while unanswered.
+- `hosting_generation` u32 — only internal routing; the receiving host asserts it matches its current ownership generation. Zero for calls that originate at a client.
+- `deadline_ms` u32 — the caller's remaining budget in milliseconds; monotonic, not a wall-clock promise. A request that would exceed it answers `TIMEOUT` even if the operation completed, because a late answer is unusable. Notify still carries one so a saturated host can refuse the work.
+- payload — sproto-encoded arguments; request answers carry the typed returns.
+
+The addressing key `(scope, type_id, entity_id, incarnation)` is exactly what `EntityRef` carries (as fixed under [Stable identity](#stable-identity-and-filenames)), so a method argument of type `EntityRef` and a call target share one addressing vocabulary rather than two.
+
+The inner entity `correlation_id` is deliberately independent of the outer transport correlation: the gateway maps the client's outer correlation onto the inner entity request and back through its own bounded table, so one client channel can multiplex many entity requests without consuming transport correlation ids.
+
+**Errors form one closed, versioned set** (`EntityError`), never business-defined free-form bodies. A request answers with exactly one of: the typed returns, or a single `EntityError`. Never both, never partial, and an error is the terminal answer for that correlation id.
+
+| Code | Meaning |
+|---|---|
+| `INVALID` | Malformed envelope, wrong encoding, or a field combination the schema rejects; the only error allowed a `reason` string, for diagnostics |
+| `UNROUTED` | No route or owner for `(type_id, entity_id)` right now |
+| `STALE` | The entity id is known but not this incarnation |
+| `FORBIDDEN` | Caller policy denied the method: not the owner, not an authorized service, or a client-side method invoked from the server |
+| `TIMEOUT` | The deadline expired before completion |
+| `CANCELLED` | Cancelled by the caller |
+| `NO_IMPLEMENTATION` | The descriptor declares the method but the loaded implementation table has no binding |
+| `NOT_READY` | The host is draining, not ready, or does not own the entity here |
+| `CAPACITY` | A bounded queue or admission control rejected the request |
+| `CONFLICT` | Business-level conflict, e.g. a lost write generation or a duplicate operation id |
+
+The receiver validates in this order and answers with the first failure: envelope shape → descriptor lookup (`type_id`, `side`, `method_id`) → permissions → implementation binding → incarnation/ownership → argument decoding → argument value checks. Permissions are checked before arguments are decoded, so an unauthorized caller learns nothing from a malformed payload. Unknown error codes are treated as `INVALID` by clients; codes are versioned with the contract digest.
+
+**Decisions and rejected alternatives.** Free-form per-method error payloads were rejected: without a closed set, no client can handle errors mechanically. A notify ACK was rejected: it turns a one-way call into a second request channel, doubles traffic, and contradicts "notify is not proof of durable settlement". Reusing the transport correlation id as the entity correlation id was rejected: the gateway's outer correlation is consumed by the client hop, so the two levels need independent ids for multiplexing. Partial results on partial failure were rejected: they are ambiguous for replication and persistence. Putting error codes in the sproto schema instead of a closed host/SDK enum was rejected: the error set is transport policy, not business data, and per-contract redefinition would break shared client SDKs.
 
 ## Automatic property replication
 
