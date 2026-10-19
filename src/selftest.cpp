@@ -33,6 +33,8 @@ void api_tamper();
 void api_replay();
 void api_acceptance();
 void api_ownership();
+void api_wire();
+void api_http();
 void lua_lifecycle();
 void lua_http();
 void cross_admission();
@@ -119,6 +121,8 @@ int run_tests(int argc, char** argv) {
         {"api.replay","api",test::api_replay},
         {"api.acceptance","api",test::api_acceptance},
         {"api.ownership","api",test::api_ownership},
+        {"api.wire","api",test::api_wire},
+        {"api.http","api",test::api_http},
         {"lua.lifecycle","lua",test::lua_lifecycle},
         {"lua.http","lua",test::lua_http},
         {"cross.admission","cross",test::cross_admission},

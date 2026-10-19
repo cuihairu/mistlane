@@ -143,6 +143,135 @@ void api_acceptance() {
     std::cout << "api.acceptance surface: retry dedup to the same receipt [PASS]\n";
 }
 
+void api_wire() {
+    const auto field = [](std::string_view value) {
+        std::string bytes(4, '\0');
+        const auto size = static_cast<std::uint32_t>(value.size());
+        bytes[0] = static_cast<char>(size >> 24);
+        bytes[1] = static_cast<char>(size >> 16);
+        bytes[2] = static_cast<char>(size >> 8);
+        bytes[3] = static_cast<char>(size);
+        bytes.append(value);
+        return bytes;
+    };
+    // Round-trip: the wire body parses back to the exact request, both operations.
+    for (const auto operation : {ApiOperation::Accept, ApiOperation::Owner}) {
+        auto request = base_request(operation);
+        if (operation == ApiOperation::Owner) request.nonce = "fedcba9876544321fedcba9876544321";
+        request.signature = api_sign(request, test_secret(1));
+        ApiRequest parsed;
+        require(parse_api_body(api_canonical(request)
+                + std::string(request.signature.begin(), request.signature.end()), parsed),
+                "a well-formed MLA1 body was refused");
+        require(parsed == request, "the parsed body did not round-trip the request");
+    }
+    auto request = base_request();
+    request.signature = api_sign(request, test_secret(1));
+    const std::string signature(reinterpret_cast<const char*>(request.signature.data()), request.signature.size());
+    // Nine framed fields; the payload is appended by body_of so a case can
+    // replace it with a lying length or with nothing at all.
+    const auto nine = [&](std::string_view operation, std::string_view timestamp) {
+        return "MLA1" + field(operation) + field(request.audience) + field(request.principal)
+            + field(request.key_id) + field(timestamp) + field(request.nonce)
+            + field(request.character.first) + field(request.character.second)
+            + field(request.idempotency_key);
+    };
+    const auto body_of = [&](std::string_view operation, std::string_view timestamp, std::string_view payload) {
+        return nine(operation, timestamp) + field(payload);
+    };
+    const auto lie = [](std::uint32_t size) {
+        std::string header(4, '\0');
+        header[0] = static_cast<char>(size >> 24);
+        header[1] = static_cast<char>(size >> 16);
+        header[2] = static_cast<char>(size >> 8);
+        header[3] = static_cast<char>(size);
+        return header;
+    };
+    const std::string good = body_of("ACCEPT", std::to_string(request.timestamp), request.payload);
+    require(good + signature == api_canonical(request) + signature,
+            "hand-framed bytes diverged from api_canonical");
+    // Structural refusals: anything but ten framed fields then 32 bytes fails.
+    ApiRequest sink;
+    const auto ts = std::to_string(request.timestamp);
+    const std::vector<std::pair<std::string, const char*>> malformed = {
+        {{}, "empty"},
+        {"MLA1", "magic only"},
+        {"MLA2" + api_canonical(request).substr(4) + signature, "wrong magic"},
+        {nine("ACCEPT", ts) + signature, "nine fields"},
+        {good + field("extra") + signature, "eleven fields"},
+        {nine("ACCEPT", ts) + lie(100) + "grant" + signature, "length beyond body"},
+        {good + signature + "x", "leftover bytes"},
+        {good + signature.substr(0, 31), "short signature"},
+        {body_of("POLL", ts, request.payload) + signature, "unknown operation"},
+        {body_of("ACCEPT", "1e6", request.payload) + signature, "non-numeric timestamp"},
+        {body_of("ACCEPT", "", request.payload) + signature, "empty timestamp"},
+        {body_of("ACCEPT", "99999999999999999999999", request.payload) + signature, "overflowing timestamp"},
+    };
+    for (const auto& [body, name] : malformed)
+        require(!parse_api_body(body, sink), std::string("malformed body accepted: ") + name);
+    // Shape-valid framing with a request-invalid field (nonce charset) still
+    // fails, because validation runs after the framing passes.
+    std::string bad_nonce = good;
+    require(!parse_api_body(bad_nonce.replace(bad_nonce.find(request.nonce), request.nonce.size(),
+        std::string(32, 'z')) + signature, sink), "a non-hex nonce was accepted");
+
+    // Reply framing: five words, receipt payload verbatim, empty tails.
+    const auto reply_bytes = [&](const std::vector<std::string_view>& values) {
+        std::string bytes = "MLA1";
+        for (const auto& value : values) bytes += field(value);
+        return bytes;
+    };
+    ApiReply accepted;
+    accepted.auth = ApiAuth::Ok;
+    accepted.acceptance = ApiAcceptance{ApiCreate::Inserted, ApiDurability::Volatile,
+        ApiReceipt{ApiCommand{{"platform", "ops-callback", {"realm1", "char42"}, "grant-7"}, "grant"}}};
+    require(api_reply_body(accepted) == reply_bytes({"OK", "INSERTED", "VOLATILE", "grant", ""}),
+            "the inserted reply framing changed");
+    auto existing = accepted;
+    existing.acceptance->result = ApiCreate::Existing;
+    existing.acceptance->durability = ApiDurability::Durable;
+    require(api_reply_body(existing) == reply_bytes({"OK", "EXISTING", "DURABLE", "grant", ""}),
+            "the idempotent-reply framing changed");
+    auto conflicted = accepted;
+    conflicted.acceptance->result = ApiCreate::Conflict;
+    conflicted.acceptance->receipt.reset();
+    require(api_reply_body(conflicted) == reply_bytes({"OK", "CONFLICT", "VOLATILE", "", ""}),
+            "a conflict reply lost its empty receipt tail");
+    ApiReply found;
+    found.auth = ApiAuth::Ok;
+    found.ownership = ApiOwnershipReply{ApiOwnershipReply::Status::Found, std::nullopt};
+    require(api_reply_body(found) == reply_bytes({"OK", "", "", "", "FOUND"}),
+            "a found-ownership reply framing changed");
+    ApiReply missing = found;
+    missing.ownership->status = ApiOwnershipReply::Status::NotFound;
+    require(api_reply_body(missing) == reply_bytes({"OK", "", "", "", "NOT_FOUND"}),
+            "a not-found ownership reply framing changed");
+    ApiReply replay;
+    replay.auth = ApiAuth::Replay;
+    require(api_reply_body(replay) == reply_bytes({"REPLAY", "", "", "", ""}),
+            "an auth-only reply left a non-empty tail");
+
+    // HTTP status mapping: auth verdicts first, then the operation outcome.
+    require(api_http_status(accepted) == 200 && api_http_status(existing) == 200
+            && api_http_status(found) == 200, "successful outcomes lost 200");
+    require(api_http_status(missing) == 404, "an unknown character did not map to 404");
+    require(api_http_status(conflicted) == 409, "a conflicting body did not map to 409");
+    auto full = accepted;
+    full.acceptance->result = ApiCreate::Full;
+    full.acceptance->receipt.reset();
+    require(api_http_status(full) == 503, "a full store did not map to 503");
+    for (const auto& [auth, status] : {std::pair{ApiAuth::Invalid, 400u},
+            {ApiAuth::UnknownCredential, 401u}, {ApiAuth::BadSignature, 401u},
+            {ApiAuth::Window, 401u}, {ApiAuth::Replay, 401u}, {ApiAuth::Forbidden, 403u},
+            {ApiAuth::Clock, 503u}, {ApiAuth::Full, 503u}}) {
+        ApiReply reply;
+        reply.auth = auth;
+        require(api_http_status(reply) == status, "an auth verdict mapped to the wrong HTTP status");
+    }
+    std::cout << "api.wire body: ten framed fields plus signature, byte-exact [PASS]\n";
+    std::cout << "api.wire reply and status: five framed words, verdict mapping [PASS]\n";
+}
+
 void api_ownership() {
     // Home facts live on the home transaction aggregate, never the route.
     HomeGenerationAuthority home;

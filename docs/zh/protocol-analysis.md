@@ -35,7 +35,7 @@
 3. **持久确认应答格式——部分解，既有 B（`fe8b2a6`）+ C。** 格式/编解码/发送端校验已解：`MLD1 ACK durable <realm> <character> gen <n> seq <m>`，丢 ACK 按原幂等键重放。证据：`include/mistlane/record.hpp:52–69,228–236`；`cross.return.queue`。**未解·原因：**端点仅有易失记录、不发持久 ACK，发送端也不可恢复。**解锁条件：**状态/游标/栅栏原子持久事务，丢响应及 data 重启后重放已提交 ACK，并以崩溃测试覆盖可恢复的发送端重放来源。存储部分按 `fe8b2a6` 原记录继续开放。
 4. **归属权执行与端点检查——部分解，A/C（既有模型 B：`fe8b2a6`）。** [交接设计](./cross-return-protocol.md#写入租约交接)已固定顺序、旧源晚到写、在途工作与计时器；`WriterLease` 仅测试本地转换（`include/mistlane/record.hpp`（`WriterLease`）、`src/test_cases.cpp`（`cross_return_queue`））。**未解·原因：**孤立模型不构成共享权威；MLD1 SUBMIT 仍可凭更大 generation 和下一序号被接受（`record.hpp:121–151`），不查 owner 授权；MLS1 只认服务链路。持久租约/墓碑未接入 coordinator/data/Avatar，授权/撤销/到期消息未编码。**解锁条件：**认证且幂等的授权/撤销/接管线消息与持久 home 权威，Avatar 处理器/计时器闸门接线，以及双宿主竞争、到期、旧/伪造 generation 和各阶段崩溃恢复测试。不得凭模型标全解。
 5. **coordinator 路由与归属——部分解，B/C（第一片，2026-10-20）。** 原文（`b35786a`）：“路由只存 scope/role/instance，没有 generation 或迁移事务。”改后：[类型化事务协议与模型](#coordinator-migration-transaction-first-slice)绑定 home 键/请求 ID/generation，比对预期 owner/route，实现 prepare/commit、中止/清理与检查点恢复，拒绝在源排空 → home 栅栏 → 目标确认之前发布路由；显式记录区服/跨服组作用域及角色/实例/场景。证据：`include/mistlane/migration.hpp`（`MigrationRequest`、`HomeGenerationAuthority`、`MigrationTransaction`）、`include/mistlane/record.hpp`（`WriterLease`）、`src/test_cases.cpp` 五例 `coordinator.migration.commit/abort/recover/stale/order`。**未解·原因：**这是易失协议聚合模型，仅为测试将 home 事实、源租约与 coordinator journal 放在一起；MLR1 SET/GET 仍无事务/generation。检查点重建不等于持久进程恢复。**解锁条件：**认证线交换、持久 prepare/commit/abort journal 与 home 栅栏/最终序号权威、真实 coordinator/data/Avatar 和路由接线，以及跨服务崩溃/重复/成员退役/目标失效测试。MLR1 保持目录职责，home data 保持 generation 权威；路由不授予写租约。
-6. **apiServer 回调受理——部分解，A/B（第一片，2026-10-20）。** 原文：「可信网络与请求级处理；平台签名/规范字节、密钥轮换、防重放窗口、幂等键作用域、持久受理响应及归属查询/重试消息均未定；login HMAC 决策不能替代 HTTP 回调认证。」改后：[类型化外部 API 协议与模型](#external-api-surface-first-slice)已定——规范 `MLA1` 字节 + 按 `(principal, key_id)` 的 `HMAC-SHA256` 凭据（含 realm 授权）；绝对 ±300 秒时间窗与按 `(audience, principal, nonce)` 的重放声明（时钟回拨即 fail closed）；按 `(audience, principal, (realm, character), idempotency_key)` 的原子 create-or-read 受理，区分 `Inserted`/`Existing`/`Conflict` 且重试取回同一回执；只读归属查询 `(realm, character) → owner/generation/状态`。证据：`src/api.cpp:30–47`（规范字节/HMAC）、`src/api.cpp:48–61`（重放声明）、`src/api.cpp:83–97`（原子受理）、`include/mistlane/migration.hpp:119–129`（归属事实）、`include/mistlane/api.hpp:22,33`（`ApiRequest`/`ApiCredential`）、`src/test_api.cpp` 五例 `api.signature/tamper/replay/acceptance/ownership`。**未解·原因：**验证器、重放声明与受理行均为进程内易失状态——无共享/持久声明或受理后端，未接 HTTP 动词/传输/重试错误封套，密钥轮换仍只是静态 `(principal, key_id)` 表（无撤销/到期语义）；凭据由宿主应用注入，本仓不提供加载器或 CLI 秘钥旗标。**解锁条件：**持久受理后端及崩溃/丢回复测试、多进程重放声明、轮换/撤销语义、把 MLA1 接入 HTTP 的响应/错误/重试映射，以及 owner 迁移后的重试测试。HTTP 2xx 不能证明业务持久。
+6. **apiServer 回调受理——部分解，A/B（第一片与 HTTP 传输均为 2026-10-20）。** 原文：「可信网络与请求级处理；平台签名/规范字节、密钥轮换、防重放窗口、幂等键作用域、持久受理响应及归属查询/重试消息均未定；login HMAC 决策不能替代 HTTP 回调认证。」改后：[类型化外部 API 协议与模型](#external-api-surface-first-slice)已定——规范 `MLA1` 字节 + 按 `(principal, key_id)` 的 `HMAC-SHA256` 凭据（含 realm 授权）；绝对 ±300 秒时间窗与按 `(audience, principal, nonce)` 的重放声明（时钟回拨即 fail closed）；按 `(audience, principal, (realm, character), idempotency_key)` 的原子 create-or-read 受理，区分 `Inserted`/`Existing`/`Conflict` 且重试取回同一回执；只读归属查询 `(realm, character) → owner/generation/状态`；以及[HTTP 传输](#http-transport-first-slice-2026-10-20)——HTTP 监听器上的 `POST /mla1`、逐字节严格解析、五词框定应答、结论到状态码映射，凭据仅由环境变量注入。证据：`src/api.cpp:30–47`（规范字节/HMAC）、`src/api.cpp:48–61`（重放声明）、`src/api.cpp:83–97`（原子受理）、`src/api.cpp`（`parse_api_body`/`api_reply_body`/`api_http_status`）、`src/node.cpp`（`/mla1` 拦截、`MISTLANE_MLA1_*` 加载）、`include/mistlane/migration.hpp:119–129`（归属事实）、`include/mistlane/api.hpp:22,33`（`ApiRequest`/`ApiCredential`）、`api.signature/tamper/replay/acceptance/ownership/wire/http`（`src/test_api.cpp`、`src/test_cases.cpp`）。**未解·原因：**验证器、重放声明与受理行均为进程内易失状态——无共享/持久声明或受理后端，归属查询在接入 home 事实来源前只能答 `NotFound`，密钥轮换仍只是静态 `(principal, key_id)` 环境变量表。**解锁条件：**持久受理后端及崩溃/丢回复测试、多进程重放声明、轮换/撤销语义、接入 home 事实的归属来源与 owner 迁移后的重试测试。HTTP 2xx 不能证明业务持久。
 7. **实体发布闸门——部分解，A/C（既有实现 `3326fd4`、`1048bcd`、`c0d9d82`、`49c59c2`、`dec204a`）。** 原文：“没有发布兼容流程”，没有运行时/黄金验收物。改后：`contract build` 已确定性生成 XSD/lock/digest/sproto/C++/JS/C#；`contract compat OLD.lock NEW.lock` 检查新增/删除/改分配（`src/contract_tool.cpp:57–77,123–143`）；已有上游 sproto 向量及派发器/实体/RPC 夹具（`include/mistlane/entity_runtime.hpp:11–72`、[验证记录](./validation.md)）；invocation envelope/error 规范编解码已进程内实现并带 hosting-generation 栅栏（`include/mistlane/entity_envelope.hpp`），INT64 边界/缺省/未知字段/畸形向量、嵌套结构/整数数组/空数组向量已在 C++/Lua/JS/C# 四语言锁定（JS/C# codec 已 schema 驱动），含上游 `todword` 解码缺陷的复现与规避（2026-10-20，[验证记录](./validation.md)）。**未解·原因：**参数/标量向量不覆盖完整 invocation/error envelope；EntityRef 参数仍映射为整数（`entity_dispatch.hpp:74–79`）；网络加载/路由、JS/C# UTF-8/bytes/BOOL codec 覆盖、嵌套复制与持久化仍缺失。**解锁条件：**冻结规范 envelope/error/EntityRef 字节及 C++/Lua/JS/C# 畸形输入向量，将 schema/绑定/锁/向量检查接入强制 bundle-load 闸门；再验证在线路由/deadline/cancel/栅栏及独立的复制/持久化闸门。进程内夹具与通过 lock diff 不能授权生产接入。[实体契约验收顺序](./entity-contract.md#发布与验收顺序)中的过时文字同步修正。
 
 ## coordinator 迁移事务（第一片） {#coordinator-migration-transaction-first-slice}
@@ -68,7 +68,7 @@
 
 ## 外部 API 面（第一片） {#external-api-surface-first-slice}
 
-2026-10-20 已实现为 `include/mistlane/api.hpp` + `src/api.cpp` 的类型化 C++ 协议，不暴露 HTTP 路由、CLI 动词或凭据加载器。与上文迁移切片一样，本片为 apiServer 契约定稿线语义与最小确定性实现（`ApiVerifier`、`ApiReplayGuard`、`ApiAcceptanceStore`、`ApiSurface`），不是在运行的外部端点。凭据（`ApiCredential`，32 字节秘钥）由宿主应用从环境变量/本机私有配置注入——仓库内没有真实秘钥、CLI 旗标或加载器，聊天与代码中出现的均非凭据。
+2026-10-20 已实现为 `include/mistlane/api.hpp` + `src/api.cpp` 的类型化 C++ 协议，并于同日接通 HTTP 传输（见下）。与上文迁移切片一样，本片为 apiServer 契约定稿线语义与最小确定性实现（`ApiVerifier`、`ApiReplayGuard`、`ApiAcceptanceStore`、`ApiSurface`）；HTTP 面是 Lua 路由旁的原生 `POST /mla1` 拦截，仍无持久受理后端，也未接归属事实来源。凭据（`ApiCredential`，32 字节秘钥）由宿主应用从环境变量/本机私有配置注入——仓库内没有真实秘钥，聊天与代码中出现的均非凭据。
 
 ### 请求字段与签名
 
@@ -99,7 +99,15 @@
 
 调用方：生成 CSPRNG nonce → 填绝对时间戳 → 规范化 → HMAC → 投递。验证方：按上述顺序，再按操作表分派。重放请求在其原声明未过期期间确定性地被拒（`Replay`）；超出时间窗后无论是否重放一律 `Window`。
 
-五例 `api.signature`、`.tamper`、`.replay`、`.acceptance`、`.ownership` 覆盖：合法 HMAC 校验与操作绑定的规范字节；载荷/签名位/外来秘钥篡改及 nonce 保留；完全重放、窗内 nonce 复用、时间窗过期与时钟回拨；`Inserted`/`Existing`/`Conflict` 及经组合面的签名重试去重；交接各阶段的归属（`Active` → `Draining` → `Fenced` → `Active`）与确定性 `Found`/`NotFound`。未做及解锁条件：真实 HTTP 服务接入（把 MLA1 接到现有 HTTP 栈并映射响应/错误/重试——解锁：传输决策与凭据加载）、持久受理后端与多进程重放声明（解锁：持久存储事务加崩溃/丢回复/重启测试）、密钥轮换/撤销语义（解锁：轮换策略决策加新旧密钥重叠测试）。
+### HTTP 传输（第一片，2026-10-20）
+
+任何节点 HTTP 监听器上的 `POST /mla1` 会被原生拦截，先于 Lua `http` 回调；其余路径（以及 `GET /mla1`）仍走普通 Lua 路由。请求体是规范字节后接 32 字节原始签名；解析逐字节严格——`MLA1` 幻数、恰好十个框定字段、十进制时间戳（`from_chars`，拒绝溢出）、恰好 32 字节签名且其后不得有任何字节——任何偏差（包括形状合法但请求校验不过的字段）一律回答 `400` 加 `INVALID` 结论体，不会误入脚本。应答体用同样的 `u32 BE` 长度方案框定五个词：auth 结论（`OK`/`INVALID`/`UNKNOWN_CREDENTIAL`/`FORBIDDEN`/`BAD_SIGNATURE`/`WINDOW`/`REPLAY`/`CLOCK`/`FULL`）、受理词（`INSERTED`/`EXISTING`/`CONFLICT`/`FULL`/`INVALID` 或空）、持久性（`VOLATILE`/`DURABLE` 或空）、原样回执载荷（或空）、归属词（`FOUND`/`NOT_FOUND` 或空）。HTTP 状态码跟随结论：校验成功 200；`Invalid` 400；`UnknownCredential`/`BadSignature`/`Window`/`Replay` 401；`Forbidden` 403；`OWNER` 查询答 `NOT_FOUND` 404；`Conflict` 409；`Full`/`Clock` 503（时钟回拨在服务端 fail closed，时间恢复后重试可成功）。
+
+启用只靠环境变量且要么全给要么不给：`MISTLANE_MLA1_AUDIENCE` 加 `MISTLANE_MLA1_CREDENTIAL`，后者为 `;` 分隔的行 `principal:key_id:<64 位小写十六进制秘钥>:realm[,realm...]`。只配一半或格式非法都会拒绝节点启动；两个变量都未设置时 `/mla1` 只是普通 Lua 路由。归属查询在 home 事实有来源之前不接任何东西，`OWNER` 确定性地答 `NOT_FOUND`——绝不编造 owner。原生拦截不产生 Lua 回调延迟观测；API 面的指标随持久受理后端一并延后。
+
+用例 `api.wire` 与 `api.http` 覆盖：两个操作的逐字节往返；完整畸形体拒绝清单（空体、仅幻数、错误幻数、九/十一字段、说谎长度、多余字节、短签名、未知操作、非数字/空/溢出时间戳、非十六进制 nonce）；每个结论的精确应答字节；状态码映射表；以及在已启动 apiServer 上的端到端——签名 `ACCEPT` 先 `INSERTED` 后幂等 `EXISTING`，同键换体 `CONFLICT`，篡改签名 401，`OWNER` 404，垃圾体 400，其余路由与未配置节点一律 Lua 回落，半配置/非法凭据拒绝启动。
+
+未做及解锁条件：持久受理后端与多进程重放声明（解锁：持久存储事务加崩溃/丢回复/重启测试）、接入 home 事实的归属来源与 owner 迁移重试测试（解锁：home-data 读路径）、密钥轮换/撤销语义（解锁：轮换策略决策加新旧密钥重叠测试）。
 
 ## 命名与语义已对齐（有明确边界）
 
@@ -113,7 +121,7 @@
 | Todo 范围 | 保留工作 | 审计编号 |
 |---|---|---|
 | crossServer 回传与唯一写入权（`todo.md:54`） | 归属持久事务/ACK/重放、可恢复发送源、有界队列/只读/最终回服接线、共享租约权威与 Avatar 集成 | 矛盾 4 的恢复部分；缺口 3/4 |
-| login/data/apiServer（`todo.md:56`） | C++ 凭据签发/验证、规范凭据传输与 home-data 授权消息；已定 MLA1 回调协议（签名/防重放/受理/归属已建模）的持久受理后端、多进程重放声明与 HTTP 接线 | 缺口 2（运行时归 4）、4/6 |
+| login/data/apiServer（`todo.md:56`） | C++ 凭据签发/验证、规范凭据传输与 home-data 授权消息；已定 MLA1 回调协议（签名/防重放/受理/归属已建模、HTTP 传输已接通）的持久受理后端与多进程重放声明 | 缺口 2（运行时归 4）、4/6 |
 | coordinator 归属/迁移（`todo.md:48`） | 迁移线消息认证、持久 journal/home 权威与真实路由/运行时接线；跨服务崩溃及成员退役/目标失效证据 | 缺口 5（类型协议/模型已实现） |
 | 实体实现链（`todo.md:76+`） | 完整 envelope/error/EntityRef 向量与 bundle-load 闸门、生产 codec/网络运行时、嵌套复制与持久化 | 缺口 7 |
 

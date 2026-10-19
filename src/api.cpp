@@ -3,6 +3,7 @@
 #include <openssl/crypto.h>
 #include <openssl/evp.h>
 #include <algorithm>
+#include <charconv>
 #include <limits>
 
 namespace mistlane {
@@ -14,6 +15,17 @@ void field(std::string& bytes, std::string_view value) {
     const auto size = static_cast<std::uint32_t>(value.size());
     for (int shift : {24, 16, 8, 0}) bytes.push_back(static_cast<char>((size >> shift) & 255));
     bytes.append(value);
+}
+// Consumes one framed field; false when the prefix lies about what remains.
+bool read_field(std::string_view& bytes, std::string& out) {
+    if (bytes.size() < 4) return false;
+    std::uint32_t size = 0;
+    for (int i = 0; i < 4; ++i) size = (size << 8) | static_cast<unsigned char>(bytes[i]);
+    bytes.remove_prefix(4);
+    if (bytes.size() < size) return false;
+    out.assign(bytes.substr(0, size));
+    bytes.remove_prefix(size);
+    return true;
 }
 }
 bool valid_api_request(const ApiRequest& r) {
@@ -112,5 +124,88 @@ ApiReply ApiSurface::handle(const ApiRequest& request, std::uint64_t now) const 
             std::move(current)};
     }
     return reply;
+}
+bool parse_api_body(std::string_view body, ApiRequest& out) {
+    if (body.substr(0, 4) != "MLA1") return false;
+    body.remove_prefix(4);
+    ApiRequest request;
+    std::string operation, timestamp, realm, character;
+    if (!read_field(body, operation) || !read_field(body, request.audience)
+            || !read_field(body, request.principal) || !read_field(body, request.key_id)
+            || !read_field(body, timestamp) || !read_field(body, request.nonce)
+            || !read_field(body, realm) || !read_field(body, character)
+            || !read_field(body, request.idempotency_key) || !read_field(body, request.payload)
+            || body.size() != request.signature.size())
+        return false; // Exactly ten framed fields, then exactly the signature.
+    if (operation == "ACCEPT") request.operation = ApiOperation::Accept;
+    else if (operation == "OWNER") request.operation = ApiOperation::Owner;
+    else return false;
+    const auto digits = std::from_chars(timestamp.data(), timestamp.data()+timestamp.size(), request.timestamp);
+    if (digits.ec != std::errc() || digits.ptr != timestamp.data()+timestamp.size()) return false;
+    request.character = {std::move(realm), std::move(character)};
+    std::copy_n(body.begin(), request.signature.size(), request.signature.begin());
+    if (!valid_api_request(request)) return false;
+    out = std::move(request);
+    return true;
+}
+std::string api_reply_body(const ApiReply& reply) {
+    const auto auth = [reply] {
+        switch (reply.auth) {
+            case ApiAuth::Ok: return "OK";
+            case ApiAuth::Invalid: return "INVALID";
+            case ApiAuth::UnknownCredential: return "UNKNOWN_CREDENTIAL";
+            case ApiAuth::Forbidden: return "FORBIDDEN";
+            case ApiAuth::BadSignature: return "BAD_SIGNATURE";
+            case ApiAuth::Window: return "WINDOW";
+            case ApiAuth::Replay: return "REPLAY";
+            case ApiAuth::Clock: return "CLOCK";
+            case ApiAuth::Full: return "FULL";
+        }
+        return "INVALID";
+    }();
+    std::string bytes = "MLA1";
+    field(bytes, auth);
+    if (reply.acceptance) {
+        switch (reply.acceptance->result) {
+            case ApiCreate::Inserted: field(bytes, "INSERTED"); break;
+            case ApiCreate::Existing: field(bytes, "EXISTING"); break;
+            case ApiCreate::Conflict: field(bytes, "CONFLICT"); break;
+            case ApiCreate::Full: field(bytes, "FULL"); break;
+            default: field(bytes, "INVALID"); break;
+        }
+        field(bytes, reply.acceptance->durability == ApiDurability::Durable ? "DURABLE" : "VOLATILE");
+        field(bytes, reply.acceptance->receipt ? reply.acceptance->receipt->command.payload : std::string{});
+    } else {
+        field(bytes, "");
+        field(bytes, "");
+        field(bytes, "");
+    }
+    field(bytes, reply.ownership
+        ? (reply.ownership->status == ApiOwnershipReply::Status::Found ? "FOUND" : "NOT_FOUND") : "");
+    return bytes;
+}
+unsigned api_http_status(const ApiReply& reply) {
+    switch (reply.auth) {
+        case ApiAuth::Ok: break;
+        case ApiAuth::Invalid: return 400;
+        case ApiAuth::UnknownCredential:
+        case ApiAuth::BadSignature:
+        case ApiAuth::Window:
+        case ApiAuth::Replay: return 401;
+        case ApiAuth::Forbidden: return 403;
+        case ApiAuth::Clock:
+        case ApiAuth::Full: return 503;
+    }
+    if (reply.ownership) return reply.ownership->status == ApiOwnershipReply::Status::Found ? 200 : 404;
+    if (reply.acceptance) {
+        switch (reply.acceptance->result) {
+            case ApiCreate::Inserted:
+            case ApiCreate::Existing: return 200;
+            case ApiCreate::Conflict: return 409;
+            case ApiCreate::Full: return 503;
+            default: return 400;
+        }
+    }
+    return 400;
 }
 }

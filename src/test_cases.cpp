@@ -2,6 +2,7 @@
 #include "test_support.hpp"
 #include "test_fixtures.hpp"
 #include "test_resources.hpp"
+#include "mistlane/api.hpp"
 #include "mistlane/cross.hpp"
 #include "mistlane/entity_contract.hpp"
 #include "mistlane/entity_dispatch.hpp"
@@ -868,6 +869,118 @@ void transport_http() {
         }
     }
     must_fail([] { (void)http_request({"file:///etc/hosts"}); });
+}
+
+// MLA1 rides the node's HTTP listener: a native /mla1 intercept beside the Lua
+// routes, enabled by credential environment variables only.
+void api_http() {
+    Context c;
+    write(c.path("api.lua"), http_lua);
+    ApiSecret secret{};
+    for (auto& byte : secret) byte = 0x37;
+    std::string hex;
+    for (std::size_t i = 0; i < secret.size(); ++i) hex += "37";
+    const auto now = static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::seconds>(
+        std::chrono::system_clock::now().time_since_epoch()).count());
+    unsigned counter = 0;
+    const auto nonce = [&counter] {
+        char digits[33];
+        std::snprintf(digits, sizeof digits, "%032x", ++counter);
+        return std::string(digits);
+    };
+    const auto signed_body = [&](ApiRequest& request) {
+        request.signature = api_sign(request, secret);
+        return api_canonical(request) + std::string(request.signature.begin(), request.signature.end());
+    };
+    const auto accept_body = [&](const std::string& idempotency, const std::string& payload = "grant") {
+        ApiRequest request;
+        request.operation = ApiOperation::Accept;
+        request.audience = "platform";
+        request.principal = "ops-callback";
+        request.key_id = "key-2026";
+        request.timestamp = now;
+        request.nonce = nonce();
+        request.character = {"realm1", "char42"};
+        request.idempotency_key = idempotency;
+        request.payload = payload;
+        return signed_body(request);
+    };
+    const auto owner_body = [&] {
+        ApiRequest request;
+        request.operation = ApiOperation::Owner;
+        request.audience = "platform";
+        request.principal = "ops-callback";
+        request.key_id = "key-2026";
+        request.timestamp = now;
+        request.nonce = nonce();
+        request.character = {"realm1", "char42"};
+        return signed_body(request);
+    };
+    const auto reply_body = [](std::initializer_list<std::string_view> values) {
+        std::string bytes = "MLA1";
+        for (const auto& value : values) {
+            const auto size = static_cast<std::uint32_t>(value.size());
+            for (int shift : {24, 16, 8, 0}) bytes.push_back(static_cast<char>((size >> shift) & 255));
+            bytes.append(value);
+        }
+        return bytes;
+    };
+    {
+        ScopedEnv audience("MISTLANE_MLA1_AUDIENCE", "platform");
+        ScopedEnv credentials("MISTLANE_MLA1_CREDENTIAL", "ops-callback:key-2026:"+hex+":realm1");
+        const auto listen = port();
+        c.node("apiServer", listen, {"--script", c.path("api.lua").string()});
+        const auto base = "http://"+endpoint(listen);
+        // A signed acceptance inserts once, then deduplicates on retry.
+        auto sent = http(base+"/mla1", "POST", accept_body("grant-7"));
+        require(sent.status == 200, "a signed acceptance was not 200");
+        equal(sent.body, reply_body({"OK", "INSERTED", "VOLATILE", "grant", ""}));
+        sent = http(base+"/mla1", "POST", accept_body("grant-7"));
+        require(sent.status == 200, "a retried acceptance was not 200");
+        equal(sent.body, reply_body({"OK", "EXISTING", "VOLATILE", "grant", ""}));
+        // One idempotency key with a changed body conflicts, nothing stored.
+        sent = http(base+"/mla1", "POST", accept_body("grant-7", "grant-v2"));
+        require(sent.status == 409, "a changed body under one key was not 409");
+        equal(sent.body, reply_body({"OK", "CONFLICT", "VOLATILE", "", ""}));
+        // One flipped signature bit: 401 verdict word, never stored.
+        auto tampered = accept_body("grant-8");
+        tampered.back() = static_cast<char>(tampered.back() ^ 0x80);
+        sent = http(base+"/mla1", "POST", tampered);
+        require(sent.status == 401, "a tampered signature was not 401");
+        equal(sent.body, reply_body({"BAD_SIGNATURE", "", "", "", ""}));
+        // OWNER asks home facts; with no facts wired the answer is NOT_FOUND.
+        sent = http(base+"/mla1", "POST", owner_body());
+        require(sent.status == 404, "an unknown character was not 404");
+        equal(sent.body, reply_body({"OK", "", "", "", "NOT_FOUND"}));
+        // Structural garbage is a 400 verdict body, not a Lua trip.
+        sent = http(base+"/mla1", "POST", "garbage");
+        require(sent.status == 400, "a malformed body was not 400");
+        equal(sent.body, reply_body({"INVALID", "", "", "", ""}));
+        // Every other route (and GET /mla1) stays plain Lua routing.
+        equal(http(base+"/nowhere", "POST", "ping").body, "missing");
+        equal(http(base+"/mla1", "GET").body, "missing");
+    }
+    // Without credential variables /mla1 is ordinary Lua routing.
+    {
+        const auto listen = port();
+        c.node("apiServer", listen, {"--script", c.path("api.lua").string()});
+        equal(http("http://"+endpoint(listen)+"/mla1", "POST", accept_body("grant-9")).body, "missing");
+    }
+    // Half-configured or malformed credentials refuse startup.
+    {
+        ScopedEnv audience("MISTLANE_MLA1_AUDIENCE", "platform");
+        auto& lonely = c.spawn({self().string(), "--role", "apiServer", "--listen", endpoint(port()),
+            "--script", c.path("api.lua").string()});
+        require(lonely.wait() != 0 && lonely.output().find("MISTLANE_MLA1") != std::string::npos,
+                "an audience without credentials booted");
+        ScopedEnv bad("MISTLANE_MLA1_CREDENTIAL", "ops-callback:key-2026:not-hex:realm1");
+        auto& corrupt = c.spawn({self().string(), "--role", "apiServer", "--listen", endpoint(port()),
+            "--script", c.path("api.lua").string()});
+        require(corrupt.wait() != 0 && corrupt.output().find("MLA1 credential") != std::string::npos,
+                "a malformed credential booted");
+    }
+    std::cout << "api.http surface: signed POST /mla1 inserts, dedupes, refuses [PASS]\n";
+    std::cout << "api.http config: env-only enablement, malformed credentials refuse startup [PASS]\n";
 }
 void transport_listeners() {
     Context c; c.cert();

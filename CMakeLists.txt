@@ -66,7 +66,7 @@ if(BUILD_TESTING)
       entity.envelope
       coordinator.placement coordinator.routes coordinator.migration.commit coordinator.migration.abort
       coordinator.migration.recover coordinator.migration.stale coordinator.migration.order lua.lifecycle lua.http
-      api.signature api.tamper api.replay api.acceptance api.ownership
+      api.signature api.tamper api.replay api.acceptance api.ownership api.wire api.http
       cross.admission cross.record cross.return.queue probe.control scaffold.init config.file cli.bot)
     string(REPLACE "." "_" test_name "${test_case}")
     add_test(NAME mistlane_${test_name} COMMAND mistlane test --case "${test_case}")

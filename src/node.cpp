@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
+#include "mistlane/api.hpp"
 #include "mistlane/node.hpp"
 #include "mistlane/cross.hpp"
 #include "mistlane/diagnostics.hpp"
@@ -53,6 +54,45 @@ std::string correlated_frame(std::uint64_t request, std::string_view payload) {
     for (int i = 3; i >= 0; --i) { frame[i] = static_cast<char>(id & 255); id >>= 8; }
     frame.append(payload);
     return frame;
+}
+// MLA1 credential rows, ';'-separated: "principal:key_id:<64 lowercase hex
+// secret>:realm[,realm...]". Injected through the environment so no loader,
+// CLI secret flag or real credential ships inside the framework.
+std::vector<ApiCredential> api_credentials(std::string_view text) {
+    std::vector<ApiCredential> credentials;
+    auto row = text;
+    while (!row.empty()) {
+        const auto end = row.find(';');
+        const auto body = row.substr(0, end);
+        row = end == std::string_view::npos ? std::string_view{} : row.substr(end+1);
+        const auto first = body.find(':');
+        const auto second = first == std::string_view::npos ? std::string::npos : body.find(':', first+1);
+        const auto third = second == std::string::npos ? std::string::npos : body.find(':', second+1);
+        if (first == std::string_view::npos || second == std::string_view::npos || third == std::string::npos)
+            throw std::invalid_argument("MLA1 credential row needs principal:key_id:secret:realms");
+        ApiCredential credential;
+        credential.principal = body.substr(0, first);
+        credential.key_id = body.substr(first+1, second-first-1);
+        const auto hex = body.substr(second+1, third-second-1);
+        const auto digit = [hex](std::size_t at) {
+            const char ch = hex[at];
+            if (ch >= '0' && ch <= '9') return static_cast<int>(ch-'0');
+            if (ch >= 'a' && ch <= 'f') return static_cast<int>(ch-'a'+10);
+            throw std::invalid_argument("MLA1 credential secret must be 64 lowercase hex digits");
+        };
+        if (hex.size() != 64)
+            throw std::invalid_argument("MLA1 credential secret must be 64 lowercase hex digits");
+        for (std::size_t i = 0; i < hex.size(); i += 2)
+            credential.secret[i/2] = static_cast<unsigned char>(digit(i)*16 + digit(i+1));
+        auto realms = body.substr(third+1);
+        while (!realms.empty()) {
+            const auto comma = realms.find(',');
+            credential.realms.emplace(realms.substr(0, comma));
+            realms = comma == std::string_view::npos ? std::string_view{} : realms.substr(comma+1);
+        }
+        credentials.push_back(std::move(credential));
+    }
+    return credentials;
 }
 // The service identity frame: "MLS1 <role> <instance> <token>", four single
 // words with no quoting. role and instance only label the peer's logs; the
@@ -1865,6 +1905,24 @@ public:
         if (script_role)
             service_ = std::make_shared<LuaService>(config_.script, service_context_, redis_,
                 websockets_.get(), game_sessions_.get(), this);
+        if (http_service) {
+            // MLA1 rides the same listener as the Lua routes. Both variables
+            // must be injected together; anything else leaves /mla1 as a
+            // plain Lua route and half-configured deployments fail startup.
+            const char* audience = std::getenv("MISTLANE_MLA1_AUDIENCE");
+            const char* credential = std::getenv("MISTLANE_MLA1_CREDENTIAL");
+            const bool enabled = audience && *audience && credential && *credential;
+            if (!enabled && ((audience && *audience) || (credential && *credential)))
+                throw std::invalid_argument(
+                    "MISTLANE_MLA1_AUDIENCE and MISTLANE_MLA1_CREDENTIAL must be set together");
+            if (enabled) {
+                api_verifier_ = std::make_unique<ApiVerifier>(audience, api_credentials(credential), api_replay_);
+                // Ownership needs the home transaction aggregate; until that
+                // source is wired the endpoint answers NotFound, never invents.
+                api_surface_ = std::make_unique<ApiSurface>(*api_verifier_, api_store_,
+                    [](const MigrationKey&) { return std::nullopt; });
+            }
+        }
         for (const auto& e : config_.upstreams) (void)parse_address(e.address);
         for (const auto& item : config_.listeners) {
             if (item.protocol != "tcp") continue;
@@ -1907,7 +1965,24 @@ public:
                     std::move(lifecycle),
                     [this](WebRequest request, HttpCompletion complete) {
                         asio::post(io_, [this, request=std::move(request), complete=std::move(complete)]() mutable {
-                            if (stopping_ || !service_) return complete({503, {}, "Service Unavailable"});
+                            if (stopping_) return complete({503, {}, "Service Unavailable"});
+                            // Native MLA1 route, no script in the path. Bodies are
+                            // the canonical bytes plus the raw signature; replies
+                            // are five framed words, self-describing without a
+                            // content type.
+                            if (api_surface_ && request.method == "POST" && request.path == "/mla1") {
+                                ApiReply reply;
+                                ApiRequest parsed;
+                                if (!parse_api_body(request.body, parsed)) reply.auth = ApiAuth::Invalid;
+                                else {
+                                    const auto now = static_cast<std::uint64_t>(
+                                        std::chrono::duration_cast<std::chrono::seconds>(
+                                            std::chrono::system_clock::now().time_since_epoch()).count());
+                                    reply = api_surface_->handle(parsed, now);
+                                }
+                                return complete({api_http_status(reply), {}, api_reply_body(reply)});
+                            }
+                            if (!service_) return complete({503, {}, "Service Unavailable"});
                             const auto started = std::chrono::steady_clock::now();
                             auto response = service_->http(request);
                             diagnostics_->observe_lua_callback("http", std::chrono::steady_clock::now() - started);
@@ -2140,6 +2215,11 @@ private:
     // Only the data role routes frames into this; every other role passes
     // nullptr and keeps MLD1 as plain script traffic.
     RecordStore records_;
+    // MLA1 external API: native route beside the Lua HTTP callbacks.
+    ApiReplayGuard api_replay_;
+    ApiMemoryAcceptanceStore api_store_;
+    std::unique_ptr<ApiVerifier> api_verifier_;
+    std::unique_ptr<ApiSurface> api_surface_;
     std::unique_ptr<Diagnostics> diagnostics_;
     std::shared_ptr<ProbeServer> probe_;
     std::exception_ptr startup_error_;

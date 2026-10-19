@@ -27,6 +27,7 @@ struct ApiRequest {
     RecordStore::RecordKey character;
     std::string idempotency_key, payload;
     ApiSignature signature{};
+    bool operator==(const ApiRequest&) const = default;
 };
 // The embedding application injects credentials from private local config or
 // environment. No loader, CLI secret flag or real credential is supplied here.
@@ -127,4 +128,11 @@ private:
     ApiAcceptanceStore& store_;
     Lookup lookup_;
 };
+// MLA1 wire body: the canonical bytes followed by the raw 32-byte signature.
+// Parsing is byte-exact — exactly the ten framed fields, then exactly the
+// signature, nothing else. The reply framing and HTTP status mapping below
+// are the transport face of the same contract.
+bool parse_api_body(std::string_view body, ApiRequest& out);
+std::string api_reply_body(const ApiReply& reply);
+unsigned api_http_status(const ApiReply& reply);
 }
