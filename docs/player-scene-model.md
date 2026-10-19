@@ -45,7 +45,7 @@ Legacy locations: `game/Hegel/Scene/SceneLogic.lua::doSwitchHegel`, `game/Data/R
 | Character behavior, entry conditions, combat/rewards and instance rules | Lua | Lua business behavior and lifecycle hooks |
 | Map/scene runtime | Lua SceneManager/Scene plus C++ spatial-data code | C++ common lifecycle/spatial/synchronization mechanisms; Lua gameplay rules; resource interfaces specified separately |
 
-Lua may request entry into cross-region gameplay. The framework handles placement, transfer, acknowledgement, route publication and old-host release. Hooks need thread/error/reentrancy/timeout contracts and rules during transfer. These are extraction targets, not capabilities supplied by the existing message/http module.
+Lua may request entry into cross-region gameplay. The framework handles placement, transfer, acknowledgement, route publication and old-host release. Hooks need thread/error/reentrancy/timeout contracts and rules during transfer. These are extraction targets, not capabilities supplied by the existing message/http module. The runtime contract — object split, states, hook surface, migration and load/save rules — is specified on the [Avatar runtime](./avatar-runtime.md) page.
 
 ## Protocol and method contracts before abstraction
 

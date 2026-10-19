@@ -72,7 +72,7 @@ The endpoint enforces the fence (`STALE` when the submitted generation is lower 
 ## Deliberately not decided here
 
 - Wire format and framing of MLD1: decided with the implemented endpoint — the grammar and reply vocabulary are in the section above; framing is the shared u32 BE length frame.
-- Settlement, reward and ranking business rules, cross-scene templates, and the actual Avatar/scene runtime: later crossServer slices and the entity-contract chain.
+- Settlement, reward and ranking business rules, cross-scene templates, and the actual Avatar/scene runtime: later crossServer slices and the entity-contract chain. The Avatar/Session runtime contract is now designed on the [avatar runtime](./avatar-runtime.md) page; the entity property runtime remains the chain's.
 - Lease duration numbers, queue bounds and retry budgets: configuration named at implementation time with defaults justified by measurement, not by this page.
 - Whether the entry ticket is signed, and by whom: an authentication design gated on the login contract.
 

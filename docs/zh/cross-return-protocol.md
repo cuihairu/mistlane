@@ -72,7 +72,7 @@ MLD1 ERR INVALID | MLD1 ERR STALE gen <n> | MLD1 ERR SEQ seq <n> | MLD1 ERR FULL
 ## 此处刻意不定的事项
 
 - MLD1 的线格式与分帧：随端点实现一并定稿——语法与应答词表见上节；分帧沿用共享的 u32 BE 长度帧。
-- 结算、奖励与排行业务规则、跨服场景模板、实际的 Avatar/场景运行时：归后续 crossServer 切片与实体契约链。
+- 结算、奖励与排行业务规则、跨服场景模板、实际的 Avatar/场景运行时：归后续 crossServer 切片与实体契约链。Avatar/会话运行时契约已在 [Avatar 运行时契约](./avatar-runtime.md) 页定稿；实体属性运行时仍归实体契约链。
 - 租约时长、队列界与重试预算：实现时以测量依据给出默认值的配置项，不由本页拍数字。
 - 入场凭据是否签名、由谁签发：绑定 login 契约的认证设计。
 

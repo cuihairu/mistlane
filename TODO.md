@@ -126,11 +126,11 @@
 
 ## H. 发布后整理
 
-- [ ] 为首个公开源码候选确定版本号与发布说明。
-- [ ] 发布说明写明研究学习用途、老游戏抽取背景和业务剥离范围。
-- [ ] 发布说明列出当前不支持的生产能力和未验证容量边界。
-- [ ] 为源码归档附上 SHA256 校验值。
-- [ ] 检查 GitHub 发布页包含 Apache-2.0 许可证链接和 NOTICE。
+- [ ] 为首个公开源码候选确定版本号与发布说明。（BLOCKED 2026-10-19：版本号只由维护者明示给出——版本发布红线；发布说明草稿见 RELEASE_NOTES.md）
+- [x] 发布说明写明研究学习用途、老游戏抽取背景和业务剥离范围。证据（2026-10-19）：RELEASE_NOTES.md 草稿"Purpose"/"Background and business stripping"两节，分别引 README 状态徽标与剥离清单；不建 tag、不建 Release、不打版本号。
+- [x] 发布说明列出当前不支持的生产能力和未验证容量边界。证据（2026-10-19）：RELEASE_NOTES.md "What is explicitly not here"（无持久化链/无 Avatar 场景实体运行时/无 crossServer 发送侧/无认证/无 AOI 流式）与 "Unvalidated boundaries"（引 docs/validation.md 的 Not validated 清单）；不宣称生产就绪。
+- [ ] 为源码归档附上 SHA256 校验值。（BLOCKED 2026-10-19：等发布触发——tools/export.py 已生成并核验过归档校验）
+- [ ] 检查 GitHub 发布页包含 Apache-2.0 许可证链接和 NOTICE。（BLOCKED 2026-10-19：等发布触发——无 Release 页可检查，版本发布红线）
 - [x] 在完成实际部署前，不将 GitHub About 首页设置为尚未发布的文档站地址。证据：Pages 已部署（CI run 39084967834 成功）且 https://cuihairu.github.io/mistlane/ 返回 200，About 主页指向已上线站点。
 
 ## I. 老框架组件迁移追踪
@@ -190,9 +190,9 @@
 - [x] 让 cross 在新房间握手时读取 shard readiness 并拒绝不可接纳节点；保留已有会话和房间 owner，禁止探测失败触发状态房间自动重映射。证据：`--upstream` 接受 `IP:PORT[:PROBE]`（新 upstream() 解析器：末两段均为纯数字且地址段无冒号或带方括号时按三段式切分，否则回退末冒号切分，兼容不带探测端口的裸 IPv6）；cross 会话仅在转发首个房间加入前探测一次（每会话一次，`probed_`）：明确 notready → `MLC1 ERR NOT_READY`，连接/写/读失败或应答非法 → `MLC1 ERR UPSTREAM`（`Session::probe` 分阶段 1 秒定时器）；已建立房间不再探测、继续转发，探测结果不触发任何房间重映射。
 - [x] 增加探测功能测试：响应 nonce、错误版本、超时、事件循环阻塞、readiness 转换迟滞、关闭清理及多个 cross 观测同一 shard。证据：新增 `probe.control` 用例（CTest `mistlane_probe_control`，共 13 项）以裸 TCP 覆盖 nonce 回显、version/command/malformed/nonce 非法、readiness 行格式与 lag_ms 字段、空闲连接 2s 截止、`--overload-ratio 0.5 --ready-hysteresis 2` 下容量 2 与 4 节点的饱和翻转 notready→ready 迟滞、`MISTLANE_PROBE_TOKEN` 的 err auth 与带 token 成功、四个 cross 观测同一 shard（NOT_READY 拒绝、恢复后可加入、无探测端口不门控、死探测端口 UPSTREAM）、节点退出时 ProbeServer 随 io 排空关闭；用例 4/4 稳定，完整 ctest 13/13 绿；双语 cross-server/validation 更新。
 - [x] 对 profiler 做 vcpkg 可用性与采样开销评估，选择可选外部采样器/工具集成路线；不在服务热路径自行实现采样器。证据：2026-10-18 决策为外部采样器路线并写入双语 cross-server「剖析与压测运行手册」：进程内采样器与 gperftools（vcpkg 有 port）均因自我采样消耗被测 CPU 预算而排除，仅当目标主机也封锁外部采样时才以可选诊断构建重评；当前开发沙箱实测无法采集任何开销数字——perf 7.0.14 已装但 `perf_event_paranoid=4` 且无 CAP_PERFMON 打不开事件、`strace -c -p` 报 `Operation not permitted`、`eu-stack`/`pprof` 未安装，因此不声称开销数字，留给目标环境演练采集；目标主机工作流已记录（`perf record -F 99 -g -p PID -- sleep 30` + build id 符号匹配）；压测场景用内置 `mistlane bot --url tcp://... --clients 64 --count 500`（已实测 80/80 请求成功且 `/metrics` 计数对齐）。
-- [ ] 为 profiler 工作流提供可重复的跨服压测场景和符号化步骤，记录采样对吞吐、P99 和 RSS 的影响。
+- [ ] 为 profiler 工作流提供可重复的跨服压测场景和符号化步骤，记录采样对吞吐、P99 和 RSS 的影响。（BLOCKED 2026-10-19：取证 `/proc/sys/kernel/perf_event_paranoid`=4 且无 CAP_PERFMON——本环境无法采样；跨服压测场景又依赖 195 的目标环境）
 - [x] 同步更新双语 README、依赖页、架构页、迁移状态、跨服排障页和验证记录，标清哪些能力已实现、哪些只是依赖声明。证据：2026-10-18 双语 README/README.zh-CN 组件表新增 Diagnostics 行并在 Run 段记录 `--metrics-listen`/`--probe-listen`/`IP:PORT[:PROBE]` 用法；依赖页补此前缺失的 prometheus-cpp 1.3.0 与 crashpad 2026-07-02 行；架构页与架构对比页修正过时声明（本地就绪门控已存在、"readiness-aware routing" 移出缺失清单、转储验证已完成、下一步增量改为目标环境演练）；迁移状态页记录 PROBE1 交付并在退出序列加入探测监听器；跨服页与验证记录当日已随功能提交更新；docs:build 通过。
-- [ ] 在目标 Linux/容器环境执行崩溃演练、监控抓取、探针过载演练和压力剖析；未测试前不宣称已解决历史跨服卡死或容量问题。
+- [ ] 在目标 Linux/容器环境执行崩溃演练、监控抓取、探针过载演练和压力剖析；未测试前不宣称已解决历史跨服卡死或容量问题。（BLOCKED 2026-10-19：仅开发沙箱可用，无目标 Linux/容器环境与真实负载）
 
 ## K. 项目初始化 CLI 与进程运维模板
 
@@ -210,4 +210,4 @@
 - [x] 为逐进程 shell 配置文档补充合法字段、逗号分隔 upstream、密钥应使用 systemd credentials/environment，而非提交到模板仓库。证据：2026-10-18 guide.md 与 zh/guide.md 新增"实例配置字段"表（ROLE/LISTEN/TRANSPORT/SCRIPT/UPSTREAMS/ROUTE_EPOCH/CERT/KEY，与 ops/run-instance.sh 逐字段核对），注明 UPSTREAMS 逗号分隔、wss/https 证书拒绝启动行为与机密经 systemd unit 注入；pnpm docs:build 双语构建与内链检查通过。
 - [x] 在模板上增加进程间依赖/健康检查与启动失败回滚，避免用固定 sleep 代替 readiness；当前启动器只做短暂启动确认。证据：2026-10-18 ops/cluster.sh 每个 start 轮询 ready 行（MISTLANE_START_TIMEOUT 默认 5 秒），未就绪即 TERM 并移除 pidfile；start 失败只回滚本次命令启动的实例并保留已有实例，restart 失败反向停止已启动项；scaffold.init 覆盖"就绪门通过 + 坏实例回滚 + 已有实例保留 + 二次失败全停"四条路径。
 - [x] 决定是否提供原生 Mistlane config-file schema；若实现，定义格式版本、字段校验、环境覆盖、相对路径规则和错误提示，再将 shell env 模板迁移到该 schema。证据：2026-10-18 决策=是，最小原生格式随二进制交付：`--config FILE` 读 `KEY=VALUE` 文件，首非空行必须是 `# mistlane-config 1` 版本标记（防误吞任意 shell env）；键为 CLI 选项大写形式（含 PROBE_LISTEN/METRICS_LISTEN 等 21 键）+ `ROOT`，未知键/重复键/缺版本行均以「文件:行号」拒绝；优先级=文件值 < 非空 `MISTLANE_<KEY>` 环境变量 < `--config` 后显式参数（展开即内联进参数序列）；SCRIPT/CERT/KEY/CRASHPAD 相对路径按配置文件目录解析，`ROOT` 可改基准以兼容项目根风格；空值跳过。测试先行为 `config.file` 用例（CTest `mistlane_config_file`，共 14 项）：合法文件启动 worker 并 echo 回环、三种错误路径、env 覆盖（42→7）、显式参数覆盖（→3）、`ROOT=` 解析、PROBE_LISTEN 应答与 METRICS_LISTEN 抓取；用例 3/3 稳定，完整 ctest 14/14 绿。双语 guide 新增「原生配置文件」小节并修正 README/guide 中「不解析原生配置文件」的过时表述，validation 双语加行。**模板迁移边界（明确记录）**：生成模板与 `ops/run-instance.sh` 保持 shell 展开不变——cluster.sh 仍需 ROLE/LISTEN 做 pidfile 命名，且模板相对路径基于项目根而原生格式基于文件目录，两套基准不同，故模板未加版本标记；用户可用 `ROOT=` 桥接（文档已写明），真正的模板切换留待与 config schema 演进一并处理。
-- [ ] 按架构比较文档继续补内部 liveness/readiness 探测、Crashpad 转储生成/保留与部署工作流；再依据真实压力测试决定动态 registry、lease/fencing、房间 drain/migration 或容器编排需求。
+- [ ] 按架构比较文档继续补内部 liveness/readiness 探测、Crashpad 转储生成/保留与部署工作流；再依据真实压力测试决定动态 registry、lease/fencing、房间 drain/migration 或容器编排需求。（BLOCKED 2026-10-19：PROBE1 与 Crashpad 已实现——src/main.cpp:248 `--probe-listen`、CMakeLists.txt:16 与 mistlane_crashpad_startup 用例；动态 registry/lease/drain/编排决策被 193/195 的真实压力测试门控）
