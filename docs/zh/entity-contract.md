@@ -1,8 +1,8 @@
 # 实体契约与代码生成设计
 
-> 研究设计笔记。构建期契约校验器和确定性 sproto schema 生成器已经实现；运行时加载、实体执行和属性同步仍不在当前范围。
+> 研究设计笔记。构建期契约校验器、确定性 sproto schema/C++ 方法描述符生成器和进程内分发原型已经实现；运行时实体加载/执行和属性同步仍不在当前范围。
 
-状态：研究设计及构建期实现。`include/mistlane/entity_contract.hpp` 解析 XML 子集并校验显式稳定 id、封闭词表、类型默认值、数组/结构引用、递归和 DOCTYPE/实体；生成项目 XSD、发布锁、模型摘要和确定性的 sproto schema。`mistlane contract build` 先用既有语义校验器检查全部输入，再写出生成物。类型映射为 `BOOL`→`boolean`、整数及 `EntityRef`→`integer`、`STRING`→`string`、`BYTES`→`binary`、结构按名称引用、数组使用 `*`。RPC 名采用 `E{entityId}_{Server|Client}_{methodId}`；cloudwu/sproto parser tag 使用 `entityId * 512 + side * 256 + methodId`，entity id ≤63、method id ≤254、tag ≤32766。Avatar fixture 已通过上游 parser 和标准字节向量，并有最小上游 Lua 编码/解码样例。详见[路线及验收证据](./bigworld-like-protocol.md#已实现状态与证据)。仍缺方法分发/运行时、发布兼容报告、服务端 bundle 加载和 SDK 生成。适用 Mistlane，不调整 Apollo 架构或进程命名。客户端目标为 JavaScript 和 C#；客户端随契约重新生成、构建和发布，服务器的业务契约更新不重新编译 C++ 二进制。
+状态：研究设计、构建期实现及进程内 C++ 分发原型。`include/mistlane/entity_contract.hpp` 解析 XML 子集并校验显式稳定 id、封闭词表、类型默认值、数组/结构引用、递归和 DOCTYPE/实体；生成项目 XSD、发布锁、模型摘要、确定性 sproto schema 与 C++ 方法描述符。`EntityDispatcher` 按 entity/side/method 查找方法，检查 caller 策略与类型化字段，将 caller/target 传入处理器，并检查 request/response 与 notify 语义。它接收调用方已经解码的值，尚未接入上游 sproto 二进制解码或实体路由。其余类型映射为 `BOOL`→`boolean`、整数及 `EntityRef`→`integer`、`STRING`→`string`、`BYTES`→`binary`、结构按名称引用、数组使用 `*`。RPC 名采用 `E{entityId}_{Server|Client}_{methodId}`；cloudwu/sproto parser tag 使用 `entityId * 512 + side * 256 + methodId`，entity id ≤63、method id ≤254、tag ≤32766。Avatar fixture 已通过上游 parser 和标准字节向量，并有最小上游 Lua 编码/解码样例。详见[路线及验收证据](./bigworld-like-protocol.md#已实现状态与证据)。仍缺实体运行时加载/路由、发布兼容报告、服务端 bundle 加载和 SDK 生成。适用 Mistlane，不调整 Apollo 架构或进程命名。客户端目标为 JavaScript 和 C#；客户端随契约重新生成、构建和发布，服务器的业务契约更新不重新编译 C++ 二进制。
 
 ## 设计选择
 

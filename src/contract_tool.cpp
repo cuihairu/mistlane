@@ -14,8 +14,8 @@ namespace fs = std::filesystem;
 namespace mistlane {
 namespace {
 struct Artifact {
-    fs::path xsd, lock, digest, sproto;
-    std::string xsd_text, lock_text, digest_text, sproto_text;
+    fs::path xsd, lock, digest, sproto, bindings;
+    std::string xsd_text, lock_text, digest_text, sproto_text, bindings_text;
 };
 void write_artifact(const fs::path& target, const std::string& content) {
     std::ofstream out(target, std::ios::binary | std::ios::trunc);
@@ -38,7 +38,7 @@ int run_contract(int argc, char** argv) {
                          "       mistlane contract build --out DIR FILE...\n"
                          "check validates each entity-contract document (.def) against the\n"
                          "definition-time rules. build validates first and, only when every\n"
-                         "file passes, writes DIR/<stem>.xsd, .lock, .digest and .sproto.\n"
+                         "file passes, writes XSD, lock, digest, sproto and C++ bindings.\n"
                          "Each file is an independent contract, so cross-file type references\n"
                          "and release-compatibility reports are not implemented yet.\n";
             return 0;
@@ -80,12 +80,14 @@ int run_contract(int argc, char** argv) {
                 a.lock = out/(stem+".lock");
                 a.digest = out/(stem+".digest");
                 a.sproto = out/(stem+".sproto");
+                a.bindings = out/(stem+".bindings.hpp");
                 a.xsd_text = contract.xsd();
                 a.lock_text = contract.lock();
                 std::ostringstream hex;
                 hex << std::hex << std::setw(16) << std::setfill('0') << contract.digest() << '\n';
                 a.digest_text = hex.str();
                 a.sproto_text = contract.sproto();
+                a.bindings_text = contract.cpp_bindings();
                 artifacts.push_back(std::move(a));
             }
         } catch (const ContractError& e) {
@@ -107,6 +109,7 @@ int run_contract(int argc, char** argv) {
         write_artifact(a.lock, a.lock_text);
         write_artifact(a.digest, a.digest_text);
         write_artifact(a.sproto, a.sproto_text);
+        write_artifact(a.bindings, a.bindings_text);
         std::cout << "wrote "+a.lock.string() << '\n';
     }
     return 0;

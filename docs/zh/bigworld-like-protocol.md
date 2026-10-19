@@ -43,7 +43,7 @@
 |---|---|---|
 | 1. XML 契约生成 sproto schema | `.def` 保持源契约；先运行既有语义校验，再生成。保留来源说明，将 game-fogs 原始 sproto 文本标为未恢复。映射类型、字段、方法及 request/response 或单向通知；内部名固定为 `E{entityId}_{Server|Client}_{methodId}`。cloudwu/sproto parser 的 tag 上限为 0–32766；当前确定性映射为 `entityId * 512 + side * 256 + methodId`，entity id ≤63、method id ≤254。 | `contract.tool` 检查类型映射、稳定命名和重复输出；CLI 在全部输入通过后生成 XSD、lock、digest 和 schema。上游 parser 可解析生成的 `avatar.sproto`。 |
 | 2. 编解码边界与黄金向量 | 外层传输帧与载荷编码分开；使用 cloudwu/sproto 上游线格式覆盖标量、数组、嵌套和边界值。此前 fixture 专用规范 TLV 向量保留并明确标为内部格式。 | `mistlane_sproto_wire_golden` 对非空和空 Avatar 固定上游 sproto 字节；`mistlane_sproto_upstream_parser` 解析生成 schema。`sproto.golden` 保留为独立内部 TLV 检查。 |
-| 3. Lua 原型与分发 | 先使用生成 schema 和上游 Lua 绑定；后续再扩展方法描述符、entity/caller 上下文及 request/response 或单向分发。 | `mistlane_sproto_lua_roundtrip` 运行 `examples/sproto_lua.lua`，断言编码、解码、重编码一致。完整分发仍未完成。 |
+| 3. Lua 原型与分发 | 使用生成 schema 和上游 Lua 绑定；C++ 契约描述符按 entity/side/method 分派，并传入 caller 与 target 上下文。按契约检查字段；request 返回类型化响应，notify 无响应。 | `contract.tool` 覆盖确定性 C++ bindings、分发和五类负向路径；`mistlane_sproto_lua_roundtrip` 覆盖 Lua 编解码回环。 |
 | 4. RPC harness 与生命周期 | 定义关联 ID、超时/取消、重复处理、响应归属和过期实体代次行为。 | 进程内及双进程 harness 覆盖请求/响应、push、超时、过期引用、错误调用方、断连和重复处理。 |
 | 5. SDK 兼容 | 从共享 schema 生成 JS/C# 绑定，并核对支持的客户端版本。 | JS/C# 编解码标准黄金向量；兼容检查发现已发布 ID 删除、重编号或改类型。 |
 | 6. 发布锁与发布闸门 | 在发布锁中持久记录协议 tag 和 schema digest，并与已发布 bundle 比较兼容性。 | 可复现 bundle 和兼容报告在发布前阻断破坏性变更。 |
@@ -54,7 +54,7 @@
 
 阶段 1 已实现。阶段 2 对当前 fixture 已完成：`mistlane contract build` 校验 XML 并生成确定性 `.sproto`；vendored 上游 parser 可解析；上游 Lua 绑定编码为标准线上字节，并以固定 hex 黄金向量校验后再解码。独立的 `sproto.golden` 仍是项目内部 TLV，未冒充 sproto 字节。`examples/contracts/avatar.def` 是新构造的 fixture，并非恢复出的 game-fogs 源文件。
 
-阶段 3 已有使用生成 schema 和上游绑定的 Lua 编码/解码/重编码原型。方法分发、caller/entity 上下文、负向用例和完整绑定生成尚未实现。阶段 4–6 尚未实现：RPC 生命周期 harness、SDK 兼容和发布锁闸门。证据见三个 `mistlane_sproto_*` CTest 用例及 `examples/sproto_lua.lua` 的运行命令。
+阶段 3 已有使用生成 schema 和上游绑定的 Lua 编码/解码/重编码原型。C++ `EntityDispatcher` 按契约方法 ID 与方向分派，将 caller 和 target 传给处理器，并用闭合 `EntityError` 集合拒绝无效调用。`contract build` 另生成确定性的 `<stem>.bindings.hpp` caller 调用包装、handler 注册辅助函数及描述符表；业务处理器仍由运行时注册。负向覆盖包括未知方法、字段类型错误、缺必填、编码损坏和 caller 上下文缺失。阶段 3 仍未做：将上游 sproto 二进制解码直接接入调度器、运行时实体路由/生命周期、按字段生成的强类型参数对象。阶段 4–6 未做：RPC 生命周期 harness、JS/C# SDK 兼容、发布锁闸门。证据见 `contract.tool`、三个 `mistlane_sproto_*` CTest 用例及 `examples/sproto_lua.lua`。
 
 ## 范围与排除项
 
