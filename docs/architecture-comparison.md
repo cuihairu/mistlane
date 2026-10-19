@@ -60,3 +60,16 @@ The old game is closer to the persistent-world model. It should not be rewritten
 Mistlane modernizes dependencies and extracts generic process roles; it is not yet a modern MMO runtime. Its gateway cross routing/crossServer code is a research implementation of stable room affinity and local overload rejection. Cross nodes already gate new room joins on a crossServer's PROBE1 readiness. It lacks dynamic service discovery, route leases, room migration, globally coordinated limits, durable request handling and capacity tests. The optional Prometheus endpoint and Crashpad capture are initial diagnostics, not a complete operations platform. Its deterministic hash can remap rooms when the ordered crossServer list changes, so topology changes require drain or application-level migration.
 
 The project initializer now generates instance-specific configuration, a foreground launcher, local start/stop/status/log tools and a systemd unit template. Internal liveness/readiness endpoints exist and a profiler route is decided (external sampler; none ships in-process). The next increment is target-environment drills (crash, metrics scraping, probe overload, stress profiling), documenting secrets and deployment permissions, validating the unit on a target distribution, and then adding leases/fencing and room drain/migration before attempting automatic cross-shard recovery.
+
+## Deferred decision: what grows the coordination plane
+
+Which of these options to adopt stays gated on the target-environment stress drills (ledger item); the comparison itself is fixed now so the drills can measure the numbers that discriminate between rows.
+
+| Option | What it adds | What it solves | What it costs | Choose when |
+|---|---|---|---|---|
+| Static lists + MLR1 membership + route records (today) | Nothing new | Discovery, placement lookups, reconnect routing to the current host | No ownership handover: a dead host just drops its routes and reconnects go back through `MLR1 ROUTE EMPTY` → entry flow | Now — this is the drills' baseline |
+| Leases/fencing over route records | Renewal/expiry plus a fence token on MLD1 writes | A partitioned or crashed host cannot keep writing after its lease dies | Timer machinery plus two new failure modes (renewal loss, clock skew); takeovers need explicit fencing verdicts | If the drills show a host outliving its control connection, or capacity work needing live takeover |
+| Room drain/migration | Cross-node participant moves with target-side admission on real state | Topology changes without losing gameplay | `MLC1` context is per-join today; the whole Avatar/transfer chain must exist first | Only after the Avatar runtime ships — never before |
+| Container orchestration | Fleet placement, warm capacity, rolling updates | Operations at fleet scale | An orchestrator cannot see rooms; without drain it evicts live state owners | When multi-host fleet operations actually exist |
+
+What the drills should therefore record: control-plane failover time (member retire → registry reflects it), reconnect-routing staleness (`MLR1 ROUTE` verdicts after a host kill), join-rejection rates under churn, and whether any observed partition lets a host keep accepting writes — those four numbers pick the row.

@@ -30,6 +30,8 @@ Diagnostics::Diagnostics(const Config& config) {
             .Help("Current accepted client sessions.").Labels(labels).Register(*registry_).Add({});
         registry_members_ = &prometheus::BuildGauge().Name("mistlane_registry_members")
             .Help("Live registered members of this coordinator.").Labels(labels).Register(*registry_).Add({});
+        registry_routes_ = &prometheus::BuildGauge().Name("mistlane_registry_routes")
+            .Help("Character route records held by this coordinator.").Labels(labels).Register(*registry_).Add({});
         event_loop_lag_max_ = &prometheus::BuildGauge().Name("mistlane_event_loop_lag_max_seconds")
             .Help("Largest observed delay between scheduled event-loop ticks.")
             .Labels(labels).Register(*registry_).Add({});
@@ -97,6 +99,9 @@ void Diagnostics::set_active_sessions(std::size_t count) {
 }
 void Diagnostics::set_registry_members(std::size_t count) {
     if (registry_members_) registry_members_->Set(static_cast<double>(count));
+}
+void Diagnostics::set_registry_routes(std::size_t count) {
+    if (registry_routes_) registry_routes_->Set(static_cast<double>(count));
 }
 void Diagnostics::reject(std::string_view) { if (rejected_) rejected_->Increment(); }
 void Diagnostics::record_result(std::string_view result) {

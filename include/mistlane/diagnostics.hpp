@@ -29,6 +29,7 @@ public:
     void set_ready(bool ready);
     void set_active_sessions(std::size_t count);
     void set_registry_members(std::size_t count);
+    void set_registry_routes(std::size_t count);
     void reject(std::string_view reason);
     void record_result(std::string_view result);
     void add_message(std::string_view direction);
@@ -48,6 +49,7 @@ private:
     prometheus::Gauge* ready_ = nullptr;
     prometheus::Gauge* active_sessions_ = nullptr;
     prometheus::Gauge* registry_members_ = nullptr;
+    prometheus::Gauge* registry_routes_ = nullptr;
     prometheus::Gauge* event_loop_lag_max_ = nullptr;
     prometheus::Gauge* process_rss_ = nullptr;
     prometheus::Counter* rejected_ = nullptr;

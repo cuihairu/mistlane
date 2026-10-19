@@ -7,6 +7,7 @@ Status: contract design (2026-10-19); implementation as noted per section. This 
 - **The home-side endpoint for MLD1 is the `data` role itself.** A home-region gateway may front it for transport, but the durable-ack authority is the data service — not a coordinator, not a gameServer. This closes the open question on the return-protocol page.
 - **All three roles reuse the existing runtime surface** — framed TCP sessions with optional `MLS1` identity, the Lua `message`/`http` hooks, `MLR1` registry access, and the existing HTTP stack for apiServer. No new transport layer is introduced for them.
 - **login and data run as plain script services** (`--role login`/`--role data` start with `--script`, the standard hooks and framed sessions, like a gameServer without scenes). Login's placement lookup and the data-side MLD1 record endpoint are implemented; the authentication, durable load and persistence flows remain contract-only. apiServer is already running and gains contract documentation, not new code.
+- **The entry credential between services is a short-lived HMAC-SHA256 ticket** (decided 2026-10-19 under the standing 2026-10-14 authorization): after its own credential check, login issues one ticket over (realm, character, target instance, expiry, nonce) keyed by a per-realm pre-shared secret from config, and the receiving gameServer/crossServer verifies it before accepting an entry or transfer — so a host never loads a character on a bare claim. Rejected: per-client PKI/mTLS (needs CA and rotation operations this deployment does not run), an external JWT/auth service (a new process and dependency on the entry hot path), and no framework ticket at all (hosts would trust unvalidated claims, breaking the single-writer rule). `MLS1` pre-shared tokens stay the service-leg identity; the sandbox opens no crypto libraries, so issue/verify are future C++ primitives and nothing is implemented yet.
 
 ## login
 
@@ -19,10 +20,10 @@ login owns the entry flow: verify the account, present the character list, obtai
 | Lua surface | Same `message`/`init`/`start`/`tick`/`stop`/`shutdown` hooks; a login handler answers auth, charlist and entry requests; no scene or Avatar objects |
 | Placement | login asks the coordinator `MLR1 PLACE gameServer <scope>` and returns the placed address in the entry response; it must not embed addresses in durable records (responsibility rule), and an `MLR1 EMPTY` answer is an entry refusal, not an error to swallow |
 | Entry context | The entry response carries origin realm, character identity and return route — the same participant fields the cross return protocol defines — so gameServer and later crossServer speak one context shape |
-| Auth boundary | Credential verification is an application Lua decision; the framework provides transport, framing and identity, not accounts, tickets or sessions beyond the connection |
+| Auth boundary | Credential verification is an application Lua decision; between services the entry credential is the decided HMAC-SHA256 short-lived ticket (see the decisions above) — not implemented yet, so today a host still cannot validate an entry context beyond transport identity |
 | State | login holds at most connection state and pending-placement records; nothing durable. After the entry response the character's route belongs to gameServer/coordinator, not login |
 
-Wiring status: the role starts as a script service (`--role login` with `--script`, framed sessions and the standard hooks), and `--coordinator ADDR:PORT [--scope NAME]` wires the registry client: Lua `mistlane.place(role, scope?, callback)` asks `MLR1 PLACE` per lookup over a fresh connection and hands the placed address (or a reason) back to the script. Not implemented: the credential/authentication design and the full entry flow around placement.
+Wiring status: the role starts as a script service (`--role login` with `--script`, framed sessions and the standard hooks), and `--coordinator ADDR:PORT [--scope NAME]` wires the registry client: Lua `mistlane.place(role, scope?, callback)` asks `MLR1 PLACE` per lookup over a fresh connection and hands the placed address (or a reason) back to the script. The entry-ticket scheme is decided (HMAC-SHA256, per-realm pre-shared secret — see the decisions above) but not implemented: it waits on C++ crypto primitives, since the Lua sandbox opens no crypto libraries. Not implemented either: the full entry flow around placement.
 
 ## data
 
@@ -54,7 +55,7 @@ apiServer is implemented and keeps its shape; this section records its contract 
 
 ## What is deliberately not here
 
-- Login credential formats, ticket signing and session tokens: an authentication design gated on the login implementation slice.
+- Client-facing credential formats and account systems: application domain, deliberately outside the framework. The service-side ticket scheme itself is decided (HMAC-SHA256 short-lived ticket, per-realm pre-shared secret); what is not here is its implementation — gated on C++ crypto primitives, since the Lua sandbox opens no crypto libraries.
 - Character state schema and dirty semantics: the entity-contract chain.
 - Settlement and reward rules: gameplay.
 

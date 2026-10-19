@@ -91,7 +91,7 @@ stateDiagram-v2
 
 - 已在执行的处理器在移交开始前结束；`transferring`/`loading`/`suspended` 期间到达的处理器以显式失败拒绝。有界队列留在今天所在的位置：会话与传输层。
 - Avatar 拥有的计时器在移交开始时停止，且只在快照声明了它们时重新装填；未声明的计时器不随行。
-- 重新连接绝不复活已关闭的 Avatar。本设计中 coordinator 持有按角色的路由记录，把新会话送到当前宿主——`MLR1` 目前只有 `REGISTER`/`QUERY`/`PLACE`，是成员承载而非角色路由；移交失败让路由留在来源，重入一律走 `loading`。
+- 重新连接绝不复活已关闭的 Avatar。本设计中 coordinator 持有按角色的路由记录，把新会话送到当前宿主——线上动词已存在，即 `MLR1 ROUTE SET/GET`（路由随成员存亡，GET 回答实时状态），但尚无 Lua 绑定，宿主须经帧式 TCP 使用它们；移交失败让路由留在来源，重入一律走 `loading`。
 - VM 替换（SIGHUP）是节点级退役，不是 Avatar 迁移：旧 VM 里的每个 Avatar 获得一次尽力而为的 `avatar_save` 然后关闭；会话在切换后经 `loading` 重入。这保持既有的诚实规则——重载不迁移状态。
 
 ## 错误、超时与重入

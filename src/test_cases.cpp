@@ -1366,6 +1366,134 @@ void cross_admission() {
     auto healthy=tcp(ingress); equal(join(*healthy,"a",rooms[1]),"MLC1 OK 1");
     equal(healthy->request("ok"),"a(anon):g/"+rooms[1]+":ok");
 }
+// Character route records: a route is only written against a registered
+// member, GET answers from the live member state, and a retiring member drops
+// every route that pointed at it.
+void coordinator_routes() {
+    Context c;
+    write(c.path("echo.lua"), correlate_lua);
+    const auto registry = port(), metrics = port(), tokened = port(),
+              first = port(), second = port();
+    auto& coord = c.node("coordinator", registry, {"--metrics-listen", endpoint(metrics)});
+    c.node("coordinator", tokened, {"--service-token", "s3cret"});
+    auto& gs_a = c.node("gameServer", first, {"--script", c.path("echo.lua").string(),
+        "--coordinator", endpoint(registry), "--scope", "alpha", "--service-name", "gs-a"});
+    auto& gs_b = c.node("gameServer", second, {"--script", c.path("echo.lua").string(),
+        "--coordinator", endpoint(registry), "--scope", "alpha", "--service-name", "gs-b"});
+    const auto send_frame = [](RawSocket& raw, std::string_view payload) {
+        std::string frame(4, '\0');
+        auto length = static_cast<std::uint32_t>(payload.size());
+        for (int i = 3; i >= 0; --i) { frame[i] = static_cast<char>(length & 255); length >>= 8; }
+        raw.send(frame+std::string(payload));
+    };
+    const auto read_frame = [](RawSocket& raw) {
+        const auto header = raw.receive(4);
+        std::size_t length = 0;
+        for (unsigned char ch : header) length = (length << 8) | ch;
+        return raw.receive(length);
+    };
+    const auto expect_close = [](RawSocket& raw) {
+        for (int i = 0; i < 40 && !raw.closed(); ++i) std::this_thread::sleep_for(50ms);
+        require(raw.closed(), "connection stayed open after a refusal");
+    };
+    std::string body;
+    // One-shot legs: one frame in, one verdict out, then the coordinator closes.
+    const auto ask = [&](const std::string& line) {
+        RawSocket raw(registry);
+        send_frame(raw, line);
+        body = read_frame(raw);
+        expect_close(raw);
+        return body;
+    };
+    eventually([&] { return ask("MLR1 QUERY").find("MLR1 MEMBERS 2") != std::string::npos; },
+        5s, "members never reached the registry");
+    // GET before any SET is an honest empty, not an error.
+    equal(ask("MLR1 ROUTE GET mist eve"), "MLR1 ROUTE EMPTY");
+    // Malformed shapes and unknown verbs report the right word.
+    for (const auto& [line, word] : std::vector<std::pair<std::string, std::string>>{
+            {"MLR1 ROUTE SET alpha mist eve gameServer", "MLR1 ERR INVALID"},
+            {"MLR1 ROUTE SET alpha mist eve gameServer gs-a extra", "MLR1 ERR INVALID"},
+            {"MLR1 ROUTE SET alpha mi!t eve gameServer gs-a", "MLR1 ERR INVALID"},
+            {"MLR1 ROUTE SET alpha mist eve data gs-a", "MLR1 ERR INVALID"},
+            {"MLR1 ROUTE GET mist", "MLR1 ERR INVALID"},
+            {"MLR1 ROUTE GET mist ev!", "MLR1 ERR INVALID"},
+            {"MLR1 ROUTE LIST", "MLR1 ERR UNEXPECTED"},
+            {"MLR1 ROUTE", "MLR1 ERR UNEXPECTED"}}) {
+        RawSocket raw(registry);
+        send_frame(raw, line);
+        equal(read_frame(raw), word);
+        expect_close(raw);
+    }
+    // A route needs a live host: an unregistered instance is refused by name.
+    equal(ask("MLR1 ROUTE SET alpha mist eve gameServer gs-z"), "MLR1 ERR UNKNOWN");
+    equal(ask("MLR1 ROUTE SET alpha mist eve gameServer gs-a"), "MLR1 ROUTE OK");
+    auto live = http("http://"+endpoint(metrics)+"/metrics").body;
+    require(live.find("mistlane_registry_routes{role=\"coordinator\"} 1") != std::string::npos,
+            "route gauge did not follow the record count");
+    const auto eve_at = "MLR1 ROUTE AT alpha gameServer gs-a 127.0.0.1:"+
+        std::to_string(first)+" 0 ready 0/42";
+    eventually([&] { return ask("MLR1 ROUTE GET mist eve") == eve_at; },
+        5s, "route did not follow the live member state");
+    // A second SET for the same character overwrites; the count stays at one.
+    equal(ask("MLR1 ROUTE SET alpha mist eve gameServer gs-b"), "MLR1 ROUTE OK");
+    const auto eve_moved = "MLR1 ROUTE AT alpha gameServer gs-b 127.0.0.1:"+
+        std::to_string(second)+" 0 ready 0/42";
+    eventually([&] { return ask("MLR1 ROUTE GET mist eve") == eve_moved; },
+        5s, "route overwrite did not stick");
+    // A registered member publishes routes on its own control leg and the leg
+    // keeps heartbeating; GET mirrors the heartbeat state it announces.
+    {
+        RawSocket host(registry);
+        send_frame(host, "MLR1 REGISTER gameServer gs-r alpha 127.0.0.1:1 0");
+        equal(read_frame(host), "MLR1 OK");
+        send_frame(host, "MLR1 ROUTE SET alpha mist rogue gameServer gs-r");
+        equal(read_frame(host), "MLR1 ROUTE OK");
+        send_frame(host, "MLR1 notready 0 42");
+        equal(read_frame(host), "MLR1 OK");
+        equal(ask("MLR1 ROUTE GET mist rogue"),
+              "MLR1 ROUTE AT alpha gameServer gs-r 127.0.0.1:1 0 notready 0/42");
+        send_frame(host, "MLR1 ready 1 42");
+        equal(read_frame(host), "MLR1 OK");
+        equal(ask("MLR1 ROUTE GET mist rogue"),
+              "MLR1 ROUTE AT alpha gameServer gs-r 127.0.0.1:1 0 ready 1/42");
+        live = http("http://"+endpoint(metrics)+"/metrics").body;
+        require(live.find("mistlane_registry_routes{role=\"coordinator\"} 2") != std::string::npos,
+                "route gauge missed the second record");
+    } // the host retires here
+    eventually([&] { return ask("MLR1 ROUTE GET mist rogue") == "MLR1 ROUTE EMPTY"; },
+        5s, "a retired host kept its route");
+    live = http("http://"+endpoint(metrics)+"/metrics").body;
+    require(live.find("mistlane_registry_routes{role=\"coordinator\"} 1") != std::string::npos,
+            "route gauge did not follow the retirement");
+    // Placement beside the route verbs stays member placement.
+    eventually([&] { return ask("MLR1 PLACE gameServer alpha") ==
+        "MLR1 PLACE gs-a 127.0.0.1:"+std::to_string(first)+" 0 ready 0/42"; },
+        5s, "placement broke beside the route verbs");
+    // Identity gates routes like everything else on a tokened coordinator.
+    RawSocket anonymous(tokened);
+    send_frame(anonymous, "MLR1 ROUTE GET mist eve");
+    equal(read_frame(anonymous), "MLS1 ERR TOKEN");
+    expect_close(anonymous);
+    c.node("gameServer", port(), {"--script", c.path("echo.lua").string(),
+        "--coordinator", endpoint(tokened), "--upstream-token", "s3cret", "--service-name", "gs-d"});
+    const auto identified = [&](const std::string& line) {
+        RawSocket raw(tokened);
+        send_frame(raw, "MLS1 registryClient routes-1 s3cret");
+        equal(read_frame(raw), "MLS1 OK");
+        send_frame(raw, line);
+        body = read_frame(raw);
+        expect_close(raw);
+        return body;
+    };
+    eventually([&] { return identified("MLR1 ROUTE SET main mist kate gameServer gs-d") ==
+        "MLR1 ROUTE OK"; }, 5s, "an identified route publish never landed");
+    body = identified("MLR1 ROUTE GET mist kate");
+    require(body.starts_with("MLR1 ROUTE AT main gameServer gs-d "), "route answer wrong shape: "+body);
+    require(gs_a.output().find("callback failed") == std::string::npos &&
+            gs_b.output().find("callback failed") == std::string::npos,
+            "registry member logged Lua failures");
+    require(coord.output().find("unexpected frame") == std::string::npos, "coordinator log noise");
+}
 void cross_record() {
     Context c;
     write(c.path("echo.lua"), echo);

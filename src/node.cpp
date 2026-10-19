@@ -1220,8 +1220,33 @@ public:
         auto found = members_.find(scope+'\x1'+role+'\x1'+instance);
         if (found == members_.end() || found->second.second != owner) return false;
         members_.erase(found);
+        drop_routes(scope, role, instance);
         return true;
     }
+    // Character route record: the registry also remembers which live member
+    // currently hosts a character, so a reconnect or a cross return has
+    // something authoritative to ask about. A route is only accepted against a
+    // registered member and dies with that member, so a dead host can never be
+    // routed to.
+    struct Route {
+        std::string scope, role, instance;
+    };
+    bool set_route(const std::string& scope, const std::string& realm,
+                   const std::string& character, const std::string& role,
+                   const std::string& instance) {
+        if (!members_.count(scope+'\x1'+role+'\x1'+instance)) return false;
+        routes_[realm+'\x1'+character] = Route{scope, role, instance};
+        return true;
+    }
+    const Member* route(const std::string& realm, const std::string& character) const {
+        const auto found = routes_.find(realm+'\x1'+character);
+        if (found == routes_.end()) return nullptr;
+        const auto& hosted = found->second;
+        const auto member =
+            members_.find(hosted.scope+'\x1'+hosted.role+'\x1'+hosted.instance);
+        return member == members_.end() ? nullptr : &member->second.first;
+    }
+    std::size_t routes() const { return routes_.size(); }
     std::vector<const Member*> list(const std::string& role, const std::string& scope) const {
         std::vector<const Member*> found;
         for (const auto& [key, entry] : members_)
@@ -1246,7 +1271,19 @@ public:
         return out.str();
     }
 private:
+    // A member that retires orphans every route that pointed at it: routes
+    // follow the member, they never outlive it.
+    void drop_routes(const std::string& scope, const std::string& role,
+                     const std::string& instance) {
+        for (auto it = routes_.begin(); it != routes_.end();) {
+            const auto& hosted = it->second;
+            if (hosted.scope == scope && hosted.role == role && hosted.instance == instance)
+                it = routes_.erase(it);
+            else ++it;
+        }
+    }
     std::map<std::string, std::pair<Member, void*>> members_;
+    std::map<std::string, Route> routes_;
 };
 // One coordinator control connection: a member registration with its heartbeat
 // channel, or a one-shot list/place query. The coordinator forwards no gameplay
@@ -1263,6 +1300,8 @@ public:
         closed_ = true;
         timer_.cancel();
         if (member_) registry_.retire(member_->scope, member_->role, member_->instance, this);
+        // Retiring a member may have dropped its routes; the gauge follows.
+        diagnostics_.set_registry_routes(registry_.routes());
         channel_->close();
         on_close_(this);
     }
@@ -1355,6 +1394,9 @@ private:
     }
     void heartbeat(const std::string& payload) {
         if (!member_) return refuse("UNEXPECTED");
+        // A registered member may also publish or look up character routes on
+        // its control connection; the leg stays open afterwards.
+        if (payload.starts_with("MLR1 ROUTE")) return route_frame(payload);
         std::istringstream in(payload);
         std::string magic, state, extra;
         std::size_t active = 0, capacity = 0;
@@ -1369,6 +1411,7 @@ private:
         reply("MLR1 OK");
     }
     void query(const std::string& payload) {
+        if (payload.starts_with("MLR1 ROUTE")) return route_frame(payload);
         std::istringstream in(payload);
         std::string magic, command, role, scope, extra;
         in >> magic >> command >> role >> scope;
@@ -1391,6 +1434,53 @@ private:
                 return close_with(out.str());
             }
             return close_with("MLR1 EMPTY");
+        }
+        return refuse("UNEXPECTED");
+    }
+    // One-shot query legs close after the verdict, like QUERY/PLACE; a member's
+    // control leg replies and keeps heartbeating.
+    void answer(std::string payload) {
+        if (registered_) return reply(std::move(payload));
+        close_with(std::move(payload));
+    }
+    // MLR1 ROUTE SET <scope> <realm> <character> <role> <instance>
+    //   -> MLR1 ROUTE OK | MLR1 ERR UNKNOWN | MLR1 ERR INVALID
+    // MLR1 ROUTE GET <realm> <character>
+    //   -> MLR1 ROUTE AT <scope> <role> <instance> <listen> <probe>
+    //      <ready|notready> <active>/<capacity>
+    //   | MLR1 ROUTE EMPTY | MLR1 ERR INVALID
+    // A route is only written against a member that is registered right now, so
+    // it can never point at a host the registry does not know, and GET answers
+    // from the live member state so a sick host reads as notready.
+    void route_frame(const std::string& payload) {
+        std::istringstream in(payload);
+        std::string magic, command, sub, spare;
+        in >> magic >> command >> sub;
+        if (sub == "SET") {
+            std::string scope, realm, character, role, instance;
+            if (!(in >> scope >> realm >> character >> role >> instance) || (in >> spare))
+                return refuse("INVALID");
+            if (!record_identifier(scope) || !record_identifier(realm) ||
+                    !record_identifier(character) || !record_identifier(instance) ||
+                    (role != "gameServer" && role != "crossServer"))
+                return refuse("INVALID");
+            if (!registry_.set_route(scope, realm, character, role, instance))
+                return refuse("UNKNOWN");
+            diagnostics_.set_registry_routes(registry_.routes());
+            return answer("MLR1 ROUTE OK");
+        }
+        if (sub == "GET") {
+            std::string realm, character;
+            if (!(in >> realm >> character) || (in >> spare)) return refuse("INVALID");
+            if (!record_identifier(realm) || !record_identifier(character)) return refuse("INVALID");
+            const auto* member = registry_.route(realm, character);
+            if (!member) return answer("MLR1 ROUTE EMPTY");
+            std::ostringstream out;
+            out << "MLR1 ROUTE AT " << member->scope << ' ' << member->role << ' '
+                << member->instance << ' ' << member->listen << ' ' << member->probe
+                << ' ' << (member->ready ? "ready" : "notready") << ' '
+                << member->active << '/' << member->capacity;
+            return answer(out.str());
         }
         return refuse("UNEXPECTED");
     }

@@ -18,6 +18,7 @@ void transport_identity();
 void transport_multiplex();
 void coordinator_registry();
 void coordinator_placement();
+void coordinator_routes();
 void lua_lifecycle();
 void lua_http();
 void cross_admission();
@@ -88,6 +89,7 @@ int run_tests(int argc, char** argv) {
         {"transport.multiplex","transport",test::transport_multiplex},
         {"coordinator.registry","coordinator",test::coordinator_registry},
         {"coordinator.placement","coordinator",test::coordinator_placement},
+        {"coordinator.routes","coordinator",test::coordinator_routes},
         {"lua.lifecycle","lua",test::lua_lifecycle},
         {"lua.http","lua",test::lua_http},
         {"cross.admission","cross",test::cross_admission},
