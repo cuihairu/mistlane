@@ -1,13 +1,16 @@
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
+#include <algorithm>
 #include <cstdint>
 #include <functional>
 #include <iomanip>
 #include <map>
+#include <set>
 #include <sstream>
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <tuple>
 #include <utility>
 #include <vector>
 namespace mistlane {
@@ -69,6 +72,24 @@ struct ContractEntity {
     std::vector<ContractMethod> server_methods, client_methods;
     // Retired ids: recorded so they can never be reused by another meaning.
     std::vector<unsigned> reserved_properties, reserved_server_methods, reserved_client_methods;
+};
+// One flattened release-lock line: a struct field, an entity, a property, a
+// method, one of a method's args or returns, or a reservation. `spec` is the
+// line's type-shaped meaning ("UINT16", "Inventory", "ARRAY of Item", a
+// method's "mode caller"); `sub` holds the qualifier the key needs beyond
+// kind/owner/name/id — a method's side, or "<side> <method-id>" for an arg or
+// return. Reservations carry the retired id in `id` and no name.
+struct ContractEntry {
+    std::string kind, owner, name, sub, spec;
+    unsigned id = 0;
+    auto key() const { return std::tuple(kind, owner, name, sub, id); }
+    bool operator==(const ContractEntry&) const = default;
+};
+// Publication gate verdict: breaking lines block, additive ones are the
+// compatible subset.
+struct CompatDiff {
+    std::vector<std::string> breaking, additive;
+    bool compatible() const { return breaking.empty(); }
 };
 class EntityContract {
 public:
@@ -137,6 +158,41 @@ public:
             for (unsigned r : e.reserved_client_methods) out << " reserved " << e.name << " client " << r << '\n';
         }
         return out.str();
+    }
+    // Flattened model view: the same entries parse_lock() reads back, so a
+    // live contract and its published lock compare equal under compat_diff().
+    std::vector<ContractEntry> entries() const {
+        std::vector<ContractEntry> out;
+        const auto spec_of = [](const auto& f) {
+            return f.of.empty() ? f.type : f.type + " of " + f.of;
+        };
+        for (const auto& [name, fields] : structs_)
+            for (const auto& f : fields)
+                out.push_back({"struct", name, f.name, "", spec_of(f), f.id});
+        for (const auto& e : entities_) {
+            out.push_back({"entity", "", e.name, "", std::to_string(e.id), e.id});
+            for (const auto& p : e.properties)
+                out.push_back({"prop", e.name, p.name, "", spec_of(p), p.id});
+            const auto emit = [&](const char* side, const std::vector<ContractMethod>& methods) {
+                for (const auto& m : methods) {
+                    out.push_back({"method", e.name, m.name, side, m.mode + " " + m.caller, m.id});
+                    for (const auto& a : m.args)
+                        out.push_back({"arg", e.name, a.name,
+                            std::string(side)+" "+std::to_string(m.id), spec_of(a), a.id});
+                    for (const auto& r : m.returns)
+                        out.push_back({"return", e.name, r.name,
+                            std::string(side)+" "+std::to_string(m.id), spec_of(r), r.id});
+                }
+            };
+            emit("server", e.server_methods);
+            emit("client", e.client_methods);
+            for (unsigned r : e.reserved_properties) out.push_back({"reserved-property", e.name, "", "", "", r});
+            for (unsigned r : e.reserved_server_methods) out.push_back({"reserved-server", e.name, "", "", "", r});
+            for (unsigned r : e.reserved_client_methods) out.push_back({"reserved-client", e.name, "", "", "", r});
+        }
+        std::sort(out.begin(), out.end(),
+                  [](const ContractEntry& a, const ContractEntry& b) { return a.key() < b.key(); });
+        return out;
     }
     // Project-specific schema generated from the resolved model: a checker for
     // editor support and strict validation, with each member's id and type
@@ -1207,4 +1263,187 @@ private:
     std::map<std::string, ContractArgs> structs_;
     std::vector<ContractEntity> entities_;
 };
+// Compact entry rendering for reports: "prop Avatar gold 2",
+// "method Avatar attack 1 [server]", "reserved-property Avatar 5".
+inline std::string entry_text(const ContractEntry& e) {
+    std::string text = e.kind;
+    if (!e.owner.empty()) text += " " + e.owner;
+    if (!e.name.empty()) text += " " + e.name;
+    text += " " + std::to_string(e.id);
+    if (!e.sub.empty()) text += " [" + e.sub + "]";
+    return text;
+}
+// Read a release lock back into its entries. Comment lines are skipped; every
+// other line must be a known shape and each assignment may appear exactly
+// once, or the lock is refused outright — a gate that silently skips a line
+// it does not understand, or resolves a duplicated assignment by position,
+// would let that assignment drift. The result is sorted like
+// EntityContract::entries(), so a model and its lock text compare equal
+// regardless of file line order.
+inline std::vector<ContractEntry> parse_lock(std::string_view text) {
+    std::vector<ContractEntry> entries;
+    const auto fail = [](std::string_view line) {
+        throw ContractError("unknown release lock line: "+std::string(line));
+    };
+    const auto has_trailing = [](std::istringstream& row) {
+        std::string extra;
+        return static_cast<bool>(row >> extra);
+    };
+    // The lock's two element-type spellings: struct fields write " of X" inside
+    // their braces, prop/arg/return lines carry the element as a bare trailing
+    // token. Both normalize to "TYPE of ELEM" so the model and lock compare
+    // equal; anything beyond that one token is refused.
+    const auto read_of = [&](std::istringstream& row, std::string& spec, std::string_view line) {
+        std::string of;
+        if (!(row >> of)) return;
+        if (of != "of" || !(row >> of)) fail(line);
+        spec += " of " + of;
+        if (has_trailing(row)) fail(line);
+    };
+    const auto read_bare_of = [&](std::istringstream& row, std::string& spec, std::string_view line) {
+        std::string of;
+        if (!(row >> of)) return;
+        spec += " of " + of;
+        if (has_trailing(row)) fail(line);
+    };
+    std::size_t at = 0;
+    while (at < text.size()) {
+        auto end = text.find('\n', at);
+        if (end == std::string_view::npos) end = text.size();
+        const auto line = text.substr(at, end-at);
+        at = end+1;
+        if (line.empty() || line.front() == '#') continue;
+        std::istringstream in{std::string(line)};
+        std::string kind;
+        in >> kind;
+        if (kind == "entity") {
+            ContractEntry e{"entity", "", "", "", "", 0};
+            if (!(in >> e.name >> e.id)) fail(line);
+            e.spec = std::to_string(e.id);
+            if (has_trailing(in)) fail(line);
+            entries.push_back(e);
+        } else if (kind == "prop") {
+            ContractEntry e{"prop", "", "", "", "", 0};
+            if (!(in >> e.owner >> e.id >> e.name >> e.spec)) fail(line);
+            read_bare_of(in, e.spec, line);
+            entries.push_back(e);
+        } else if (kind == "method") {
+            ContractEntry e{"method", "", "", "", "", 0};
+            std::string mode, caller;
+            if (!(in >> e.owner >> e.sub >> e.id >> e.name >> mode >> caller)) fail(line);
+            e.spec = mode + " " + caller;
+            if (has_trailing(in)) fail(line);
+            entries.push_back(e);
+        } else if (kind == "arg" || kind == "return") {
+            ContractEntry e{kind, "", "", "", "", 0};
+            std::string side;
+            unsigned method_id = 0;
+            if (!(in >> e.owner >> side >> method_id >> e.id >> e.name >> e.spec)) fail(line);
+            e.sub = side + " " + std::to_string(method_id);
+            read_bare_of(in, e.spec, line);
+            entries.push_back(e);
+        } else if (kind == "struct") {
+            std::string owner;
+            if (!(in >> owner)) fail(line);
+            const auto rest = std::string(std::istreambuf_iterator<char>(in), {});
+            std::size_t pos = 0;
+            bool any_field = false;
+            while (true) {
+                const auto open = rest.find('{', pos);
+                if (open == std::string::npos) break;
+                const auto close = rest.find('}', open);
+                if (close == std::string::npos) fail(line);
+                std::istringstream field{rest.substr(open+1, close-open-1)};
+                ContractEntry e{"struct", owner, "", "", "", 0};
+                if (!(field >> e.id >> e.name >> e.spec)) fail(line);
+                read_of(field, e.spec, line);
+                entries.push_back(e);
+                any_field = true;
+                pos = close+1;
+            }
+            if (!any_field) fail(line);
+            if (rest.substr(pos).find_first_not_of(" \t\r\n") != std::string::npos) fail(line);
+        } else if (kind == "reserved") {
+            ContractEntry e{"", "", "", "", "", 0};
+            std::string family;
+            if (!(in >> e.owner >> family >> e.id)) fail(line);
+            if (family == "property") e.kind = "reserved-property";
+            else if (family == "server") e.kind = "reserved-server";
+            else if (family == "client") e.kind = "reserved-client";
+            else fail(line);
+            if (has_trailing(in)) fail(line);
+            entries.push_back(e);
+        } else fail(line);
+    }
+    std::sort(entries.begin(), entries.end(),
+              [](const ContractEntry& a, const ContractEntry& b) { return a.key() < b.key(); });
+    for (std::size_t i = 1; i < entries.size(); ++i)
+        if (entries[i-1].key() == entries[i].key())
+            throw ContractError("duplicate release lock entry: "+entry_text(entries[i]));
+    return entries;
+}
+// Publication gate: compare two entry lists (a live model's entries() or a
+// parsed lock) and classify every move. Breaking is anything a published
+// client could depend on disappearing, renumbering or changing meaning —
+// including a retired id coming back as a live meaning and a reservation
+// being dropped, which would silently re-open the id for future reuse.
+// Additions are compatible. Reports are deterministic: maps iterate in key
+// order, so the same pair of locks always produces the same text.
+inline CompatDiff compat_diff(const std::vector<ContractEntry>& prev, const std::vector<ContractEntry>& curr) {
+    using Key = std::tuple<std::string, std::string, std::string, std::string, unsigned>;
+    using Name = std::tuple<std::string, std::string, std::string, std::string>;
+    const auto reserved = [](const std::string& kind) {
+        return kind.rfind("reserved-", 0) == 0;
+    };
+    std::map<Key, const ContractEntry*> old, now;
+    for (const auto& e : prev) old[e.key()] = &e;
+    for (const auto& e : curr) now[e.key()] = &e;
+    std::map<Name, const ContractEntry*> old_by_name, now_by_name;
+    for (const auto& slot : old)
+        if (!reserved(slot.second->kind)) old_by_name[{slot.second->kind, slot.second->owner, slot.second->name, slot.second->sub}] = slot.second;
+    for (const auto& slot : now)
+        if (!reserved(slot.second->kind)) now_by_name[{slot.second->kind, slot.second->owner, slot.second->name, slot.second->sub}] = slot.second;
+    const auto render = [](const ContractEntry& e) { return entry_text(e); };
+    CompatDiff diff;
+    for (const auto& slot : old) {
+        const auto it = now.find(slot.first);
+        if (it == now.end()) continue;
+        if (it->second->spec != slot.second->spec)
+            diff.breaking.push_back("changed: "+render(*slot.second)+" "+slot.second->spec+" -> "+it->second->spec);
+    }
+    for (const auto& slot : old) {
+        if (reserved(slot.second->kind) || now.contains(slot.first)) continue;
+        const auto renamed = now_by_name.find({slot.second->kind, slot.second->owner, slot.second->name, slot.second->sub});
+        if (renamed != now_by_name.end())
+            diff.breaking.push_back("renumbered: "+render(*slot.second)+" -> "+std::to_string(renamed->second->id));
+        else
+            diff.breaking.push_back("removed: "+render(*slot.second));
+    }
+    for (const auto& slot : now) {
+        if (reserved(slot.second->kind) || old.contains(slot.first)) continue;
+        if (old_by_name.contains({slot.second->kind, slot.second->owner, slot.second->name, slot.second->sub}))
+            continue; // same meaning at a new id: reported as a renumber above
+        diff.additive.push_back("added: "+render(*slot.second)+" = "+slot.second->spec);
+    }
+    // Retired ids: any live use against a listed reservation is reuse.
+    std::set<std::tuple<std::string, std::string, unsigned>> retired;
+    for (const auto* table : {&old, &now})
+        for (const auto& slot : *table)
+            if (reserved(slot.second->kind))
+                retired.insert({slot.second->kind.substr(9), slot.second->owner, slot.second->id});
+    const auto family = [](const ContractEntry& e) -> std::string {
+        if (e.kind == "prop") return "property";
+        if (e.kind == "method" && (e.sub == "server" || e.sub == "client")) return e.sub;
+        return "";
+    };
+    for (const auto& slot : now) {
+        const auto live = family(*slot.second);
+        if (!live.empty() && retired.contains({live, slot.second->owner, slot.second->id}))
+            diff.breaking.push_back("reserved id reused by "+render(*slot.second));
+    }
+    for (const auto& slot : old)
+        if (reserved(slot.second->kind) && !now.contains(slot.first))
+            diff.breaking.push_back("dropped reservation: "+render(*slot.second));
+    return diff;
+}
 }

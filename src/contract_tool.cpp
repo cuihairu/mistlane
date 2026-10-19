@@ -10,8 +10,6 @@
 #include <string>
 #include <string_view>
 #include <vector>
-#include <map>
-#include <regex>
 namespace fs = std::filesystem;
 namespace mistlane {
 namespace {
@@ -25,29 +23,12 @@ void write_artifact(const fs::path& target, const std::string& content) {
     out.write(content.data(), static_cast<std::streamsize>(content.size()));
     if (!out) throw std::runtime_error("cannot write "+target.string());
 }
-using LockEntries = std::map<std::string, std::string>;
-LockEntries read_lock(const fs::path& path) {
+std::string read_lock_text(const fs::path& path) {
     std::ifstream in(path);
     if (!in) throw std::runtime_error("cannot read release lock: "+path.string());
-    LockEntries entries; std::string line;
-    while (std::getline(in, line)) {
-        std::istringstream row(line); std::string kind, a, b, c, d, e, f, g;
-        row >> kind;
-        if (kind == "entity") { row >> a >> b; entries["entity "+a] = b; }
-        else if (kind == "prop") { row >> a >> b >> c >> d >> e; entries["prop "+a+" "+b] = c+" "+d+(e.empty()?"":" "+e); }
-        else if (kind == "method") { row >> a >> b >> c >> d >> e >> f; entries["method "+a+" "+b+" "+c] = d+" "+e+" "+f; }
-        else if (kind == "arg" || kind == "return") {
-            row >> a >> b >> c >> d >> e >> f >> g;
-            entries[kind+" "+a+" "+b+" "+c+" "+d] = e+" "+f+(g.empty()?"":" "+g);
-        }
-        else if (kind == "struct") {
-            row >> a;
-            static const std::regex field(R"(\{([0-9]+) ([A-Za-z0-9_]+) ([A-Za-z0-9_]+)(?: of ([A-Za-z0-9_]+))?\})");
-            for (std::sregex_iterator it(line.begin(), line.end(), field), end; it != end; ++it)
-                entries["struct "+a+" "+(*it)[1].str()] = (*it)[2].str()+" "+(*it)[3].str()+((*it)[4].matched ? " of "+(*it)[4].str() : "");
-        }
-    }
-    return entries;
+    std::ostringstream text;
+    text << in.rdbuf();
+    return text.str();
 }
 std::string read_digest(const fs::path& path) {
     std::ifstream in(path); std::string line;
@@ -55,18 +36,15 @@ std::string read_digest(const fs::path& path) {
     throw std::runtime_error("release lock has no version digest: "+path.string());
 }
 int compare_locks(const fs::path& old_path, const fs::path& new_path) {
-    const auto before = read_lock(old_path), after = read_lock(new_path);
+    // Both sides go through parse_lock, so every lock line participates —
+    // reserved lines included, since they are what keeps retired ids retired.
+    const auto diff = compat_diff(parse_lock(read_lock_text(old_path)),
+                                  parse_lock(read_lock_text(new_path)));
     std::cout << "VERSION_DIGEST old=" << read_digest(old_path) << " new=" << read_digest(new_path) << '\n';
-    bool breaking = false;
-    for (const auto& [key, value] : before) {
-        const auto it = after.find(key);
-        if (it == after.end()) { std::cout << "REMOVED " << key << " [BREAKING]\n"; breaking = true; }
-        else if (it->second != value) { std::cout << "TYPE_CHANGED " << key << ": " << value << " -> " << it->second << " [BREAKING]\n"; breaking = true; }
-    }
-    for (const auto& [key, value] : after)
-        if (!before.contains(key)) std::cout << "ADDED " << key << " = " << value << " [COMPATIBLE]\n";
-    std::cout << (breaking ? "COMPATIBILITY_GATE BLOCKED\n" : "COMPATIBILITY_GATE PASSED\n");
-    return breaking ? 1 : 0;
+    for (const auto& line : diff.breaking) std::cout << line << " [BREAKING]\n";
+    for (const auto& line : diff.additive) std::cout << line << " [COMPATIBLE]\n";
+    std::cout << (diff.compatible() ? "COMPATIBILITY_GATE PASSED\n" : "COMPATIBILITY_GATE BLOCKED\n");
+    return diff.compatible() ? 0 : 1;
 }
 }
 int run_contract(int argc, char** argv) {

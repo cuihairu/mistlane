@@ -635,6 +635,70 @@ void core_contracts() {
     require(EntityContract(document_with("</Entity>", "<Reserved><Property id=\"5\"/>"
             "<ServerMethod id=\"9\"/><ClientMethod id=\"7\"/></Reserved></Entity>")).lock() == lock_text,
             "release lock is not reproducible");
+    // Compatibility model: the lock text parses back into exactly the entries
+    // the live model flattens to, so the publication gate compares one model
+    // shape on both sides instead of a second ad-hoc lock reader.
+    const auto baseline = locked.entries();
+    require(parse_lock(lock_text) == baseline, "lock text and live model disagree on entries");
+    // A lock line the parser cannot place is refused outright, never skipped.
+    must_fail([&] { (void)parse_lock(lock_text+" widget Avatar x\n"); });
+    must_fail([&] { (void)parse_lock("struct Item {0 itemId UINT32 extra}\n"); });
+    must_fail([&] { (void)parse_lock(lock_text+" prop Avatar 2 hp UINT32\n"); });
+    require(compat_diff(baseline, baseline).compatible(), "a lock is incompatible with itself");
+    const auto compat_source = document_with("</Entity>", "<Reserved><Property id=\"5\"/>"
+            "<ServerMethod id=\"9\"/><ClientMethod id=\"7\"/></Reserved></Entity>");
+    const auto compat_edit = [&](std::string_view from, std::string_view to) {
+        auto text = compat_source;
+        const auto at = text.find(from);
+        require(at != std::string::npos,
+                std::string("compat edit missed its anchor: ")+std::string(from));
+        text.replace(at, from.size(), to);
+        return EntityContract(text).entries();
+    };
+    const auto joined_lines = [](const std::vector<std::string>& lines) {
+        std::string text;
+        for (const auto& line : lines) text += line + "; ";
+        return text;
+    };
+    const auto breaks_with = [&](const std::vector<ContractEntry>& prev, const std::vector<ContractEntry>& curr,
+                                 std::string_view needle) {
+        const auto diff = compat_diff(prev, curr);
+        const auto reports = joined_lines(diff.breaking);
+        require(!diff.compatible() && reports.find(needle) != std::string::npos,
+                std::string("compat gate missed ")+std::string(needle)+": "+reports);
+    };
+    breaks_with(baseline, compat_edit("<gold id=\"3\" type=\"INT64\"", "<gold id=\"6\" type=\"INT64\""), "3 -> 6");
+    breaks_with(baseline, compat_edit("<gold id=\"3\" type=\"INT64\"", "<gold id=\"3\" type=\"STRING\""), "INT64");
+    breaks_with(baseline, compat_edit("caller=\"owner\"", "caller=\"server\""), "notify owner -> notify server");
+    breaks_with(baseline, compat_edit("<gold id=\"3\" type=\"INT64\" default=\"-5\" flags=\"OWN_CLIENT\" persistent=\"true\"/>\n      ",
+            ""), "gold");
+    breaks_with(baseline, EntityContract(document).entries(), "dropped");
+    // Retired ids never come back as live meanings on any id space. The XML
+    // parser refuses the collision outright, so the attempt lives in lock text
+    // exactly where a published lock could be hand-edited into it.
+    const auto lock_edit = [&](std::string_view from, std::string_view to) {
+        auto text = lock_text;
+        const auto at = text.find(from);
+        require(at != std::string::npos,
+                std::string("lock edit missed its anchor: ")+std::string(from));
+        text.replace(at, from.size(), to);
+        return parse_lock(text);
+    };
+    breaks_with(baseline, lock_edit(" reserved Avatar property 5\n",
+            " reserved Avatar property 5\n prop Avatar 5 magic UINT32\n"), "reused");
+    breaks_with(baseline, lock_edit(" reserved Avatar server 9\n",
+            " reserved Avatar server 9\n method Avatar server 9 zap notify server\n"), "reused");
+    breaks_with(baseline, lock_edit(" reserved Avatar client 7\n",
+            " reserved Avatar client 7\n method Avatar client 7 zap notify owner\n"), "reused");
+    breaks_with(baseline, lock_edit(" arg Avatar server 1 0 target EntityRef\n",
+            " arg Avatar server 1 0 target ARRAY Item\n"), "EntityRef");
+    const auto added = compat_diff(baseline, compat_edit(
+            "<gold id=\"3\" type=\"INT64\" default=\"-5\" flags=\"OWN_CLIENT\" persistent=\"true\"/>",
+            "<gold id=\"3\" type=\"INT64\" default=\"-5\" flags=\"OWN_CLIENT\" persistent=\"true\"/>"
+            "<nickname id=\"6\" type=\"STRING\"/>"));
+    require(added.compatible() && !added.additive.empty() &&
+            joined_lines(added.additive).find("nickname") != std::string::npos,
+            "a new property did not land as an additive change");
     CrossAdmission admission(1, 1, 1, 1);
     int a = 0, b = 0;
     require(admission.acquire(&a, context, 0).empty(), "first admission failed");
@@ -2496,10 +2560,26 @@ void contract_tool() {
     auto& compatible = c.spawn({self().string(), "contract", "compat", old_lock.string(), compatible_lock.string()});
     require(compatible.wait()==0, "compatible release lock was rejected: "+compatible.output());
     std::cout << compatible.output();
-    write(breaking_lock, with_digest(release_lock+" prop Avatar 2 gold STRING\n", "2222222222222222"));
+    auto breaking_text = release_lock;
+    const auto gold_line = std::string(" prop Avatar 2 gold INT64\n");
+    const auto gold_at = breaking_text.find(gold_line);
+    require(gold_at != std::string::npos, "gold property missing from test release lock");
+    breaking_text.replace(gold_at, gold_line.size(), " prop Avatar 2 gold STRING\n");
+    write(breaking_lock, with_digest(breaking_text, "2222222222222222"));
     auto& breaking = c.spawn({self().string(), "contract", "compat", old_lock.string(), breaking_lock.string()});
     require(breaking.wait()!=0, "breaking release lock passed the publication gate");
+    require(breaking.output().find("changed") != std::string::npos,
+            "type change report did not name the change: "+breaking.output());
     std::cout << breaking.output();
+    // A lock listing the same assignment twice is refused outright: resolving
+    // it by whichever line came last would let the published type drift.
+    const auto duplicated_lock = c.path("duplicated.lock");
+    write(duplicated_lock, with_digest(release_lock+" prop Avatar 2 gold INT64\n", "8888888888888888"));
+    auto& duplicated = c.spawn({self().string(), "contract", "compat", old_lock.string(), duplicated_lock.string()});
+    require(duplicated.wait()!=0, "a duplicated assignment in a release lock was accepted");
+    require(duplicated.output().find("duplicate") != std::string::npos,
+            "duplicated assignment was not named as malformed: "+duplicated.output());
+    std::cout << duplicated.output();
     const auto removed_lock = c.path("removed.lock");
     auto removed_text = release_lock;
     const auto property = removed_text.find(" prop Avatar 2 gold INT64\n");
@@ -2518,6 +2598,24 @@ void contract_tool() {
     auto& struct_changed = c.spawn({self().string(), "contract", "compat", old_lock.string(), struct_changed_lock.string()});
     require(struct_changed.wait()!=0, "changed struct field type passed the publication gate");
     std::cout << struct_changed.output();
+    // Reserved lines participate in the gate: a retired id taken by a live
+    // meaning blocks, and so does dropping the reservation itself.
+    const auto retired_lock = c.path("retired.lock"), reuse_lock = c.path("reuse.lock"), dropped_lock = c.path("dropped.lock");
+    const auto retired_lines = std::string(" reserved Avatar property 8\n reserved Avatar server 9\n");
+    write(retired_lock, with_digest(release_lock+retired_lines, "5555555555555555"));
+    write(reuse_lock, with_digest(release_lock+retired_lines+" prop Avatar 8 magic UINT32\n", "6666666666666666"));
+    auto& reuse = c.spawn({self().string(), "contract", "compat", retired_lock.string(), reuse_lock.string()});
+    require(reuse.wait()!=0, "retired id reuse passed the publication gate");
+    require(reuse.output().find("reused") != std::string::npos &&
+            reuse.output().find("COMPATIBILITY_GATE BLOCKED") != std::string::npos,
+            "reuse report did not name the collision: "+reuse.output());
+    std::cout << reuse.output();
+    write(dropped_lock, with_digest(release_lock, "7777777777777777"));
+    auto& dropped = c.spawn({self().string(), "contract", "compat", retired_lock.string(), dropped_lock.string()});
+    require(dropped.wait()!=0, "dropped reservation passed the publication gate");
+    require(dropped.output().find("dropped") != std::string::npos,
+            "dropped report did not name the reservation: "+dropped.output());
+    std::cout << dropped.output();
     require(read(one/"avatar.sproto").find("E1_Server_1 ") != std::string::npos &&
             read(one/"avatar.sproto").find("E1_Client_1 ") != std::string::npos &&
             read(one/"avatar.sproto").find("items 1 : *Item") != std::string::npos &&
