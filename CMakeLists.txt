@@ -27,7 +27,7 @@ target_link_libraries(mistlane_net PUBLIC mistlane_core Drogon::Drogon)
 target_compile_options(mistlane_net PRIVATE -Wall -Wextra -Wpedantic)
 file(READ "${CMAKE_CURRENT_SOURCE_DIR}/lua/mistlane/min_heap.lua" MISTLANE_HEAP_SOURCE)
 configure_file(src/test_resources.hpp.in generated/test_resources.hpp @ONLY)
-add_executable(mistlane src/main.cpp src/scaffold.cpp src/cli_client.cpp src/bot.cpp
+add_executable(mistlane src/main.cpp src/scaffold.cpp src/contract_tool.cpp src/cli_client.cpp src/bot.cpp
   src/selftest.cpp src/test_cases.cpp src/test_databases.cpp src/lua_tests.cpp)
 target_include_directories(mistlane PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/generated")
 target_link_libraries(mistlane PRIVATE mistlane_net mistlane_http Boost::mysql)
@@ -42,7 +42,7 @@ add_executable(mistlane-mysql-probe examples/mysql_probe.cpp)
 target_link_libraries(mistlane-mysql-probe PRIVATE mistlane_mysql)
 include(CTest)
 if(BUILD_TESTING)
-  foreach(test_case IN ITEMS core.contracts core.roles transport.tcp transport.websocket transport.http
+  foreach(test_case IN ITEMS core.contracts contract.tool core.roles transport.tcp transport.websocket transport.http
       transport.push transport.correlate transport.identity transport.multiplex coordinator.registry
       coordinator.placement coordinator.routes lua.lifecycle lua.http
       cross.admission cross.record probe.control scaffold.init config.file cli.bot)

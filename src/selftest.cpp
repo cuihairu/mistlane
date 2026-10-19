@@ -7,6 +7,7 @@
 
 namespace mistlane::test {
 void core_contracts();
+void contract_tool();
 void role_names();
 void transport_tcp();
 void transport_websocket();
@@ -78,6 +79,7 @@ int run_tests(int argc, char** argv) {
     }
     const std::vector<Case> cases{
         {"core.contracts","core",test::core_contracts},
+        {"contract.tool","contract",test::contract_tool},
         {"core.roles","core",test::role_names},
         {"transport.tcp","transport",test::transport_tcp},
         {"transport.websocket","transport",test::transport_websocket},

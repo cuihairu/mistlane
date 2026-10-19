@@ -2009,6 +2009,71 @@ void config_file() {
         require(node.wait() == 0, "diagnostics node should stop cleanly");
     }
 }
+void contract_tool() {
+    Context c;
+    const std::string avatar = R"(<Contracts>
+  <Types>
+    <Item><itemId id="0" type="UINT32"/><count id="1" type="UINT32" default="1"/></Item>
+    <Inventory><capacity id="0" type="UINT16" default="20"/><items id="1" type="ARRAY" of="Item"/></Inventory>
+  </Types>
+  <Entity name="Avatar" id="1">
+    <Properties>
+      <level id="1" type="UINT16" default="1" flags="OWN_CLIENT" persistent="true"/>
+      <gold id="2" type="INT64" default="-5" flags="OWN_CLIENT" persistent="true"/>
+    </Properties>
+    <ServerMethods><Method name="attack" id="1" mode="notify" caller="owner">
+      <Arg name="target" id="0" type="EntityRef"/>
+    </Method></ServerMethods>
+    <ClientMethods><Method name="onReward" id="1" mode="notify" audience="owner"/></ClientMethods>
+  </Entity>
+</Contracts>)";
+    const auto good = c.path("avatar.def");
+    write(good, avatar);
+    require(c.command({self().string(), "contract", "check", good.string()}) == 0,
+            "check rejected a valid document");
+    const auto broken = c.path("broken.def");
+    write(broken, std::string("<Contracts><Entity name=\"A\" id=\"1\">"
+        "<Properties><x id=\"1\" type=\"WAT\"/></Properties></Entity></Contracts>"));
+    auto& rejected = c.spawn({self().string(), "contract", "check", broken.string()});
+    require(rejected.wait() != 0, "check accepted an invalid document");
+    require(rejected.output().find("neither built-in") != std::string::npos,
+            "check did not name the failing rule: "+rejected.output());
+    // build emits the three generators, byte-for-byte reproducible.
+    const auto one = c.path("bundle");
+    require(c.command({self().string(), "contract", "build", "--out", one.string(), good.string()}) == 0,
+            "build failed on a valid document");
+    for (const auto& name : {"avatar.xsd", "avatar.lock", "avatar.digest"})
+        require(fs::is_regular_file(one/name), std::string("missing artifact: ")+name);
+    const auto two = c.path("rebuild");
+    require(c.command({self().string(), "contract", "build", "--out", two.string(), good.string()}) == 0,
+            "rebuild failed");
+    equal(read(one/"avatar.xsd"), read(two/"avatar.xsd"));
+    equal(read(one/"avatar.lock"), read(two/"avatar.lock"));
+    equal(read(one/"avatar.digest"), read(two/"avatar.digest"));
+    // The lock's digest line, the digest file and the library digest agree.
+    const auto lock_text = read(one/"avatar.lock");
+    const auto at = lock_text.find("# digest ");
+    require(at != std::string::npos, "lock lost its digest line: "+lock_text);
+    equal(lock_text.substr(at+9, 16), read(one/"avatar.digest").substr(0, 16));
+    std::ostringstream hex;
+    hex << std::hex << std::setw(16) << std::setfill('0') << EntityContract(avatar).digest();
+    equal(hex.str(), read(one/"avatar.digest").substr(0, 16));
+    require(read(one/"avatar.xsd").find("name=\"Avatar\"") != std::string::npos,
+            "schema lost the entity");
+    // A failed build writes nothing, so a broken change cannot clobber a bundle.
+    const auto before_broken = c.path("before-broken");
+    require(c.command({self().string(), "contract", "build", "--out", before_broken.string(),
+                       good.string(), broken.string()}) != 0, "build accepted a broken document");
+    require(!fs::exists(before_broken) || fs::is_empty(before_broken),
+            "a failed build must not write artifacts");
+    // Usage errors are non-zero.
+    require(c.command({self().string(), "contract"}) != 0, "missing verb accepted");
+    require(c.command({self().string(), "contract", "frobnicate", good.string()}) != 0,
+            "unknown verb accepted");
+    require(c.command({self().string(), "contract", "build", good.string()}) != 0,
+            "build without --out accepted");
+}
+
 void scaffold_init() {
     Context c; const auto root=c.path("sample service");
     require(c.command({self().string(),"init",root.string()})==0,"initializer failed");

@@ -2,6 +2,7 @@
 #include "mistlane/roles.hpp"
 #include "mistlane/node.hpp"
 #include "mistlane/cli.hpp"
+#include "mistlane/contract_tool.hpp"
 #include "mistlane/scaffold.hpp"
 #include <charconv>
 #include <cstdlib>
@@ -191,6 +192,7 @@ int main(int argc, char** argv) {
         if (argc > 1) {
             if (std::string_view(argv[1]) == "test") return mistlane::run_tests(argc, argv);
             if (std::string_view(argv[1]) == "bot") return mistlane::run_bot(argc, argv);
+            if (std::string_view(argv[1]) == "contract") return mistlane::run_contract(argc, argv);
             const int scaffold_result = mistlane::run_scaffold(argv[1], argc, argv);
             if (scaffold_result >= 0) return scaffold_result;
         }
@@ -218,6 +220,8 @@ int main(int argc, char** argv) {
                              "mistlane init [DIRECTORY]  Create a multi-role starter project\n"
                              "mistlane test [--list|--suite NAME|--case NAME]  Run native C++ cases\n"
                              "mistlane bot --url URL [--clients N --count N]  Simulate game requests\n"
+                             "mistlane contract check FILE...  Validate entity-contract documents\n"
+                             "mistlane contract build --out DIR FILE...  Emit schema, lock and digest artifacts\n"
                              "  --config FILE  KEY=VALUE native config ('# mistlane-config 1' header;\n"
                              "    MISTLANE_<KEY> env overrides, flags after --config win, relative\n"
                              "    paths resolve against the file or its ROOT= entry)\n"
