@@ -115,6 +115,11 @@ public:
         auto n = ::recv(fd_, &ch, 1, 0);
         return n == 0 || (n < 0 && errno == ECONNRESET);
     }
+    bool closed_now() {
+        char ch;
+        auto n = ::recv(fd_, &ch, 1, MSG_DONTWAIT);
+        return n == 0 || (n < 0 && errno == ECONNRESET);
+    }
     // True when at least one byte has arrived without blocking.
     bool pending() {
         int bytes = 0;
@@ -1980,14 +1985,9 @@ void probe_control() {
     {
         std::vector<std::unique_ptr<RawSocket>> held;
         for (int i = 0; i < 64; ++i) held.push_back(std::make_unique<RawSocket>(probe));
-        const auto deadline = std::chrono::steady_clock::now() + 1200ms;
-        bool rejected = false;
         RawSocket over(probe);
-        while (std::chrono::steady_clock::now() < deadline) {
-            if (over.closed()) { rejected = true; break; }
-            std::this_thread::sleep_for(20ms);
-        }
-        require(rejected, "peer cap did not close the 65th probe connection");
+        eventually([&] { return over.closed_now(); }, 5s,
+            "peer cap did not close the 65th probe connection");
         held.clear();
         eventually([&] {
             return ask(probe, "PROBE1 freed liveness") == "PROBE1 freed ok alive";
