@@ -2,6 +2,9 @@
 #include <lua.hpp>
 #include "mistlane/entity_dispatch.hpp"
 #include <iostream>
+#include <array>
+#include <iomanip>
+#include <sstream>
 #include <string>
 
 extern "C" int luaopen_sproto_core(lua_State*);
@@ -33,6 +36,22 @@ int main(int argc, char** argv) {
     const std::string script = std::string(MISTLANE_SPROTO_LUA_DIR) + "/../../examples/sproto_lua.lua";
     const int result = luaL_dofile(state, script.c_str());
     if (result != LUA_OK) std::cerr << lua_tostring(state, -1) << '\n';
+    if (result == LUA_OK && std::string(argv[1]) == "sdk-vector") {
+        // Independent C++ encoder for one standard sproto scalar field:
+        // schema tag 1, integer value 1. Header words are count, skipped tag,
+        // then the in-band short integer value.
+        std::array<unsigned char, 6> bytes{};
+        const unsigned field_tag = 1, integer_value = 1;
+        const unsigned skipped = field_tag;
+        const unsigned scalar = (integer_value + 1) * 2;
+        bytes[0] = 2; // number of tag words
+        bytes[2] = skipped & 0xff; bytes[3] = (skipped >> 8) & 0xff;
+        bytes[4] = scalar & 0xff; bytes[5] = (scalar >> 8) & 0xff;
+        std::ostringstream hex;
+        for (const auto byte : bytes) hex << std::hex << std::setw(2) << std::setfill('0') << static_cast<unsigned>(byte);
+        if (hex.str() != "020001000400") { lua_close(state); return 1; }
+        std::cout << "CPP_SPROTO_SDK_GOLDEN level=1 hex=" << hex.str() << " [PASS]\n";
+    }
     if (result == LUA_OK && std::string(argv[1]) == "dispatch") {
         lua_getglobal(state, "MISTLANE_DECODE_OK");
         const bool decoded_ok = lua_toboolean(state, -1) != 0;

@@ -40,6 +40,10 @@ elseif MISTLANE_SPROTO_MODE == "golden" then
     "full Avatar standard sproto golden changed")
   assert(hex(empty_bytes) == "03000100020000000a00000002000200000000000000",
     "empty Avatar standard sproto golden changed")
+elseif MISTLANE_SPROTO_MODE == "sdk-vector" then
+  local bytes = sp:encode("Avatar", { level = 1 })
+  print("CPP_SPROTO_SDK_GOLDEN level=1 hex=" .. hex(bytes))
+  assert(hex(bytes) == "020001000400", "SDK scalar vector changed")
 elseif MISTLANE_SPROTO_MODE == "roundtrip" then
   local bytes = sp:encode("Avatar", full)
   local decoded = sp:decode("Avatar", bytes)

@@ -10,12 +10,14 @@
 #include <string>
 #include <string_view>
 #include <vector>
+#include <map>
+#include <regex>
 namespace fs = std::filesystem;
 namespace mistlane {
 namespace {
 struct Artifact {
-    fs::path xsd, lock, digest, sproto, bindings;
-    std::string xsd_text, lock_text, digest_text, sproto_text, bindings_text;
+    fs::path xsd, lock, digest, sproto, bindings, javascript, csharp;
+    std::string xsd_text, lock_text, digest_text, sproto_text, bindings_text, javascript_text, csharp_text;
 };
 void write_artifact(const fs::path& target, const std::string& content) {
     std::ofstream out(target, std::ios::binary | std::ios::trunc);
@@ -23,10 +25,57 @@ void write_artifact(const fs::path& target, const std::string& content) {
     out.write(content.data(), static_cast<std::streamsize>(content.size()));
     if (!out) throw std::runtime_error("cannot write "+target.string());
 }
+using LockEntries = std::map<std::string, std::string>;
+LockEntries read_lock(const fs::path& path) {
+    std::ifstream in(path);
+    if (!in) throw std::runtime_error("cannot read release lock: "+path.string());
+    LockEntries entries; std::string line;
+    while (std::getline(in, line)) {
+        std::istringstream row(line); std::string kind, a, b, c, d, e, f, g;
+        row >> kind;
+        if (kind == "entity") { row >> a >> b; entries["entity "+a] = b; }
+        else if (kind == "prop") { row >> a >> b >> c >> d >> e; entries["prop "+a+" "+b] = c+" "+d+(e.empty()?"":" "+e); }
+        else if (kind == "method") { row >> a >> b >> c >> d >> e >> f; entries["method "+a+" "+b+" "+c] = d+" "+e+" "+f; }
+        else if (kind == "arg" || kind == "return") {
+            row >> a >> b >> c >> d >> e >> f >> g;
+            entries[kind+" "+a+" "+b+" "+c+" "+d] = e+" "+f+(g.empty()?"":" "+g);
+        }
+        else if (kind == "struct") {
+            row >> a;
+            static const std::regex field(R"(\{([0-9]+) ([A-Za-z0-9_]+) ([A-Za-z0-9_]+)(?: of ([A-Za-z0-9_]+))?\})");
+            for (std::sregex_iterator it(line.begin(), line.end(), field), end; it != end; ++it)
+                entries["struct "+a+" "+(*it)[1].str()] = (*it)[2].str()+" "+(*it)[3].str()+((*it)[4].matched ? " of "+(*it)[4].str() : "");
+        }
+    }
+    return entries;
+}
+std::string read_digest(const fs::path& path) {
+    std::ifstream in(path); std::string line;
+    while (std::getline(in,line)) if (line.starts_with("# digest ")) return line.substr(9);
+    throw std::runtime_error("release lock has no version digest: "+path.string());
+}
+int compare_locks(const fs::path& old_path, const fs::path& new_path) {
+    const auto before = read_lock(old_path), after = read_lock(new_path);
+    std::cout << "VERSION_DIGEST old=" << read_digest(old_path) << " new=" << read_digest(new_path) << '\n';
+    bool breaking = false;
+    for (const auto& [key, value] : before) {
+        const auto it = after.find(key);
+        if (it == after.end()) { std::cout << "REMOVED " << key << " [BREAKING]\n"; breaking = true; }
+        else if (it->second != value) { std::cout << "TYPE_CHANGED " << key << ": " << value << " -> " << it->second << " [BREAKING]\n"; breaking = true; }
+    }
+    for (const auto& [key, value] : after)
+        if (!before.contains(key)) std::cout << "ADDED " << key << " = " << value << " [COMPATIBLE]\n";
+    std::cout << (breaking ? "COMPATIBILITY_GATE BLOCKED\n" : "COMPATIBILITY_GATE PASSED\n");
+    return breaking ? 1 : 0;
+}
 }
 int run_contract(int argc, char** argv) {
     if (argc < 3) throw std::invalid_argument("contract needs a verb: check or build");
     const std::string verb(argv[2]);
+    if (verb == "compat") {
+        if (argc != 5) throw std::invalid_argument("contract compat needs OLD.lock NEW.lock");
+        return compare_locks(argv[3], argv[4]);
+    }
     if (verb != "check" && verb != "build")
         throw std::invalid_argument("unknown contract verb: "+verb);
     std::vector<fs::path> files;
@@ -36,11 +85,11 @@ int run_contract(int argc, char** argv) {
         if (arg == "--help" || arg == "-h") {
             std::cout << "Usage: mistlane contract check FILE...\n"
                          "       mistlane contract build --out DIR FILE...\n"
+                         "       mistlane contract compat OLD.lock NEW.lock\n"
                          "check validates each entity-contract document (.def) against the\n"
                          "definition-time rules. build validates first and, only when every\n"
-                         "file passes, writes XSD, lock, digest, sproto and C++ bindings.\n"
-                         "Each file is an independent contract, so cross-file type references\n"
-                         "and release-compatibility reports are not implemented yet.\n";
+                         "file passes, writes XSD, lock, digest, sproto and C++/JS/C# bindings.\n"
+                         "compat compares old and new locks; breaking removals or changes return nonzero.\n";
             return 0;
         }
         if (arg == "--out") {
@@ -81,6 +130,8 @@ int run_contract(int argc, char** argv) {
                 a.digest = out/(stem+".digest");
                 a.sproto = out/(stem+".sproto");
                 a.bindings = out/(stem+".bindings.hpp");
+                a.javascript = out/(stem+".bindings.js");
+                a.csharp = out/(stem+".bindings.cs");
                 a.xsd_text = contract.xsd();
                 a.lock_text = contract.lock();
                 std::ostringstream hex;
@@ -88,6 +139,8 @@ int run_contract(int argc, char** argv) {
                 a.digest_text = hex.str();
                 a.sproto_text = contract.sproto();
                 a.bindings_text = contract.cpp_bindings();
+                a.javascript_text = contract.javascript_bindings();
+                a.csharp_text = contract.csharp_bindings();
                 artifacts.push_back(std::move(a));
             }
         } catch (const ContractError& e) {
@@ -110,6 +163,8 @@ int run_contract(int argc, char** argv) {
         write_artifact(a.digest, a.digest_text);
         write_artifact(a.sproto, a.sproto_text);
         write_artifact(a.bindings, a.bindings_text);
+        write_artifact(a.javascript, a.javascript_text);
+        write_artifact(a.csharp, a.csharp_text);
         std::cout << "wrote "+a.lock.string() << '\n';
     }
     return 0;

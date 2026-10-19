@@ -73,6 +73,14 @@ if(BUILD_TESTING)
     "${CMAKE_CURRENT_BINARY_DIR}/sproto-fixture/avatar.sproto")
   add_test(NAME mistlane_sproto_wire_golden COMMAND mistlane-sproto-probe golden
     "${CMAKE_CURRENT_BINARY_DIR}/sproto-fixture/avatar.sproto")
+  add_test(NAME mistlane_sproto_sdk_cpp_golden COMMAND mistlane-sproto-probe sdk-vector
+    "${CMAKE_CURRENT_BINARY_DIR}/sproto-fixture/avatar.sproto")
+  find_program(MISTLANE_NODE_EXECUTABLE node)
+  if(MISTLANE_NODE_EXECUTABLE)
+    add_test(NAME mistlane_sproto_sdk_js_golden COMMAND "${MISTLANE_NODE_EXECUTABLE}"
+      "${CMAKE_CURRENT_SOURCE_DIR}/examples/sproto_sdk_golden.mjs"
+      "${CMAKE_CURRENT_BINARY_DIR}/sproto-fixture/avatar.bindings.js")
+  endif()
   add_test(NAME mistlane_sproto_lua_roundtrip COMMAND mistlane-sproto-probe roundtrip
     "${CMAKE_CURRENT_BINARY_DIR}/sproto-fixture/avatar.sproto")
   add_test(NAME mistlane_sproto_dispatch COMMAND mistlane-sproto-probe dispatch

@@ -45,8 +45,8 @@
 | 2. 编解码边界与黄金向量 | 外层传输帧与载荷编码分开；使用 cloudwu/sproto 上游线格式覆盖标量、数组、嵌套和边界值。此前 fixture 专用规范 TLV 向量保留并明确标为内部格式。 | `mistlane_sproto_wire_golden` 对非空和空 Avatar 固定上游 sproto 字节；`mistlane_sproto_upstream_parser` 解析生成 schema。`sproto.golden` 保留为独立内部 TLV 检查。 |
 | 3. Lua 原型与分发 | 使用生成 schema 和上游 Lua 绑定；C++ 契约描述符按 entity/side/method 分派，并传入 caller 与 target 上下文。按契约检查字段；request 返回类型化响应，notify 无响应。 | `contract.tool` 覆盖确定性 C++ bindings、分发和五类负向路径；`mistlane_sproto_lua_roundtrip` 覆盖 Lua 编解码回环。 |
 | 4. RPC harness 与生命周期 | 定义关联 ID、超时/取消、重复处理、响应归属和过期实体代次行为。 | 进程内及双进程 harness 覆盖请求/响应、push、超时、过期引用、错误调用方、断连和重复处理。 |
-| 5. SDK 兼容 | 从共享 schema 生成 JS/C# 绑定，并核对支持的客户端版本。 | JS/C# 编解码标准黄金向量；兼容检查发现已发布 ID 删除、重编号或改类型。 |
-| 6. 发布锁与发布闸门 | 在发布锁中持久记录协议 tag 和 schema digest，并与已发布 bundle 比较兼容性。 | 可复现 bundle 和兼容报告在发布前阻断破坏性变更。 |
+| 5. SDK 兼容 | 从共享契约生成 JavaScript JSDoc 字段类型和无依赖标量 sproto 编码器，以及 C# record 类型和标量编码器。 | `contract.tool` 检查 SDK 工件可复现；C++/上游、Node JS、.NET C# 均将 `Avatar.level=1` 编为相同字节。 |
+| 6. 发布锁与发布闸门 | 按稳定 entity/member ID 比较新旧发布锁，并分类新增、删除和含义变化。新增通过；删除或映射变化以非零退出阻止发布。 | `contract.tool` 通过 `mistlane contract compat OLD.lock NEW.lock` 测试兼容变更与破坏性变更。 |
 
 这是研究闸门，不是时间表或产品承诺。阶段是否完成以证据为准；仅有生成文件不能作为后续阶段完成的依据。
 
@@ -58,7 +58,9 @@
 
 阶段 4 已有进程内 RPC 生命周期 harness：按 caller correlation id 配对、由注入的单调时钟触发超时、丢弃迟到响应、拒绝重复响应、断连时取消在途请求。它是确定性状态机测试，不是生产传输实现。协议对照见 [entity-contract envelope 与错误词表](./entity-contract.md#invocation-envelope-and-error-protocol-decided-unimplemented)：`docs/entity-contract.md:241–252` 为 envelope，`:258–273` 为闭合错误，`:275` 为校验顺序。对应行为：超时=`TIMEOUT`、断连=`CANCELLED`、过期目标=`STALE`、重复投递/响应=`CONFLICT`。
 
-阶段 5–6 仍未做：JS/C# SDK 兼容与发布锁闸门。运行时加载、网络分发、真实传输上的 deadline/cancel、hosting-generation 栅栏、持久化和生产容量限制仍在 harness 范围之外。证据见 `rpc.lifecycle`、`mistlane_sproto_dispatch`、`contract.tool` 及 `examples/sproto_lua.lua`。
+阶段 5–6 已按当前原型边界实现。阶段 5 生成 JavaScript JSDoc entity/参数类型和无依赖标量 sproto 编码器，以及 C# record 类型和标量编码器；两侧是最小 SDK，不是完整客户端运行库。`Avatar.level=1` 在 C++ 参考、生成的 JavaScript 和以 .NET 10 编译运行的 C# 中均编码为 `020001000400`。未增加第三方依赖。阶段 6 增加 `mistlane contract compat OLD.lock NEW.lock`，报告 `ADDED`、`REMOVED`、`TYPE_CHANGED`；新增兼容，删除和映射变化返回非零。`contract.tool` 覆盖兼容新增、删除与类型变化。
+
+仍未实现：完整生产级 JS/C# codec 与 SDK runtime；在线网络契约加载与分发；真实网络 deadline/cancel 传播；hosting-generation 栅栏；运行时持久化与迁移；自动属性变更跟踪、同步/AOI；生产容量和故障恢复。RPC harness 仍在进程内。证据见 `contract.tool`、`mistlane_sproto_sdk_cpp_golden`、`mistlane_sproto_sdk_js_golden`、`rpc.lifecycle` 与 `mistlane_sproto_dispatch`。
 
 ## 范围与排除项
 

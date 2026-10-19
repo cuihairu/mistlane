@@ -1094,19 +1094,27 @@ void transport_multiplex() {
     auto& node = c.spawn({self().string(), "--role", "gameServer", "--listen", endpoint(gameServer),
         "--script", c.path("correlate.lua").string(), "--service-token", "s3cret",
         "--metrics-listen", endpoint(metrics)});
+    // Gateway starts its shared MuxLink on the first client. Wait until the
+    // upstream listener has announced readiness before allowing that connect.
+    node.ready("ready gameServer");
     c.node("gateway", gateway, {"--upstream", endpoint(gameServer),
         "--upstream-token", "s3cret", "--upstream-multiplex", "1"});
+    std::string phase = "initial client echo";
     const auto send_frame = [](RawSocket& raw, std::string_view payload) {
         std::string frame(4, '\0');
         auto length = static_cast<std::uint32_t>(payload.size());
         for (int i = 3; i >= 0; --i) { frame[i] = static_cast<char>(length & 255); length >>= 8; }
         raw.send(frame+std::string(payload));
     };
-    const auto read_frame = [](RawSocket& raw) {
-        const auto header = raw.receive(4);
-        std::size_t length = 0;
-        for (unsigned char ch : header) length = (length << 8) | ch;
-        return raw.receive(length);
+    const auto read_frame = [&phase](RawSocket& raw) {
+        try {
+            const auto header = raw.receive(4);
+            std::size_t length = 0;
+            for (unsigned char ch : header) length = (length << 8) | ch;
+            return raw.receive(length);
+        } catch (const std::exception& error) {
+            throw std::runtime_error("multiplex phase '"+phase+"': "+error.what());
+        }
     };
     const auto tagged = [](std::uint32_t id, std::string_view payload) {
         std::string frame(4, '\0');
@@ -1141,14 +1149,26 @@ void transport_multiplex() {
     RawSocket a(gateway), b(gateway);
     send_frame(a, "hello"); equal(read_frame(a), "hello");
     send_frame(b, "world"); equal(read_frame(b), "world");
-    std::this_thread::sleep_for(300ms);
-    require(established(gameServer) == 1, "upstream connection not shared by logical sessions");
-    const auto live = http("http://"+endpoint(metrics)+"/metrics").body;
+    // Synchronize on server admission and the kernel socket state. The fixed
+    // sleep used to sample /proc/net/tcp before the shared connection was
+    // visible under load.
+    const auto deadline = std::chrono::steady_clock::now() + 5s;
+    int upstream_connections = 0;
+    std::string live;
+    do {
+        live = http("http://"+endpoint(metrics)+"/metrics").body;
+        upstream_connections = established(gameServer);
+        if (upstream_connections == 1 &&
+            live.find("mistlane_active_sessions{role=\"gameServer\"} 2") != std::string::npos) break;
+        std::this_thread::sleep_for(10ms);
+    } while (std::chrono::steady_clock::now() < deadline);
+    require(upstream_connections == 1, "expected one shared upstream TCP connection; observed " + std::to_string(upstream_connections));
     require(live.find("mistlane_active_sessions{role=\"gameServer\"} 2") != std::string::npos,
             "logical sessions missing from server admission");
     // Correlation is a first-frame handshake, so it lives on a third client and
     // must survive the envelope of a session it never shared.
     RawSocket corr(gateway);
+    phase = "correlation handshake";
     send_frame(corr, "MLC2"); equal(read_frame(corr), "MLC2 OK");
     send_frame(corr, tagged(5, "self"));
     split(read_frame(corr));
@@ -1157,12 +1177,14 @@ void transport_multiplex() {
     body = read_frame(b);
     require(body.starts_with("session=") && body.ends_with(":req=nil"), "plain session broken: "+body);
     // A push and a broadcast stay inside their logical session.
+    phase = "push and correlated reply";
     send_frame(corr, tagged(6, "push"));
     split(read_frame(corr)); require(id == 0 && body == "pushed", "push lost on the shared leg");
     split(read_frame(corr)); require(id == 6 && body == "done", "reply lost after a push");
     require(!b.pending(), "push leaked into another logical session");
     // A directly authenticated session shares the registry too, so the count
     // reaches four: a, b, corr and the direct peer.
+    phase = "direct peer and broadcast";
     RawSocket direct(gameServer);
     send_frame(direct, "MLS1 gateway inst-9 s3cret");
     equal(read_frame(direct), "MLS1 OK");
@@ -1174,14 +1196,17 @@ void transport_multiplex() {
     equal(read_frame(direct), "bc");
     // A Lua error closes only that logical session.
     {
+        phase = "isolated Lua error";
         RawSocket err(gateway);
         send_frame(err, "oops");
         expect_close(err);
     }
     require(node.output().find("mux oops") != std::string::npos,
             "logical session error not reported");
+    phase = "survivor after Lua error";
     send_frame(b, "again"); equal(read_frame(b), "again");
     // A disconnect retires its logical session; the rest of the hub survives.
+    phase = "disconnect retirement";
     {
         RawSocket gone(gateway);
         send_frame(gone, "bye"); equal(read_frame(gone), "bye");
@@ -1194,6 +1219,11 @@ void transport_multiplex() {
     equal(read_frame(b), "bc"); equal(read_frame(b), "bcast=4");
     equal(read_frame(a), "bc");
     // Nobody upgrades mid-session, whether through the gateway or directly.
+    // Check for malformed hub traffic before the deliberate MLM1 refusals
+    // below: those expected refusals are logged as "unexpected frame" too.
+    require(node.output().find("unexpected frame") == std::string::npos,
+            "hub parsed a malformed frame before the refusal cases");
+    phase = "mid-session refusal probes";
     send_frame(a, "MLM1"); equal(read_frame(a), "MLM1");
     {
         RawSocket mid(gateway);
@@ -1217,7 +1247,6 @@ void transport_multiplex() {
         require(bad.wait() != 0 && bad.output().find("requires --upstream-token") != std::string::npos,
                 "multiplex accepted without a service identity");
     }
-    require(node.output().find("unexpected frame") == std::string::npos, "hub parsed a malformed frame");
 }
 // The coordinator role (MLR1) keeps a live registry instead of forwarding
 // gameplay: members register with a scope and heartbeat readiness/load, a
@@ -2089,7 +2118,7 @@ void contract_tool() {
     const auto one = c.path("bundle");
     require(c.command({self().string(), "contract", "build", "--out", one.string(), good.string()}) == 0,
             "build failed on a valid document");
-    for (const auto& name : {"avatar.xsd", "avatar.lock", "avatar.digest", "avatar.sproto", "avatar.bindings.hpp"})
+    for (const auto& name : {"avatar.xsd", "avatar.lock", "avatar.digest", "avatar.sproto", "avatar.bindings.hpp", "avatar.bindings.js", "avatar.bindings.cs"})
         require(fs::is_regular_file(one/name), std::string("missing artifact: ")+name);
     const auto two = c.path("rebuild");
     require(c.command({self().string(), "contract", "build", "--out", two.string(), good.string()}) == 0,
@@ -2099,12 +2128,55 @@ void contract_tool() {
     equal(read(one/"avatar.digest"), read(two/"avatar.digest"));
     equal(read(one/"avatar.sproto"), read(two/"avatar.sproto"));
     equal(read(one/"avatar.bindings.hpp"), read(two/"avatar.bindings.hpp"));
+    equal(read(one/"avatar.bindings.js"), read(two/"avatar.bindings.js"));
+    equal(read(one/"avatar.bindings.cs"), read(two/"avatar.bindings.cs"));
     const auto generated_bindings=read(one/"avatar.bindings.hpp");
     require(generated_bindings.find("struct Avatar_server_attackArgs") != std::string::npos &&
             generated_bindings.find("std::int64_t target;") != std::string::npos &&
             generated_bindings.find("struct Avatar_server_getProfileArgs") != std::string::npos &&
             generated_bindings.find("std::uint32_t account;") != std::string::npos,
             "generated field-specific typed argument objects missing");
+    require(read(one/"avatar.bindings.js").find("encodeScalar") != std::string::npos &&
+            read(one/"avatar.bindings.js").find("sprotoFields") != std::string::npos &&
+            read(one/"avatar.bindings.cs").find("record Avatar") != std::string::npos &&
+            read(one/"avatar.bindings.cs").find("SprotoScalarCodec") != std::string::npos &&
+            read(one/"avatar.bindings.cs").find("AvatarSchema") != std::string::npos,
+            "generated JS/C# SDK bindings missing");
+    const auto old_lock = c.path("old.lock"), compatible_lock = c.path("compatible.lock"), breaking_lock = c.path("breaking.lock");
+    const auto release_lock = read(one/"avatar.lock");
+    auto with_digest = [](std::string text, std::string_view digest) {
+        const auto at = text.find("# digest ");
+        require(at != std::string::npos, "test release lock missing version digest");
+        text.replace(at+9, 16, digest);
+        return text;
+    };
+    write(old_lock, release_lock);
+    write(compatible_lock, with_digest(release_lock+" prop Avatar 5 nickname STRING\n", "1111111111111111"));
+    auto& compatible = c.spawn({self().string(), "contract", "compat", old_lock.string(), compatible_lock.string()});
+    require(compatible.wait()==0, "compatible release lock was rejected: "+compatible.output());
+    std::cout << compatible.output();
+    write(breaking_lock, with_digest(release_lock+" prop Avatar 2 gold STRING\n", "2222222222222222"));
+    auto& breaking = c.spawn({self().string(), "contract", "compat", old_lock.string(), breaking_lock.string()});
+    require(breaking.wait()!=0, "breaking release lock passed the publication gate");
+    std::cout << breaking.output();
+    const auto removed_lock = c.path("removed.lock");
+    auto removed_text = release_lock;
+    const auto property = removed_text.find(" prop Avatar 2 gold INT64\n");
+    require(property != std::string::npos, "gold property missing from test release lock");
+    removed_text.erase(property, std::string(" prop Avatar 2 gold INT64\n").size());
+    write(removed_lock, with_digest(removed_text, "3333333333333333"));
+    auto& removed = c.spawn({self().string(), "contract", "compat", old_lock.string(), removed_lock.string()});
+    require(removed.wait()!=0, "removed property passed the publication gate");
+    std::cout << removed.output();
+    auto struct_changed_text = release_lock;
+    const auto array_field = struct_changed_text.find("{1 items ARRAY of Item}");
+    require(array_field != std::string::npos, "array struct field missing from test lock");
+    struct_changed_text.replace(array_field, std::string("{1 items ARRAY of Item}").size(), "{1 items STRING}");
+    const auto struct_changed_lock = c.path("struct-changed.lock");
+    write(struct_changed_lock, with_digest(struct_changed_text, "4444444444444444"));
+    auto& struct_changed = c.spawn({self().string(), "contract", "compat", old_lock.string(), struct_changed_lock.string()});
+    require(struct_changed.wait()!=0, "changed struct field type passed the publication gate");
+    std::cout << struct_changed.output();
     require(read(one/"avatar.sproto").find("E1_Server_1 ") != std::string::npos &&
             read(one/"avatar.sproto").find("E1_Client_1 ") != std::string::npos &&
             read(one/"avatar.sproto").find("items 1 : *Item") != std::string::npos &&
