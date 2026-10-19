@@ -70,7 +70,7 @@ Legacy evidence: `game/Hegel/Rpc/PacketHandler.lua`, `game/Common/CService/Serve
 | Layer | Contents | Loading and lifetime |
 |---|---|---|
 | Map definition | Template ID, type, spawn points, rules and resource references | Configuration registration; multiple scenes may reference one definition |
-| Static spatial data | Read-only obstacles, walkability and navigation | Target process-local shared cache with readiness, loading/failure, references and release rules; chunk streaming requires separate design |
+| Static spatial data | Read-only obstacles, walkability and navigation | Target process-local shared cache with readiness, loading/failure, references and release rules, now specified on the [scene lifecycle](./scene-lifecycle.md) page; chunk streaming is a separate requirement on the [big map](./big-map.md) page |
 | Scene instance | Instance ID, players, monsters, timers, revival and progress | Create/run/enter/leave/close; persistent scenes and temporary instances use different policies |
 
 ```mermaid
@@ -81,7 +81,7 @@ flowchart TB
   process --> b
 ```
 
-This is the target sharing model: static data shared, mutable scene state isolated. One game process can host multiple scenes; an instance is not a process. Entering an existing scene should not reload the entire map. Avatar transfer does not carry static map resources. A destination that is not ready must not publish successful entry; readiness, failure and timeout need explicit handling.
+This is the target sharing model: static data shared, mutable scene state isolated. One game process can host multiple scenes; an instance is not a process. Entering an existing scene should not reload the entire map. Avatar transfer does not carry static map resources. A destination that is not ready must not publish successful entry; readiness, failure and timeout need explicit handling. The prepare states, cleanup order and reference-release rules are specified on the [scene lifecycle](./scene-lifecycle.md) page.
 
 The old newScene shallow-copies a definition and separates tid/id; createCloneScene allocates dynamic instances and SceneManager.init creates persistent scenes. MapMgr caches read-only MapData by mapId, but key navigator calls in CAPI are commented out, so neither active navigation nor streaming is established. GameSceneIndex creates instances and handles activity closure/player evacuation; Scene.destory remains a TODO, requiring per-gameplay cleanup review.
 
@@ -95,7 +95,7 @@ Legacy locations: `game/Common/Template/TScene.lua`, `game/Hegel/Scene/SceneLogi
 - **Many active entities:** AOI limits synchronization, while activation/simulation still require budgets. Capacity evidence should guide channels, separate instances or spatial partitions. Area alone does not determine compute load.
 - **One seamless map across processes:** requires neighbor interactions/state and authority handoff. Complete-Avatar transfer and asset chunks do not by themselves provide seamless spatial partitions.
 
-Combined Base/Cell responsibilities do not rule out large maps. The observed legacy model hosts complete scenes per process and transfers players across scenes/processes. Mature streaming, spatial AOI and seamless partitions are not established by this repository, nor can client resource loading be inferred from server code. [UE World Partition](https://dev.epicgames.com/documentation/en-us/unreal-engine/world-partition-in-unreal-engine) is only a reference for chunk streaming, not an integrated feature here.
+Combined Base/Cell responsibilities do not rule out large maps. The observed legacy model hosts complete scenes per process and transfers players across scenes/processes. Mature streaming, spatial AOI and seamless partitions are not established by this repository, nor can client resource loading be inferred from server code. [UE World Partition](https://dev.epicgames.com/documentation/en-us/unreal-engine/world-partition-in-unreal-engine) is only a reference for chunk streaming, not an integrated feature here. The per-axis assessment and the streaming and spatial-partition requirements are on the [big map](./big-map.md) page.
 
 ## Implementation status and follow-up
 
