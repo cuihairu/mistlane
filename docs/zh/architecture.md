@@ -18,7 +18,7 @@ flowchart TB
   cross <--> data
 ```
 
-data 表示按角色数据归属寻址的服务职责，不是一台所有区服共享的数据库。crossServer 的长期变更回传原区服 data；具体协议与确认语义待实现，图中的访问边不授予双写权限。apiServer 是可选外部系统接入职责，完整回调链见[HTTP 与 WebSocket](./http.md)。
+data 表示按角色数据归属寻址的服务职责，不是一台所有区服共享的数据库。crossServer 的长期变更回传原区服 data。[回传协议与确认语义](./cross-return-protocol.md)已定：MLD1 LOAD/SUBMIT、易失性 RECEIVED、有序发送队列、持久 ACK 编解码与租约状态模型已实现；持久存储、ACK 发出及 crossServer/coordinator/Avatar 运行时接线仍未实现。图中的访问边不授予双写权限。apiServer 是可选外部系统接入职责，完整回调链见[HTTP 与 WebSocket](./http.md)。
 
 ## 当前可运行原型
 

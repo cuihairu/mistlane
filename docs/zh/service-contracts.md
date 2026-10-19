@@ -7,7 +7,7 @@
 - **MLD1 的归属侧端点就是 `data` 角色本身。** 归属区服的 gateway 可以为它做传输前置，但持久确认的权威是 data 服务——不是 coordinator，也不是 gameServer。此项关闭回传协议页上的未决问题。
 - **三个角色都复用现有运行时面**——带可选 `MLS1` 身份的帧式 TCP 会话、Lua `message`/`http` 钩子、`MLR1` 注册表访问，以及 apiServer 现有的 HTTP 栈。不为它们引入新传输层。
 - **login 与 data 已可作为普通脚本服务运行**（`--role login`/`--role data` 带 `--script` 启动，标准钩子与帧式会话，形同没有场景的 gameServer）。login 的分配查询与 data 侧 MLD1 记录端点已实现；认证、持久加载与持久化流程仍是契约层。apiServer 已在运行，本页补契约文档，不加代码。
-- **服务间的进入凭据定为短时效 HMAC-SHA256 凭据**（2026-10-19 依据 2026-10-14 既有授权代决）：login 在自身凭据校验之后，以区服预共享秘钥（来自配置）对（realm、character、目标 instance、有效期、nonce）签发一张凭据，接收侧 gameServer/crossServer 先验证凭据再接受进入或移交——宿主绝不在裸声明上加载角色。被否选项：每客户端 PKI/mTLS（需要本部署不具备的 CA 与轮换运维）、外部 JWT/认证服务（新增进程，且把依赖压进入口热路径）、以及框架不出凭据（宿主将信任未验证声明，破坏唯一写入权规则）。`MLS1` 预共享令牌仍是服务链路身份；沙箱不开启任何密码库，签发/验证是未来的 C++ 原语，目前未实现任何部分。
+- **服务间的进入凭据定为短时效 HMAC-SHA256 凭据**（2026-10-19 依据 2026-10-14 既有授权代决）：login 在自身凭据校验之后，以区服预共享秘钥（来自配置）对（realm、character、目标 instance、承载 generation、有效期、nonce）签发一张凭据，接收侧 gameServer/crossServer 先验证凭据再接受进入或移交——宿主绝不在裸声明上加载角色。被否选项：每客户端 PKI/mTLS（需要本部署不具备的 CA 与轮换运维）、外部 JWT/认证服务（新增进程，且把依赖压进入口热路径）、以及框架不出凭据（宿主将信任未验证声明，破坏唯一写入权规则）。`MLS1` 预共享令牌仍是服务链路身份；沙箱不开启任何密码库，签发/验证是未来的 C++ 原语，目前未实现任何部分。
 
 ## login
 
@@ -19,9 +19,11 @@ login 拥有进入流程：验证账号、展示角色列表、取得承载分�
 | 对端 | 入向：客户端与 gateway；出向：coordinator 注册表（以注册表客户端身份 `MLR1 QUERY`/`MLR1 PLACE`）、data（入场前必须取回的角色列表/存档） |
 | Lua 面 | 同一套 `message`/`init`/`start`/`tick`/`stop`/`shutdown` 钩子；login 处理器应答认证、角色列表与进入请求；没有场景或 Avatar 对象 |
 | 承载分配 | login 向 coordinator 发 `MLR1 PLACE gameServer <scope>` 并在进入应答中带回分配地址；不得把地址写进持久记录（职责规则）；`MLR1 EMPTY` 是进入拒绝，不是可吞掉的错误 |
-| 进入上下文 | 进入应答携带来源区服、角色标识与返回路由——与跨服回传协议定义的参与者字段同形，使 gameServer 与后续 crossServer 使用同一种上下文 |
+| 进入上下文 | 进入应答携带来源区服、角色标识、归属 data 签发的承载 generation、返回路由及 login 凭据；gameServer 与后续 crossServer 使用同一参与者上下文 |
 | 认证边界 | 凭据验证是应用层 Lua 决策；服务之间，进入凭据是已拍板的 HMAC-SHA256 短时效凭据（见上方决定）——尚未实现，因此今天宿主在传输身份之外仍无法验证进入上下文 |
 | 状态 | login 至多持有连接状态与未完成的承载记录；没有任何持久数据。进入应答之后，角色路由归属 gameServer/coordinator，而不是 login |
+
+generation 生命周期（设计，非运行时）：分配选出目标实例后，login 向归属 data 请求 `(realm, character, target instance)` 授权。归属 data 是唯一 generation 权威：新键从 1 开始；重新分配或接管须持久分配严格更大的 generation，栅栏/墓碑旧授权，并按[有序租约交接](./cross-return-protocol.md#写入租约交接)激活目标。中止或超时后不得复用已分配 generation。login 在进入上下文返回 data 签发的 generation，并与目标实例一起绑定进凭据；接收宿主在持久写前验证凭据及归属 data 的有效授权。宿主不能自发或推进 generation。当前 MLD1 LOAD 只观察内存记录，SUBMIT 接受更大数字不构成租约授权。授权/预留/激活线消息、持久权威与凭据编码/传输仍归归属执行缺口，尚未实现。
 
 接线状态：已可作为脚本服务启动（`--role login` 加 `--script`，帧式会话与标准钩子）；`--coordinator ADDR:PORT [--scope NAME]` 接通注册表客户端——Lua `mistlane.place(role, scope?, callback)` 每次查询经新连接发起 `MLR1 PLACE`，把分配地址（或原因）交回脚本。进入凭据方案已拍板（HMAC-SHA256、区服预共享秘钥——见上方决定）但未实现：等 C++ 密码原语，因为 Lua 沙箱不开启任何密码库。同样未实现：分配外围的完整进入流程。
 

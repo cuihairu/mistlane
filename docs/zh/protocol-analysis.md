@@ -1,6 +1,6 @@
 # 协议面分析
 
-状态：按 2026-10-19 已有设计稿与实现记录进行跨文档核查。本文接续实体、服务、跨服回传与验证分析，不重述各稿设计，也不把文档契约等同于运行时接线。清单区分线行为、已定设计和缺失的运行时工作。
+状态：2026-10-20 对照 `fe8b2a6` 与下述文档修正重新核查。本文接续实体、服务、跨服回传与验证分析，不把文档契约等同于运行时接线。清单区分线行为、已定设计和缺失的运行时工作。
 
 ## 协议面全景
 
@@ -11,38 +11,32 @@
 | 路由与跨服 | `MLC1` 是 gateway 跨服路由/准入握手，可选携带全有或全无的参与者后缀（`ch`、`gen`、`ret`）。它选择静态房间/组亲和与准入，不等于动态角色分配或迁移。`PROBE1` 提供就绪/过载检查。 | [cross-server.md](../cross-server.md)、[cross-return-protocol.md 参与者与返回上下文](../cross-return-protocol.md#参与者与返回上下文)、[architecture-comparison.md:53–60](../architecture-comparison.md) |
 | coordinator 控制面 | `MLR1` 在具名作用域内提供成员注册、心跳、QUERY/PLACE 和 ROUTE SET/GET。注册携带就绪/负载；现有路由记录指向当前已注册成员。归属租约与迁移状态机尚未实现。 | [process-roles.md 当前实现](../process-roles.md#当前实现)、todo.md:48–51 |
 | 回传与数据 | `MLD1 LOAD/SUBMIT` 是 `data` 上的帧式 TCP 端点；它执行 generation 栅栏、按 `(realm, character)` 连续序号及重复回执。`RECEIVED` 只是进程内回执；没有持久 ACK 或存储链。每参与者有序发送队列边界已实现但尚未接入 crossServer 运行时。 | [cross-return-protocol.md 回传与持久化确认](../cross-return-protocol.md#回传与持久化确认-mld1)、[service-contracts.md data](../service-contracts.md#data)、[validation.md MLD1 行](../validation.md) |
-| 实体契约与同步 | XML `.def` 原型固定一部分类型、显式 ID、项目 XSD 和发布锁。已设计的调用 envelope 是帧载荷，含 `EntityRef` 寻址、独立关联 ID、generation/deadline 和封闭 `EntityError`；属性复制与持久化仍属设计/运行时工作。 | [entity-contract.md 定义格式与校验](../entity-contract.md#one-contract)、[调用 envelope 与错误协议](../entity-contract.md#invocation-envelope-and-error-protocol-decided-unimplemented)、[属性复制](../entity-contract.md#automatic-property-replication) |
+| 实体契约与同步 | XML `.def` 已生成 XSD/lock/digest、sproto 及 C++/JS/C# 原型绑定，`contract compat` 比较发布锁。已有上游线向量、派发器与进程内实体/RPC 夹具。完整网络 envelope/error 编码、生产 codec、运行时加载、属性复制与持久化仍开放（缺口 7）。 | [entity-contract.md](./entity-contract.md)、[实现证据](./bigworld-like-protocol.md#已实现状态与证据)、[validation.md 契约/SDK 行](./validation.md) |
 | 服务契约 | `login` 是面向客户端的脚本角色与 MLR1 分配客户端；`data` 是归属侧记录端点；可选 `apiServer` 是外部 HTTP 入口。MLS1 是服务链路身份。login 凭据已决定为 HMAC-SHA256，但签发/验证尚未实现。 | [service-contracts.md](../service-contracts.md)、[process-roles.md 跨区数据归属](../process-roles.md#cross-region-data-ownership) |
 | HTTP 与错误边界 | HTTP gateway 将请求/上游结果映射为 HTTP 状态；apiServer hooks 与 WebSocket callbacks 定义请求/会话级错误处理。EntityError 是另一套封闭 RPC 错误词表。MLR1/MLD1/MLS1/MLC1 错误各自属于协议，不能视为共享的 EntityError 枚举。 | [http.md 服务端与 Lua HTTP handlers](../http.md)、[entity-contract.md 调用 envelope 与错误协议](../entity-contract.md#invocation-envelope-and-error-protocol-decided-unimplemented) |
 
 ## 一致性核查
 
-以下是尚未解决的审计项，不是统计每处重复文字。还剩 3 条矛盾与 6 条缺口。若后写的定案与前稿断言相反，计作矛盾；缺少线格式、归属或时序的计作缺口。
+固定沿用原始审计 `a429664` 的编号：4 条矛盾、7 条缺口，含已解项，解决后不重排。原文中**归属权执行是缺口 4，coordinator 路由与归属是缺口 5**；本次两者与缺口 2、6、7 一并核查。A = 改文档消解；B = 改代码消解；C = 保留并写清未来工作。既有 B 实现只记对应提交，不重做。
 
-### 矛盾（3）
+**终态：矛盾 4 条（已解 4 / 未解 0）；缺口 7 条（已解 2 / 部分 3 / 未解 2）。** 消除矛盾承诺不等于实现崩溃恢复；部分/未解运行时工作仍受下述闸门约束。
 
-1. **凭据状态：**`cross-return-protocol.md:15,17,77` 说尚无签发方、入场凭据/签名仍待决定；`service-contracts.md:10,23,26,58` 与 `todo.md:56,58` 已决定由 login 签发 HMAC-SHA256 凭据，并明确仅实现未落地。设计决策已定，回传页文字过时。
-2. **回传协议是否已定：**`architecture.md:21` 称回传协议/确认语义尚未实现。`cross-return-protocol.md:3,46,74` 与 `service-contracts.md:7` 表明协议及 data 端点归属已定，只是实现不完整。这里把“尚未决定”和“决定但未实现”混为一谈。
-3. **崩溃/重启后的去重持久性：**`cross-return-protocol.md:65` 承诺发送方重启后由归属侧去重；`:58`、`service-contracts.md:41` 和 `todo.md:55` 又说明当前记录与去重状态只在进程内，data 重启即 EMPTY。只有持久存储与持久序号状态落地后，重启去重承诺才成立。
+### 矛盾
 
-### 缺口（6）
+1. **序号顺序——已解，B（`b46be86`，此前已完成）。** 发送队列按 `(realm, character)` 串行发送连续序号，与端点 `stored + 1` 校验一致。`RECEIVED` 释放发送槽，变更仍保留到持久确认。证据：`include/mistlane/record.hpp:135–151,163–244`；`cross.return.queue`、`cross.record`。
+2. **凭据状态——已解，A。** 原文：“入场凭据是否签名、由谁签发”仍待决定。改后：签发方已定为 login，以区服密钥签发短时效 HMAC-SHA256 凭据；C++ 签发/验证及凭据传输未实现，当前上下文仍未获持久写授权。证据：[参与者上下文](./cross-return-protocol.md#参与者与返回上下文)、[已定决策](./cross-return-protocol.md#已定决策与剩余工作)，与既有决定 `fe8b2a6:docs/service-contracts.md:10,23,26,58` 对齐。
+3. **回传协议是否已定——已解，A。** 原文（`fe8b2a6:docs/zh/architecture.md:21`）：“具体协议与确认语义待实现”。改后：回传协议/确认语义已定；LOAD/SUBMIT/RECEIVED、有序队列、持久 ACK codec 与租约模型已实现，存储、持久 ACK 发出和运行时接线未实现。证据：[架构](./architecture.md#目标游戏服务架构)、`b46be86`（队列）、`fe8b2a6`（ACK/租约）、`include/mistlane/record.hpp:52–69,108–159,247–264`。
+4. **崩溃/重启后的去重持久性——文字已解，A；持久恢复保留，C。** 原文：“归属侧重启后看到重复并按序号去重”，丢 ACK 重发后“队列排空”。改后：发送方崩溃会丢失进程内队列；仅当应用重建相同提交、同一 data 进程仍存活且 generation/最新序号匹配时，才去重为 `RECEIVED`。data 重启丢失载荷、游标与栅栏并答 `EMPTY`；更旧序号答 `ERR SEQ`。回执和崩溃均不意味着持久恢复。证据：[故障处理](./cross-return-protocol.md#故障处理)、`include/mistlane/record.hpp:121–159,163–244`；`src/test_cases.cpp:1867–1872` 只验证新 data 进程，未验证持久重启。**恢复未解·原因：**无归属侧持久事务及可恢复发送端重放来源。**解锁条件：**原子持久化状态/游标/generation/墓碑，以丢持久 ACK、data/发送端重启测试证明恢复后才扩大承诺（缺口 3）。
 
-1. **进入上下文不完整：**回传参与者结构有 `generation`；`service-contracts.md:22` 的 login 进入响应只列来源区服、角色标识、返回路由。没有写初始 generation 在哪里签发、返回或递增。
-2. **持久确认应答格式——格式已解，存储部分解：**MLD1 已定义 `ACK durable <realm> <character> gen <n> seq <m>` 与发送端校验；持久存储落地前端点不能发送它。丢 ACK 后按同一幂等键/游标重放。
-3. **归属权执行与端点检查——部分解决：**交接顺序、旧源晚到写栅栏、在途请求及计时器处置已定义并由状态模型覆盖。coordinator/data/Avatar 运行时与持久墓碑执行尚未接线。
-4. **coordinator 路由与归属状态关系不明：**MLR1 ROUTE SET/GET 记录当前在线宿主（`architecture.md:70`、`todo.md:51`）；职责表也把归属/迁移状态列给 coordinator（`process-roles.md:11`）。临时路由、归属侧持久 owner 与迁移状态之间没有编码关系。
-5. **apiServer 回调受理协议未定：**`service-contracts.md:52–54` 说明当前信任网络，回调认证/幂等仍开放；缺少签名校验、防重放窗口、持久受理响应或归属查询消息。HTTP 响应生命周期没有定义业务持久性。
-6. **实体契约阶段闸门不完整：**XSD、ID/保留锁及 envelope/错误语义已写，但 `todo.md:76–90` 中兼容 diff、EntityRef 运行时语义、编译器/SDK 生成、嵌套同步与 data 持久化仍开放。XML 原型能生成 XSD/lock，却没有发布兼容流程；错误 envelope 没有线编码/黄金字节或运行时绑定。格式审定到运行时接入之间缺互通验收物。
+### 缺口
 
-### todo:54 第一切片已解决
-
-- **序号顺序（原矛盾 1）：**发送队列按参与者只发送连续序号，与端点 `stored + 1` 校验一致。`RECEIVED` 释放发送槽，但变更保留到持久确认。
-- **realm 键（原缺口 1）：**端点栅栏/去重状态和发送队列均使用 `(realm, character)`。端点状态目前仅在内存中，无在线迁移；将来持久化的旧 character-only 键须回填 realm 或明确解决冲突。
-
-### todo:54 第二切片——缺口 3/4
-
-- **持久 ACK 语法：**线格式/编解码/发送端边界已解决；端到端部分解决，因为 data 持久存储尚不存在，端点不会虚报确认。
-- **租约交接时序：**有序设计与确定性状态模型已解决；运行时部分解决，coordinator、归属 data 持久 owner 与 Avatar 生命周期尚未接通。
+1. **身份/去重键中的 realm——已解，B（`b46be86`，此前已完成）。** 端点栅栏/去重与发送队列均按 `(realm, character)` 建键。现有状态易失，无在线迁移；未来持久 character-only 键须回填 realm 或解决冲突。证据：`include/mistlane/record.hpp:105–113,244`；`cross.record`、`cross.return.queue` 的跨区隔离断言。
+2. **进入上下文完整性——契约已解，A。** 原文（`fe8b2a6:docs/zh/service-contracts.md:22`）：“来源区服、角色标识与返回路由”。改后：响应补齐归属 data 签发的承载 generation 与 login 凭据。[login 生命周期](./service-contracts.md#login)明确分配 → data 授权 → 凭据/响应 → 接收宿主验证：新键从 1 开始；重新分配/接管须分配严格更大 generation 并按交接顺序栅栏旧授权；中止分配不复用。凭据同时绑定 generation、realm/character/target/expiry/nonce。证据：`include/mistlane/cross.hpp:19,63`、`src/lua_service.cpp:229–234` 已传递 generation；`fe8b2a6` 已定 data 为 generation 权威。授权线消息、密码原语和运行时有效授权校验仍归缺口 4，不冒充已实现。
+3. **持久确认应答格式——部分解，既有 B（`fe8b2a6`）+ C。** 格式/编解码/发送端校验已解：`MLD1 ACK durable <realm> <character> gen <n> seq <m>`，丢 ACK 按原幂等键重放。证据：`include/mistlane/record.hpp:52–69,228–236`；`cross.return.queue`。**未解·原因：**端点仅有易失记录、不发持久 ACK，发送端也不可恢复。**解锁条件：**状态/游标/栅栏原子持久事务，丢响应及 data 重启后重放已提交 ACK，并以崩溃测试覆盖可恢复的发送端重放来源。存储部分按 `fe8b2a6` 原记录继续开放。
+4. **归属权执行与端点检查——部分解，A/C（既有模型 B：`fe8b2a6`）。** [交接设计](./cross-return-protocol.md#写入租约交接)已固定顺序、旧源晚到写、在途工作与计时器；`WriterLease` 仅测试本地转换（`include/mistlane/record.hpp:247–264`、`src/test_cases.cpp:1903–1914`）。**未解·原因：**孤立模型不构成共享权威；MLD1 SUBMIT 仍可凭更大 generation 和下一序号被接受（`record.hpp:121–151`），不查 owner 授权；MLS1 只认服务链路。持久租约/墓碑未接入 coordinator/data/Avatar，授权/撤销/到期消息未编码。**解锁条件：**认证且幂等的授权/撤销/接管线消息与持久 home 权威，Avatar 处理器/计时器闸门接线，以及双宿主竞争、到期、旧/伪造 generation 和各阶段崩溃恢复测试。不得凭模型标全解。
+5. **coordinator 路由与归属——未解，C。原因：**MLR1 SET 仅查在线成员，GET/退役跟随成员状态（`src/node.cpp:1225–1247,1277–1284,1446–1485`）；路由只存 scope/role/instance，没有 generation 或迁移事务。`fe8b2a6` 已定目标确认后发布路由，但未编码或实现 coordinator 提交/中止/恢复交换。**解锁条件：**绑定 generation 的迁移请求 ID 与预期 owner/route 比对、持久 prepare/commit/abort、data 栅栏与目标确认后的路由发布，以及崩溃/重复/退役测试，证明路由不能授权第二写者。MLR1 保持目录职责，home data 保持 generation 权威。
+6. **apiServer 回调受理——未解，C。原因：**[apiServer 契约](./service-contracts.md#apiserver)仍为可信网络与请求级处理；平台签名/规范字节、密钥轮换、防重放窗口、幂等键作用域、持久受理响应及归属查询/重试消息均未定。login HMAC 决策不能替代 HTTP 回调认证。**解锁条件：**选定平台签名/规范化和重放策略，定义持久去重/受理、响应/错误/重试及 home 查询协议，落实事务并测试坏签名、过期/重放、重复/丢回复、重启与 owner 迁移。HTTP 2xx 不能证明业务持久。
+7. **实体发布闸门——部分解，A/C（既有实现 `3326fd4`、`1048bcd`、`c0d9d82`、`49c59c2`）。** 原文：“没有发布兼容流程”，没有运行时/黄金验收物。改后：`contract build` 已确定性生成 XSD/lock/digest/sproto/C++/JS/C#；`contract compat OLD.lock NEW.lock` 检查新增/删除/改分配（`src/contract_tool.cpp:57–77,123–143`）；已有上游 sproto 向量及派发器/实体/RPC 夹具（`include/mistlane/entity_runtime.hpp:11–72`、[验证记录](./validation.md)）。**未解·原因：**参数/标量向量不覆盖完整 invocation/error envelope；EntityRef 参数仍映射为整数（`entity_dispatch.hpp:74–79`）；网络加载/路由、hosting-generation 校验、完整 JS/C# codec、嵌套复制与持久化仍缺失。**解锁条件：**冻结规范 envelope/error/EntityRef 字节及 C++/Lua/JS/C# 畸形输入向量，将 schema/绑定/锁/向量检查接入强制 bundle-load 闸门；再验证在线路由/deadline/cancel/栅栏及独立的复制/持久化闸门。进程内夹具与通过 lock diff 不能授权生产接入。[实体契约验收顺序](./entity-contract.md#发布与验收顺序)中的过时文字同步修正。
 
 ### 命名与语义已对齐（有明确边界）
 
@@ -51,33 +45,15 @@
 - `RECEIVED` 表示端点已收入进程内存；`ACK durable` 表示归属 data 已提交持久存储，二者明确定义不同（`cross-return-protocol.md:58`、`service-contracts.md:36–41`）。
 - 传输关联（`MLC2`）与实体 `correlation_id` 有意独立；协议错误按各自表面区分，不共用 EntityError 码（`entity-contract.md:237–275`）。
 
-## 按 todo 归口的未决问题
+## 按 todo 归口的剩余实现闸门
 
-### todo.md:54 — crossServer 回传与唯一写入权
-
-| 卡点 | 可选方案 | 推荐 |
+| Todo 范围 | 保留工作 | 审计编号 |
 |---|---|---|
-| 序号缺口与乱序描述冲突；端点现要求连续的 `stored+1`。 | A. 保持严格有序，由发送方缓存/重试缺口。B. data 保存有界乱序窗口。 | **A（本片已实现）。** 队列按角色串行提交并等待/重试缺号；端点仍是最终校验方。 |
-| 角色键描述未纳入 realm。 | A. 角色 ID 全局唯一、只按 character 建键。B. 全链路按 `(realm, character)` 建键。 | **B（端点和队列已实现）。** 契约只保证区服内唯一，MLD1 已有 realm。 |
-| 发送方崩溃恢复承诺假设 data 去重可跨重启，但当前 MLD1 在内存。 | A. 持久化前收窄承诺。B. 同事务持久 inbox/序号与状态。 | **B（推荐，作为实现门槛）。** 状态和序号原子落盘后才回 ACK durable；此前 RECEIVED 不能作为恢复凭据。 |
-| 租约/交接没有具体请求应答时序。 | A. coordinator 发 generation，data 侧 CAS 接管。B. 超时/心跳自行推断新 owner。 | **A（本文代决）。** home data 发新 generation 并封存旧值；coordinator 只在来源栅栏、目标加载及确认后发布路由。 |
-| 发送队列、只读阈值与最终回服状态未接线。 | A. 每角色有界队列、明确只读与最终序号屏障。B. 丢最旧项或把 RECEIVED 当完成。 | **A（推荐）。** 不丢弃，也不把回执当持久确认；确认前强制改路由仍算回传失败。 |
+| crossServer 回传与唯一写入权（`todo.md:54`） | 归属持久事务/ACK/重放、可恢复发送源、有界队列/只读/最终回服接线、共享租约权威与 Avatar 集成 | 矛盾 4 的恢复部分；缺口 3/4 |
+| login/data/apiServer（`todo.md:56`） | C++ 凭据签发/验证、规范凭据传输与 home-data 授权消息；签名/防重放/持久受理回调及归属查询 | 缺口 2（运行时归 4）、4/6 |
+| coordinator 归属/迁移（`todo.md:48`） | generation 绑定的提交/中止/恢复消息及路由发布执行 | 缺口 5 |
+| 实体实现链（`todo.md:76+`） | 完整 envelope/error/EntityRef 向量与 bundle-load 闸门、生产 codec/网络运行时、嵌套复制与持久化 | 缺口 7 |
 
-### todo.md:56 — login/data/apiServer 契约与接线
-
-| 卡点 | 可选方案 | 推荐 |
-|---|---|---|
-| login 凭据决策没有同步到回传页，密码原语未接线。 | A. login 用区服密钥签短时 HMAC-SHA256 凭据。B. mTLS/PKI 或外部 JWT 服务。 | **A（已经决定，实现待办）。** 同步回传页；票据未验证前参与者上下文不能作为有效授权。 |
-| 服务契约进入上下文遗漏 generation，未说明签发时序。 | A. login 分配前向 data 申请/推进 generation。B. 宿主进入时自行生成。 | **A（推荐）。** data 是唯一 generation 权威；票据绑定 realm、角色、目标实例、generation、到期时间和 nonce。 |
-| MLD1 没有持久 ACK 格式和存储事务边界。 | A. 状态与序号一并持久提交后 ACK。B. 收到即 ACK。 | **A（已定原则）。** 定义稳定的 `ACK durable gen <n> seq <m>` 应答，在原子提交后发送；`RECEIVED` 保持非终态。 |
-| apiServer 回调认证/幂等和持久响应仍未定。 | A. 全交应用自行处理且无框架契约。B. 定义签名校验、幂等键和持久受理边界。 | **B（推荐）。** 支付规则仍由应用负责；成功响应前要求签名通过且幂等受理已持久化。 |
-
-### todo.md:48 与 todo.md:76+ — coordinator 与实体阶段
-
-| 卡点 | 可选方案 | 推荐 |
-|---|---|---|
-| MLR1 路由没有归属/场景状态迁移协议。 | A. 把 MLR1 注册表扩成游戏状态权威。B. 保持 MLR1 为分配/路由目录，在 home data generation 栅栏外定义迁移状态机。 | **B（推荐）。** coordinator 留在控制面；迁移实现前明确 reserve → prepare → commit/abort 与路由发布顺序。 |
-| 实体契约阶段没有从 XML 到运行时的发布闸门。 | A. 直接从现有原型做运行时。B. 先冻结 schema、错误字节、兼容 diff 与黄金向量。 | **B（推荐）。** 按格式审定 → 最小 codec/XSD/lock 兼容原型 → 运行时推进；EntityRef、嵌套复制和持久化分别设闸。 |
-| Entity envelope/error 只有语义字段，没有序列化黄金表示；EntityRef 仍只是声明类型。 | A. 各运行时自行约定编码。B. C++/Lua/JS/C# 绑定前定义规范编码与错误向量。 | **B（推荐）。** 保持已决定的字段顺序与封闭错误集，发布测试向量；运行时接入前拒绝未知/畸形形式。 |
+以上均为保留闸门，不是新增实现声明。每个部分/未解项必须连同上面的原因与解锁条件阅读；历史 todo 叙述不能覆盖当前代码证据。
 
 `apiServer` 外部请求数据由应用定义；未来任何数据外发或云备份默认关闭。

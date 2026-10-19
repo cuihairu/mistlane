@@ -236,7 +236,7 @@ References hide fixed IPs and hosts. Transfer needs updateable routes, bounded q
 
 ## Invocation envelope and error protocol (decided, unimplemented)
 
-The envelope below pins the transport of an entity invocation. Nothing speaks it yet: the runtime has no entity objects, so the wire verb that carries it does not exist. What is fixed here is the decision.
+The envelope below fixes the intended network invocation fields. In-process `EntityRuntime` and `RpcHarness` fixtures implement addressing and selected lifecycle outcomes; no network verb carries the complete envelope or serialized error reply yet. Field semantics are decided; canonical envelope/error bytes and live transport binding remain unimplemented.
 
 An entity invocation is a payload kind inside the existing transport framing (MLC1/MLC2/MLM1 frames or a client session channel), not a new TCP protocol; it stays inside the bounded 1 MiB frame. Fields, in order:
 
@@ -348,7 +348,7 @@ Breaking updates may still require old clients to upgrade or reconnect. An uncha
 
 ## Implementation and acceptance order
 
-1. Specify XSD, type rules, ID lock, compatibility, invocation envelope and error structures. The definition-time prototype already pins the XSD, type rules and the ID lock (`Reserved` groups, `xsd()`, `lock()` in `include/mistlane/entity_contract.hpp`); the invocation envelope, error structures and the compatibility diff against a published lock are still open. Use Avatar and Monster to test identical method names across entity types and caller permissions.
+1. Specify XSD, type rules, ID lock, compatibility, invocation envelope and error structures. XSD, type rules and ID lock are implemented; envelope fields and the closed error vocabulary are decided. `mistlane contract compat OLD.lock NEW.lock` supplies the publication compatibility check (additions pass, removals/changed assignments fail). Canonical full-envelope/error encoding and cross-language golden vectors remain open; generated argument codecs and in-process enum results do not close that gate. See [implemented evidence and remaining gates](./protocol-analysis.md#gaps), gap 7.
 2. Prototype C++/Lua, JS and C# codecs against shared golden bytes: integer boundaries, UTF-8, bytes, absent/empty values, arrays, nested structures, unknown fields and malformed/truncated inputs.
 3. Implement deterministic generation and atomic bundle loading. Invalid/conflicting/missing implementations cannot become ready. Client artifacts exclude server-internal methods and private property descriptors.
 4. Implement Entity identity, controlled properties, RPC and client proxies; then baselines/deltas and persistence. Verify reconnects, offline outcomes, write conflicts and corrupt records.

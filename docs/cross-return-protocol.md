@@ -12,16 +12,16 @@ Entering crossServer changes execution placement, not account, character identit
 | Character identity | Stable character id in the home domain | Required; unique within the origin realm |
 | Hosting generation | Version of the current hosting assignment | Required; carried on every return submission and compared by the home side |
 | Return route | How the character gets back (realm/group/room or scene references) | Required at entry; durable records must not pin process addresses |
-| Entry ticket | Authorization to enter this cross scope | Optional until an issuer exists; the crossServer side treats its absence as "unvalidated" and marks the session read-only for durable writes |
+| Entry ticket | Authorization to enter this cross scope | Decided: login-issued, short-lived HMAC-SHA256 ticket using a per-realm secret; issue/verify are unimplemented, so current contexts remain unvalidated for durable writes |
 
-`MLC1` was widened rather than given a follow-up frame: after the routing fields, an optional trailing group `ch <character> gen <generation> ret <realm> <group> <room>` carries the participant context, its three parts declared together or not at all (wire format in [cross-server](./cross-server.md)). Lua receives the participant fields with the session (`character`, `generation`, nested `route`); anonymous five-field joins keep working and stay anonymous. The entry ticket has no issuer yet, so no session is validated — until one exists, the rule **a session without a validated participant context cannot submit durable character changes** keeps every session out of durable writes, and application code may still run gameplay for anonymous sessions.
+`MLC1` was widened rather than given a follow-up frame: after the routing fields, an optional trailing group `ch <character> gen <generation> ret <realm> <group> <room>` carries the participant context, its three parts declared together or not at all (wire format in [cross-server](./cross-server.md)). Lua receives the participant fields with the session (`character`, `generation`, nested `route`); anonymous five-field joins keep working and stay anonymous. Login is the decided ticket issuer; its C++ issue/verify primitives and ticket transport are still unimplemented (see [service contracts](./service-contracts.md#login)). Consequently no current session has a validated ticket. **A session without a validated participant context cannot submit durable character changes**; application code may still run gameplay for anonymous sessions. Supplying `ch`/`gen`/`ret` or passing MLS1 alone does not grant a writer lease.
 
 ## Single-writer authority
 
 1. At most one writable Avatar per character exists at any time. The home data domain is the durable writer of record; a crossServer holds only a provisional, bounded write lease scoped to the cross participation.
 2. The lease is identified by the hosting generation. The home side rejects any submission whose generation is not the newest issued for that character — a late or duplicated writer cannot overwrite a newer state by arriving last.
 3. Lease expiry, a missing heartbeat or a process crash alone never creates a second writable owner. Reclaiming a lease requires an explicit takeover step on the home side (new generation issued, old generation tombstoned), not a timeout inference. This mirrors the responsibility rule that a missed heartbeat cannot authorize a second active owner.
-4. Disconnect ends participation but not durability obligations: changes already submitted and acknowledged survive; unacknowledged changes are only as durable as the protocol below makes them.
+4. Disconnect ends participation but not durability obligations: only changes acknowledged with `ACK durable` have a durability guarantee. Current `RECEIVED` replies provide none; unacknowledged changes are only as durable as the protocol below makes them.
 
 ## Return and persistence confirmation (MLD1)
 
@@ -71,18 +71,19 @@ The home data service is the sole generation authority. The state sequence is `a
 | Failure | Rule |
 |---|---|
 | Home unreachable | Retry within the bounded queue; the participant stays writable for cross-local state but cannot finish a return. No timeout may convert an unacknowledged change into an acknowledged one. |
-| Sender crash after submit, before ACK | The home side sees a duplicate after restart and dedups by sequence; at-least-once plus idempotency, never at-most-once. |
-| Lost ACK (delivered, reply lost) | Same dedup path; the resend produces a second ACK for the same sequence and the queue drains. |
+| Sender crash after submit, before ACK | Today the in-memory sender queue is lost; there is no automatic replay or recovery guarantee. If an application can reconstruct the exact submission and the same data process still holds that generation and latest sequence, replay returns a duplicate `RECEIVED`. This does not survive data restart. Durable recovery remains gated on atomic persistence of payload, dedup cursor and generation/tombstone, plus a recoverable sender replay source; neither exists today. |
+| Lost reply (delivered, reply lost) | Today replay of the same generation and latest stored sequence returns another volatile `RECEIVED`, retaining the retry entry; an older sequence is rejected with `ERR SEQ`. Future lost durable ACK replay must preserve the original idempotency key and return its committed ACK, tested across data restart before claiming recovery. |
+| Data process restart | All current payload, sequence and generation state is lost; LOAD returns `EMPTY`. No dedup or writer-fence recovery is promised. |
 | Generation mismatch on submission | The home side rejects and answers with the current generation; the old writer stops and the outcome is surfaced to the operator/application. No overwrite. |
-| Return refused or entry ticket invalid | The character never becomes a durable writer in that scope; already-acknowledged changes stand, the rest stays queued or is discarded per application choice. |
+| Return refused or entry ticket invalid | The character never becomes a durable writer in that scope; only durably acknowledged changes stand, the rest stays queued or is discarded per application choice. |
 | Offline during participation | The bounded queue outlives the connection in the crossServer process; leaving players does not flush it. Bounded means a longest-waiting entry can force the participant read-only — memory safety beats delivery completeness, and the condition is observable. |
-| CrossServer crash | Unacknowledged submissions in its queue are lost by design; anything the application declared durable was acknowledged before the crash. The framework does not pretend otherwise. |
+| CrossServer crash | Unacknowledged submissions in its process-local queue are lost by design. Only an actual `ACK durable` could justify a durability claim; the current endpoint never emits one. |
 
-## Deliberately not decided here
+## Fixed decisions and remaining work
 
 - Wire format and framing of MLD1: grammar and codec are implemented above; framing is the shared u32 BE length frame.
 - Settlement, reward and ranking business rules, cross-scene templates, and the actual Avatar/scene runtime: later crossServer slices and the entity-contract chain. The Avatar/Session runtime contract is now designed on the [avatar runtime](./avatar-runtime.md) page; the entity property runtime remains the chain's.
 - Lease duration numbers, queue bounds and retry budgets: configuration named at implementation time with defaults justified by measurement, not by this page.
-- Whether the entry ticket is signed, and by whom: an authentication design gated on the login contract.
+- Entry-ticket signing and issuer are decided in the login contract: HMAC-SHA256, login, per-realm secret. C++ issue/verify primitives, canonical ticket encoding and transport remain implementation work; the initial generation and renewal lifecycle are specified in [service contracts](./service-contracts.md#login).
 
 The participant context, endpoint keying, ordered queue, durable ACK codec/queue gate and lease state model have tests (validation records: cross routing, record endpoint and return queue). The persistent storage chain and crossServer/coordinator/Avatar runtime wiring remain later work.

@@ -18,7 +18,7 @@ flowchart TB
   cross <--> data
 ```
 
-data denotes ownership-aware service access rather than one shared database for every region. Permanent crossServer changes return to home data; protocol/acknowledgement semantics remain unimplemented and the edge does not authorize dual writers. Optional apiServer ingress and its callback flow are described in [HTTP and WebSocket](./http.md).
+data denotes ownership-aware service access rather than one shared database for every region. Permanent crossServer changes return to home data. The [return protocol and acknowledgement semantics](./cross-return-protocol.md) are decided: MLD1 LOAD/SUBMIT and volatile RECEIVED, the ordered sender queue, durable ACK codec and lease state model are implemented; durable storage, ACK emission and crossServer/coordinator/Avatar runtime integration remain unimplemented. The edge does not authorize dual writers. Optional apiServer ingress and its callback flow are described in [HTTP and WebSocket](./http.md).
 
 ## Current runnable prototype
 

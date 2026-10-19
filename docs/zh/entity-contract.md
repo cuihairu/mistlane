@@ -240,7 +240,7 @@ flowchart TB
 
 ## 调用 envelope 与错误协议（已代决，未实现）
 
-下面的 envelope 钉死实体调用的传输形态。目前没有实现者：运行时没有实体对象，承载它的线上动词不存在。这里固定的是决策。
+下面的 envelope 固定目标网络调用字段。进程内 `EntityRuntime` 与 `RpcHarness` 夹具已实现寻址及部分生命周期结果；尚无线上动词承载完整 envelope 或序列化错误应答。字段语义已定，规范 envelope/error 字节与真实传输绑定尚未实现。
 
 实体调用是现有传输分帧（MLC1/MLC2/MLM1 帧或客户端会话通道）内的一种载荷，不是新的 TCP 协议，仍在 1 MiB 有界帧内。字段顺序：
 
@@ -348,7 +348,7 @@ inventory 及其类型须先在契约中声明；上述为行为示意，不是�
 
 ## 发布与验收顺序
 
-1. 固定 `.def` 的 XSD、类型规则、编号锁文件、兼容规则、协议 envelope 和错误结构。定义期原型已钉死 XSD、类型规则与编号锁（`Reserved` 组、`xsd()`、`lock()`，见 `include/mistlane/entity_contract.hpp`）；协议 envelope、错误结构与对照已发布锁的兼容差异仍未做。先做 Avatar 与 Monster 两个类型、同名方法隔离及权限用例。
+1. 固定 `.def` 的 XSD、类型规则、编号锁文件、兼容规则、协议 envelope 和错误结构。XSD、类型规则与编号锁已实现；envelope 字段与封闭错误词表已定。`mistlane contract compat OLD.lock NEW.lock` 已提供发布兼容检查（新增通过，删除/改分配拒绝）。完整 envelope/error 规范编码及跨语言黄金向量仍开放；参数 codec 与进程内枚举结果不能代替此闸门。见[实现证据与剩余闸门](./protocol-analysis.md#缺口)，缺口 7。
 2. 做 C++/Lua、JS、C# 编解码原型；覆盖 INT64 边界、UTF-8、bytes、空值/空数组、嵌套结构、未知字段、截断和畸形输入；共享黄金字节样本。
 3. 实现 bundle 原子加载与生成工具；同一输入可复现相同输出，非法/冲突/缺实现不能发布就绪；客户端产物不包含服务器内部方法和私有属性描述。
 4. 实现 Entity 身份、受控属性、RPC 分发与客户端代理；再接同步基线/增量和持久化，验证重连、离线、写冲突与损坏数据。
