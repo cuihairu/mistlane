@@ -214,14 +214,14 @@ int main(int argc, char** argv) {
         for (std::size_t i = 0; i < tokens.size(); ++i) {
             std::string key = tokens[i];
             if (key == "--help") {
-                std::cout << "mistlane --role gateway|gameServer|crossServer|coordinator|apiServer --listen IP:PORT\n"
+                std::cout << "mistlane --role gateway|gameServer|crossServer|coordinator|apiServer|login|data --listen IP:PORT\n"
                              "mistlane init [DIRECTORY]  Create a multi-role starter project\n"
                              "mistlane test [--list|--suite NAME|--case NAME]  Run native C++ cases\n"
                              "mistlane bot --url URL [--clients N --count N]  Simulate game requests\n"
                              "  --config FILE  KEY=VALUE native config ('# mistlane-config 1' header;\n"
                              "    MISTLANE_<KEY> env overrides, flags after --config win, relative\n"
                              "    paths resolve against the file or its ROOT= entry)\n"
-                             "  gameServer/crossServer/apiServer: --script FILE\n"
+                             "  gameServer/crossServer/apiServer/login/data: --script FILE\n"
                              "  gateway: --upstream IP:PORT (repeat for session round robin)\n"
                              "  --routing session|cross (gateway only; default session)\n"
                              "  service identity (session routing only; cross keeps MLC1):\n"

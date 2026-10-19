@@ -6,7 +6,7 @@ Status: contract design (2026-10-19); implementation as noted per section. This 
 
 - **The home-side endpoint for MLD1 is the `data` role itself.** A home-region gateway may front it for transport, but the durable-ack authority is the data service — not a coordinator, not a gameServer. This closes the open question on the return-protocol page.
 - **All three roles reuse the existing runtime surface** — framed TCP sessions with optional `MLS1` identity, the Lua `message`/`http` hooks, `MLR1` registry access, and the existing HTTP stack for apiServer. No new transport layer is introduced for them.
-- **login and data are contract-only today** (`--role login`/`--role data` still refuse to start as planned-but-unimplemented); apiServer is already running and gains contract documentation, not new code.
+- **login and data run as plain script services today** (`--role login`/`--role data` start with `--script`, the standard hooks and framed sessions, like a gameServer without scenes); their service flows — placement, load and persistence — remain contract-only. apiServer is already running and gains contract documentation, not new code.
 
 ## login
 
@@ -22,7 +22,7 @@ login owns the entry flow: verify the account, present the character list, obtai
 | Auth boundary | Credential verification is an application Lua decision; the framework provides transport, framing and identity, not accounts, tickets or sessions beyond the connection |
 | State | login holds at most connection state and pending-placement records; nothing durable. After the entry response the character's route belongs to gameServer/coordinator, not login |
 
-Wiring status: not implemented. The first slice is `--role login` startup with script hooks plus the registry-client and placement flow behind tests.
+Wiring status: the role starts as a script service (`--role login` with `--script`, framed sessions and the standard hooks). Not implemented: the registry-client and placement flow, and the credential/authentication design behind it.
 
 ## data
 
@@ -37,7 +37,7 @@ data owns the durable character store of its home region: the only writer of rec
 | Until persistence lands | The data-side persistence chain (entity-contract item) is not implemented. Until it exists, data cannot emit truthful durable acks; an interim implementation must not send `ACK durable` at all, so senders stay in their retry/read-only state — an honest degradation, not a shortcut |
 | Excluded | Business schemas, SQL, cache-table semantics; the storage engine and dirty-tracking belong to the entity-contract chain |
 
-Wiring status: not implemented. The persistence dependency is explicit: MLD1 acks wait for the persistence chain; the role shell, identity and load-request path can land before it.
+Wiring status: the role shell starts (`--role data` with `--script`), and `--service-token` already enforces `MLS1` identity on every leg. Not implemented: the load path, the MLD1 endpoint and the persistence chain — MLD1 acks wait for the persistence chain.
 
 ## apiServer
 

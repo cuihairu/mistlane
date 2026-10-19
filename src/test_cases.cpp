@@ -291,10 +291,20 @@ void role_names() {
         require(child.wait() != 0, "removed role accepted");
         require(child.output().find("unknown role") != std::string::npos, "removed role was not rejected by name");
     }
-    for (const auto& planned : {"login", "data"}) {
-        auto& child = c.spawn({self().string(), "--role", planned});
-        require(child.wait() != 0 && child.output().find("planned but not implemented") != std::string::npos,
-                "planned service was presented as runnable");
+    // login and data run as script services: a script-less launch is refused,
+    // and with a script they serve framed sessions under their own role name.
+    for (const auto& role : {"login", "data"}) {
+        auto& child = c.spawn({self().string(), "--role", role});
+        require(child.wait() != 0 && child.output().find("--script") != std::string::npos,
+                std::string(role) + " started without a script");
+        write(c.path(std::string(role)+".lua"), "return {message=function(p)return p end}");
+        const auto listen = port(), metrics = port();
+        c.node(role, listen, {"--script", c.path(std::string(role)+".lua").string(),
+                              "--metrics-listen", endpoint(metrics)});
+        equal(tcp(listen)->request("ok"), "ok");
+        const auto samples = http("http://"+endpoint(metrics)+"/metrics");
+        require(samples.status == 200 && samples.body.find(std::string("mistlane_ready{role=\"")+role+"\"} 1") != std::string::npos,
+            std::string(role) + " readiness gauge missing");
     }
     write(c.path("api.lua"), http_lua);
     const auto api_port = port();

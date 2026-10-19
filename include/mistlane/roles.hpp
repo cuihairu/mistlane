@@ -10,8 +10,8 @@ inline constexpr std::array role_definitions{
     RoleDefinition{"crossServer", true, true},
     RoleDefinition{"apiServer", true, true},
     RoleDefinition{"coordinator", true, false},
-    RoleDefinition{"login", false, false},
-    RoleDefinition{"data", false, false},
+    RoleDefinition{"login", true, true},
+    RoleDefinition{"data", true, true},
 };
 inline const RoleDefinition* find_role(std::string_view name) {
     for (const auto& role : role_definitions) if (role.name == name) return &role;

@@ -5,6 +5,7 @@
 #include "mistlane/lua_service.hpp"
 #include "mistlane/token_bucket.hpp"
 #include "mistlane/transport.hpp"
+#include "mistlane/roles.hpp"
 #include <utility>
 #include <boost/asio.hpp>
 #include <algorithm>
@@ -1641,7 +1642,10 @@ public:
             redis_ = std::make_shared<RedisRuntime>(io_, config_.redis.address, config_.redis.port);
             redis_->start();
         }
-        const bool script_role = config_.role == "gameServer" || config_.role == "crossServer" || config_.role == "apiServer";
+        // One source of truth for script-backed roles, so a new script role
+        // needs no node-side change.
+        const auto* role_definition = find_role(config_.role);
+        const bool script_role = role_definition && role_definition->script;
         service_context_ = ServiceContext{config_.role, config_.transport, config_.route_epoch, game_sessions, http_service};
         if (config_.role == "coordinator") registry_ = std::make_unique<Registry>();
         if (config_.coordinator_enabled)

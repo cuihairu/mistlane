@@ -69,7 +69,7 @@ coordinator 负责承载决策和注册状态；进程启动、重启与资源�
 | `crossServer` | TCP 跨服上下文与 Lua 执行、最终连接准入 | 跨服角色迁移、场景与回传保存 |
 | `apiServer` | Lua HTTP/HTTPS 请求钩子；不带 transport 时默认 HTTP；可选 WS/WSS message | 平台回调业务、可靠内部调用及多监听 |
 | `coordinator` | 仅 TCP 的注册表：成员注册、心跳上报就绪与负载，按命名作用域回答 QUERY/PLACE，断连即退役成员 | 承载决策与归属状态、区服/跨服组作用域、迁移握手、高可用与恢复 |
-| `login`、`data` | 名称和职责已登记；CLI 明确拒绝启动并说明未实现；线级契约见[服务契约](./service-contracts.md) | 账号验证、归属数据服务和接线 |
+| `login`、`data` | 已可按脚本服务启动（帧式会话、标准 Lua 钩子）；服务流程（分配、加载、持久化）仍停留在契约层，线级契约见[服务契约](./service-contracts.md) | 账号验证、归属数据服务和接线 |
 
 单二进制仍为 mistlane。现有运行角色已迁移，独立通用转发角色已删除，跨服静态入口归入 gateway 的 routing 策略；这不等于完成旧 World 的协调能力。旧角色名称不保留 CLI 别名。MLC1/PROBE1、room/group 键和 max-shard-sessions 配额参数本轮保持原协议含义，它们不是新增进程名称。
 
