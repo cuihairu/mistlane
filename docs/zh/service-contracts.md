@@ -22,7 +22,7 @@ login 拥有进入流程：验证账号、展示角色列表、取得承载分�
 | 认证边界 | 凭据验证是应用层 Lua 决策；框架只提供传输、分帧与身份，不提供账号、凭据或超出连接本身的会话 |
 | 状态 | login 至多持有连接状态与未完成的承载记录；没有任何持久数据。进入应答之后，角色路由归属 gameServer/coordinator，而不是 login |
 
-接线状态：已可作为脚本服务启动（`--role login` 加 `--script`，帧式会话与标准钩子）。未实现：注册表客户端与分配流程，以及其后的凭据/认证设计。
+接线状态：已可作为脚本服务启动（`--role login` 加 `--script`，帧式会话与标准钩子）；`--coordinator ADDR:PORT [--scope NAME]` 接通注册表客户端——Lua `mistlane.place(role, scope?, callback)` 每次查询经新连接发起 `MLR1 PLACE`，把分配地址（或原因）交回脚本。未实现：凭据/认证设计与分配外围的完整进入流程。
 
 ## data
 

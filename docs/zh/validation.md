@@ -1,6 +1,6 @@
 # 验证记录
 
-验证日期：2026-10-17；HTTP/HTTPS、Lua apiServer 与原生 gateway cross routing/crossServer 检查同 Redis 新增项于 2026-10-18 验证；多监听、WebSocket 生命周期、服务身份、共享连接多路复用、进程注册表、跨服参与者上下文与 login/data 角色启动检查于 2026-10-19 验证。环境为 Linux x64、GCC 15.2.0、CMake 4.2.3，固定 vcpkg baseline：a5f736224e85b32e25a8ffc52562333180396642。
+验证日期：2026-10-17；HTTP/HTTPS、Lua apiServer 与原生 gateway cross routing/crossServer 检查同 Redis 新增项于 2026-10-18 验证；多监听、WebSocket 生命周期、服务身份、共享连接多路复用、进程注册表、跨服参与者上下文、login/data 角色启动与分配查询检查于 2026-10-19 验证。环境为 Linux x64、GCC 15.2.0、CMake 4.2.3，固定 vcpkg baseline：a5f736224e85b32e25a8ffc52562333180396642。
 
 | 项目 | 实际结果 |
 |---|---|
@@ -15,6 +15,7 @@
 | 共享连接多路复用（MLM1） | `transport.multiplex` 在 `--upstream-multiplex on` 的 gateway 后启动要求令牌的 gameServer 并验证：两个 gateway 会话共享一条 ESTABLISHED 上游套接字（`/proc/net/tcp`）、逐逻辑会话的 `MLC2` 握手走单 id 载荷且 id 精确回显、推送携带 id 0、服务端 `mistlane_active_sessions` 计入逻辑会话、直连 `MLS1` 链路与多路复用链路共存、双向 `CLOSE` 关闭后广播只达存活链路、handler 报错仅关闭自己的逻辑会话（日志留痕、链路与同伴存活）、客户端发来的 `MLM1` 直连/会话中/经 gateway 三种情形均被 `MLM1 ERR UNEXPECTED` 拒绝、缺 `--upstream-token` 的 gateway 带该开关拒绝启动 |
 | 进程注册表（MLR1） | `coordinator.registry` 启动两个 coordinator（普通与 `--service-token`）和两个作用域内的三个成员：非 MLR1 流量与格式错误注册被 `MLR1 ERR UNEXPECTED`/`MLR1 ERR INVALID` 拒绝并关闭，`MLR1 QUERY` 列出三个成员且作用域过滤生效，`MLR1 PLACE` 返回就绪且负载最低的成员、未知作用域返回 `MLR1 EMPTY`，两个真实客户端把饱和成员经心跳翻为 `notready 2/4`（释放后回到 `ready 0/4`），SIGTERM 后成员退役并使 `mistlane_registry_members` 降为 2，匿名注册在带令牌的 coordinator 上得到 `MLS1 ERR TOKEN` 而 `--upstream-token` 成员经握手正常注册，成员日志留有注册记录，`coordinator+脚本`、`gateway+--coordinator` 与单独 `--scope` 均拒绝启动 |
 | login 与 data 角色启动 | `core.roles` 接受两个服务角色按脚本服务运行：`--role login`/`--role data` 缺 `--script` 拒绝启动，带脚本后各自提供帧式会话并以自身名称上报 `mistlane_ready{role="..."}`，已移除角色名（`worker`、`router`、`cross`、`shard`）仍按名拒绝，apiServer 保持 HTTP 默认 |
+| 分配查询（MLR1 PLACE） | `coordinator.placement` 启动普通与 `--service-token` 两种 coordinator、各带一个已注册的 gameServer 成员与三个 `--role login` 客户端：每次查询独占一条连接并应答被分配的监听地址，未知角色或作用域得 `EMPTY`，身份被拒得 `TOKEN`，coordinator 不可达得 `unreachable`，无法解析的 payload 由脚本自行应答；`scope` 默认 `main`，login 查询期间成员数保持 1（不自我注册），`data --coordinator` 拒绝启动，两个 coordinator 日志均无噪音 |
 | HTTP / HTTPS | 两种传输下的 Drogon 请求、二进制正文，以及 curl 适配的证书 / 主机名校验、仅允许 HTTP/HTTPS 的协议限制和响应大小上限通过 |
 | 多监听与 WebSocket 生命周期 | `transport.listeners` 启动混合 gameServer（TCP 主监听 + WS + WSS，WSS 用 `?cert=&key=` 单独覆盖证书）、apiServer HTTP 节点（`/`、`/ws` 升级进入 Lua `websocket_open/message/close` 生命周期，`mistlane.websocket.send` 覆盖成功、`unknown websocket id`、`payload exceeds 1 MiB`）、`websocket_message` 内 Lua 报错只关闭该会话且 HTTP 服务继续应答、SIGTERM 排空在线会话、慢消费者越过 2 MiB 输出高水位被强制关闭、HTTPS+WSS 单监听证书、gateway HTTP 监听承载游戏会话升级、配置文件 `LISTENERS=`，以及脚本角色 TCP 监听与重复端口的启动拒绝 |
 | Lua apiServer | 请求元数据、before_request 短路、after_request 修改、on_error 兜底、响应校验与重载回退通过 |

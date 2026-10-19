@@ -22,7 +22,7 @@ login owns the entry flow: verify the account, present the character list, obtai
 | Auth boundary | Credential verification is an application Lua decision; the framework provides transport, framing and identity, not accounts, tickets or sessions beyond the connection |
 | State | login holds at most connection state and pending-placement records; nothing durable. After the entry response the character's route belongs to gameServer/coordinator, not login |
 
-Wiring status: the role starts as a script service (`--role login` with `--script`, framed sessions and the standard hooks). Not implemented: the registry-client and placement flow, and the credential/authentication design behind it.
+Wiring status: the role starts as a script service (`--role login` with `--script`, framed sessions and the standard hooks), and `--coordinator ADDR:PORT [--scope NAME]` wires the registry client: Lua `mistlane.place(role, scope?, callback)` asks `MLR1 PLACE` per lookup over a fresh connection and hands the placed address (or a reason) back to the script. Not implemented: the credential/authentication design and the full entry flow around placement.
 
 ## data
 

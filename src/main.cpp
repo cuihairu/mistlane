@@ -232,6 +232,8 @@ int main(int argc, char** argv) {
                              "  gameServer/crossServer: --coordinator IP:PORT [--scope NAME] registers with\n"
                              "      the coordinator and heartbeats readiness/load (--upstream-token presents\n"
                              "      MLS1 when the coordinator requires identity)\n"
+                             "  login: --coordinator IP:PORT [--scope NAME] enables mistlane.place(role,\n"
+                             "      scope?, callback) placement lookups (no registration)\n"
                              "  --transport tcp|ws|wss|http|https (wss/https require --cert FILE --key FILE)\n"
                              "  --listener PROTO://IP:PORT (repeat; independent extra listener, mixed\n"
                              "    plaintext/TLS allowed; wss/https may add ?cert=FILE&key=FILE overrides)\n"
@@ -250,8 +252,7 @@ int main(int argc, char** argv) {
                              "SIGHUP: transactional script reload (state is reset)\n"
                              "  coordinator: --service-token TOKEN (require member identity); registry\n"
                              "    members connect with --coordinator IP:PORT [--scope NAME] and heartbeat\n"
-                             "    MLR1 REGISTER/QUERY/PLACE over framed TCP\n"
-                             "Planned, not runnable: login, data\n";
+                             "    MLR1 REGISTER/QUERY/PLACE over framed TCP";
                 return 0;
             }
             if (++i >= tokens.size()) throw std::invalid_argument("missing value for "+key);
@@ -312,8 +313,11 @@ int main(int argc, char** argv) {
             throw std::invalid_argument("coordinator requires no script and no upstream");
         }
         // Registration is a member duty; gateways route, coordinators collect.
-        if (config.coordinator_enabled && config.role != "gameServer" && config.role != "crossServer")
-            throw std::invalid_argument("--coordinator applies to gameServer and crossServer");
+        if (config.coordinator_enabled && config.role != "gameServer" && config.role != "crossServer"
+                && config.role != "login")
+            // gameServer/crossServer register and heartbeat; login only asks
+            // placements. The registry stays the coordinator's own job.
+            throw std::invalid_argument("--coordinator applies to gameServer, crossServer and login");
         if (!config.coordinator_enabled && scope_selected)
             throw std::invalid_argument("--scope requires --coordinator");
         if (!config.coordinator_enabled && !config.upstream_token.empty() && config.role != "gateway")

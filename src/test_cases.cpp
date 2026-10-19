@@ -1058,7 +1058,7 @@ void coordinator_registry() {
                 "coordinator accepted a script");
         auto& routed = c.spawn({self().string(), "--role", "gateway", "--listen", endpoint(port()),
             "--upstream", endpoint(registry), "--coordinator", endpoint(registry)});
-        require(routed.wait() != 0 && routed.output().find("--coordinator applies to gameServer and crossServer") != std::string::npos,
+        require(routed.wait() != 0 && routed.output().find("--coordinator applies to gameServer, crossServer and login") != std::string::npos,
                 "gateway accepted a coordinator");
         auto& scoped = c.spawn({self().string(), "--role", "gameServer", "--listen", endpoint(port()),
             "--script", c.path("echo.lua").string(), "--scope", "alpha"});
@@ -1068,6 +1068,82 @@ void coordinator_registry() {
     for (const auto* member : {&gs_a, &gs_b})
         require(member->output().find("callback failed") == std::string::npos, "registry member logged Lua failures");
     require(coord.output().find("unexpected frame") == std::string::npos, "coordinator log noise");
+}
+// login is a registry client, not a member: each placement ask owns one
+// connection, and the callback answers through mistlane.session.send because
+// the answer arrives after the handler returned.
+void coordinator_placement() {
+    Context c;
+    write(c.path("echo.lua"), echo);
+    write(c.path("place.lua"),
+        "return {message=function(p,c)"
+        " local role, scope = p:match('place (%S+) ?(%S*)')\n"
+        " if not role then return 'usage' end\n"
+        " mistlane.place(role, scope ~= '' and scope or nil, function(err, address)\n"
+        "   mistlane.session.send(c.session, err and ('ERR '..err) or ('OK '..address))\n"
+        " end)\n"
+        " return nil end}");
+    const auto send_frame = [](RawSocket& raw, std::string_view payload) {
+        std::string frame(4, '\0');
+        auto length = static_cast<std::uint32_t>(payload.size());
+        for (int i = 3; i >= 0; --i) { frame[i] = static_cast<char>(length & 255); length >>= 8; }
+        raw.send(frame + std::string(payload));
+    };
+    const auto read_frame = [](RawSocket& raw) {
+        std::size_t length = 0;
+        for (unsigned char ch : raw.receive(4)) length = (length << 8) | ch;
+        return raw.receive(length);
+    };
+    const auto place = [&](unsigned listen, std::string_view request) {
+        RawSocket raw(listen);
+        send_frame(raw, request);
+        return read_frame(raw);
+    };
+    const auto members = [&](unsigned metrics) {
+        const auto body = http("http://"+endpoint(metrics)+"/metrics").body;
+        const auto needle = std::string("mistlane_registry_members{role=\"coordinator\"} ");
+        const auto at = body.find(needle);
+        return at == std::string::npos ? -1 : static_cast<int>(std::strtod(body.c_str()+at+needle.size(), nullptr));
+    };
+    const auto registry = port(), member_listen = port(), login = port(), metrics = port(),
+             token_registry = port(), token_member = port(), token_login = port(),
+             wrong_login = port(), dead_login = port();
+    auto& coord = c.node("coordinator", registry, {"--metrics-listen", endpoint(metrics)});
+    c.spawn({self().string(), "--role", "gameServer", "--listen", endpoint(member_listen),
+             "--script", c.path("echo.lua").string(), "--coordinator", endpoint(registry)});
+    eventually([&] { return members(metrics) == 1; }, 5s, "the member never registered");
+    c.node("login", login, {"--script", c.path("place.lua").string(), "--coordinator", endpoint(registry)});
+    // Registration precedes the first readiness heartbeat, so the ask waits
+    // for the ready verdict instead of racing it.
+    eventually([&] { return place(login, "place gameServer")
+        == "OK 127.0.0.1:"+std::to_string(member_listen); }, 5s, "placement never saw the ready member");
+    equal(place(login, "place gameServer nobody"), "ERR EMPTY");
+    equal(place(login, "place crossServer"), "ERR EMPTY");
+    equal(place(login, "where"), "usage");
+    require(members(metrics) == 1, "login registered itself as a member");
+    // A tokened coordinator gates the lookup behind MLS1.
+    auto& token_coord = c.node("coordinator", token_registry, {"--service-token", "s3cret"});
+    c.spawn({self().string(), "--role", "gameServer", "--listen", endpoint(token_member),
+             "--script", c.path("echo.lua").string(), "--coordinator", endpoint(token_registry),
+             "--upstream-token", "s3cret", "--service-name", "gs-token"});
+    c.node("login", token_login, {"--script", c.path("place.lua").string(),
+        "--coordinator", endpoint(token_registry), "--upstream-token", "s3cret", "--service-name", "login-1"});
+    c.node("login", wrong_login, {"--script", c.path("place.lua").string(),
+        "--coordinator", endpoint(token_registry), "--upstream-token", "nope"});
+    eventually([&] { return place(token_login, "place gameServer")
+        == "OK 127.0.0.1:"+std::to_string(token_member); }, 5s, "identity did not reach the tokened registry");
+    equal(place(wrong_login, "place gameServer"), "ERR TOKEN");
+    // A dead coordinator reports a reason instead of holding the session.
+    c.node("login", dead_login, {"--script", c.path("place.lua").string(), "--coordinator", endpoint(port())});
+    equal(place(dead_login, "place gameServer"), "ERR unreachable");
+    // The registry stays the coordinator's job: data never presents itself.
+    auto& data = c.spawn({self().string(), "--role", "data", "--listen", endpoint(port()),
+        "--script", c.path("place.lua").string(), "--coordinator", endpoint(registry)});
+    require(data.wait() != 0 && data.output().find("--coordinator applies to gameServer, crossServer and login")
+        != std::string::npos, "data accepted registry placement");
+    require(coord.output().find("member registered login") == std::string::npos, "login registered as a member");
+    require(coord.output().find("unexpected frame") == std::string::npos, "coordinator log noise");
+    require(token_coord.output().find("unexpected frame") == std::string::npos, "coordinator log noise");
 }
 void transport_push() {
     Context c;

@@ -131,9 +131,9 @@ void LuaService::check(int status) {
     }
 }
  LuaService::LuaService(const std::string& path, ServiceContext context, std::shared_ptr<RedisRuntime> redis,
-                        WebsocketSink* sink, GameSessionSink* sessions)
+                        WebsocketSink* sink, GameSessionSink* sessions, PlacementSink* placement)
   : state_(luaL_newstate()), context_(std::move(context)), websocket_sink_(sink), session_sink_(sessions),
-    async_context_(std::make_shared<AsyncContext>()), redis_(std::move(redis)) {
+    placement_sink_(placement), async_context_(std::make_shared<AsyncContext>()), redis_(std::move(redis)) {
     if (!state_) throw std::runtime_error("cannot create Lua state");
     async_context_->state = state_;
     try {
@@ -145,6 +145,7 @@ void LuaService::check(int status) {
         push_stream_api(state_, this);
         push_websocket_api(state_, this);
         push_session_api(state_, this);
+        push_placement_api(state_, this);
         lua_pushcfunction(state_, traceback);
         check(luaL_loadfile(state_, path.c_str()));
         check(protected_call(state_, 0, 1, 1));
@@ -305,6 +306,51 @@ void LuaService::push_session_api(lua_State* l, LuaService* service) {
     lua_pushlightuserdata(l, service); lua_pushcclosure(l, session_send, 1); lua_setfield(l, -2, "send");
     lua_pushlightuserdata(l, service); lua_pushcclosure(l, session_broadcast, 1); lua_setfield(l, -2, "broadcast");
     lua_setfield(l, -2, "session"); lua_setglobal(l, "mistlane");
+}
+void LuaService::push_placement_api(lua_State* l, LuaService* service) {
+    lua_getglobal(l, "mistlane");
+    if (!lua_istable(l, -1)) { lua_pop(l, 1); lua_newtable(l); }
+    lua_pushlightuserdata(l, service); lua_pushcclosure(l, placement_call, 1);
+    lua_setfield(l, -2, "place");
+    lua_setglobal(l, "mistlane");
+}
+// A placement lookup cannot answer inside the handler: the callback runs on
+// the same event loop only after the handler returned, so scripts answer
+// through mistlane.session.send from the callback instead of a return value.
+int LuaService::placement_call(lua_State* l) {
+    auto* service = static_cast<LuaService*>(lua_touserdata(l, lua_upvalueindex(1)));
+    auto word = [&](int index, const char* label) {
+        if (!lua_isstring(l, index)) throw std::runtime_error(std::string(label)+" must be an identifier");
+        std::size_t size = 0;
+        const char* data = lua_tolstring(l, index, &size);
+        if (!size || size > 64) throw std::runtime_error(std::string(label)+" length is invalid");
+        for (std::size_t i = 0; i < size; ++i) {
+            const unsigned char ch = data[i];
+            if (!((ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z')
+                    || (ch >= '0' && ch <= '9') || ch == '_' || ch == '-'))
+                throw std::runtime_error(std::string(label)+" must be an identifier");
+        }
+        return std::string(data, size);
+    };
+    const auto role = word(1, "role");
+    std::string scope;
+    if (!lua_isnil(l, 2)) scope = word(2, "scope");
+    if (!lua_isfunction(l, 3)) throw std::runtime_error("last argument must be a callback function");
+    lua_pushvalue(l, 3);
+    const auto callback = luaL_ref(l, LUA_REGISTRYINDEX);
+    const auto life = service->async_context_;
+    if (!service->placement_sink_)
+        return finish_lua(life, callback, "placement is disabled; start with --coordinator IP:PORT",
+            [](lua_State* l) { lua_pushnil(l); }), 0;
+    service->placement_sink_->place(role, scope,
+        [life, callback](std::string_view address, std::string_view reason) {
+            if (!reason.empty())
+                return finish_lua(life, callback, std::string(reason), [](lua_State* l) { lua_pushnil(l); });
+            finish_lua(life, callback, {}, [address](lua_State* l) {
+                lua_pushlstring(l, address.data(), address.size());
+            });
+        });
+    return 0;
 }
 void LuaService::websocket_callback(const char* name, std::uint64_t id, std::string_view payload, const std::string& path) {
     StackGuard guard(state_);

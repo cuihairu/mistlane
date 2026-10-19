@@ -143,7 +143,7 @@ coordinator 是注册表，不是转发面。用 `--role coordinator --listen AD
 
 每个成员保持一条出站控制连接：先用 `MLR1 REGISTER <role> <instance> <scope> <listen ADDR:PORT> <probe ADDR:PORT|0>` 注册（instance 取 `--service-name`，缺省时为监听地址），此后每 500 ms 心跳一次 `MLR1 <ready|notready> <active> <capacity>`。就绪状态来自成员自身的准入闸门（超载比例与滞回，基于在线会话数和 `--max-connections`）；coordinator 不可达时成员只是重试注册，不会导致进程失败。成员身份随连接存亡：断连即退役，coordinator 上的 `mistlane_registry_members` 指标记录存活成员数。
 
-两条只读命令在各自的短连接上应答后即关闭：`MLR1 QUERY [role] [scope]` 列出成员及其就绪与负载，`MLR1 PLACE <role> <scope>` 挑选一个——就绪优先，再取 active/capacity 最低者，最后按实例名——应答 `MLR1 PLACE <instance> <listen> <probe> ready <active>/<capacity>` 或 `MLR1 EMPTY`。coordinator 上的任何非 MLR1 帧都会得到 `MLR1 ERR UNEXPECTED`；带 `--service-token` 的 coordinator 对未通过 `MLS1` 握手前的所有帧回复 `MLS1 ERR TOKEN`，成员侧 `--upstream-token` 的用法与任何内部链路一致。注册表只回答当前状态：不持有归属与迁移状态、不搬运角色、也没有故障转移——拿到 PLACE 地址之后做什么由调用方自己决定。
+两条只读命令在各自的短连接上应答后即关闭：`MLR1 QUERY [role] [scope]` 列出成员及其就绪与负载，`MLR1 PLACE <role> <scope>` 挑选一个——就绪优先，再取 active/capacity 最低者，最后按实例名——应答 `MLR1 PLACE <instance> <listen> <probe> ready <active>/<capacity>` 或 `MLR1 EMPTY`。以 `--coordinator ADDR:PORT`（可选 `--scope NAME`，即默认查询作用域）启动的 login 是注册表客户端而非成员：Lua 调用 `mistlane.place(role, scope?, callback)`，每次查询独占一条连接，回调稍后以（`nil`, 被分配的监听地址）或（`reason`, `nil`）触发——没有就绪成员时为 `EMPTY`，呈递的身份被拒时为 `TOKEN`，传输故障为 `unreachable`/`timeout`。应答在 handler 返回之后才到达，脚本须在回调里经 `mistlane.session.send` 回答，而不是通过返回值。coordinator 上的任何非 MLR1 帧都会得到 `MLR1 ERR UNEXPECTED`；带 `--service-token` 的 coordinator 对未通过 `MLS1` 握手前的所有帧回复 `MLS1 ERR TOKEN`，成员侧 `--upstream-token` 的用法与任何内部链路一致。注册表只回答当前状态：不持有归属与迁移状态、不搬运角色、也没有故障转移——拿到 PLACE 地址之后做什么由调用方自己决定。
 
 ### 初始化模板中的配置
 

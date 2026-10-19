@@ -1513,6 +1513,91 @@ private:
     unsigned generation_ = 0;
     bool reading_ = false, dead_ = false;
 };
+// One-shot placement lookups: connect, optionally identify, ask MLR1 PLACE,
+// answer once and close. The registry closes a PLACE connection itself, so
+// every lookup owns a fresh connection and keeps no state between lookups.
+class RegistryClient : public std::enable_shared_from_this<RegistryClient> {
+public:
+    using Answer = std::function<void(std::string address, std::string reason)>;
+    static void lookup(asio::io_context& io, const Config& config,
+                       std::string_view role, std::string_view scope, Answer answer) {
+        std::shared_ptr<RegistryClient> self(new RegistryClient(io, config));
+        self->begin(std::string(role), !scope.empty() ? std::string(scope) : config.scope, std::move(answer));
+    }
+private:
+    RegistryClient(asio::io_context& io, const Config& config)
+      : io_(io), config_(config), endpoint_(parse_address(config.coordinator.address), config.coordinator.port),
+        channel_(std::make_shared<TcpChannel>(tcp::socket(io))), timer_(io) {}
+    void begin(std::string role, std::string scope, Answer answer) {
+        question_ = "MLR1 PLACE " + role + " " + scope;
+        answer_ = std::move(answer);
+        deadline();
+        channel_->socket().async_connect(endpoint_, [self=shared_from_this()](Error ec) {
+            if (self->answered()) return;
+            if (ec) return self->answer({}, "unreachable");
+            // A tokened coordinator requires the identity first; a plain one
+            // would refuse the handshake instead of the placement.
+            if (self->config_.upstream_token.empty()) return self->ask();
+            self->write(service_hello(self->config_));
+        });
+    }
+    void ask() {
+        write(question_);
+    }
+    void write(std::string payload) {
+        channel_->write(std::move(payload), [self=shared_from_this()](Error ec) {
+            if (self->answered()) return;
+            if (ec) return self->answer({}, "unreachable");
+            self->channel_->read([self](Error ec, std::string payload) {
+                if (self->answered()) return;
+                if (ec) return self->answer({}, "unreachable");
+                self->verdict(std::move(payload));
+            });
+        });
+    }
+    void verdict(std::string payload) {
+        std::istringstream in(payload);
+        std::string magic, command, instance, address, extra;
+        in >> magic >> command;
+        if (magic == "MLS1") {
+            if (command == "OK") return ask(); // identified: now ask the placement
+            // "MLS1 ERR <reason>": TOKEN / INVALID / UNEXPECTED.
+            std::string reason;
+            if (command == "ERR") in >> reason;
+            return answer({}, reason.empty() ? std::string("refused") : reason);
+        }
+        if (magic != "MLR1") return answer({}, "unexpected");
+        if (command == "EMPTY") return answer({}, "EMPTY");
+        // "MLR1 PLACE <instance> <listen> <probe> ready <active>/<capacity>"
+        if (command != "PLACE" || !(in >> instance >> address)) return answer({}, "unexpected");
+        answer(address, {});
+    }
+    void deadline() {
+        timer_.expires_after(std::chrono::seconds(10));
+        timer_.async_wait([self=shared_from_this()](Error ec) {
+            if (!ec && !self->answered()) self->answer({}, "timeout");
+        });
+    }
+    bool answered() {
+        if (done_) return true;
+        return false;
+    }
+    void answer(std::string address, std::string reason) {
+        if (done_) return;
+        done_ = true;
+        timer_.cancel();
+        channel_->close();
+        answer_(std::move(address), std::move(reason));
+    }
+    asio::io_context& io_;
+    const Config& config_;
+    tcp::endpoint endpoint_;
+    std::shared_ptr<TcpChannel> channel_;
+    asio::steady_timer timer_;
+    std::string question_;
+    Answer answer_;
+    bool done_ = false;
+};
 // Lua websocket lifecycle sessions (script roles with an http/https listener).
 // Every method runs on the node's event loop thread, matching the WebsocketSink
 // contract, so no locking is needed. Sessions share max_connections with the
@@ -1595,8 +1680,15 @@ private:
     std::map<std::uint64_t, std::shared_ptr<Channel>> sessions_;
     std::uint64_t next_id_ = 1;
 };
-class Node {
+class Node : public PlacementSink {
 public:
+    // One placement question, one connection: login handlers ask the registry
+    // through Lua; the answer callback runs back on this event loop.
+    void place(std::string_view role, std::string_view scope,
+        std::function<void(std::string_view address, std::string_view reason)> answer) override {
+        if (!config_.coordinator_enabled) return answer({}, "disabled");
+        RegistryClient::lookup(io_, config_, role, scope, std::move(answer));
+    }
     explicit Node(Config config)
       : config_(std::move(config)), signals_(io_, SIGINT, SIGTERM, SIGHUP), tick_(io_),
         admission_(std::max<std::size_t>(1, config_.upstreams.size()), config_.max_room_sessions,
@@ -1648,7 +1740,8 @@ public:
         const bool script_role = role_definition && role_definition->script;
         service_context_ = ServiceContext{config_.role, config_.transport, config_.route_epoch, game_sessions, http_service};
         if (config_.role == "coordinator") registry_ = std::make_unique<Registry>();
-        if (config_.coordinator_enabled)
+        if (config_.coordinator_enabled && config_.role != "login")
+            // Members register and heartbeat; login only asks placements.
             member_ = std::make_shared<RegistryMember>(io_, config_,
                 [this] { return heartbeat_status(); });
         if (script_role && http_service)
@@ -1660,7 +1753,7 @@ public:
             game_sessions_ = std::make_shared<GameSessions>();
         if (script_role)
             service_ = std::make_shared<LuaService>(config_.script, service_context_, redis_,
-                websockets_.get(), game_sessions_.get());
+                websockets_.get(), game_sessions_.get(), this);
         for (const auto& e : config_.upstreams) (void)parse_address(e.address);
         for (const auto& item : config_.listeners) {
             if (item.protocol != "tcp") continue;

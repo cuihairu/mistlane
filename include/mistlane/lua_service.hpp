@@ -2,6 +2,7 @@
 #pragma once
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <string>
@@ -37,6 +38,17 @@ public:
     // Queues the payload for every live session; returns how many accepted it.
     virtual std::size_t session_broadcast(std::string_view payload) = 0;
 };
+// Placement lookup adapter (registry client); implemented by the node. All
+// calls run on the node's event loop thread, so implementations need no locking.
+class PlacementSink {
+public:
+    virtual ~PlacementSink() = default;
+    // Asks the coordinator registry for one placement and fires the callback
+    // once on the event loop thread: address non-empty on success, otherwise
+    // address empty and reason a short machine-readable word.
+    virtual void place(std::string_view role, std::string_view scope,
+        std::function<void(std::string_view address, std::string_view reason)> answer) = 0;
+};
 class RedisRuntime {
 public:
     RedisRuntime(boost::asio::io_context& io, std::string host, std::uint16_t port);
@@ -56,7 +68,8 @@ class LuaService {
 public:
     struct AsyncContext { lua_State* state = nullptr; };
     explicit LuaService(const std::string& path, ServiceContext context = {}, std::shared_ptr<RedisRuntime> redis = {},
-                        WebsocketSink* websocket_sink = nullptr, GameSessionSink* session_sink = nullptr);
+                        WebsocketSink* websocket_sink = nullptr, GameSessionSink* session_sink = nullptr,
+                        PlacementSink* placement_sink = nullptr);
     ~LuaService();
     LuaService(const LuaService&) = delete;
     LuaService& operator=(const LuaService&) = delete;
@@ -84,6 +97,8 @@ private:
     static void push_stream_api(lua_State*, LuaService*);
     static void push_websocket_api(lua_State*, LuaService*);
     static void push_session_api(lua_State*, LuaService*);
+    static int placement_call(lua_State*);
+    static void push_placement_api(lua_State*, LuaService*);
     void websocket_callback(const char* name, std::uint64_t id, std::string_view payload, const std::string& path);
     static int leaderboard_add(lua_State*);
     static int leaderboard_get(lua_State*);
@@ -96,6 +111,7 @@ private:
     ServiceContext context_;
     WebsocketSink* websocket_sink_ = nullptr;
     GameSessionSink* session_sink_ = nullptr;
+    PlacementSink* placement_sink_ = nullptr;
     bool started_ = false, stopped_ = false, shutdown_ = false;
     std::shared_ptr<AsyncContext> async_context_;
     std::shared_ptr<RedisRuntime> redis_;
