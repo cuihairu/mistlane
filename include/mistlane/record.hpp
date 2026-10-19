@@ -2,6 +2,7 @@
 #pragma once
 #include <cstdint>
 #include <map>
+#include <optional>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -77,17 +78,18 @@ inline RecordRequest parse_record(std::string_view payload) {
     return r;
 }
 // Single event-loop thread: no locking. The store keeps the newest accepted
-// change-set per character; merging change-sets into entity state is the
+// change-set per (realm, character); merging change-sets into entity state is the
 // deferred entity-contract work, not this endpoint's.
 class RecordStore {
 public:
+    using RecordKey = std::pair<std::string, std::string>;
     // Handles one frame and returns the reply; the result word feeds the
     // bounded result label of mistlane_record_results_total.
     std::string handle(std::string_view frame, std::string_view& result) {
         RecordRequest request;
         try { request = parse_record(frame); }
         catch (const std::exception&) { result = "invalid"; return "MLD1 ERR INVALID"; }
-        const auto key = std::pair{request.realm, request.character};
+        const RecordKey key{request.realm, request.character};
         const auto it = records_.find(key);
         if (request.type == RecordRequest::Type::Load) {
             if (it == records_.end()) { result = "empty"; return "MLD1 EMPTY"; }
@@ -110,8 +112,8 @@ public:
             return "MLD1 RECEIVED gen " + std::to_string(it->second.generation)
                  + " seq " + std::to_string(it->second.sequence);
         }
-        // Sequence discipline: per-character monotonic across generations, no
-        // gaps the home side cannot fill. A fresh record starts at one.
+        // Sequence discipline per (realm, character), monotonic across
+        // generations, with no gaps the home side can fill. A fresh key starts at one.
         const auto expected = it == records_.end() ? 1 : it->second.sequence + 1;
         if (request.sequence != expected) {
             result = "seq";
@@ -134,6 +136,81 @@ private:
     // instead of growing without bound under a misbehaving peer.
     static constexpr std::size_t limit = 1000000;
     struct RecordState { std::uint64_t generation = 0, sequence = 0; std::string payload; };
-    std::map<std::pair<std::string, std::string>, RecordState> records_;
+    std::map<RecordKey, RecordState> records_;
+};
+
+// Sender-side ordering boundary. The caller seeds the durable cursor from
+// LOAD, then may enqueue changes in any arrival order. Only the next
+// contiguous sequence for a (realm, character) can be sent, and only one
+// frame per participant may be in flight. RECEIVED releases the transport
+// slot but retains the item until a future durable acknowledgement exists.
+class ReturnSendQueue {
+public:
+    struct Change {
+        std::string realm, character;
+        std::uint64_t generation = 0, sequence = 0;
+        std::string payload;
+    };
+    explicit ReturnSendQueue(std::size_t retry_limit) : retry_limit_(retry_limit) {}
+    void seed(std::string realm, std::string character, std::uint64_t stored_sequence) {
+        const auto key = std::pair{std::move(realm), std::move(character)};
+        if (send_cursor_.contains(key)) throw std::invalid_argument("participant already seeded");
+        send_cursor_[key] = stored_sequence;
+        durable_cursor_[key] = stored_sequence;
+    }
+    void enqueue(Change change) {
+        const auto key = std::pair{change.realm, change.character};
+        if (!send_cursor_.contains(key) || !change.sequence || !change.generation)
+            throw std::invalid_argument("unseeded participant or invalid sequence");
+        if (!pending_[key].emplace(change.sequence, std::move(change)).second)
+            throw std::invalid_argument("duplicate sequence");
+    }
+    std::optional<Change> next(std::string_view realm, std::string_view character) {
+        const auto key = std::pair{std::string(realm), std::string(character)};
+        if (in_flight_.contains(key)) return std::nullopt;
+        const auto seq = send_cursor_.find(key);
+        const auto rows = pending_.find(key);
+        if (seq == send_cursor_.end() || rows == pending_.end()) return std::nullopt;
+        const auto item = rows->second.find(seq->second + 1);
+        if (item == rows->second.end() || attempts_[key][item->first] >= retry_limit_)
+            return std::nullopt;
+        ++attempts_[key][item->first];
+        in_flight_[key] = item->first;
+        return item->second;
+    }
+    bool retry(std::string_view realm, std::string_view character) {
+        const auto key = std::pair{std::string(realm), std::string(character)};
+        const auto flight = in_flight_.find(key);
+        if (flight == in_flight_.end()) return false;
+        const auto seq = flight->second;
+        in_flight_.erase(flight);
+        return attempts_[key][seq] < retry_limit_;
+    }
+    bool received(std::string_view realm, std::string_view character, std::uint64_t sequence) {
+        const auto key = std::pair{std::string(realm), std::string(character)};
+        const auto flight = in_flight_.find(key);
+        if (flight == in_flight_.end() || flight->second != sequence) return false;
+        in_flight_.erase(flight);
+        send_cursor_[key] = sequence;
+        return true;
+    }
+    bool ack_durable(std::string_view realm, std::string_view character, std::uint64_t sequence) {
+        const auto key = std::pair{std::string(realm), std::string(character)};
+        auto cursor = durable_cursor_.find(key);
+        auto rows = pending_.find(key);
+        if (cursor == durable_cursor_.end() || rows == pending_.end()
+                || sequence != cursor->second + 1 || sequence > send_cursor_[key]) return false;
+        if (!rows->second.contains(sequence)) return false;
+        rows->second.erase(sequence);
+        cursor->second = sequence;
+        return true;
+    }
+private:
+    using Key = std::pair<std::string, std::string>;
+    std::size_t retry_limit_;
+    std::map<Key, std::uint64_t> send_cursor_, durable_cursor_;
+    std::map<Key, std::map<std::uint64_t, Change>> pending_;
+    std::map<Key, std::map<std::uint64_t, std::size_t>> attempts_;
+    std::map<Key, std::uint64_t> in_flight_;
 };
 }

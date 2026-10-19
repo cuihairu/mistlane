@@ -358,6 +358,11 @@ void core_contracts() {
     equal(records.handle("MLD1 LOAD home hero", result), "MLD1 STATE gen 7 seq 3");
     // Records are independent per character, and a fresh record starts at one.
     equal(records.handle("MLD1 SUBMIT home other gen 1 seq 2", result), "MLD1 ERR SEQ seq 1");
+    // Realm is part of both the fence and sequence key: the same character
+    // id in another home domain starts independently at sequence one.
+    equal(records.handle("MLD1 SUBMIT away hero gen 1 seq 1 hp=3", result), "MLD1 RECEIVED gen 1 seq 1");
+    equal(records.handle("MLD1 LOAD home hero", result), "MLD1 STATE gen 7 seq 3");
+    equal(records.handle("MLD1 LOAD away hero", result), "MLD1 STATE gen 1 seq 1 hp=3");
     equal(records.handle("MLD1 NOPE", result), "MLD1 ERR INVALID");
     require(result == "invalid", "malformed frame mislabeled");
     // Entity contract prototype: the design page's example parses, resolves
@@ -1813,6 +1818,33 @@ void cross_record() {
     equal(ask(leg, "MLD1 SUBMIT home hero gen 4 seq 2 late"), "MLD1 ERR STALE gen 5");
     equal(ask(leg, "MLD1 SUBMIT home hero gen 6 seq 2 taken"), "MLD1 RECEIVED gen 6 seq 2");
     equal(ask(leg, "MLD1 SUBMIT home hero gen 7 seq 9 jump"), "MLD1 ERR SEQ seq 3");
+    equal(ask(leg, "MLD1 SUBMIT away hero gen 1 seq 1 hp=3"), "MLD1 RECEIVED gen 1 seq 1");
+    equal(ask(leg, "MLD1 LOAD home hero"), "MLD1 STATE gen 6 seq 2 taken");
+    equal(ask(leg, "MLD1 LOAD away hero"), "MLD1 STATE gen 1 seq 1 hp=3");
+    // Inject sequence 2 before sequence 1. The sender queue holds the gap,
+    // then emits both frames in order to the real framed-TCP endpoint.
+    ReturnSendQueue ordered(3);
+    ordered.seed("order", "hero", 0);
+    ordered.enqueue({"order", "hero", 2, 2, "second"});
+    require(!ordered.next("order", "hero"), "sender emitted across a sequence gap");
+    ordered.enqueue({"order", "hero", 2, 1, "first"});
+    auto first = ordered.next("order", "hero");
+    require(first && first->sequence == 1, "sender did not select missing sequence first");
+    const auto submit = [](const ReturnSendQueue::Change& change) {
+        return "MLD1 SUBMIT " + change.realm + " " + change.character + " gen "
+            + std::to_string(change.generation) + " seq " + std::to_string(change.sequence)
+            + " " + change.payload;
+    };
+    equal(ask(leg, submit(*first)), "MLD1 RECEIVED gen 2 seq 1");
+    require(ordered.received("order", "hero", 1), "sender did not release first receipt");
+    auto second_change = ordered.next("order", "hero");
+    require(second_change && second_change->sequence == 2, "sender did not continue in order");
+    equal(ask(leg, submit(*second_change)), "MLD1 RECEIVED gen 2 seq 2");
+    require(ordered.received("order", "hero", 2), "sender did not release second receipt");
+    require(!ordered.ack_durable("order", "hero", 2), "queue accepted an out-of-order durable ACK");
+    require(ordered.ack_durable("order", "hero", 1), "queue rejected first durable ACK");
+    require(ordered.ack_durable("order", "hero", 2), "queue rejected second durable ACK");
+    equal(ask(leg, "MLD1 LOAD order hero"), "MLD1 STATE gen 2 seq 2 second");
     // A record leg also carries plain script frames under the same session.
     equal(ask(leg, "ping"), "ping");
     equal(ask(leg, "MLD1 NOPE"), "MLD1 ERR INVALID");
@@ -1825,8 +1857,8 @@ void cross_record() {
         require(at != std::string::npos, std::string("missing metric ")+sample);
         return std::strtod(body.c_str()+at+needle.size(), nullptr);
     };
-    require(results("accepted") == 2, "accepted counter mismatch");
-    require(results("loaded") == 2, "loaded counter mismatch");
+    require(results("accepted") == 5, "accepted counter mismatch");
+    require(results("loaded") == 5, "loaded counter mismatch");
     require(results("duplicate") == 1, "duplicate counter mismatch");
     require(results("seq") == 2, "seq counter mismatch");
     require(results("stale") == 1, "stale counter mismatch");
@@ -1857,6 +1889,26 @@ void cross_record() {
         RawSocket game(plain);
         equal(ask(game, "MLD1 LOAD home hero"), "MLD1 LOAD home hero");
     }
+}
+void cross_return_queue() {
+    ReturnSendQueue queue(2);
+    queue.seed("realm-a", "same-id", 4);
+    queue.seed("realm-b", "same-id", 0);
+    queue.enqueue({"realm-a", "same-id", 3, 6, "six"});
+    queue.enqueue({"realm-b", "same-id", 1, 1, "other realm"});
+    require(!queue.next("realm-a", "same-id"), "gap was not held for retry/fill");
+    queue.enqueue({"realm-a", "same-id", 3, 5, "five"});
+    must_fail([&] { queue.enqueue({"realm-a", "same-id", 3, 5, "duplicate"}); });
+    auto first = queue.next("realm-a", "same-id");
+    require(first && first->sequence == 5, "sender did not release filled gap");
+    require(!queue.next("realm-a", "same-id"), "same participant had concurrent sends");
+    require(queue.retry("realm-a", "same-id"), "first retry was not allowed");
+    first = queue.next("realm-a", "same-id");
+    require(first && first->sequence == 5, "retry changed sequence order");
+    require(!queue.retry("realm-a", "same-id"), "retry limit was not enforced");
+    require(!queue.next("realm-a", "same-id"), "retry exhaustion resent an item");
+    auto other = queue.next("realm-b", "same-id");
+    require(other && other->sequence == 1, "realm key interfered with same character id");
 }
 void probe_control() {
     Context c;
