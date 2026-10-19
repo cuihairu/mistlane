@@ -95,3 +95,13 @@ expectThrow('int64 overflow', () => encodeRecord(sprotoFields.Avatar, { exp: 2n 
 expectThrow('not an array', () => encodeRecord(sprotoFields.Avatar, { tags: 5 }));
 expectThrow('bad array element', () => encodeRecord(sprotoFields.Avatar, { tags: [1.5] }));
 console.log('JS_SPROTO_SDK_DECODE malformed: short/truncated/array-layout/overflow rejected [PASS]');
+
+// BOOL/STRING/BYTES kinds are emitted into the field tables but refused by the
+// codecs until their wire-form vectors land (the remaining open item), on both
+// directions: in-band and length-prefixed placements of an unsupported kind.
+// id 0 so the wire tags below actually reach the injected field.
+const unsupported = [{ id: 0, name: 'zz', kind: 'bool' }];
+expectThrow('unsupported kind', () => encodeRecord(unsupported, { zz: true }));
+expectThrow('unsupported in-band decode', () => decodeRecord(unsupported, unhex('01000200')));
+expectThrow('unsupported length-prefixed decode', () => decodeRecord(unsupported, unhex('01000000')));
+console.log('JS_SPROTO_SDK_CODEC unsupported kinds refused [PASS]');

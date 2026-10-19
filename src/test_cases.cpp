@@ -2418,6 +2418,7 @@ void contract_tool() {
       <gold id="2" type="INT64" default="-5" flags="OWN_CLIENT" persistent="true"/>
       <inventory id="3" type="Inventory" flags="OWN_CLIENT"/>
       <active id="4" type="BOOL" default="true"/>
+      <tags id="5" type="ARRAY" of="UINT32"/>
     </Properties>
     <ServerMethods><Method name="attack" id="1" mode="notify" caller="owner">
       <Arg name="target" id="0" type="EntityRef"/>
@@ -2461,13 +2462,27 @@ void contract_tool() {
             generated_bindings.find("struct Avatar_server_getProfileArgs") != std::string::npos &&
             generated_bindings.find("std::uint32_t account;") != std::string::npos,
             "generated field-specific typed argument objects missing");
-    require(read(one/"avatar.bindings.js").find("encodeRecord") != std::string::npos &&
-            read(one/"avatar.bindings.js").find("decodeRecord") != std::string::npos &&
-            read(one/"avatar.bindings.js").find("sprotoFields") != std::string::npos &&
-            read(one/"avatar.bindings.cs").find("record Avatar") != std::string::npos &&
-            read(one/"avatar.bindings.cs").find("SprotoCodec") != std::string::npos &&
-            read(one/"avatar.bindings.cs").find("AvatarSchema") != std::string::npos,
-            "generated JS/C# SDK bindings missing");
+    const auto js_bindings = read(one/"avatar.bindings.js");
+    require(js_bindings.find("encodeRecord") != std::string::npos &&
+            js_bindings.find("decodeRecord") != std::string::npos &&
+            js_bindings.find("sprotoFields") != std::string::npos &&
+            // The generated field tables carry the schema-aware kind/of data
+            // the JS/C# codecs recurse through, including the kinds whose wire
+            // forms are still open (BOOL/STRING/BYTES stay refused there).
+            js_bindings.find("kind: 'struct', of: 'Inventory'") != std::string::npos &&
+            js_bindings.find("kind: 'struct-array', of: 'Item'") != std::string::npos &&
+            js_bindings.find("kind: 'int-array'") != std::string::npos &&
+            js_bindings.find("kind: 'bool'") != std::string::npos,
+            "generated JS field tables lost kind/of");
+    const auto cs_bindings = read(one/"avatar.bindings.cs");
+    require(cs_bindings.find("record Avatar") != std::string::npos &&
+            cs_bindings.find("SprotoCodec") != std::string::npos &&
+            cs_bindings.find("AvatarSchema") != std::string::npos &&
+            cs_bindings.find("SprotoKind.Struct, \"Inventory\"") != std::string::npos &&
+            cs_bindings.find("SprotoKind.StructArray, \"Item\"") != std::string::npos &&
+            cs_bindings.find("SprotoKind.IntArray, null") != std::string::npos &&
+            cs_bindings.find("\"active\", SprotoKind.Unsupported, null") != std::string::npos,
+            "generated C# field tables lost kind/sub");
     const auto old_lock = c.path("old.lock"), compatible_lock = c.path("compatible.lock"), breaking_lock = c.path("breaking.lock");
     const auto release_lock = read(one/"avatar.lock");
     auto with_digest = [](std::string text, std::string_view digest) {
@@ -2477,7 +2492,7 @@ void contract_tool() {
         return text;
     };
     write(old_lock, release_lock);
-    write(compatible_lock, with_digest(release_lock+" prop Avatar 5 nickname STRING\n", "1111111111111111"));
+    write(compatible_lock, with_digest(release_lock+" prop Avatar 6 nickname STRING\n", "1111111111111111"));
     auto& compatible = c.spawn({self().string(), "contract", "compat", old_lock.string(), compatible_lock.string()});
     require(compatible.wait()==0, "compatible release lock was rejected: "+compatible.output());
     std::cout << compatible.output();

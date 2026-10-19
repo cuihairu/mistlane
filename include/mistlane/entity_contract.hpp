@@ -658,10 +658,11 @@ public:
         };
         auto cs_sub = [this](const ContractField& f) {
             const auto kind = field_kind(f);
+            // Only struct kinds resolve through the type registry; everything
+            // else keeps a null Sub.
             if (kind == "struct") return "\"" + f.type + "\"";
             if (kind == "struct-array") return "\"" + f.of + "\"";
-            if (kind == "int") return std::string("null");
-            return "\"" + (f.type == "ARRAY" ? f.of : f.type) + "\"";
+            return std::string("null");
         };
         std::vector<std::string> type_names;
         auto emit = [&](const std::string& name, const ContractArgs& fields) {
