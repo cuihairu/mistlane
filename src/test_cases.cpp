@@ -7,6 +7,7 @@
 #include "mistlane/token_bucket.hpp"
 #include "mistlane/transport.hpp" // max_frame bounds the flood sizing
 #include <curl/curl.h>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <iomanip>
@@ -761,6 +762,142 @@ void transport_identity() {
     }
     for (const auto& node_output : {node.output(), open_node.output()})
         require(node_output.find("callback failed") == std::string::npos, "handshake path logged Lua failures");
+}
+// The gateway --upstream-multiplex mode (MLM1) shares one upstream connection
+// across client sessions: logical sessions stay isolated, pushes and broadcast
+// address a single session, a Lua error or disconnect closes only its own
+// logical session, and plain clients are told off instead of upgrading.
+void transport_multiplex() {
+    Context c;
+    write(c.path("correlate.lua"), correlate_lua);
+    const auto gameServer = port(), metrics = port(), gateway = port();
+    auto& node = c.spawn({self().string(), "--role", "gameServer", "--listen", endpoint(gameServer),
+        "--script", c.path("correlate.lua").string(), "--service-token", "s3cret",
+        "--metrics-listen", endpoint(metrics)});
+    c.node("gateway", gateway, {"--upstream", endpoint(gameServer),
+        "--upstream-token", "s3cret", "--upstream-multiplex", "1"});
+    const auto send_frame = [](RawSocket& raw, std::string_view payload) {
+        std::string frame(4, '\0');
+        auto length = static_cast<std::uint32_t>(payload.size());
+        for (int i = 3; i >= 0; --i) { frame[i] = static_cast<char>(length & 255); length >>= 8; }
+        raw.send(frame+std::string(payload));
+    };
+    const auto read_frame = [](RawSocket& raw) {
+        const auto header = raw.receive(4);
+        std::size_t length = 0;
+        for (unsigned char ch : header) length = (length << 8) | ch;
+        return raw.receive(length);
+    };
+    const auto tagged = [](std::uint32_t id, std::string_view payload) {
+        std::string frame(4, '\0');
+        for (int i = 3; i >= 0; --i) { frame[i] = static_cast<char>(id & 255); id >>= 8; }
+        return frame+std::string(payload);
+    };
+    std::uint32_t id = 0;
+    std::string body;
+    const auto split = [&id, &body](const std::string& frame) {
+        require(frame.size() >= 4, "correlated frame too short");
+        id = 0;
+        for (int i = 0; i < 4; ++i) id = (id<<8) | static_cast<unsigned char>(frame[i]);
+        body = frame.substr(4);
+    };
+    const auto expect_close = [](RawSocket& raw) {
+        for (int i = 0; i < 40 && !raw.closed(); ++i) std::this_thread::sleep_for(50ms);
+        require(raw.closed(), "connection stayed open after a refusal");
+    };
+    const auto established = [](unsigned port) {
+        char hex[8];
+        std::snprintf(hex, sizeof hex, "%04X", port);
+        std::ifstream net("/proc/net/tcp");
+        std::string sl, local, remote, state, rest;
+        int count = 0;
+        while (net >> sl >> local >> remote >> state) {
+            if (state == "01" && local.ends_with(":"+std::string(hex))) ++count;
+            std::getline(net, rest);
+        }
+        return count;
+    };
+    // Two clients ride one upstream connection; the server still counts both.
+    RawSocket a(gateway), b(gateway);
+    send_frame(a, "hello"); equal(read_frame(a), "hello");
+    send_frame(b, "world"); equal(read_frame(b), "world");
+    std::this_thread::sleep_for(300ms);
+    require(established(gameServer) == 1, "upstream connection not shared by logical sessions");
+    const auto live = http("http://"+endpoint(metrics)+"/metrics").body;
+    require(live.find("mistlane_active_sessions{role=\"gameServer\"} 2") != std::string::npos,
+            "logical sessions missing from server admission");
+    // Correlation is a first-frame handshake, so it lives on a third client and
+    // must survive the envelope of a session it never shared.
+    RawSocket corr(gateway);
+    send_frame(corr, "MLC2"); equal(read_frame(corr), "MLC2 OK");
+    send_frame(corr, tagged(5, "self"));
+    split(read_frame(corr));
+    require(id == 5 && body.ends_with(":req=5"), "correlation lost through the shared leg: "+body);
+    send_frame(b, "self");
+    body = read_frame(b);
+    require(body.starts_with("session=") && body.ends_with(":req=nil"), "plain session broken: "+body);
+    // A push and a broadcast stay inside their logical session.
+    send_frame(corr, tagged(6, "push"));
+    split(read_frame(corr)); require(id == 0 && body == "pushed", "push lost on the shared leg");
+    split(read_frame(corr)); require(id == 6 && body == "done", "reply lost after a push");
+    require(!b.pending(), "push leaked into another logical session");
+    // A directly authenticated session shares the registry too, so the count
+    // reaches four: a, b, corr and the direct peer.
+    RawSocket direct(gameServer);
+    send_frame(direct, "MLS1 gateway inst-9 s3cret");
+    equal(read_frame(direct), "MLS1 OK");
+    send_frame(direct, "hi"); equal(read_frame(direct), "hi");
+    send_frame(b, "bcast");
+    split(read_frame(corr)); require(id == 0 && body == "bc", "broadcast shape lost on the correlated session");
+    equal(read_frame(a), "bc");
+    equal(read_frame(b), "bc"); equal(read_frame(b), "bcast=4");
+    equal(read_frame(direct), "bc");
+    // A Lua error closes only that logical session.
+    {
+        RawSocket err(gateway);
+        send_frame(err, "oops");
+        expect_close(err);
+    }
+    require(node.output().find("mux oops") != std::string::npos,
+            "logical session error not reported");
+    send_frame(b, "again"); equal(read_frame(b), "again");
+    // A disconnect retires its logical session; the rest of the hub survives.
+    {
+        RawSocket gone(gateway);
+        send_frame(gone, "bye"); equal(read_frame(gone), "bye");
+        send_frame(b, "bcast");
+        equal(read_frame(b), "bc"); equal(read_frame(b), "bcast=5");
+        equal(read_frame(a), "bc"); // the survivors read the broadcast twice
+    }
+    std::this_thread::sleep_for(300ms);
+    send_frame(b, "bcast");
+    equal(read_frame(b), "bc"); equal(read_frame(b), "bcast=4");
+    equal(read_frame(a), "bc");
+    // Nobody upgrades mid-session, whether through the gateway or directly.
+    send_frame(a, "MLM1"); equal(read_frame(a), "MLM1");
+    {
+        RawSocket mid(gateway);
+        send_frame(mid, "hi"); equal(read_frame(mid), "hi");
+        send_frame(mid, "MLM1"); equal(read_frame(mid), "MLM1");
+    }
+    RawSocket plain(gameServer);
+    send_frame(plain, "MLM1");
+    equal(read_frame(plain), "MLM1 ERR UNEXPECTED");
+    expect_close(plain);
+    {
+        RawSocket through(gateway);
+        send_frame(through, "MLM1");
+        equal(read_frame(through), "MLM1 ERR UNEXPECTED");
+        expect_close(through);
+    }
+    // Multiplexing is an internal mode, so it needs the identity handshake.
+    {
+        auto& bad = c.spawn({self().string(), "--role", "gateway", "--listen", endpoint(port()),
+                             "--upstream", endpoint(gameServer), "--upstream-multiplex", "1"});
+        require(bad.wait() != 0 && bad.output().find("requires --upstream-token") != std::string::npos,
+                "multiplex accepted without a service identity");
+    }
+    require(node.output().find("unexpected frame") == std::string::npos, "hub parsed a malformed frame");
 }
 void transport_push() {
     Context c;

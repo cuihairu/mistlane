@@ -54,6 +54,14 @@ double ratio(std::string_view text) {
         throw std::invalid_argument("overload ratio must be in (0,1]: "+plain);
     return value;
 }
+// Every option takes a value, so on/off switches name their state instead of
+// standing alone: --upstream-multiplex on|off (0/1, true/false, yes/no work).
+bool switch_value(std::string_view text) {
+    const std::string plain(text);
+    if (plain == "on" || plain == "1" || plain == "true" || plain == "yes") return true;
+    if (plain == "off" || plain == "0" || plain == "false" || plain == "no") return false;
+    throw std::invalid_argument("expected on|off for "+plain);
+}
 // "PROTO://IP:PORT[?cert=FILE&key=FILE]" adds one independent listener. The
 // query certificate/key pair overrides the global --cert/--key for that
 // listener only; anything else in the query is rejected.
@@ -97,7 +105,7 @@ std::vector<std::pair<std::string, std::string>> config_flags(const std::filesys
     static constexpr Field fields[] = {
         {"ROLE","--role",0,0,0}, {"ROUTING","--routing",0,0,0}, {"LISTEN","--listen",0,0,0}, {"TRANSPORT","--transport",0,0,0},
         {"SERVICE_TOKEN","--service-token",0,0,0}, {"UPSTREAM_TOKEN","--upstream-token",0,0,0},
-        {"SERVICE_NAME","--service-name",0,0,0},
+        {"SERVICE_NAME","--service-name",0,0,0}, {"UPSTREAM_MULTIPLEX","--upstream-multiplex",0,0,0},
         {"SCRIPT","--script",1,0,0}, {"UPSTREAMS","--upstream",0,1,0}, {"CERT","--cert",1,0,0},
         {"KEY","--key",1,0,0}, {"LISTENERS","--listener",0,1,0}, {"REDIS","--redis",0,0,0},
         {"METRICS_LISTEN","--metrics-listen",0,0,0}, {"PROBE_LISTEN","--probe-listen",0,0,0},
@@ -218,6 +226,8 @@ int main(int argc, char** argv) {
                              "  service identity (session routing only; cross keeps MLC1):\n"
                              "    --service-token TOKEN (accept only peers presenting MLS1),\n"
                              "    --upstream-token TOKEN --service-name NAME (present MLS1 to each upstream)\n"
+                             "    --upstream-multiplex on|off (gateway shares one upstream connection\n"
+                             "      across sessions; requires --upstream-token, which identifies the peer)\n"
                              "  --transport tcp|ws|wss|http|https (wss/https require --cert FILE --key FILE)\n"
                              "  --listener PROTO://IP:PORT (repeat; independent extra listener, mixed\n"
                              "    plaintext/TLS allowed; wss/https may add ?cert=FILE&key=FILE overrides)\n"
@@ -244,6 +254,7 @@ int main(int argc, char** argv) {
             else if (key == "--service-token") config.service_token = value;
             else if (key == "--upstream-token") config.upstream_token = value;
             else if (key == "--service-name") config.service_name = value;
+            else if (key == "--upstream-multiplex") config.upstream_multiplex = switch_value(value);
             else if (key == "--upstream") config.upstreams.push_back(upstream(value));
             else if (key == "--routing") config.routing = value;
             else if (key == "--transport") { config.transport = value; transport_selected = true; }
@@ -294,6 +305,16 @@ int main(int argc, char** argv) {
             throw std::invalid_argument("--service-token does not apply to cross routing");
         if (!config.upstream_token.empty() && config.routing == "cross")
             throw std::invalid_argument("--upstream-token does not apply to cross routing");
+        // Multiplexing is the internal mode: only identified peers may upgrade
+        // a shared connection, so an anonymous upstream link cannot be offered it.
+        if (config.upstream_multiplex) {
+            if (config.role != "gateway")
+                throw std::invalid_argument("--upstream-multiplex applies to gateway only");
+            if (config.routing == "cross")
+                throw std::invalid_argument("--upstream-multiplex does not apply to cross routing");
+            if (config.upstream_token.empty())
+                throw std::invalid_argument("--upstream-multiplex requires --upstream-token");
+        }
         // The primary listener comes from --listen/--transport; --listener entries follow.
         mistlane::Listener primary;
         primary.protocol = config.transport;

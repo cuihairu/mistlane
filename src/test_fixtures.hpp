@@ -217,6 +217,8 @@ function M.message(payload, context)
   elseif payload == 'big' then
     local ok, err = mistlane.session.send(context.session, string.rep('x', 1024*1024-3))
     return 'big='..tostring(ok)..':'..tostring(err)
+  elseif payload == 'oops' then
+    error('mux oops')
   end
   return payload
 end

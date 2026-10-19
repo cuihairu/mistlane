@@ -20,6 +20,7 @@
 #include <set>
 #include <sstream>
 #include <thread>
+#include <unordered_map>
 #include <vector>
 
 namespace mistlane {
@@ -27,6 +28,7 @@ namespace {
 namespace asio = boost::asio;
 using tcp = asio::ip::tcp;
 using Error = boost::system::error_code;
+using Completion = Channel::Completion;
 // IPv6 literals travel bracketed ("[::1]") so that a port can follow them.
 asio::ip::address parse_address(const std::string& text) {
     if (text.size() >= 2 && text.front() == '[' && text.back() == ']')
@@ -56,6 +58,22 @@ bool service_fields(std::string_view payload, std::string& role,
     std::istringstream in{std::string(payload)};
     std::string magic, extra;
     return (in >> magic >> role >> instance >> token) && magic == "MLS1" && !(in >> extra);
+}
+// The identity a gateway presents to an upstream: role plus --service-name, else
+// the listen endpoint. It only labels the peer's logs; the token decides.
+std::string service_hello(const Config& config) {
+    const std::string instance = !config.service_name.empty() ? config.service_name
+        : config.listen.address + ":" + std::to_string(config.listen.port);
+    return "MLS1 " + config.role + " " + instance + " " + config.upstream_token;
+}
+// Envelope of a correlated or multiplexed frame: the first four bytes are a
+// u32 BE id. Zero and "short" both mean "no id", so a truncated frame is
+// reported by the caller instead of silently becoming id 0.
+std::uint32_t frame_id(const std::string& payload) {
+    if (payload.size() < 4) return 0;
+    std::uint32_t id = 0;
+    for (int i = 0; i < 4; ++i) id = (id << 8) | static_cast<unsigned char>(payload[i]);
+    return id;
 }
 class TcpChannel : public Channel, public std::enable_shared_from_this<TcpChannel> {
 public:
@@ -325,21 +343,252 @@ private:
     std::map<std::uint64_t, Entry> sessions_;
     std::uint64_t next_id_ = 1;
 };
+// Gateway side of MLM1: one upstream connection carries every logical session
+// that shares an endpoint, so a busy gateway stops opening a socket per client.
+// After MLS1 the gateway asks for "MLM1" and the peer answers "MLM1 OK"; every
+// later frame is "u32 BE id | payload", and id 0 carries the "CLOSE <id>"
+// control. Ids are gateway-assigned and 0 is kept for the control plane.
+class MuxLink : public std::enable_shared_from_this<MuxLink> {
+public:
+    struct Logical {
+        std::function<void(std::string)> deliver; // one frame addressed to this session
+        std::function<void()> close;              // this session is gone
+    };
+    MuxLink(const Endpoint& endpoint, asio::io_context& io, const Config& config,
+            Diagnostics& diagnostics)
+      : endpoint_(tcp::endpoint(parse_address(endpoint.address), endpoint.port)),
+        io_(io), config_(config), diagnostics_(diagnostics), timer_(io) {}
+    bool alive() const { return started_ && !dead_; }
+    std::uint32_t attach(Logical logical) {
+        const std::uint32_t id = next_id_++;
+        logicals_[id] = std::move(logical);
+        if (!started_) start_connect();
+        return id;
+    }
+    // A detaching session tells the peer so it can retire the logical session
+    // and stop counting it; the last one drops the shared connection, which the
+    // peer sees as a read failure.
+    void detach(std::uint32_t id) {
+        if (id == 0 || logicals_.erase(id) == 0) return;
+        if (logicals_.empty()) return teardown();
+        if (phase_ == Phase::ready)
+            write_enveloped(0, "CLOSE " + std::to_string(id), [](Error) {});
+    }
+    // Refusals are synchronous (like TcpChannel), so a caller can report them
+    // straight to Lua; everything else settles on the event loop.
+    void send(std::uint32_t id, std::string payload, Completion completion) {
+        if (dead_ || id == 0) return completion(asio::error::not_connected);
+        if (payload.size() + 4 > max_frame) return completion(asio::error::message_size);
+        if (queued_ + payload.size() + 8 > write_backlog) return completion(asio::error::message_size);
+        if (phase_ != Phase::ready) {
+            queued_ += payload.size();
+            outbox_.push_back({id, std::move(payload), std::move(completion)});
+            return;
+        }
+        write_enveloped(id, std::move(payload), std::move(completion));
+    }
+private:
+    enum class Phase { connecting, identifying, switching, ready };
+    void start_connect() {
+        dead_ = false;
+        started_ = true;
+        phase_ = Phase::connecting;
+        channel_ = std::make_shared<TcpChannel>(tcp::socket(io_));
+        channel_->start([self=shared_from_this()](Error) { self->pump(); });
+    }
+    void pump() {
+        if (dead_) return;
+        if (!channel_) return;
+        if (phase_ == Phase::connecting) return connect();
+        if (reading_) return;
+        reading_ = true;
+        channel_->read([self=shared_from_this()](Error ec, std::string payload) {
+            self->reading_ = false;
+            if (self->dead_) return;
+            if (ec) return self->fail(ec.message().c_str());
+            self->dispatch(std::move(payload));
+        });
+    }
+    void connect() {
+        channel_->socket().async_connect(endpoint_,
+          [self=shared_from_this()](Error ec) {
+            if (self->dead_) return;
+            if (ec) return self->fail("upstream connect");
+            // Only identified peers may upgrade, so the token always leads; a
+            // tokenless link goes straight to the mode switch.
+            self->phase_ = self->config_.upstream_token.empty() ? Phase::switching : Phase::identifying;
+            self->deadline();
+            if (self->phase_ == Phase::identifying)
+                self->write_raw(service_hello(self->config_), [self](Error) { self->pump(); });
+            else
+                self->write_raw("MLM1", [self](Error) { self->pump(); });
+        });
+    }
+    void dispatch(std::string payload) {
+        if (phase_ == Phase::identifying) {
+            if (payload != "MLS1 OK") return fail(payload.c_str());
+            phase_ = Phase::switching;
+            deadline();
+            return write_raw("MLM1", [self=shared_from_this()](Error) { self->pump(); });
+        }
+        if (phase_ == Phase::switching) {
+            if (payload != "MLM1 OK") return fail(payload.c_str());
+            phase_ = Phase::ready;
+            deadline();
+            flush();
+            return pump();
+        }
+        if (payload.size() < 4) return teardown(); // no id, no routing possible
+        const auto id = frame_id(payload);
+        payload.erase(0, 4);
+        if (id == 0) return control(std::move(payload)); // re-arms or tears down
+        const auto found = logicals_.find(id);
+        if (found == logicals_.end()) {
+            std::cerr << "unexpected frame\n";
+            return teardown();
+        }
+        found->second.deliver(std::move(payload));
+        pump(); // keep reading: deliver alone never touches the socket
+    }
+    // "CLOSE <id>": the peer retired a logical session. The session's own
+    // detach is a no-op because the entry is already gone.
+    void control(std::string payload) {
+        constexpr std::string_view magic = "CLOSE ";
+        if (!payload.starts_with(magic)) {
+            std::cerr << "unexpected frame\n";
+            return teardown();
+        }
+        char* end = nullptr;
+        const auto target = std::strtoul(payload.data()+magic.size(), &end, 10);
+        if (end == payload.data() || *end != '\0' || target == 0) {
+            std::cerr << "unexpected frame\n";
+            return teardown();
+        }
+        const auto found = logicals_.find(target);
+        if (found == logicals_.end()) {
+            std::cerr << "unexpected frame\n";
+            return teardown();
+        }
+        auto close = std::move(found->second.close);
+        logicals_.erase(found);
+        close();
+        if (logicals_.empty()) return teardown();
+        pump();
+    }
+    void flush() {
+        while (!outbox_.empty()) {
+            auto pending = std::move(outbox_.front());
+            outbox_.pop_front();
+            queued_ -= pending.payload.size();
+            send(pending.id, std::move(pending.payload), std::move(pending.completion));
+        }
+    }
+    void write_raw(std::string payload, Completion completion) {
+        channel_->write(std::move(payload), [self=shared_from_this(), cb=std::move(completion)](Error ec) mutable {
+            cb(ec);
+            self->pump();
+        });
+    }
+    void write_enveloped(std::uint32_t id, std::string payload, Completion completion) {
+        channel_->write(correlated_frame(id, payload),
+          [self=shared_from_this(), cb=std::move(completion)](Error ec) mutable {
+            if (!ec) self->deadline();
+            cb(ec);
+            self->pump();
+        });
+    }
+    void deadline(int seconds = 10) {
+        const auto generation = ++generation_;
+        timer_.expires_after(std::chrono::seconds(seconds));
+        timer_.async_wait([self=shared_from_this(), generation](Error ec) {
+            if (!ec && self->generation_ == generation) {
+                self->diagnostics_.upstream_timeout();
+                self->fail("handshake timeout");
+            }
+        });
+    }
+    void fail(const char* why) {
+        diagnostics_.upstream_error();
+        std::cerr << "multiplex link failed: " << why << '\n';
+        teardown();
+    }
+    void teardown() {
+        if (dead_) return;
+        dead_ = true;
+        started_ = false;
+        auto failed = std::move(outbox_);
+        queued_ = 0;
+        timer_.cancel();
+        if (channel_) { channel_->close(); channel_ = nullptr; }
+        for (auto& pending : failed) pending.completion(asio::error::not_connected);
+        auto logicals = std::move(logicals_);
+        logicals_.clear();
+        for (auto& [id, logical] : logicals) {
+            (void)id;
+            if (logical.close) logical.close();
+        }
+        if (on_close_) on_close_(this);
+    }
+    struct Pending { std::uint32_t id; std::string payload; Completion completion; };
+    tcp::endpoint endpoint_;
+    asio::io_context& io_;
+    const Config& config_;
+    Diagnostics& diagnostics_;
+    asio::steady_timer timer_;
+    std::shared_ptr<TcpChannel> channel_;
+    std::unordered_map<std::uint32_t, Logical> logicals_;
+    std::deque<Pending> outbox_;
+    std::size_t queued_ = 0;
+    std::uint32_t next_id_ = 1;
+    Phase phase_ = Phase::connecting;
+    std::uint64_t generation_ = 0;
+    bool started_ = false, reading_ = false, dead_ = false;
+    std::function<void(MuxLink*)> on_close_;
+};
+// One shared link per upstream endpoint; sessions look their endpoint up so a
+// dead link is replaced lazily instead of by a timer.
+class MuxLinks {
+public:
+    explicit MuxLinks(asio::io_context& io) : io_(io) {}
+    std::shared_ptr<MuxLink> get(const Endpoint& endpoint, const Config& config,
+                                 Diagnostics& diagnostics) {
+        const auto found = links_.find(&endpoint);
+        if (found != links_.end() && found->second->alive()) return found->second;
+        auto link = std::make_shared<MuxLink>(endpoint, io_, config, diagnostics);
+        links_[&endpoint] = link;
+        return link;
+    }
+private:
+    asio::io_context& io_;
+    std::unordered_map<const Endpoint*, std::shared_ptr<MuxLink>> links_;
+};
 class Session : public std::enable_shared_from_this<Session> {
 public:
     Session(std::shared_ptr<Channel> client, std::shared_ptr<LuaService>& service,
             const Endpoint* upstream, const Config& config, CrossAdmission& admission,
             Diagnostics& diagnostics, GameSessions* registry,
-            std::function<void(Session*)> on_close)
+            std::function<void(Session*)> on_close, MuxLinks* mux_links = nullptr,
+            std::function<void(std::shared_ptr<Channel>)> mux_upgrade = {},
+            bool internal = false)
       : client_(std::move(client)), service_(service),
         timer_(client_->executor()), config_(config), admission_(admission), diagnostics_(diagnostics),
-        registry_(registry), on_close_(std::move(on_close)) {
+        registry_(registry), on_close_(std::move(on_close)), mux_upgrade_(std::move(mux_upgrade)),
+        internal_(internal) {
         if (upstream) {
             endpoint_ = tcp::endpoint(parse_address(upstream->address), upstream->port);
-            upstream_ = std::make_shared<TcpChannel>(tcp::socket(client_->executor()));
+            // Multiplexing keeps one socket per upstream: the link owns the
+            // connection and this session rides it under an assigned id.
+            if (mux_links) link_ = mux_links->get(*upstream, config_, diagnostics_);
+            else upstream_ = std::make_shared<TcpChannel>(tcp::socket(client_->executor()));
         }
     }
     void start() {
+        // The link connection opens with the first attached session, and its
+        // verdict may arrive before the client sends anything.
+        if (link_)
+            mux_id_ = link_->attach({
+                [self=shared_from_this()](std::string payload) { self->forward_to_client(std::move(payload)); },
+                [self=shared_from_this()] { self->stop(); }});
         client_->start([self=shared_from_this()](Error ec) {
             if (self->closed_) return;
             if (ec) return self->stop();
@@ -357,6 +606,7 @@ public:
         timer_.cancel();
         client_->close();
         if (upstream_) upstream_->close();
+        if (link_) link_->detach(mux_id_);
         if (registry_ && context_.session) registry_->detach(context_.session);
         on_close_(this);
     }
@@ -389,24 +639,36 @@ private:
         });
     }
     void route(std::string payload) {
-        // Handshake window: MLS1 identifies an internal peer and MLC2 turns on
-        // correlation, both only until the first business payload routes.
+        // Handshake window: MLS1 identifies an internal peer, MLC2 turns on
+        // correlation and MLM1 upgrades an identified leg to the shared link,
+        // all only until the first business payload routes. A logical session
+        // inside a hub reuses the hub's identity, so it keeps only MLC2.
         // Cross routing keeps its own MLC1 join as the identity; a plain
         // gateway relays MLC2 upstream like any other frame.
         if (!routed_ && !config_.is_cross_gateway() && config_.role != "crossServer") {
-            if (!config_.service_token.empty() && !service_ok_) {
-                // The first frame must carry the identity; afterwards the
-                // session is business traffic (MLC2 may stack on acceptance).
-                if (!payload.starts_with("MLS1")) return refuse_service("TOKEN");
-                std::string role, instance, token;
-                if (!service_fields(payload, role, instance, token)) return refuse_service("INVALID");
-                if (token != config_.service_token) return refuse_service("TOKEN");
-                service_ok_ = true;
-                return reply("MLS1 OK");
+            if (!internal_) {
+                // Nobody upgrades from the client side: the shared leg belongs
+                // to the hub, which answers for every logical session it owns.
+                if (payload == "MLM1") {
+                    if (!service_ok_ || !mux_upgrade_) return refuse_service("MLM1", "UNEXPECTED");
+                    return become_mux();
+                }
+                if (!config_.service_token.empty() && !service_ok_) {
+                    // The first frame must carry the identity; afterwards the
+                    // session is business traffic (MLC2 may stack on acceptance).
+                    if (!payload.starts_with("MLS1")) return refuse_service("MLS1", "TOKEN");
+                    std::string role, instance, token;
+                    if (!service_fields(payload, role, instance, token)) return refuse_service("MLS1", "INVALID");
+                    if (token != config_.service_token) return refuse_service("MLS1", "TOKEN");
+                    service_ok_ = true;
+                    return reply("MLS1 OK");
+                }
+                if (config_.service_token.empty() && payload.starts_with("MLS1"))
+                    return refuse_service("MLS1", "UNEXPECTED"); // surfaces a stray token config
             }
-            if (config_.service_token.empty() && payload.starts_with("MLS1"))
-                return refuse_service("UNEXPECTED"); // surfaces a stray token config
-            if (!upstream_ && payload == "MLC2") {
+            // A gateway owns the shared leg, so it must not answer MLC2 for a
+            // logical session it only forwards.
+            if (!upstream_ && !link_ && payload == "MLC2") {
                 reply("MLC2 OK"); // queued unprefixed while correlation is still off
                 correlated_ = true;
                 if (registry_ && context_.session) registry_->set_correlated(context_.session);
@@ -432,14 +694,13 @@ private:
             } catch (const std::exception&) { return reject("INVALID"); }
         }
         routed_ = true; // the handshake window ends at the first business payload
+        if (link_) return forward_link(std::move(payload), 0);
         if (!upstream_) {
             // Correlated requests carry their id in the first payload bytes;
             // the reply echoes it, pushes answer with id 0.
             if (!correlated_) return serve_local(std::move(payload));
             if (payload.size() < 4) return stop(); // malformed correlated frame
-            std::uint64_t request = 0;
-            for (int i = 0; i < 4; ++i)
-                request = (request << 8) | static_cast<unsigned char>(payload[i]);
+            const auto request = frame_id(payload);
             payload.erase(0, 4);
             return serve_local(std::move(payload), request);
         }
@@ -477,9 +738,9 @@ private:
     // A refused service handshake closes the connection after the verdict:
     // INVALID means a malformed frame, TOKEN a missing or wrong secret,
     // UNEXPECTED a server that asks for no MLS1 at all.
-    void refuse_service(const char* reason) {
+    void refuse_service(const char* magic, const char* reason) {
         std::cerr << "service handshake rejected: " << reason << '\n';
-        client_->write("MLS1 ERR " + std::string(reason),
+        client_->write(std::string(magic) + " ERR " + reason,
             [self=shared_from_this()](Error) { self->stop(); });
     }
     // A new room only joins a shard the probe just saw ready. Probe failures are
@@ -600,16 +861,9 @@ private:
         if (!config_.upstream_token.empty() && !config_.is_cross_gateway() && !awaiting_mls1_) {
             awaiting_mls1_ = true;
             deadline(10); // the verdict is bounded, not the session
-            forward_upstream(service_hello());
+            forward_upstream(service_hello(config_));
         }
         forward_upstream(std::move(payload));
-    }
-    // The presented identity: role plus --service-name, else the listen
-    // endpoint. It only labels the peer's logs; the token is the authority.
-    std::string service_hello() const {
-        const std::string instance = !config_.service_name.empty() ? config_.service_name
-            : config_.listen.address + ":" + std::to_string(config_.listen.port);
-        return "MLS1 " + config_.role + " " + instance + " " + config_.upstream_token;
     }
     // Only the gateway leg sees the MLS1 verdict: success settles into the
     // normal idle cadence, anything else closes the session (the client saw
@@ -624,6 +878,19 @@ private:
         pump_upstream();
         pump_client();
     }
+    // An accepted peer asks to share this connection: hand the client channel
+    // to the hub, which answers "MLM1 OK" and owns every logical session from
+    // here. This session's slot is released so logicals count for themselves.
+    void become_mux() {
+        closed_ = true;
+        timer_.cancel();
+        if (registry_ && context_.session) {
+            registry_->detach(context_.session);
+            context_.session = 0;
+        }
+        on_close_(this);
+        mux_upgrade_(client_);
+    }
     void forward_to_client(std::string frame) {
         diagnostics_.add_message("tx");
         diagnostics_.add_payload_bytes("tx", frame.size());
@@ -631,6 +898,18 @@ private:
             if (self->closed_) return;
             if (ec) return self->stop();
             self->pump_upstream();
+            self->pump_client();
+        });
+    }
+    // Shared upstream leg: the link adds this session's id and leaves any MLC2
+    // id inside the payload, so correlation and multiplexing stay independent.
+    void forward_link(std::string payload, std::uint64_t request) {
+        if (request) payload = correlated_frame(request, payload);
+        diagnostics_.add_message("tx");
+        diagnostics_.add_payload_bytes("tx", payload.size());
+        link_->send(mux_id_, std::move(payload), [self=shared_from_this()](Error ec) {
+            if (self->closed_) return;
+            if (ec) { self->diagnostics_.upstream_error(); return self->stop(); }
             self->pump_client();
         });
     }
@@ -655,6 +934,8 @@ private:
     }
     std::shared_ptr<Channel> client_;
     std::shared_ptr<TcpChannel> upstream_;
+    std::shared_ptr<MuxLink> link_;
+    std::uint32_t mux_id_ = 0;
     std::shared_ptr<LuaService>& service_;
     asio::steady_timer timer_;
     tcp::endpoint endpoint_;
@@ -671,8 +952,199 @@ private:
     // business payload routes, so MLC2 can stack on an accepted MLS1 session.
     bool routed_ = false, correlated_ = false, service_ok_ = false, awaiting_mls1_ = false;
     std::function<void(Session*)> on_close_;
+    std::function<void(std::shared_ptr<Channel>)> mux_upgrade_;
     TokenBucket bucket_;
     std::uint64_t generation_ = 0;
+    bool closed_ = false, internal_ = false;
+};
+// Server side of MLM1: one inbound connection becomes many logical sessions,
+// each with its own id and a Session on top of a VirtualChannel. Ids come from
+// the peer, so capacity is checked before a logical session is born and an
+// over-capacity request gets a control frame instead of a session.
+class MuxHub : public std::enable_shared_from_this<MuxHub> {
+public:
+    struct Logical {
+        std::shared_ptr<Channel> channel;
+        std::function<void(std::string)> deliver;
+    };
+    using Spawner = std::function<std::shared_ptr<Logical>(std::uint32_t)>;
+    MuxHub(std::shared_ptr<Channel> channel, Diagnostics& diagnostics,
+           std::function<void(MuxHub*)> on_close)
+      : channel_(std::move(channel)), diagnostics_(diagnostics),
+        timer_(channel_->executor()), on_close_(std::move(on_close)) {}
+    asio::any_io_executor executor() const { return channel_->executor(); }
+    void start() {
+        channel_->start([self=shared_from_this()](Error ec) {
+            if (ec) { self->diagnostics_.upstream_error(); return self->teardown(); }
+            self->write("MLM1 OK", [](Error) {}); // the verdict, then the first frame
+            self->pump();
+        });
+    }
+    // Node shutdown: retire the shared leg and every logical session on it.
+    void stop() { teardown(); }
+    // Who builds logical sessions; set once after construction because the
+    // builder needs a weak reference back to this hub.
+    void set_spawner(Spawner spawner) { spawn_ = std::move(spawner); }
+    void send(std::uint32_t id, std::string payload, Completion completion) {
+        if (dead_) return completion(asio::error::not_connected);
+        write(correlated_frame(id, payload), std::move(completion));
+    }
+    // A logical session ended on this side; the control frame closes the loop
+    // without tearing the shared connection down.
+    void retire(std::uint32_t id) {
+        if (dead_ || logicals_.erase(id) == 0) return;
+        write(correlated_frame(0, "CLOSE " + std::to_string(id)), [](Error) {});
+    }
+private:
+    void pump() {
+        if (dead_ || reading_) return;
+        reading_ = true;
+        channel_->read([self=shared_from_this()](Error ec, std::string payload) {
+            self->reading_ = false;
+            if (self->dead_) return;
+            if (ec) return self->teardown();
+            self->deadline();
+            self->dispatch(std::move(payload));
+        });
+    }
+    void dispatch(std::string payload) {
+        if (payload.size() < 4) return teardown(); // no id, no routing possible
+        const auto id = frame_id(payload);
+        payload.erase(0, 4);
+        if (id == 0) return control(std::move(payload)); // re-arms or tears down
+        const auto found = logicals_.find(id);
+        if (found == logicals_.end()) {
+            // The peer opened a new logical session; capacity is refused with a
+            // control frame instead of a session.
+            auto spawned = spawn_ ? spawn_(id) : nullptr;
+            if (!spawned) return write(correlated_frame(0, "CLOSE " + std::to_string(id)), [](Error) {});
+            auto logical = *spawned;
+            logicals_[id] = logical;
+            logical.deliver(std::move(payload));
+        } else {
+            found->second.deliver(std::move(payload));
+        }
+        pump(); // keep reading: deliver alone never touches the socket
+    }
+    // "CLOSE <id>" retires one logical session. It is erased before its channel
+    // closes, so that close cannot bounce another control down the connection.
+    void control(std::string payload) {
+        constexpr std::string_view magic = "CLOSE ";
+        char* end = nullptr;
+        const auto target = payload.starts_with(magic)
+            ? std::strtoul(payload.data()+magic.size(), &end, 10) : 0;
+        if (!payload.starts_with(magic) || end == payload.data() || *end != '\0' || target == 0) {
+            std::cerr << "unexpected frame\n";
+            return teardown();
+        }
+        const auto found = logicals_.find(target);
+        if (found == logicals_.end()) {
+            std::cerr << "unexpected frame\n";
+            return teardown();
+        }
+        auto channel = found->second.channel;
+        logicals_.erase(found);
+        channel->close();
+        pump();
+    }
+    void write(std::string payload, Completion completion) {
+        if (dead_) return completion(asio::error::not_connected);
+        channel_->write(std::move(payload), [self=shared_from_this(), cb=std::move(completion)](Error ec) mutable {
+            if (!ec) self->pump();
+            cb(ec);
+        });
+    }
+    void deadline() {
+        const auto generation = ++generation_;
+        timer_.expires_after(std::chrono::seconds(60));
+        timer_.async_wait([self=shared_from_this(), generation](Error ec) {
+            if (!ec && self->generation_ == generation) {
+                self->diagnostics_.upstream_timeout();
+                self->teardown();
+            }
+        });
+    }
+    void teardown() {
+        if (dead_) return;
+        dead_ = true;
+        timer_.cancel();
+        channel_->close();
+        auto logicals = std::move(logicals_);
+        logicals_.clear();
+        for (auto& [id, logical] : logicals) { (void)id; logical.channel->close(); }
+        if (on_close_) on_close_(this);
+    }
+    Spawner spawn_;
+    std::shared_ptr<Channel> channel_;
+    Diagnostics& diagnostics_;
+    asio::steady_timer timer_;
+    std::unordered_map<std::uint32_t, Logical> logicals_;
+    std::uint64_t generation_ = 0;
+    bool dead_ = false, reading_ = false;
+    std::function<void(MuxHub*)> on_close_;
+};
+// One logical session of a MuxHub: the Channel a Session talks to, carrying an
+// id and borrowing the hub's connection and bounds. Ingress stays bounded like
+// a socket buffer so a stalled logical session stops the link, not memory.
+class VirtualChannel : public Channel, public std::enable_shared_from_this<VirtualChannel> {
+public:
+    VirtualChannel(std::uint32_t id, std::weak_ptr<MuxHub> hub, asio::any_io_executor executor)
+      : hub_(std::move(hub)), executor_(executor), id_(id) {}
+    asio::any_io_executor executor() override { return executor_; }
+    void start(Completion callback) override { callback({}); }
+    void read(Reader callback) override {
+        auto self = shared_from_this(); // the posted handoff must keep the channel alive
+        if (closed_) return callback(asio::error::not_connected, {});
+        if (!ingress_.empty()) {
+            auto payload = std::move(ingress_.front());
+            ingress_.pop_front();
+            asio::post(executor_, [self, cb=std::move(callback), payload=std::move(payload)]() mutable {
+                cb({}, std::move(payload));
+            });
+            return;
+        }
+        reader_ = std::move(callback);
+    }
+    void write(std::string payload, Completion callback) override {
+        if (closed_) return callback(asio::error::not_connected);
+        if (payload.size()+4 > max_frame) return callback(asio::error::message_size);
+        const auto hub = hub_.lock();
+        if (!hub) return callback(asio::error::not_connected);
+        hub->send(id_, std::move(payload), [self=shared_from_this(), cb=std::move(callback)](Error ec) mutable {
+            if (ec) self->close(); // a refused or dead leg ends the logical session
+            cb(ec);                // the caller re-arms its own reader with this
+        });
+    }
+    void close() override {
+        if (closed_) return;
+        closed_ = true;
+        ingress_.clear();
+        auto hub = hub_.lock();
+        if (hub) hub->retire(id_);
+        auto reader = std::move(reader_);
+        reader_ = {};
+        if (reader) reader(asio::error::not_connected, {});
+    }
+    // Delivered by the hub off the shared connection.
+    void deliver(std::string payload) {
+        if (closed_) return;
+        auto reader = std::move(reader_);
+        if (reader) {
+            reader_ = {};
+            asio::post(executor_, [cb=std::move(reader), payload=std::move(payload)]() mutable {
+                cb({}, std::move(payload));
+            });
+            return;
+        }
+        if (ingress_.size()+payload.size() > write_backlog) return close();
+        ingress_.push_back(std::move(payload));
+    }
+private:
+    std::weak_ptr<MuxHub> hub_;
+    asio::any_io_executor executor_;
+    std::uint32_t id_;
+    std::deque<std::string> ingress_;
+    Reader reader_;
     bool closed_ = false;
 };
 // Lua websocket lifecycle sessions (script roles with an http/https listener).
@@ -889,6 +1361,10 @@ private:
         if (stopping_ || active_sessions() >= config_.max_connections) return client->close();
         const Endpoint* upstream = config_.upstreams.empty() || config_.is_cross_gateway() ? nullptr
             : &config_.upstreams[cursor_++ % config_.upstreams.size()];
+        // An authenticated peer may upgrade its leg into a shared hub.
+        std::function<void(std::shared_ptr<Channel>)> mux_upgrade;
+        if (!config_.is_cross_gateway() && config_.role != "crossServer")
+            mux_upgrade = [this](std::shared_ptr<Channel> channel) { attach_mux(std::move(channel)); };
         auto session = std::make_shared<Session>(std::move(client), service_, upstream, config_, admission_, *diagnostics_,
             game_sessions_.get(),
             [this](Session* ptr) {
@@ -896,10 +1372,44 @@ private:
                 for (auto i = sessions_.begin(); i != sessions_.end(); ++i)
                     if (i->get() == ptr) { sessions_.erase(i); break; }
                 publish_active();
-            });
+            },
+            config_.upstream_multiplex ? &mux_links_ : nullptr, std::move(mux_upgrade));
         sessions_.insert(session);
         publish_active();
         session->start();
+    }
+    // A peer upgraded a connection into a hub: it now owns every logical
+    // session until the peer goes away.
+    void attach_mux(std::shared_ptr<Channel> channel) {
+        if (stopping_) { channel->close(); return; }
+        auto hub = std::make_shared<MuxHub>(std::move(channel), *diagnostics_,
+            [this](MuxHub* ptr) {
+                for (auto i = hubs_.begin(); i != hubs_.end(); ++i)
+                    if (i->get() == ptr) { hubs_.erase(i); break; }
+            });
+        hubs_.insert(hub);
+        const auto weak = std::weak_ptr<MuxHub>(hub);
+        hub->set_spawner([this, weak](std::uint32_t id) -> std::shared_ptr<MuxHub::Logical> {
+            const auto hub_ptr = weak.lock();
+            if (!hub_ptr || stopping_ || active_sessions() >= config_.max_connections) return nullptr;
+            auto channel = std::make_shared<VirtualChannel>(id, weak, hub_ptr->executor());
+            auto logical = std::make_shared<MuxHub::Logical>();
+            logical->channel = channel;
+            logical->deliver = [channel](std::string payload) { channel->deliver(std::move(payload)); };
+            auto session = std::make_shared<Session>(channel, service_, nullptr, config_, admission_, *diagnostics_,
+                game_sessions_.get(),
+                [this](Session* ptr) {
+                    admission_.release(ptr);
+                    for (auto i = sessions_.begin(); i != sessions_.end(); ++i)
+                        if (i->get() == ptr) { sessions_.erase(i); break; }
+                    publish_active();
+                }, nullptr, nullptr, true);
+            sessions_.insert(session);
+            publish_active();
+            session->start();
+            return logical;
+        });
+        hub->start();
     }
     void accept() {
         for (const auto& acceptor : acceptors_) accept(acceptor);
@@ -991,6 +1501,10 @@ private:
         if (web_mode_) stop_web();
         signals_.cancel();
         tick_.cancel();
+        // Hubs first: their teardown stops the logical sessions through the
+        // normal Session::stop path, so the drain below only sees leftovers.
+        auto hubs = std::move(hubs_);
+        for (auto& hub : hubs) hub->stop();
         while (!sessions_.empty()) {
             auto session = *sessions_.begin();
             session->stop();
@@ -1003,6 +1517,7 @@ private:
     }
     Config config_;
     asio::io_context io_;
+    MuxLinks mux_links_{io_};
     std::vector<std::shared_ptr<tcp::acceptor>> acceptors_;
     asio::signal_set signals_;
     asio::steady_timer tick_;
@@ -1012,6 +1527,7 @@ private:
     ServiceContext service_context_;
     std::shared_ptr<RedisRuntime> redis_;
     std::set<std::shared_ptr<Session>> sessions_;
+    std::set<std::shared_ptr<MuxHub>> hubs_;
     std::size_t cursor_ = 0;
     CrossAdmission admission_;
     std::unique_ptr<Diagnostics> diagnostics_;

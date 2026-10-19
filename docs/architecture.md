@@ -59,13 +59,13 @@ The CMake targets are `mistlane::core` for Lua, `mistlane::net` for nodes, and `
 
 Each node owns one Asio thread for internal TCP, timers, signals and Lua. Web nodes additionally use Drogon/Trantor event loops for HTTP/TLS/WS, with at most one submitted payload per session. Lua is only entered on Asio. Sessions are full duplex: client frames arrive independently of replies, a handler may send nothing, and unsolicited upstream frames reach the client without a matching request.
 
-Gateway is the forwarding role in this version. Each new session selects an upstream in round-robin order. One downstream session owns one upstream TCP connection and stays with that upstream. A new client connection may select another gameServer; this does not provide player-ID affinity.
+Gateway is the forwarding role in this version. Each new session selects an upstream in round-robin order. By default one downstream session owns one upstream TCP connection and stays with that upstream; with `--upstream-multiplex on` the gateway instead shares one connection per upstream across all of its sessions (see the identity paragraph below). A new client connection may select another gameServer; this does not provide player-ID affinity.
 
 A session reads frames as they arrive and keeps one frame in flight toward each peer, so a slow downstream applies back pressure to upstream instead of buffering indefinitely. Writes are queued per channel and bounded: internal frames accept about 2 MiB of backlog and refuse beyond it, while the Drogon side of a WS session is capped by the Trantor 2 MiB high-water mark. Drogon assembles WS/WSS messages and adapts them to internal TCP frames.
 
 TCP frames use a four-byte big-endian payload length. A WS message is one payload without that header. Empty and binary payloads are supported, with a 1 MiB limit. WS responses are binary. The base protocol has no business message ID, account ID, or registration schema. An optional correlation mode adds one: the first frame `MLC2` switches the session to a four-byte big-endian request id carried inside each frame payload (`id | payload`); replies echo the id, unsolicited pushes carry id 0, and `MLC2` is honored only as the first frame — cross routing (`MLC1`) stays exclusive and rejects it. Sessions without the handshake keep the plain framing.
 
-Internal legs can require a service identity: with `--service-token TOKEN`, a session-role node accepts only connections whose first frame is `MLS1 <role> <instance> <token>` and answers `MLS1 OK`; a missing or wrong secret gets `MLS1 ERR TOKEN`, a malformed frame `MLS1 ERR INVALID`, and a plain node that needs no identity answers `MLS1 ERR UNEXPECTED` — every refusal closes the connection. A gateway with `--upstream-token TOKEN --service-name NAME` presents that handshake to each upstream before any business frame and consumes the verdict itself, so clients never see it; `MLC2` may stack on an accepted handshake. This is a plain token comparison that surfaces deliberate misconfiguration, not mTLS; the flags refuse to start on cross routing, where `MLC1` is the identity.
+Internal legs can require a service identity: with `--service-token TOKEN`, a session-role node accepts only connections whose first frame is `MLS1 <role> <instance> <token>` and answers `MLS1 OK`; a missing or wrong secret gets `MLS1 ERR TOKEN`, a malformed frame `MLS1 ERR INVALID`, and a plain node that needs no identity answers `MLS1 ERR UNEXPECTED` — every refusal closes the connection. A gateway with `--upstream-token TOKEN --service-name NAME` presents that handshake to each upstream before any business frame and consumes the verdict itself, so clients never see it; `MLC2` may stack on an accepted handshake. With `--upstream-multiplex on` (requires the token, gateways with session routing only) the gateway further upgrades that single upstream leg with `MLM1`: the server answers `MLM1 OK`, every following frame becomes `u32 id | payload` (big-endian), each client session owns an id, unknown ids spawn a logical session on the server under its admission limits, and id 0 carries the `CLOSE <id>` text control either side uses to retire a leg. Correlation stays per logical session — a `MLC2` handshake travels inside one id's payload exactly as on a dedicated connection — and a client-sent `MLM1` is refused with `MLM1 ERR UNEXPECTED`. This is a plain token comparison that surfaces deliberate misconfiguration, not mTLS; the flags refuse to start on cross routing, where `MLC1` is the identity.
 
 | Control | Current behavior |
 |---|---|
@@ -88,7 +88,7 @@ See the [migration status ledger](./migration-status) for the fuller inventory o
 |---|---|
 | FogsProcess / FogsServer / LuaCallHandler | Retained lifecycle concepts, reimplemented as Node / LuaService |
 | TcpConn / SendBuffer / handwritten WebSocket | New TCP framing; mature Drogon WS/WSS implementation; wire compatibility intentionally broken |
-| ServerConnBase | Per-session upstream connection; original shared connection, registration handshake, and reconnect behavior not migrated |
+| ServerConnBase | Shared-connection multiplexing migrated as `MLM1`; original registration handshake and reconnect behavior not migrated |
 | Gateway / World / Hegel | Generic forwarding/execution only; World coordination and Hegel character/scene hosting are not fully migrated; see process responsibilities |
 | TokenBucket | Rewritten around a monotonic clock with accumulated replenishment |
 | MinHeap | Extracted utility with module export; original bounded heap semantics retained |
@@ -101,14 +101,14 @@ The heap retains the original bounded-selection behavior: when full, smaller inc
 
 ## Current limitations
 
-Original login, account routing, player migration, legacy cross-server gameplay, navigation, caches, and operational features are excluded. This version also lacks service discovery, discovery-based health routing (cross nodes do gate new joins on the static PROBE1 readiness of their configured upstreams), shared-connection multiplexing, automatic reconnect, durable replay, distributed consistency, global backpressure, production metrics collection, and measured capacity limits.
+Original login, account routing, player migration, legacy cross-server gameplay, navigation, caches, and operational features are excluded. This version also lacks service discovery, discovery-based health routing (cross nodes do gate new joins on the static PROBE1 readiness of their configured upstreams), automatic reconnect, durable replay, distributed consistency, global backpressure, production metrics collection, and measured capacity limits.
 
 Scripts are trusted application code. The instruction hook helps with typical infinite loops but is not an unbypassable CPU budget or a memory quota. Database integration is a separate C++ adapter and example; a general asynchronous Lua database bridge is not implemented. Successful network delivery does not imply transaction durability.
 
 ## Suggested next experiments
 
 1. Use a small application to study deployment, error contracts, session recovery, and lifecycle behavior.
-2. Add registration/authentication, request correlation, multiplexing, routing policies, or reconnect only as needed, retaining mature network and database implementations.
+2. Add registration/authentication, request correlation, routing policies, or reconnect only as needed, retaining mature network and database implementations.
 3. Introduce an asynchronous application database interface with value binding, timeouts, transactions, and explicit errors, rather than exposing raw pointers to Lua.
 4. Define application state migration and request draining before attempting a complete game migration.
 5. Use stress, soak, and fault-injection results before making operational stability claims.

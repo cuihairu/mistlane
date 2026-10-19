@@ -25,6 +25,9 @@ struct Config {
     // upstream_token makes the gateway present itself to each upstream.
     // Cross routing keeps its own MLC1 join as the identity.
     std::string service_token, upstream_token, service_name;
+    // gateway multiplexes many logical sessions over one upstream connection
+    // (MLM1). Internal mode: the peer must accept MLS1 for the upgrade to offer.
+    bool upstream_multiplex = false;
     std::string script;
     Endpoint redis{"127.0.0.1", 6379};
     Endpoint metrics_listen{"127.0.0.1", 9090};

@@ -59,11 +59,11 @@ flowchart TB
 
 每个节点有一个 Asio 线程，执行内部 TCP、计时、信号和 Lua 回调。Web 接入另由 Drogon/Trantor 事件循环处理 HTTP/TLS/WS；每会话最多递交一条待处理消息至 Asio，禁止两套循环并发访问 Lua VM。会话全双工：客户端帧不依赖响应到达，handler 可以不回复，上游主动帧也无需对应请求即可到达客户端。
 
-gateway 的当前运行机制为：新连接按 upstream 列表轮询；一个下游会话对应一个上游 TCP 连接。会话按帧到达节奏读取，向每个对端方向一次只在途一帧，慢下游因此对上游形成背压而非无限缓冲。每通道发送按序排队且有界：内部帧约 2 MiB 积压上限、越界拒绝，WS 侧由 Trantor 2 MiB 高水位约束。WS/WSS 由 Drogon 解析完整消息再转为内部 TCP 帧。连接固定到某个上游；重新连接可能选到另一上游，不具备按玩家 ID 路由的保证。
+gateway 的当前运行机制为：新连接按 upstream 列表轮询；默认一个下游会话对应一个上游 TCP 连接，`--upstream-multiplex on` 时 gateway 改为让同一 upstream 的全部会话共享一条连接（见下文服务身份段）。会话按帧到达节奏读取，向每个对端方向一次只在途一帧，慢下游因此对上游形成背压而非无限缓冲。每通道发送按序排队且有界：内部帧约 2 MiB 积压上限、越界拒绝，WS 侧由 Trantor 2 MiB 高水位约束。WS/WSS 由 Drogon 解析完整消息再转为内部 TCP 帧。连接固定到某个上游；重新连接可能选到另一上游，不具备按玩家 ID 路由的保证。
 
 TCP：`u32 big-endian length | payload`。WS：一条消息即一个 payload，允许二进制与文本输入，输出为二进制消息。payload 上限为 1 MiB。请求 / 响应顺序一致，基础协议里没有业务消息 ID、账号 ID 或服务注册数据。可选关联模式补充请求 ID：首帧 `MLC2` 将会话切换为帧内携带 4 字节 big-endian 请求 ID（`id | payload`），响应回显该 ID，主动推送携带 ID 0；`MLC2` 仅首帧生效，与 cross 路由（`MLC1`）互斥并被拒绝。未握手的会话保持原帧格式。
 
-内部链路可要求服务身份：会话角色节点配置 `--service-token TOKEN` 后，仅接受首帧为 `MLS1 <role> <instance> <token>` 的连接并回复 `MLS1 OK`；缺秘钥或秘钥错误返回 `MLS1 ERR TOKEN`，格式错误返回 `MLS1 ERR INVALID`，不要求身份的普通节点返回 `MLS1 ERR UNEXPECTED`——拒绝后一律关闭连接。gateway 配置 `--upstream-token TOKEN --service-name NAME` 时，在任何业务帧之前先向上游呈递该握手并自行消费裁决，客户端全程不可见；已接受的会话上可继续叠加 `MLC2`。这是用于暴露配置错误的明文令牌比对，不是 mTLS；两令牌参数作用于 cross 路由时直接拒绝启动，cross 以 `MLC1` 为身份。
+内部链路可要求服务身份：会话角色节点配置 `--service-token TOKEN` 后，仅接受首帧为 `MLS1 <role> <instance> <token>` 的连接并回复 `MLS1 OK`；缺秘钥或秘钥错误返回 `MLS1 ERR TOKEN`，格式错误返回 `MLS1 ERR INVALID`，不要求身份的普通节点返回 `MLS1 ERR UNEXPECTED`——拒绝后一律关闭连接。gateway 配置 `--upstream-token TOKEN --service-name NAME` 时，在任何业务帧之前先向上游呈递该握手并自行消费裁决，客户端全程不可见；已接受的会话上可继续叠加 `MLC2`。`--upstream-multiplex on`（要求令牌、仅限会话路由的 gateway）时，gateway 进一步用 `MLM1` 升级这条唯一上游链路：服务端回复 `MLM1 OK`，此后每帧变为 `u32 id | payload`（big-endian），每个客户端会话拥有一个 id，未知 id 由服务端在准入上限内生成逻辑会话，id 0 承载 `CLOSE <id>` 文本控制、任一侧均可用其关闭一条逻辑链路。关联仍是每逻辑会话独立的——`MLC2` 握手只走在单个 id 的载荷内，与专用连接完全一致；客户端发来的 `MLM1` 会被 `MLM1 ERR UNEXPECTED` 拒绝。这是用于暴露配置错误的明文令牌比对，不是 mTLS；两令牌参数作用于 cross 路由时直接拒绝启动，cross 以 `MLC1` 为身份。
 
 - 连接上限由 --max-connections 和 --memory-budget-mib 共同决定，默认有效上限 42；详见跨服文档的内存估算边界。
 - 每会话令牌桶容量 200、补充速度 100 条消息/秒。
@@ -81,7 +81,7 @@ TCP：`u32 big-endian length | payload`。WS：一条消息即一个 payload，�
 |---|---|
 | FogsProcess / FogsServer / LuaCallHandler | 保留进程职责和生命周期设计，重新实现为 Node / LuaService |
 | TcpConn / SendBuffer / WebSocket / WebSocketSecure | 新 TCP 帧；WS/WSS 全部交由 Drogon；旧协议不兼容 |
-| ServerConnBase | 当前为会话级上游连接；未迁移共享连接、注册握手或自动重连 |
+| ServerConnBase | 共享连接多路复用已以 `MLM1` 迁移；注册握手与自动重连未迁移 |
 | d_gateway / d_world / d_hegel | 只实现通用转发与执行；World 协调和 Hegel 角色/场景能力没有完整迁入；目标职责见进程职责页 |
 | TokenBucket | 重写为单调时钟累积令牌，修正旧实现覆盖已有令牌等问题 |
 | game/Util/MinHeap.lua | 保留排序算法，改为模块导出；满容量时保留较大元素的原语义不变 |
@@ -92,14 +92,14 @@ TCP：`u32 big-endian length | payload`。WS：一条消息即一个 payload，�
 
 ## 当前缺口
 
-本版本适合验证框架与开发应用原型。原游戏已有的登录、账号绑定、迁服、跨服玩法、寻路、数据库缓存和运营能力均不在核心中。也尚未提供：服务发现、基于服务发现的健康路由（cross 节点已按静态配置上游的 PROBE1 就绪状态挡住新加入）、连接多路复用、自动重连、持久化重放、分布式一致性、全局背压、生产指标采集与压力容量证据。
+本版本适合验证框架与开发应用原型。原游戏已有的登录、账号绑定、迁服、跨服玩法、寻路、数据库缓存和运营能力均不在核心中。也尚未提供：服务发现、基于服务发现的健康路由（cross 节点已按静态配置上游的 PROBE1 就绪状态挡住新加入）、自动重连、持久化重放、分布式一致性、全局背压、生产指标采集与压力容量证据。
 
 Lua 脚本属于可信应用代码；指令 hook 仅辅助定位典型死循环，不提供不可绕过的资源控制或内存配额。DB 接入的示例拥有独立 pool，尚无通用 Lua 异步 DB 桥接。网络传输成功也不代表事务已持久化。
 
 ## 后续优先顺序
 
 1. 在真实小应用中验证部署、会话恢复、回调契约和错误语义。
-2. 按需求补充服务注册 / 认证、请求 ID、多路复用、负载策略和重连；保持网络协议、存储池交给成熟库。
+2. 按需求补充服务注册 / 认证、请求 ID、负载策略和重连；保持网络协议、存储池交给成熟库。
 3. 用应用扩展实现异步数据库调用，把连接获取、参数化 SQL、超时、事务与错误统一传回应用，不向 Lua 暴露裸指针。
 4. 定义应用状态迁移与退出排空策略，再迁移原游戏。
 5. 用容量、长期运行和故障演练数据界定生产适用范围。
