@@ -3,6 +3,7 @@
 #include "test_fixtures.hpp"
 #include "test_resources.hpp"
 #include "mistlane/cross.hpp"
+#include "mistlane/entity_contract.hpp"
 #include "mistlane/record.hpp"
 #include "mistlane/http_client.hpp"
 #include "mistlane/token_bucket.hpp"
@@ -312,6 +313,129 @@ void core_contracts() {
     equal(records.handle("MLD1 SUBMIT home other gen 1 seq 2", result), "MLD1 ERR SEQ seq 1");
     equal(records.handle("MLD1 NOPE", result), "MLD1 ERR INVALID");
     require(result == "invalid", "malformed frame mislabeled");
+    // Entity contract prototype: the design page's example parses, resolves
+    // and digests; every listed semantic rule refuses its violation.
+    const auto document = R"(<Contracts>
+  <Types>
+    <Item><itemId id="0" type="UINT32"/><count id="1" type="UINT32" default="1"/></Item>
+    <Inventory><capacity id="0" type="UINT16" default="20"/><items id="1" type="ARRAY" of="Item"/></Inventory>
+  </Types>
+  <Entity name="Avatar" id="1">
+    <Properties>
+      <level id="1" type="UINT16" default="1" flags="OWN_CLIENT" persistent="true"/>
+      <hp id="2" type="UINT32" default="100" flags="ALL_CLIENTS"/>
+      <gold id="3" type="INT64" default="-5" flags="OWN_CLIENT" persistent="true"/>
+      <inventory id="4" type="Inventory" flags="OWN_CLIENT" persistent="true"/>
+    </Properties>
+    <ServerMethods>
+      <Method name="attack" id="1" mode="notify" caller="owner">
+        <Arg name="target" id="0" type="EntityRef"/>
+      </Method>
+      <Method name="getProfile" id="2" mode="request" caller="server">
+        <Returns><Field name="level" id="0" type="UINT16"/></Returns>
+      </Method>
+    </ServerMethods>
+    <ClientMethods>
+      <Method name="onReward" id="1" mode="notify" audience="owner">
+        <Arg name="itemId" id="0" type="UINT32"/><Arg name="count" id="1" type="UINT32"/>
+      </Method>
+    </ClientMethods>
+  </Entity>
+</Contracts>)";
+    const auto document_with = [&](std::string_view from, std::string_view to) {
+        auto text = std::string(document);
+        const auto at = text.find(from);
+        require(at != std::string::npos, std::string("test edit missed its anchor: ")+std::string(from));
+        text.replace(at, from.size(), to);
+        return text;
+    };
+    EntityContract contract(document);
+    require(contract.structs().size() == 2 && contract.entities().size() == 1,
+            "contract model lost a declaration");
+    const auto& avatar = contract.entities().front();
+    equal(avatar.properties[3].type, "Inventory");
+    require(avatar.properties[3].persistent, "persistent attribute lost");
+    require(avatar.properties[1].flags == "ALL_CLIENTS" && !avatar.properties[1].persistent,
+            "explicit flags lost");
+    require(avatar.properties[2].default_value == "-5", "negative INT64 default lost");
+    require(avatar.server_methods[1].returns.size() == 1, "request returns lost");
+    require(contract.structs().at("Item").front().id == 0, "struct field id lost");
+    // The dump is the digest input and keeps declaration order and explicit ids.
+    require(contract.describe().find(" prop {1 level UINT16 default 1} OWN_CLIENT persistent") != std::string::npos &&
+            contract.describe().find(" method server 2 getProfile request server") != std::string::npos,
+            "canonical dump lost the resolved model: "+contract.describe());
+    require(contract.digest() != 0, "digest is computed");
+    require(EntityContract(document).digest() == contract.digest(), "digest is not reproducible");
+    for (const auto& broken : std::vector<std::string>{
+        // ids: explicit, unique, never recomputed
+        document_with("<hp id=\"2\" type=\"UINT32\" default=\"100\" flags=\"ALL_CLIENTS\"/>",
+                      "<hp id=\"1\" type=\"UINT32\" default=\"100\" flags=\"ALL_CLIENTS\"/>"),
+        // closed vocabularies
+        document_with("flags=\"ALL_CLIENTS\"", "flags=\"EVERYONE\""),
+        document_with("type=\"UINT32\" default=\"100\" flags", "type=\"UINT8\" default=\"100\" flags"),
+        document_with("caller=\"server\"", "caller=\"anyone\""),
+        document_with("mode=\"request\" caller=\"server\"",
+                      "mode=\"fire-and-forget\" caller=\"server\""),
+        // typed defaults
+        document_with("default=\"100\" flags", "default=\"4294967296\" flags"),
+        document_with("default=\"-5\"", "default=\"false\""),
+        // arrays and struct references
+        document_with("type=\"ARRAY\" of=\"Item\"", "type=\"ARRAY\""),
+        document_with("type=\"ARRAY\" of=\"Item\"", "type=\"ARRAY\" of=\"Warehouse\""),
+        // methods
+        document_with("<Method name=\"getProfile\" id=\"2\" mode=\"request\" caller=\"server\">\n"
+                      "        <Returns><Field name=\"level\" id=\"0\" type=\"UINT16\"/></Returns>\n"
+                      "      </Method>",
+                      "<Method name=\"getProfile\" id=\"2\" mode=\"request\" caller=\"server\"/>"),
+        document_with("mode=\"notify\" caller=\"owner\">\n"
+                      "        <Arg name=\"target\" id=\"0\" type=\"EntityRef\"/>\n"
+                      "      </Method>",
+                      "mode=\"notify\" caller=\"owner\">\n"
+                      "        <Returns><Field name=\"x\" id=\"0\" type=\"UINT16\"/></Returns>\n"
+                      "      </Method>"),
+        document_with("audience=\"owner\"", "audience=\"server\""),
+        "<Entity name=\"Avatar\" id=\"1\"><ServerMethods>"
+        "<Method name=\"attack\" id=\"1\" mode=\"request\" caller=\"owner\"/></ServerMethods></Entity>",
+        // xml subset: external entities and CDATA are refused outright
+        std::string("<!DOCTYPE Contracts [<!ENTITY xxe \"evil\">]><Contracts></Contracts>"),
+        std::string("<Contracts><Entity name=\"A\" id=\"1\"/><![CDATA[raw]]></Contracts>")})
+        must_fail([&] { (void)EntityContract(broken); });
+    // Duplicate member names across groups are refused, even across method
+    // sides; the same method id on both sides is fine.
+    EntityContract mirrored(std::string(
+        "<Contracts><Entity name=\"A\" id=\"1\">"
+        "<Properties><x id=\"1\" type=\"UINT32\"/></Properties>"
+        "<ServerMethods><Method name=\"ping\" id=\"1\" mode=\"notify\" caller=\"server\"/></ServerMethods>"
+        "<ClientMethods><Method name=\"pong\" id=\"1\" mode=\"notify\" audience=\"owner\"/></ClientMethods>"
+        "</Entity></Contracts>"));
+    require(mirrored.entities().front().client_methods.front().id == 1, "side-local method id lost");
+    must_fail([&] { (void)EntityContract(std::string(
+        "<Contracts><Entity name=\"A\" id=\"1\">"
+        "<ServerMethods><Method name=\"ping\" id=\"1\" mode=\"notify\" caller=\"server\"/></ServerMethods>"
+        "<ClientMethods><Method name=\"ping\" id=\"1\" mode=\"notify\" audience=\"owner\"/></ClientMethods>"
+        "</Entity></Contracts>")); });
+    must_fail([&] { (void)EntityContract(std::string(
+        "<Contracts><Entity name=\"A\" id=\"1\">"
+        "<Properties><x id=\"1\" type=\"UINT32\"/></Properties>"
+        "<ServerMethods><Method name=\"x\" id=\"1\" mode=\"notify\" caller=\"server\"/></ServerMethods>"
+        "</Entity></Contracts>")); });
+    // Recursive struct chains are refused; acyclic chains resolve.
+    must_fail([&] { (void)EntityContract(std::string(
+        "<Contracts><Types>"
+        "<A><next id=\"0\" type=\"ARRAY\" of=\"B\"/></A>"
+        "<B><prev id=\"0\" type=\"A\"/></B>"
+        "</Types></Contracts>")); });
+    EntityContract chain(std::string(
+        "<Contracts><Types>"
+        "<A><b id=\"0\" type=\"B\"/></A>"
+        "<B><leaf id=\"0\" type=\"UINT16\"/></B>"
+        "</Types><Entity name=\"E\" id=\"1\">"
+        "<Properties><root id=\"1\" type=\"A\"/></Properties>"
+        "</Entity></Contracts>"));
+    require(chain.digest() != 0, "digest is computed");
+    require(chain.describe().find("struct A") != std::string::npos &&
+            chain.describe().find(" prop {1 root A} SERVER_ONLY") != std::string::npos,
+            "canonical dump lost the resolved model: "+chain.describe());
     CrossAdmission admission(1, 1, 1, 1);
     int a = 0, b = 0;
     require(admission.acquire(&a, context, 0).empty(), "first admission failed");

@@ -2,7 +2,7 @@
 
 > Deferred draft: prioritize the agreed legacy process responsibilities and message paths. This phase does not implement a contract library, code generation or automatic property replication.
 
-Status: design proposal, not implemented. This page applies to Mistlane and does not rename Apollo components. Clients target JavaScript and C#. Contract changes regenerate and rebuild clients; supported server business contract changes do not rebuild the C++ executable. Paths, commands and APIs below are proposed interfaces, not current capabilities.
+Status: design proposal; the format itself is now pinned by a definition-time prototype. `include/mistlane/entity_contract.hpp` parses the XML subset and enforces the semantic rules of this page (explicit stable ids, closed vocabularies, typed defaults, array/struct resolution, recursion refusal, DOCTYPE/entity refusal) with a canonical dump and digest as the future release-lock seed — unit-asserted in `core.contracts`, wired to nothing: no CLI tools, no XSD generation, no sproto emission, no runtime. This page applies to Mistlane and does not rename Apollo components. Clients target JavaScript and C#. Contract changes regenerate and rebuild clients; supported server business contract changes do not rebuild the C++ executable. Paths, commands and APIs below remain proposed interfaces beyond the prototype's scope.
 
 ## Design choice
 

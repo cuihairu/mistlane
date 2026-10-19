@@ -74,6 +74,7 @@
 - [x] 编写通用 Entity 契约设计提案：docs/entity-contract.md 与 docs/zh/entity-contract.md；XML .def 为唯一手写契约，生成 sproto、服务器描述及 JS/C# SDK；客户端随契约构建发布，业务契约更新不重编 C++ 服务器。提案不是已实现能力。
 - [ ] 按可复用库边界实现契约、类型存储、嵌套同步、绑定生成和快照编解码；Mistlane 提供网络/路由/观察者/归属 data 适配，先在仓库内模块化，不另建项目或新增命名。
 - [ ] 按实体契约提案分阶段实现（先审定格式与最小编解码原型，再进入完整运行时）：
+    - 第一切片（2026-10-19，原型）：格式审定与最小编解码原型落地为构建期库 include/mistlane/entity_contract.hpp——解析 XML 子集（元素/双引号属性/注释与声明；DOCTYPE、外部实体与 CDATA 直接拒绝，属性重复拒绝）并执行设计页语义规则：显式稳定 id（属性/方法/参数/结构字段各自唯一、实体类型 id 全局唯一、跨组成员重名拒绝、永不按遍历顺序重编号）、封闭词表（内置类型/flags/mode/caller；未知 flags 报错、缺省 flags=SERVER_ONLY、缺省 persistent=false）、带类型默认值（越界/类型不符拒绝）、ARRAY of 引用解析与结构递归链拒绝、request 必须声明返回而 notify 禁止返回、客户端方法仅 notify；规范化转储 + FNV-1a 摘要作为未来生成锁的种子（属性顺序不影响摘要）。测试：core.contracts 单元断言（设计页示例文档解析、十余类违例逐一拒绝、摘要可复现），全套 23/23 绿。仍未做（下一子项保持未勾选的原因）：逐项目 XSD 生成、生成锁文件与保留 id 规则、envelope 与错误协议、EntityRef 运行时语义、`mistlane contract check/build` 命令。
   - [ ] 固定 XML XSD 与语义检查（属性名作为标签、types.xml 复合类型引用、动态标签共享规则及项目 schema 生成）、EntityRef、稳定编号与保留规则、生成锁文件、方法权限、envelope 和错误协议；禁止按遍历顺序重编号。
   - [ ] 验证 sproto 在 C++/Lua、JavaScript、C# 的同源黄金样本；覆盖 INT64 bigint/long、嵌套结构、缺省值、未知字段和畸形输入，不预设现成 JS/C# 绑定可用。
   - [ ] 实现 contract check/build 工具、可复现生成、版本摘要、兼容报告与服务端 bundle 原子加载；生成物不覆盖业务代码，客户端产物不泄漏内部方法和私有属性。
