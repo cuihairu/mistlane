@@ -266,10 +266,12 @@ int main(int argc, char** argv) {
             && decode(totals, avatar_schema, decoded) && decoded.at(6).ints == (std::vector<std::int64_t>{-1, 2147483648LL, 4294967296LL})
             && encode({decoded.begin(), decoded.end()}) == totals
             && decode(std::vector<unsigned char>{0x02, 0x00, 0x0d, 0x00, 0x02, 0x00}, avatar_schema, decoded) && decoded.empty()
+            && decode(one, avatar_schema, decoded) && decoded.size() == 1 && decoded.at(1).i == 1
             && !decode(std::vector<unsigned char>{0x03, 0x00, 0x01, 0x00}, avatar_schema, decoded)
-            && !decode(std::vector<unsigned char>{0x02, 0x00, 0x09, 0x00, 0x00, 0x00, 0x03, 0x00, 0x00, 0x00}, avatar_schema, decoded);
+            && !decode(std::vector<unsigned char>{0x02, 0x00, 0x09, 0x00, 0x00, 0x00, 0x03, 0x00, 0x00, 0x00}, avatar_schema, decoded)
+            && !decode(std::vector<unsigned char>{0x02, 0x00, 0x01, 0x00, 0x04, 0x00, 0x00, 0x00}, avatar_schema, decoded);
         if (!ok) { std::cerr << "C++ sproto decode mismatch\n"; lua_close(state); return 1; }
-        std::cout << "CPP_SPROTO_SDK_DECODE scalar+struct+arrays roundtrip unknown_tag=skipped malformed=rejected [PASS]\n";
+        std::cout << "CPP_SPROTO_SDK_DECODE scalar+struct+arrays roundtrip unknown_tag=skipped absent=missing malformed=rejected [PASS]\n";
     }
     if (result == LUA_OK && std::string(argv[1]) == "dispatch") {
         lua_getglobal(state, "MISTLANE_DECODE_OK");
