@@ -2461,10 +2461,11 @@ void contract_tool() {
             generated_bindings.find("struct Avatar_server_getProfileArgs") != std::string::npos &&
             generated_bindings.find("std::uint32_t account;") != std::string::npos,
             "generated field-specific typed argument objects missing");
-    require(read(one/"avatar.bindings.js").find("encodeScalar") != std::string::npos &&
+    require(read(one/"avatar.bindings.js").find("encodeRecord") != std::string::npos &&
+            read(one/"avatar.bindings.js").find("decodeRecord") != std::string::npos &&
             read(one/"avatar.bindings.js").find("sprotoFields") != std::string::npos &&
             read(one/"avatar.bindings.cs").find("record Avatar") != std::string::npos &&
-            read(one/"avatar.bindings.cs").find("SprotoScalarCodec") != std::string::npos &&
+            read(one/"avatar.bindings.cs").find("SprotoCodec") != std::string::npos &&
             read(one/"avatar.bindings.cs").find("AvatarSchema") != std::string::npos,
             "generated JS/C# SDK bindings missing");
     const auto old_lock = c.path("old.lock"), compatible_lock = c.path("compatible.lock"), breaking_lock = c.path("breaking.lock");

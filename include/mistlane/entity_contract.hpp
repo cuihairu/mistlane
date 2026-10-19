@@ -316,8 +316,12 @@ public:
         auto emit_fields = [&](const std::string& name, const ContractArgs& fields) {
             out << "  " << name << ": [";
             for (std::size_t i=0;i<fields.size();++i) {
+                const std::string kind = field_kind(fields[i]);
                 if (i) out << ", ";
-                out << "{ id: " << fields[i].id << ", name: '" << fields[i].name << "' }";
+                out << "{ id: " << fields[i].id << ", name: '" << fields[i].name << "', kind: '" << kind << "'";
+                if (kind == "struct") out << ", of: '" << fields[i].type << "'";
+                else if (kind == "struct-array") out << ", of: '" << fields[i].of << "'";
+                out << " }";
             }
             out << "],\n";
         };
@@ -329,13 +333,17 @@ public:
             for (const auto& m : e.client_methods) emit_fields(e.name+"_"+m.name+"_Args", m.args);
         }
         out << "};\n\n"
-               "// Standard sproto scalar codec for the generated tag tables. Integers use the\n"
+               "// Standard sproto codec for the generated tag tables. Integers use the\n"
                "// canonical wire forms: an in-band short word for 0..0x7ffe, a 4-byte little-\n"
-               "// endian int32, and an 8-byte two's-complement int64. Values cross as bigint\n"
-               "// when they do not fit a JS Number. Encoding matches upstream cloudwu/sproto\n"
-               "// byte for byte; decode skips tags absent from the table, rejects malformed\n"
-               "// buffers, and widens the 64-bit form from unsigned dwords instead of\n"
-               "// upstream's todword int arithmetic, so negative wide integers survive.\n"
+               "// endian int32, and an 8-byte two's-complement int64. Struct fields are\n"
+               "// length-prefixed records, integer arrays carry an intlen byte before 4- or\n"
+               "// 8-byte elements, and arrays of structs are per-element [len][record].\n"
+               "// Values cross as bigint when they do not fit a JS Number. Encoding matches\n"
+               "// upstream cloudwu/sproto byte for byte; decode skips tags absent from the\n"
+               "// table, rejects malformed buffers, and widens every dword from unsigned\n"
+               "// bytes instead of upstream's todword int arithmetic, so negative wide\n"
+               "// integers survive. BOOL/STRING/BYTES fields are emitted into the tables\n"
+               "// but rejected by the codec until their wire forms land.\n"
                "const INT64_MIN = -9223372036854775808n;\n"
                "const INT64_MAX = 9223372036854775807n;\n"
                "const INT32_MIN = -2147483648n;\n"
@@ -344,33 +352,71 @@ public:
                "  if (typeof value === 'bigint') return value < INT64_MIN || value > INT64_MAX ? null : value;\n"
                "  return Number.isInteger(value) ? BigInt(value) : null;\n"
                "}\n\n"
-               "export function encodeScalar(fields, value) {\n"
+               "export function encodeRecord(fields, value) {\n"
                "  const tags = [], data = [];\n"
                "  const push32 = (word) => data.push(word & 255, (word >>> 8) & 255, (word >>> 16) & 255, (word >>> 24) & 255);\n"
                "  let last = -1;\n"
                "  for (const field of [...fields].sort((a, b) => a.id - b.id)) {\n"
                "    if (!(field.name in value)) continue;\n"
-               "    const n = sprotoAsInt64(value[field.name], field.name);\n"
-               "    if (n === null) throw new RangeError(`` + field.name + ` is not an integer`);\n"
                "    const gap = field.id - last - 1;\n"
                "    if (gap) tags.push((gap - 1) * 2 + 1);\n"
-               "    if (n >= 0n && n < 0x7fffn) {\n"
-               "      tags.push(Number(n + 1n) * 2);\n"
-               "    } else {\n"
-               "      const wide = n < INT32_MIN || n > INT32_MAX;\n"
-               "      tags.push(0);\n"
-               "      push32(wide ? 8 : 4);\n"
-               "      push32(Number(n & 0xffffffffn));\n"
-               "      if (wide) push32(Number((n >> 32n) & 0xffffffffn));\n"
-               "    }\n"
                "    last = field.id;\n"
+               "    if (field.kind === 'int') {\n"
+               "      const n = sprotoAsInt64(value[field.name], field.name);\n"
+               "      if (n === null) throw new RangeError(`${field.name} is not an integer`);\n"
+               "      if (n >= 0n && n < 0x7fffn) {\n"
+               "        tags.push(Number(n + 1n) * 2);\n"
+               "      } else {\n"
+               "        const wide = n < INT32_MIN || n > INT32_MAX;\n"
+               "        tags.push(0);\n"
+               "        push32(wide ? 8 : 4);\n"
+               "        push32(Number(n & 0xffffffffn));\n"
+               "        if (wide) push32(Number((n >> 32n) & 0xffffffffn));\n"
+               "      }\n"
+               "    } else if (field.kind === 'struct') {\n"
+               "      tags.push(0);\n"
+               "      const content = encodeRecord(sprotoFields[field.of], value[field.name]);\n"
+               "      push32(content.length);\n"
+               "      data.push(...content);\n"
+               "    } else if (field.kind === 'int-array') {\n"
+               "      tags.push(0);\n"
+               "      const list = value[field.name];\n"
+               "      if (!Array.isArray(list)) throw new RangeError(`${field.name} is not an array`);\n"
+               "      const ints = list.map((element) => {\n"
+               "        const n = sprotoAsInt64(element, field.name);\n"
+               "        if (n === null) throw new RangeError(`${field.name} element is not an integer`);\n"
+               "        return n;\n"
+               "      });\n"
+               "      const wide = ints.some((n) => n < INT32_MIN || n > INT32_MAX);\n"
+               "      const content = [];\n"
+               "      if (ints.length > 0) {\n"
+               "        content.push(wide ? 8 : 4);\n"
+               "        for (const n of ints) for (let i = 0; i < (wide ? 8 : 4); i += 1) content.push(Number((n >> BigInt(8 * i)) & 0xffn));\n"
+               "      }\n"
+               "      push32(content.length);\n"
+               "      data.push(...content);\n"
+               "    } else if (field.kind === 'struct-array') {\n"
+               "      tags.push(0);\n"
+               "      const list = value[field.name];\n"
+               "      if (!Array.isArray(list)) throw new RangeError(`${field.name} is not an array`);\n"
+               "      const content = [];\n"
+               "      for (const item of list) {\n"
+               "        const record = encodeRecord(sprotoFields[field.of], item);\n"
+               "        content.push(record.length & 255, (record.length >>> 8) & 255, (record.length >>> 16) & 255, (record.length >>> 24) & 255);\n"
+               "        content.push(...record);\n"
+               "      }\n"
+               "      push32(content.length);\n"
+               "      data.push(...content);\n"
+               "    } else {\n"
+               "      throw new RangeError(`unsupported field type ${field.kind}`);\n"
+               "    }\n"
                "  }\n"
                "  const out = [tags.length & 255, (tags.length >>> 8) & 255];\n"
                "  for (const tag of tags) out.push(tag & 255, (tag >>> 8) & 255);\n"
                "  out.push(...data);\n"
                "  return Uint8Array.from(out);\n"
                "}\n\n"
-               "export function decodeScalar(fields, bytes) {\n"
+               "export function decodeRecord(fields, bytes) {\n"
                "  if (!(bytes instanceof Uint8Array) || bytes.length < 2) throw new RangeError('short header');\n"
                "  const byTag = new Map(fields.map((field) => [field.id, field]));\n"
                "  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.length);\n"
@@ -385,26 +431,57 @@ public:
                "    tagPos += 2;\n"
                "    tag += 1;\n"
                "    if (word & 1) { tag += (word - 1) / 2; continue; }\n"
-               "    let n;\n"
-               "    if (word !== 0) {\n"
-               "      n = BigInt(word / 2 - 1);\n"
-               "    } else {\n"
-               "      if (bytes.length - dataPos < 4) throw new RangeError('truncated value');\n"
-               "      const span = view.getUint32(dataPos, true);\n"
-               "      if (span !== 4 && span !== 8) throw new RangeError('bad value span');\n"
-               "      if (bytes.length - dataPos - 4 < span) throw new RangeError('truncated value');\n"
-               "      const low = BigInt(view.getInt32(dataPos + 4, true) >>> 0) & 0xffffffffn;\n"
-               "      n = low;\n"
-               "      if (span === 8) {\n"
-               "        n |= BigInt(view.getInt32(dataPos + 8, true) >>> 0) << 32n;\n"
-               "      } else if (low & 0x80000000n) {\n"
-               "        n -= 1n << 32n;\n"
-               "      }\n"
-               "      dataPos += 4 + span;\n"
-               "    }\n"
-               "    if (n >= (1n << 63n)) n -= 1n << 64n;\n"
                "    const field = byTag.get(tag);\n"
-               "    if (field) out[field.name] = n;\n"
+               "    if (word !== 0) {\n"
+               "      if (field && field.kind !== 'int') throw new RangeError(`in-band value for non-integer ${field.name}`);\n"
+               "      if (field) out[field.name] = BigInt(word / 2 - 1);\n"
+               "      continue;\n"
+               "    }\n"
+               "    if (bytes.length - dataPos < 4) throw new RangeError('truncated value');\n"
+               "    const length = view.getUint32(dataPos, true);\n"
+               "    const start = dataPos + 4;\n"
+               "    if (bytes.length - start < length) throw new RangeError('truncated value');\n"
+               "    if (field && field.kind === 'int') {\n"
+               "      if (length !== 4 && length !== 8) throw new RangeError('bad value span');\n"
+               "      let n = BigInt(view.getUint32(start, true));\n"
+               "      if (length === 8) n |= BigInt(view.getUint32(start + 4, true)) << 32n;\n"
+               "      else if (n & 0x80000000n) n -= 1n << 32n;\n"
+               "      if (n >= (1n << 63n)) n -= 1n << 64n;\n"
+               "      out[field.name] = n;\n"
+               "    } else if (field && field.kind === 'struct') {\n"
+               "      out[field.name] = decodeRecord(sprotoFields[field.of], bytes.subarray(start, start + length));\n"
+               "    } else if (field && field.kind === 'int-array') {\n"
+               "      out[field.name] = [];\n"
+               "      let p = start;\n"
+               "      const end = start + length;\n"
+               "      if (p < end) {\n"
+               "        const intlen = bytes[p];\n"
+               "        p += 1;\n"
+               "        if ((intlen !== 4 && intlen !== 8) || (end - p) % intlen !== 0) throw new RangeError('bad array layout');\n"
+               "        while (p < end) {\n"
+               "          let n = BigInt(view.getUint32(p, true));\n"
+               "          if (intlen === 8) n |= BigInt(view.getUint32(p + 4, true)) << 32n;\n"
+               "          else if (n & 0x80000000n) n -= 1n << 32n;\n"
+               "          if (n >= (1n << 63n)) n -= 1n << 64n;\n"
+               "          out[field.name].push(n);\n"
+               "          p += intlen;\n"
+               "        }\n"
+               "      }\n"
+               "    } else if (field && field.kind === 'struct-array') {\n"
+               "      out[field.name] = [];\n"
+               "      let p = start;\n"
+               "      const end = start + length;\n"
+               "      while (p < end) {\n"
+               "        if (end - p < 4) throw new RangeError('bad array layout');\n"
+               "        const recordLength = view.getUint32(p, true);\n"
+               "        if (end - p - 4 < recordLength) throw new RangeError('bad array layout');\n"
+               "        out[field.name].push(decodeRecord(sprotoFields[field.of], bytes.subarray(p + 4, p + 4 + recordLength)));\n"
+               "        p += 4 + recordLength;\n"
+               "      }\n"
+               "    } else if (field) {\n"
+               "      throw new RangeError(`unsupported field type ${field.kind}`);\n"
+               "    }\n"
+               "    dataPos = start + length;\n"
                "  }\n"
                "  if (dataPos !== bytes.length) throw new RangeError('trailing bytes');\n"
                "  return out;\n"
@@ -416,65 +493,152 @@ public:
         out << "// Generated by mistlane contract build; do not edit.\n"
                "using System;\nusing System.Collections.Generic;\nusing System.IO;\nusing System.Linq;\n"
                "namespace Mistlane.Contracts;\n"
-               "public readonly record struct SprotoScalarField(ushort Id, string Name);\n"
-               "public static class SprotoScalarCodec {\n"
-               "  // Standard sproto scalar codec. Dword reads widen each byte through\n"
-               "  // uint before shifting: the low dword of a wide integer may carry its\n"
-               "  // sign bit, and int arithmetic here would re-create the upstream\n"
-               "  // todword sign-extension defect.\n"
+               "public enum SprotoKind { Int, Struct, IntArray, StructArray, Unsupported }\n"
+               "public readonly record struct SprotoField(ushort Id, string Name, SprotoKind Kind = SprotoKind.Int, string Sub = null);\n"
+               "public static class SprotoCodec {\n"
+               "  // Standard sproto codec for the generated tag tables. Struct fields are\n"
+               "  // length-prefixed records, integer arrays carry an intlen byte before 4-\n"
+               "  // or 8-byte elements, and arrays of structs are per-element\n"
+               "  // [len][record]. Dword reads widen each byte through uint before\n"
+               "  // shifting: the low dword of a wide integer may carry its sign bit,\n"
+               "  // and int arithmetic here would re-create the upstream todword\n"
+               "  // sign-extension defect. BOOL/STRING/BYTES fields are emitted into the\n"
+               "  // tables but rejected here until their wire forms land.\n"
                "  private static void Push32(List<byte> data, uint word) { data.Add((byte)word); data.Add((byte)(word>>8)); data.Add((byte)(word>>16)); data.Add((byte)(word>>24)); }\n"
                "  private static uint Read32(byte[] bytes, int at) => (uint)bytes[at] | ((uint)bytes[at+1]<<8) | ((uint)bytes[at+2]<<16) | ((uint)bytes[at+3]<<24);\n"
-               "  public static byte[] Encode(IReadOnlyList<SprotoScalarField> fields, IReadOnlyDictionary<string,long> values) {\n"
+               "  private static IReadOnlyList<SprotoField> Type(string sub) => ContractSchemas.Types.TryGetValue(sub ?? \"\", out var fields) ? fields : throw new InvalidDataException(\"unknown type \" + sub);\n"
+               "  public static byte[] Encode(IReadOnlyList<SprotoField> fields, IReadOnlyDictionary<string, object> values) {\n"
                "    var tags = new List<ushort>(); var data = new List<byte>(); var last = -1;\n"
                "    foreach (var field in fields.OrderBy(f => f.Id)) {\n"
-               "      if (!values.TryGetValue(field.Name, out var n)) continue;\n"
+               "      if (!values.TryGetValue(field.Name, out var raw)) continue;\n"
                "      var gap = field.Id-last-1;\n"
                "      if (gap > 0) tags.Add((ushort)((gap-1)*2+1));\n"
-               "      if (n >= 0 && n < 0x7fff) {\n"
-               "        tags.Add((ushort)((n+1)*2));\n"
-               "      } else {\n"
-               "        tags.Add(0);\n"
-               "        var wide = n < int.MinValue || n > int.MaxValue;\n"
-               "        Push32(data, wide ? 8u : 4u);\n"
-               "        Push32(data, unchecked((uint)n));\n"
-               "        if (wide) Push32(data, unchecked((uint)(n>>32)));\n"
-               "      }\n"
                "      last = field.Id;\n"
+               "      switch (field.Kind) {\n"
+               "        case SprotoKind.Int: {\n"
+               "          var n = raw as long? ?? throw new InvalidDataException(field.Name + \" is not an integer\");\n"
+               "          if (n >= 0 && n < 0x7fff) {\n"
+               "            tags.Add((ushort)((n+1)*2));\n"
+               "          } else {\n"
+               "            tags.Add(0);\n"
+               "            var wide = n < int.MinValue || n > int.MaxValue;\n"
+               "            Push32(data, wide ? 8u : 4u);\n"
+               "            Push32(data, unchecked((uint)n));\n"
+               "            if (wide) Push32(data, unchecked((uint)(n>>32)));\n"
+               "          }\n"
+               "          break;\n"
+               "        }\n"
+               "        case SprotoKind.Struct: {\n"
+               "          tags.Add(0);\n"
+               "          var nested = raw as Dictionary<string, object> ?? throw new InvalidDataException(field.Name + \" is not a struct\");\n"
+               "          var content = Encode(Type(field.Sub), nested);\n"
+               "          Push32(data, (uint)content.Length); data.AddRange(content);\n"
+               "          break;\n"
+               "        }\n"
+               "        case SprotoKind.IntArray: {\n"
+               "          tags.Add(0);\n"
+               "          var list = raw as List<long> ?? throw new InvalidDataException(field.Name + \" is not an integer array\");\n"
+               "          var wide = list.Any(n => n < int.MinValue || n > int.MaxValue);\n"
+               "          var content = new List<byte>();\n"
+               "          if (list.Count > 0) {\n"
+               "            content.Add((byte)(wide ? 8 : 4));\n"
+               "            foreach (var n in list) {\n"
+               "              if (wide) { for (int i = 0; i < 8; i++) content.Add((byte)(unchecked((ulong)n) >> (8*i))); }\n"
+               "              else { for (int i = 0; i < 4; i++) content.Add((byte)(unchecked((uint)(int)n) >> (8*i))); }\n"
+               "            }\n"
+               "          }\n"
+               "          Push32(data, (uint)content.Count); data.AddRange(content);\n"
+               "          break;\n"
+               "        }\n"
+               "        case SprotoKind.StructArray: {\n"
+               "          tags.Add(0);\n"
+               "          var list = raw as List<Dictionary<string, object>> ?? throw new InvalidDataException(field.Name + \" is not a struct array\");\n"
+               "          var content = new List<byte>();\n"
+               "          foreach (var item in list) {\n"
+               "            var record = Encode(Type(field.Sub), item);\n"
+               "            Push32(content, (uint)record.Length); content.AddRange(record);\n"
+               "          }\n"
+               "          Push32(data, (uint)content.Count); data.AddRange(content);\n"
+               "          break;\n"
+               "        }\n"
+               "        default: throw new InvalidDataException(\"unsupported field type \" + field.Kind + \" for \" + field.Name);\n"
+               "      }\n"
                "    }\n"
                "    var result = new List<byte> { (byte)tags.Count, (byte)(tags.Count>>8) };\n"
                "    foreach (var tag in tags) { result.Add((byte)tag); result.Add((byte)(tag>>8)); }\n"
                "    result.AddRange(data); return result.ToArray();\n"
                "  }\n"
-               "  public static IReadOnlyDictionary<string,long> Decode(IReadOnlyList<SprotoScalarField> fields, byte[] bytes) {\n"
-               "    var byId = fields.ToDictionary(f => f.Id, f => f.Name);\n"
+               "  public static IReadOnlyDictionary<string, object> Decode(IReadOnlyList<SprotoField> fields, byte[] bytes) {\n"
+               "    var byId = fields.ToDictionary(f => f.Id);\n"
                "    if (bytes == null || bytes.Length < 2) throw new InvalidDataException(\"short header\");\n"
                "    ushort count = (ushort)(bytes[0] | (bytes[1]<<8));\n"
                "    if (bytes.Length < 2 + 2 * count) throw new InvalidDataException(\"short tag block\");\n"
-               "    var result = new Dictionary<string,long>();\n"
+               "    var result = new Dictionary<string, object>();\n"
                "    int tagPos = 2, dataPos = 2 + 2 * count, tag = -1;\n"
                "    for (int i = 0; i < count; i++) {\n"
                "      var word = (ushort)(bytes[tagPos] | (bytes[tagPos+1]<<8));\n"
                "      tagPos += 2; tag += 1;\n"
                "      if ((word & 1) != 0) { tag += (word-1)/2; continue; }\n"
-               "      long n;\n"
+               "      var known = byId.TryGetValue((ushort)tag, out var field);\n"
                "      if (word != 0) {\n"
-               "        n = word/2 - 1;\n"
-               "      } else {\n"
-               "        if (bytes.Length - dataPos < 4) throw new InvalidDataException(\"truncated value\");\n"
-               "        uint span = Read32(bytes, dataPos);\n"
-               "        if (span != 4 && span != 8) throw new InvalidDataException(\"bad value span\");\n"
-               "        if (bytes.Length - dataPos - 4 < span) throw new InvalidDataException(\"truncated value\");\n"
-               "        uint lo = Read32(bytes, dataPos + 4);\n"
-               "        n = span == 8 ? unchecked((long)((ulong)lo | ((ulong)Read32(bytes, dataPos + 8)<<32))) : unchecked((int)lo);\n"
-               "        dataPos += 4 + (int)span;\n"
+               "        if (known && field.Kind != SprotoKind.Int) throw new InvalidDataException(\"in-band value for non-integer \" + field.Name);\n"
+               "        if (known) result[field.Name] = (long)(word/2 - 1);\n"
+               "        continue;\n"
                "      }\n"
-               "      if (byId.TryGetValue((ushort)tag, out var name)) result[name] = n;\n"
+               "      if (bytes.Length - dataPos < 4) throw new InvalidDataException(\"truncated value\");\n"
+               "      int length = (int)Read32(bytes, dataPos);\n"
+               "      int start = dataPos + 4;\n"
+               "      if (bytes.Length - start < length) throw new InvalidDataException(\"truncated value\");\n"
+               "      if (known) {\n"
+               "        switch (field.Kind) {\n"
+               "          case SprotoKind.Int: {\n"
+               "            if (length != 4 && length != 8) throw new InvalidDataException(\"bad value span\");\n"
+               "            uint lo = Read32(bytes, start);\n"
+               "            result[field.Name] = length == 8 ? unchecked((long)((ulong)lo | ((ulong)Read32(bytes, start+4)<<32))) : unchecked((int)lo);\n"
+               "            break;\n"
+               "          }\n"
+               "          case SprotoKind.Struct:\n"
+               "            result[field.Name] = Decode(Type(field.Sub), bytes.AsSpan(start, length).ToArray());\n"
+               "            break;\n"
+               "          case SprotoKind.IntArray: {\n"
+               "            var ints = new List<long>();\n"
+               "            int p = start, end = start + length;\n"
+               "            if (p < end) {\n"
+               "              int intlen = bytes[p];\n"
+               "              p += 1;\n"
+               "              if ((intlen != 4 && intlen != 8) || (end - p) % intlen != 0) throw new InvalidDataException(\"bad array layout\");\n"
+               "              while (p < end) {\n"
+               "                uint lo = Read32(bytes, p);\n"
+               "                ints.Add(intlen == 8 ? unchecked((long)((ulong)lo | ((ulong)Read32(bytes, p+4)<<32))) : unchecked((int)lo));\n"
+               "                p += intlen;\n"
+               "              }\n"
+               "            }\n"
+               "            result[field.Name] = ints;\n"
+               "            break;\n"
+               "          }\n"
+               "          case SprotoKind.StructArray: {\n"
+               "            var items = new List<Dictionary<string, object>>();\n"
+               "            int p = start, end = start + length;\n"
+               "            while (p < end) {\n"
+               "              if (end - p < 4) throw new InvalidDataException(\"bad array layout\");\n"
+               "              int recordLength = (int)Read32(bytes, p);\n"
+               "              if (end - p - 4 < recordLength) throw new InvalidDataException(\"bad array layout\");\n"
+               "              items.Add((Dictionary<string, object>)Decode(Type(field.Sub), bytes.AsSpan(p+4, recordLength).ToArray()));\n"
+               "              p += 4 + recordLength;\n"
+               "            }\n"
+               "            result[field.Name] = items;\n"
+               "            break;\n"
+               "          }\n"
+               "          default: throw new InvalidDataException(\"unsupported field type \" + field.Kind + \" for \" + field.Name);\n"
+               "        }\n"
+               "      }\n"
+               "      dataPos = start + length;\n"
                "    }\n"
                "    if (dataPos != bytes.Length) throw new InvalidDataException(\"trailing bytes\");\n"
                "    return result;\n"
                "  }\n}\n";
         auto cs_type = [](const std::string& t, const std::string& of) {
-            if (t == "ARRAY") return "System.Collections.Generic.List<" + of + ">";
+            if (t == "ARRAY") return "List<" + of + ">";
             if (t == "BOOL") return std::string("bool");
             if (t == "STRING") return std::string("string");
             if (t == "BYTES") return std::string("byte[]");
@@ -484,9 +648,30 @@ public:
             if (t == "INT32") return std::string("int");
             return t;
         };
+        auto cs_kind = [this](const ContractField& f) {
+            const auto kind = field_kind(f);
+            if (kind == "struct") return "SprotoKind.Struct";
+            if (kind == "struct-array") return "SprotoKind.StructArray";
+            if (kind == "int-array") return "SprotoKind.IntArray";
+            if (kind == "int") return "SprotoKind.Int";
+            return "SprotoKind.Unsupported";
+        };
+        auto cs_sub = [this](const ContractField& f) {
+            const auto kind = field_kind(f);
+            if (kind == "struct") return "\"" + f.type + "\"";
+            if (kind == "struct-array") return "\"" + f.of + "\"";
+            if (kind == "int") return std::string("null");
+            return "\"" + (f.type == "ARRAY" ? f.of : f.type) + "\"";
+        };
+        std::vector<std::string> type_names;
         auto emit = [&](const std::string& name, const ContractArgs& fields) {
+            auto mapped = [&](const std::string& t, const std::string& of) {
+                if (t != "ARRAY") return cs_type(t, of);
+                if (structs_.count(of)) return std::string("List<Dictionary<string, object>>");
+                return "List<" + cs_type(of, "") + ">";
+            };
             out << "public sealed record " << name << "(";
-            for (std::size_t i=0;i<fields.size();++i) { if(i) out << ", "; out << cs_type(fields[i].type,fields[i].of) << " " << fields[i].name; }
+            for (std::size_t i=0;i<fields.size();++i) { if(i) out << ", "; out << mapped(fields[i].type,fields[i].of) << " " << fields[i].name; }
             out << ");\n";
         };
         for (const auto& [name, fields] : structs_) emit(name, fields);
@@ -497,9 +682,10 @@ public:
             for (const auto& m : e.client_methods) emit(e.name+"_"+m.name+"Args", m.args);
         }
         auto emit_fields = [&](const std::string& name, const ContractArgs& fields) {
-            out << "public static class " << name << "Schema { public static readonly SprotoScalarField[] Fields = new SprotoScalarField[] {";
-            for (const auto& f : fields) out << " new(" << f.id << ", \"" << f.name << "\"),";
+            out << "public static class " << name << "Schema { public static readonly SprotoField[] Fields = new SprotoField[] {";
+            for (const auto& f : fields) out << " new(" << f.id << ", \"" << f.name << "\", " << cs_kind(f) << ", " << cs_sub(f) << "),";
             out << " }; }\n";
+            type_names.push_back(name);
         };
         for (const auto& [name, fields] : structs_) emit_fields(name, fields);
         for (const auto& e : entities_) {
@@ -508,6 +694,9 @@ public:
             for (const auto& m : e.server_methods) emit_fields(e.name+"_"+m.name+"Args", m.args);
             for (const auto& m : e.client_methods) emit_fields(e.name+"_"+m.name+"Args", m.args);
         }
+        out << "public static class ContractSchemas { public static readonly IReadOnlyDictionary<string, IReadOnlyList<SprotoField>> Types = new Dictionary<string, IReadOnlyList<SprotoField>> {";
+        for (const auto& name : type_names) out << " [\"" << name << "\"] = " << name << "Schema.Fields,";
+        out << " }; }\n";
         return out.str();
     }
     // Well-formedness of any XML document in this reader's dialect, without
@@ -519,6 +708,26 @@ public:
         return true;
     }
 private:
+    // Kind tag emitted into every field table so the SDK codecs can drive
+    // struct and array wiring: int covers every integer-like type
+    // (UINT16/UINT32/INT32/INT64/EntityRef), struct and struct-array carry the
+    // declared struct name in "of", int-array marks fixed-size integer
+    // elements, and BOOL/STRING/BYTES shapes are tagged as their own kinds the
+    // codecs reject until those wire forms land.
+    std::string field_kind(const ContractField& f) const {
+        if (f.type == "ARRAY") {
+            if (structs_.count(f.of)) return "struct-array";
+            if (f.of == "BOOL") return "bool-array";
+            if (f.of == "STRING") return "string-array";
+            if (f.of == "BYTES") return "bytes-array";
+            return "int-array";
+        }
+        if (structs_.count(f.type)) return "struct";
+        if (f.type == "BOOL") return "bool";
+        if (f.type == "STRING") return "string";
+        if (f.type == "BYTES") return "bytes";
+        return "int";
+    }
     // ---- schema generator pieces: every emitted element pins its id and its
     // declared type, so a renumbered or re-typed member fails the schema.
     static void enum_block(std::ostringstream& out, const std::string& name,
@@ -741,7 +950,7 @@ private:
     void check_type(const std::string& type, const std::string& of, const std::string& what) const {
         if (type == "ARRAY") {
             if (of.empty()) throw ContractError(what+": ARRAY needs 'of'");
-            if (of == "ARRAY" || !basic_type(of) && !structs_.count(of))
+            if (of == "ARRAY" || (!basic_type(of) && !structs_.count(of)))
                 throw ContractError(what+": ARRAY of '"+of+"' does not resolve");
             return;
         }
