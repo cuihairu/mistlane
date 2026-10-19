@@ -91,7 +91,7 @@ Three properties are the point of this surface:
 
 - Handlers already executing finish before a transfer begins; handlers arriving during `transferring`/`loading`/`suspended` are refused with an explicit failure. Bounded queues remain where they are today: at the session and transport layer.
 - Avatar-owned timers stop when a transfer starts and re-arm only if the transferred snapshot declares them; undeclared timers do not travel.
-- A reconnect never resurrects a closed avatar. The coordinator's placement record routes the new session to the current host; a failed transfer leaves the route on the source; re-entry always goes through `loading`.
+- A reconnect never resurrects a closed avatar. In this design the coordinator holds a per-character route record that sends a new session to the current host — `MLR1` today only has `REGISTER`/`QUERY`/`PLACE`, which is member placement, not a character route; a failed transfer leaves the route on the source, and re-entry always goes through `loading`.
 - A VM replacement (SIGHUP) is a node-level retirement, not an avatar migration: every avatar in the old VM gets a best-effort `avatar_save` and then closes; sessions re-enter through `loading` after the swap. This keeps the existing honest rule — reload does not migrate state.
 
 ## Errors, timeouts and reentrancy
