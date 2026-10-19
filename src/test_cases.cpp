@@ -436,6 +436,88 @@ void core_contracts() {
     require(chain.describe().find("struct A") != std::string::npos &&
             chain.describe().find(" prop {1 root A} SERVER_ONLY") != std::string::npos,
             "canonical dump lost the resolved model: "+chain.describe());
+    // Reserved ids keep retired tags forever, and the schema/lock emit them.
+    EntityContract locked(document_with("</Entity>", "<Reserved>"
+            "<Property id=\"5\"/><ServerMethod id=\"9\"/><ClientMethod id=\"7\"/></Reserved></Entity>"));
+    const auto& retained = locked.entities().front();
+    require(retained.reserved_properties.size() == 1 && retained.reserved_properties[0] == 5 &&
+            retained.reserved_server_methods.size() == 1 && retained.reserved_server_methods[0] == 9 &&
+            retained.reserved_client_methods.size() == 1 && retained.reserved_client_methods[0] == 7,
+            "reserved ids lost: "+locked.describe());
+    require(locked.digest() != contract.digest(), "reserving an id does not change the model");
+    for (const auto& broken : std::vector<std::string>{
+        document_with("</Entity>", "<Reserved><Property id=\"1\"/></Reserved></Entity>"),
+        document_with("</Entity>", "<Reserved><Property id=\"5\"/><Property id=\"5\"/></Reserved></Entity>"),
+        document_with("</Entity>", "<Reserved><Property id=\"5\" note=\"retired\"/></Reserved></Entity>"),
+        document_with("</Entity>", "<Reserved><Property/></Reserved></Entity>"),
+        document_with("</Entity>", "<Reserved><Thing id=\"5\"/></Reserved></Entity>"),
+        document_with("</Entity>", "<Reserved><Property id=\"7\"/></Reserved></Entity>"
+        "<Reserved><Property id=\"5\"/></Reserved></Entity>")})
+        must_fail([&] { (void)EntityContract(broken); });
+    // The generated schema is well-formed XML and pins each member's id and type.
+    const auto schema = locked.xsd();
+    require(EntityContract::well_formed(schema), "generated schema is not well-formed: "+schema);
+    require(EntityContract(document_with("</Entity>", "<Reserved><Property id=\"5\"/>"
+            "<ServerMethod id=\"9\"/><ClientMethod id=\"7\"/></Reserved></Entity>")).xsd() == schema,
+            "schema is not reproducible");
+    const auto block = [&](const std::string& needle) {
+        const auto at = schema.find(needle);
+        require(at != std::string::npos, std::string("schema is missing ")+needle);
+        const auto end = schema.find("</xs:element>", at);
+        require(end != std::string::npos, "schema block is unterminated");
+        return schema.substr(at, end-at);
+    };
+    const auto hp = block("<xs:element name=\"hp\" ");
+    require(hp.find("<xs:enumeration xs:value=\"2\"/>") != std::string::npos &&
+            hp.find("<xs:enumeration xs:value=\"UINT32\"/>") != std::string::npos &&
+            hp.find("type=\"ReplicationFlags\"") != std::string::npos,
+            "the schema does not pin a property's id, type and flags: "+hp);
+    require(block("<xs:element name=\"Property\" ").find("<xs:enumeration xs:value=\"5\"/>") !=
+            std::string::npos, "the schema does not pin a reserved property id");
+    require(block("<xs:element name=\"ClientMethod\" ").find("<xs:enumeration xs:value=\"7\"/>") !=
+            std::string::npos, "the schema does not pin a reserved client method id");
+    require(block("<xs:element name=\"Field\" ").find("<xs:enumeration xs:value=\"UINT16\"/>") !=
+            std::string::npos, "the schema lost the request's typed return");
+    const auto attr = [&](const char* key, const std::string& value) {
+        return std::string("<xs:attribute name=\"")+key+"\" use=\"required\"><xs:simpleType>"
+            "<xs:restriction base=\"xs:string\"><xs:enumeration xs:value=\""+value+
+            "\"/></xs:restriction></xs:simpleType></xs:attribute>";
+    };
+    require(schema.find(attr("mode", "request")) != std::string::npos &&
+            schema.find(attr("mode", "notify")) != std::string::npos,
+            "the schema does not pin the declared modes");
+    require(schema.find(attr("caller", "owner")) != std::string::npos &&
+            schema.find(attr("caller", "server")) != std::string::npos &&
+            schema.find(attr("audience", "owner")) != std::string::npos,
+            "the schema mixed up caller and audience");
+    require(schema.find(attr("name", "attack")) != std::string::npos &&
+            schema.find(attr("id", "1")) != std::string::npos,
+            "the schema does not pin member names and ids");
+    require(schema.find("<xs:enumeration xs:value=\"Inventory\"/>") != std::string::npos &&
+            schema.find("<xs:element name=\"Inventory\"") != std::string::npos &&
+            schema.find("name=\"capacity\"") != std::string::npos,
+            "the schema lost the declared structs");
+    require(contract.xsd().find("name=\"Reserved\"") == std::string::npos,
+            "an empty Reserved group must not appear in the schema");
+    require(!EntityContract::well_formed("<Contracts><A><B/></Contracts>"),
+            "well-formedness accepted a mismatched close tag");
+    require(!EntityContract::well_formed("<Contracts/></Contracts>"),
+            "well-formedness accepted trailing content");
+    // The release lock keeps every assignment a published version made.
+    const auto lock_text = locked.lock();
+    require(lock_text.find("# mistlane entity contract lock\n# digest ") != std::string::npos &&
+            lock_text.find("struct Item") != std::string::npos &&
+            lock_text.find("entity Avatar 1") != std::string::npos &&
+            lock_text.find(" prop Avatar 3 gold INT64") != std::string::npos &&
+            lock_text.find(" method Avatar server 2 getProfile") != std::string::npos &&
+            lock_text.find(" method Avatar client 1 onReward") != std::string::npos &&
+            lock_text.find(" reserved Avatar property 5") != std::string::npos &&
+            lock_text.find(" reserved Avatar server 9") != std::string::npos &&
+            lock_text.find(" reserved Avatar client 7") != std::string::npos,
+            "release lock lost assignments: "+lock_text);
+    require(EntityContract(document_with("</Entity>", "<Reserved><Property id=\"5\"/>"
+            "<ServerMethod id=\"9\"/><ClientMethod id=\"7\"/></Reserved></Entity>")).lock() == lock_text,
+            "release lock is not reproducible");
     CrossAdmission admission(1, 1, 1, 1);
     int a = 0, b = 0;
     require(admission.acquire(&a, context, 0).empty(), "first admission failed");

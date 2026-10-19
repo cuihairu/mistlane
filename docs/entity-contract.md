@@ -2,7 +2,7 @@
 
 > Deferred draft: prioritize the agreed legacy process responsibilities and message paths. This phase does not implement a contract library, code generation or automatic property replication.
 
-Status: design proposal; the format itself is now pinned by a definition-time prototype. `include/mistlane/entity_contract.hpp` parses the XML subset and enforces the semantic rules of this page (explicit stable ids, closed vocabularies, typed defaults, array/struct resolution, recursion refusal, DOCTYPE/entity refusal) with a canonical dump and digest as the future release-lock seed — unit-asserted in `core.contracts`, wired to nothing: no CLI tools, no XSD generation, no sproto emission, no runtime. This page applies to Mistlane and does not rename Apollo components. Clients target JavaScript and C#. Contract changes regenerate and rebuild clients; supported server business contract changes do not rebuild the C++ executable. Paths, commands and APIs below remain proposed interfaces beyond the prototype's scope.
+Status: design proposal; the format itself is now pinned by a definition-time prototype. `include/mistlane/entity_contract.hpp` parses the XML subset and enforces the semantic rules of this page (explicit stable ids, closed vocabularies, typed defaults, array/struct resolution, recursion refusal, DOCTYPE/entity refusal), declares retired ids in a `Reserved` group, and emits both artifacts the release process needs: the project-specific XSD (each member's id and type pinned) and the release lock (every assignment plus the model digest). Unit-asserted in `core.contracts`, wired to nothing: no CLI tools, no sproto emission, no runtime. This page applies to Mistlane and does not rename Apollo components. Clients target JavaScript and C#. Contract changes regenerate and rebuild clients; supported server business contract changes do not rebuild the C++ executable. Paths, commands and APIs below remain proposed interfaces beyond the prototype's scope.
 
 ## Design choice
 
@@ -82,9 +82,26 @@ XML is the only handwritten format for entities and complex types. Property name
 
 IDs remain explicit and stable. Validate named structures and fields too. Missing defaults follow type rules: zero/false/empty strings, empty arrays and per-field structure initialization; explicit defaults override those rules. Missing flags mean SERVER_ONLY and persistence defaults to false. Unknown flags are errors, not defaults.
 
+Retired IDs are declared, not implied: a `Reserved` group under the entity lists the exact tags a meaning has retired, so a later contract can never silently reuse one.
+
+```xml
+<Entity name="Avatar" id="1">
+  <!-- ... Properties / ServerMethods / ClientMethods ... -->
+  <Reserved>
+    <Property id="5" />        <!-- an old property tag, kept out of circulation -->
+    <ServerMethod id="9" />    <!-- a retired server method tag -->
+    <ClientMethod id="7" />
+  </Reserved>
+</Entity>
+```
+
+A reserved ID must not be live anywhere in the same contract, must not repeat within its kind, and carries no other attributes: "this tag is retired" and "this tag is free" are kept distinct. The prototype enforces all of that and carries the reserved tags into the dump, the XSD and the lock, so they participate in compatibility checks exactly like live members.
+
 [XML Schema/XSD](https://www.w3.org/TR/xmlschema-0/) validates structure, required information, lexical types, enumerations and scoped key/reference constraints. Editors with XML/XSD support and an associated schema can offer completion and diagnostics. Tooling and CI must explicitly validate; using XML alone does not execute schema checks.
 
 A generic XSD cannot enumerate every project member when member names are element names. A permissive wildcard does not fully validate arbitrary child attributes. The contract checker must enforce their shared rules; it can generate a project-specific XSD from the resolved model for editor support and strict validation. Applications do not maintain a second handwritten schema.
+
+The prototype implements this generator (`EntityContract::xsd()`): it enumerates the declared types, entities and their members, pins every member's id and declared type as enumeration restrictions (a renumbered or re-typed member fails the schema outright), restates the closed vocabularies, and feeds its own output back through the well-formedness check so a malformed schema cannot ship.
 
 | Stage | Checks |
 |---|---|
@@ -112,6 +129,8 @@ Entity type IDs are globally unique. Property IDs are unique within a type; meth
 IDs are explicit. Neither traversal order, declaration order nor hashes may renumber published definitions. Retired IDs are reserved and never reused for another meaning or type. Collisions between properties, implementation methods and engine members fail the build. Method IDs may coincide across directions, but the first version rejects duplicate entity member names across groups to avoid binding ambiguity.
 
 Generated sproto uses unique internal names such as `E1_Server_1` and recorded bundle-level protocol tags. A generated release lock preserves assignments and allocates only new tags. Entity RPC IDs and internal sproto tags are checked against that mapping; business code does not maintain either generated map.
+
+The prototype already emits that lock as text (`EntityContract::lock()`): every live and retired assignment in declaration order plus the model digest, reproducible from the source document alone. A released version ships this file; the next version diffs against it and must not renumber or re-type anything already listed.
 
 ## Generated artifacts
 
@@ -287,7 +306,7 @@ Breaking updates may still require old clients to upgrade or reconnect. An uncha
 
 ## Implementation and acceptance order
 
-1. Specify XSD, type rules, ID lock, compatibility, invocation envelope and error structures. Use Avatar and Monster to test identical method names across entity types and caller permissions.
+1. Specify XSD, type rules, ID lock, compatibility, invocation envelope and error structures. The definition-time prototype already pins the XSD, type rules and the ID lock (`Reserved` groups, `xsd()`, `lock()` in `include/mistlane/entity_contract.hpp`); the invocation envelope, error structures and the compatibility diff against a published lock are still open. Use Avatar and Monster to test identical method names across entity types and caller permissions.
 2. Prototype C++/Lua, JS and C# codecs against shared golden bytes: integer boundaries, UTF-8, bytes, absent/empty values, arrays, nested structures, unknown fields and malformed/truncated inputs.
 3. Implement deterministic generation and atomic bundle loading. Invalid/conflicting/missing implementations cannot become ready. Client artifacts exclude server-internal methods and private property descriptors.
 4. Implement Entity identity, controlled properties, RPC and client proxies; then baselines/deltas and persistence. Verify reconnects, offline outcomes, write conflicts and corrupt records.
