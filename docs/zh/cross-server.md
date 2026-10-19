@@ -47,7 +47,13 @@ build/debug/mistlane --role gateway --routing cross --listen 127.0.0.1:7300 --up
 MLC1 1 realm-a group-1 room-42
 ```
 
-字段依次是版本标识、route epoch、来源区服、跨服组、房间。标识符为 1–64 个 ASCII 字母、数字、下划线或连字符，握手最多 256 字节。epoch 为 1–1000000000 的十进制正整数。cross 先准入、选择 crossServer，再转发握手；crossServer 再执行最终准入并返回 MLC1 OK 1。之后才发送普通应用 payload，Lua message 的第二个参数包含这些路由字段。
+房间之后可携带可选的参与者上下文，例如：
+
+```text
+MLC1 1 realm-a group-1 room-42 ch hero-7 gen 12 ret home arena r1
+```
+
+字段依次是版本标识、route epoch、来源区服、跨服组、房间；尾缀依次为角色标识、承载版本与返回路由（区服/组/房间）。标识符为 1–64 个 ASCII 字母、数字、下划线或连字符，握手最多 256 字节。epoch 与承载版本为 1–1000000000 的十进制正整数。参与者三部分要么齐备、要么全部缺省，任何部分声明都按 INVALID 拒绝；匿名五字段握手保持可用。cross 先准入、选择 crossServer，再转发握手；crossServer 再执行最终准入并返回 MLC1 OK 1。之后才发送普通应用 payload，Lua message 的第二个参数包含这些路由字段——参与者握手另含 `character`、`generation` 与嵌套 `route` 表（见[Lua 生命周期](./lua)）。参与者字段是路由元数据而非认证；持久角色变更另需[跨服回传协议](./cross-return-protocol)。
 
 失败响应是 MLC1 ERR INVALID、EPOCH、ROOM_FULL、GROUP_FULL 或 SHARD_FULL（下游握手不兼容时为 UPSTREAM），然后关闭连接。网络连接、上游错误或节点全局连接上限可能直接关闭，不保证返回错误帧。不要把握手成功当成账号认证或持久化成功。
 

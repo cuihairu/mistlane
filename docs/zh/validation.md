@@ -1,6 +1,6 @@
 # 验证记录
 
-验证日期：2026-10-17；HTTP/HTTPS、Lua apiServer 与原生 gateway cross routing/crossServer 检查同 Redis 新增项于 2026-10-18 验证；多监听、WebSocket 生命周期、服务身份、共享连接多路复用与进程注册表检查于 2026-10-19 验证。环境为 Linux x64、GCC 15.2.0、CMake 4.2.3，固定 vcpkg baseline：a5f736224e85b32e25a8ffc52562333180396642。
+验证日期：2026-10-17；HTTP/HTTPS、Lua apiServer 与原生 gateway cross routing/crossServer 检查同 Redis 新增项于 2026-10-18 验证；多监听、WebSocket 生命周期、服务身份、共享连接多路复用、进程注册表与跨服参与者上下文检查于 2026-10-19 验证。环境为 Linux x64、GCC 15.2.0、CMake 4.2.3，固定 vcpkg baseline：a5f736224e85b32e25a8ffc52562333180396642。
 
 | 项目 | 实际结果 |
 |---|---|
@@ -17,7 +17,7 @@
 | HTTP / HTTPS | 两种传输下的 Drogon 请求、二进制正文，以及 curl 适配的证书 / 主机名校验、仅允许 HTTP/HTTPS 的协议限制和响应大小上限通过 |
 | 多监听与 WebSocket 生命周期 | `transport.listeners` 启动混合 gameServer（TCP 主监听 + WS + WSS，WSS 用 `?cert=&key=` 单独覆盖证书）、apiServer HTTP 节点（`/`、`/ws` 升级进入 Lua `websocket_open/message/close` 生命周期，`mistlane.websocket.send` 覆盖成功、`unknown websocket id`、`payload exceeds 1 MiB`）、`websocket_message` 内 Lua 报错只关闭该会话且 HTTP 服务继续应答、SIGTERM 排空在线会话、慢消费者越过 2 MiB 输出高水位被强制关闭、HTTPS+WSS 单监听证书、gateway HTTP 监听承载游戏会话升级、配置文件 `LISTENERS=`，以及脚本角色 TCP 监听与重复端口的启动拒绝 |
 | Lua apiServer | 请求元数据、before_request 短路、after_request 修改、on_error 兜底、响应校验与重载回退通过 |
-| 原生 gateway cross routing/crossServer | MLC1 握手、group/room 固定到同一 crossServer、ROOM_FULL 最终准入、断连释放租约、EPOCH 不匹配与上游失败隔离通过 |
+| 原生 gateway cross routing/crossServer | MLC1 握手、group/room 固定到同一 crossServer、ROOM_FULL 最终准入、断连释放租约、EPOCH 不匹配与上游失败隔离通过；可选 `ch`/`gen`/`ret` 参与者声明以 `character`/`generation`/`route` 抵达 Lua，任何部分参与者声明均按 `MLC1 ERR INVALID` 拒绝 |
 | Lua | 成功重载、语法 / 接口错误回退、回调错误、典型死循环中断、重复回调通过 |
 | 提取的堆工具 | 在实际链接的 Lua 中验证模块隔离与有序弹出 |
 | 错误和资源路径 | 上游连接失败、连接上限、消息限流、非法参数、SIGTERM 退出通过 |

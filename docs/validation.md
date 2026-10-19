@@ -1,6 +1,6 @@
 # Validation record
 
-Validated on 2026-10-17; Redis additions and the HTTP/HTTPS, Lua apiServer and native gateway cross routing/crossServer checks were verified on 2026-10-18; the multiple-listeners, WebSocket lifecycle, service-identity, shared-connection multiplexing and process-registry checks were verified on 2026-10-19. Environment: Linux x64, GCC 15.2.0, CMake 4.2.3, pinned vcpkg baseline `a5f736224e85b32e25a8ffc52562333180396642`.
+Validated on 2026-10-17; Redis additions and the HTTP/HTTPS, Lua apiServer and native gateway cross routing/crossServer checks were verified on 2026-10-18; the multiple-listeners, WebSocket lifecycle, service-identity, shared-connection multiplexing, process-registry and cross participant-context checks were verified on 2026-10-19. Environment: Linux x64, GCC 15.2.0, CMake 4.2.3, pinned vcpkg baseline `a5f736224e85b32e25a8ffc52562333180396642`.
 
 | Item | Actual result |
 |---|---|
@@ -17,7 +17,7 @@ Validated on 2026-10-17; Redis additions and the HTTP/HTTPS, Lua apiServer and n
 | HTTP / HTTPS | Passed Drogon requests over both transports, binary bodies, and the curl adapter's certificate/hostname verification, HTTP/HTTPS-only protocol restriction and response-size limit |
 | Multiple listeners and WebSocket lifecycle | `transport.listeners` boots a mixed gameServer (TCP primary + WS + WSS listeners with a per-listener `?cert=&key=` override), an apiServer HTTP node whose `/`/`/ws` upgrades run the Lua `websocket_open/message/close` lifecycle with `mistlane.websocket.send` (success, `unknown websocket id`, `payload exceeds 1 MiB`), a Lua error in `websocket_message` closing only that session while the HTTP service keeps answering, SIGTERM draining live sessions, a slow consumer force-closed by the 2 MiB output high-water mark, HTTPS+WSS with per-listener certificates, a gateway HTTP listener carrying game-session upgrades, `LISTENERS=` from a config file, and startup rejections for a script-role TCP listener and duplicate ports |
 | Lua apiServer | Passed request metadata, before_request short-circuit, after_request mutation, on_error fallback, response validation and reload rollback |
-| Native gateway cross routing/crossServer | Passed MLC1 handshake, fixed group/room affinity to one crossServer, final ROOM_FULL admission, lease release on disconnect, EPOCH mismatch and upstream-failure isolation |
+| Native gateway cross routing/crossServer | Passed MLC1 handshake, fixed group/room affinity to one crossServer, final ROOM_FULL admission, lease release on disconnect, EPOCH mismatch and upstream-failure isolation, an optional `ch`/`gen`/`ret` participant declaration reaching Lua as `character`/`generation`/`route`, and every partial participant declaration refused as `MLC1 ERR INVALID` |
 | Lua | Passed successful VM reload, invalid/schematic reload rollback, callback errors, typical infinite-loop interruption, and repeated callbacks |
 | Extracted heap | Passed module isolation and ordered pops using the actual linked Lua runtime |
 | Failure and resource paths | Passed upstream connection failure, connection limit, message-rate limit, invalid CLI arguments, SIGTERM exit |

@@ -36,7 +36,7 @@ stateDiagram-v2
 | 顶层脚本 | 无 / 模块 table | 启动与每次重载执行；必须返回符合传输类型的模块 |
 | init | context / 忽略返回 | VM 创建并验证后一次；context 含 role、transport、epoch |
 | start | 无 / 忽略返回 | 监听就绪、正式发布 ready 前一次；失败则启动失败或拒绝重载 |
-| message | payload、context / string 或 nil | 非 HTTP 完整消息；context 在帧式监听上携带数字会话身份，crossServer 加入后另含 realm/group/room/epoch，关联模式（首帧 `MLC2`）另含客户端请求 ID `request`；返回 nil 表示本请求没有响应帧 |
+| message | payload、context / string 或 nil | 非 HTTP 完整消息；context 在帧式监听上携带数字会话身份，crossServer 加入后另含 realm/group/room/epoch，参与者握手另含 `character`、`generation` 与嵌套 `route` 表（返回路由区服/组/房间，见[跨服设计](./cross-server)），关联模式（首帧 `MLC2`）另含客户端请求 ID `request`；返回 nil 表示本请求没有响应帧 |
 | before_request | req / nil 或响应 table | HTTP 前置处理；nil 继续 http，响应 table 短路主 handler |
 | http | req / 响应 table | HTTP/HTTPS apiServer 的主请求处理器 |
 | after_request | req、response / nil 或响应 table | 主处理器或前置短路成功后执行；可直接修改 response，或返回替换 table |

@@ -1,6 +1,6 @@
 # Cross return and single-writer protocol
 
-Status: decided design (2026-10-19), implementation pending. This page fixes the contracts named as the first gate of the crossServer migration item — the return and persistence-confirmation protocol and single-writer authority — before any transfer, settlement, retry, offline or failed-return implementation begins. It targets the responsibilities in [process roles](./process-roles.md); the observed legacy path and its gaps are on the [model page](./player-scene-model.md). Nothing here is implemented yet, and no page claim below changes CLI behavior today.
+Status: decided design (2026-10-19); the participant context is wired into cross admission, MLD1 and single-writer enforcement are pending. This page fixes the contracts named as the first gate of the crossServer migration item — the return and persistence-confirmation protocol and single-writer authority — before any transfer, settlement, retry, offline or failed-return implementation begins. It targets the responsibilities in [process roles](./process-roles.md); the observed legacy path and its gaps are on the [model page](./player-scene-model.md). The participant section is implemented; the remaining sections are not, and no unimplemented claim below changes CLI behavior today.
 
 ## Participant and return context
 
@@ -14,7 +14,7 @@ Entering crossServer changes execution placement, not account, character identit
 | Return route | How the character gets back (realm/group/room or scene references) | Required at entry; durable records must not pin process addresses |
 | Entry ticket | Authorization to enter this cross scope | Optional until an issuer exists; the crossServer side treats its absence as "unvalidated" and marks the session read-only for durable writes |
 
-The existing `MLC1` cross handshake carries realm/group/room but no participant fields. The implementation will extend the admission context (either by widening `MLC1` or a follow-up frame) so Lua receives the participant context with the session; the choice is an implementation decision bound by one rule: **a session without a validated participant context cannot submit durable character changes.** Application code may still run gameplay for anonymous sessions.
+`MLC1` was widened rather than given a follow-up frame: after the routing fields, an optional trailing group `ch <character> gen <generation> ret <realm> <group> <room>` carries the participant context, its three parts declared together or not at all (wire format in [cross-server](./cross-server.md)). Lua receives the participant fields with the session (`character`, `generation`, nested `route`); anonymous five-field joins keep working and stay anonymous. The entry ticket has no issuer yet, so no session is validated — until one exists, the rule **a session without a validated participant context cannot submit durable character changes** keeps every session out of durable writes, and application code may still run gameplay for anonymous sessions.
 
 ## Single-writer authority
 
@@ -62,4 +62,4 @@ sequenceDiagram
 - Lease duration numbers, queue bounds and retry budgets: configuration named at implementation time with defaults justified by measurement, not by this page.
 - Whether the entry ticket is signed, and by whom: an authentication design gated on the login contract.
 
-The first implementation slice must bring the participant context into the cross admission path with tests, then MLD1 against the data endpoint fixed by the [service contracts](./service-contracts.md).
+The participant context is in the cross admission path with tests (validation record: cross routing row); the next slice is MLD1 against the data endpoint fixed by the [service contracts](./service-contracts.md).

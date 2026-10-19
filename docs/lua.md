@@ -36,7 +36,7 @@ stateDiagram-v2
 | Script top level | None / module table | Startup and reload; validate required handler for the transport |
 | init | context / ignored | Once after validation; context has role, transport, epoch |
 | start | None / ignored | Listener ready, before ready is published; failure aborts startup/reload |
-| message | payload, context / string or nil | Non-HTTP messages; context carries the numeric session identity on framed listeners, and crossServer joins add realm/group/room/epoch; correlation mode (first frame `MLC2`) adds `request` with the client's id; a nil return sends no reply frame |
+| message | payload, context / string or nil | Non-HTTP messages; context carries the numeric session identity on framed listeners, and crossServer joins add realm/group/room/epoch, a participant join adds `character`, `generation` and the nested `route` table (return realm/group/room, see [cross-server](./cross-server)); correlation mode (first frame `MLC2`) adds `request` with the client's id; a nil return sends no reply frame |
 | before_request | req / nil or response | Before HTTP handler; a response short-circuits http |
 | http | req / response table | Main HTTP handler |
 | after_request | req, response / nil or response | After successful handler or short circuit; mutate response or return a replacement |

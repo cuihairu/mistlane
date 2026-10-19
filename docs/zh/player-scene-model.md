@@ -32,7 +32,7 @@ flowchart TB
   data --> db["归属数据库"]
 ```
 
-这是一条旧实现保存路径，不是 Mistlane 当前已接通的服务链。目标采用“运行位置可迁移，长期数据回到归属 data 保存”的原则；跨服执行进程通过归属侧服务回传变更，持久记录/订单不固化承载地址。具体接线、保存确认、版本和幂等、重试/乱序、断线/离线、回服失败仍待协议设计。调用 save 或发送消息不能当成数据库提交完成。已定的协议设计（参与者上下文、唯一写入权、MLD1 确认、故障规则）见[跨服回传与唯一写入权协议](./cross-return-protocol.md)；实现仍未开始。
+这是一条旧实现保存路径，不是 Mistlane 当前已接通的服务链。目标采用“运行位置可迁移，长期数据回到归属 data 保存”的原则；跨服执行进程通过归属侧服务回传变更，持久记录/订单不固化承载地址。具体接线、保存确认、版本与幂等、重试/乱序、断线/离线、回服失败已由[跨服回传与唯一写入权协议](./cross-return-protocol.md)定稿（参与者上下文、唯一写入权、MLD1 确认、故障规则）。调用 save 或发送消息仍不能当成数据库提交完成：其中参与者上下文已进入 `MLC1` 握手，持久化确认协议本身仍未实现。
 
 旧源码定位：`game/Hegel/Scene/SceneLogic.lua::doSwitchHegel`、`game/Data/RPC.lua::requesthegel2hegel`、`game/Common/CService/Server/GateService.lua::handleSwitchHegel`、`game/Hegel/Charactor/Charactor.lua::set/setDirty/save`、`game/World/Charactor/CharactorManager.lua::syncDataFromCross/onSyncDataFromCross`。
 

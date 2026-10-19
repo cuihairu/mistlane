@@ -248,8 +248,26 @@ void core_contracts() {
     must_fail([] { TokenBucket invalid(0, 1); });
     auto context = cross_context("MLC1 1 realm group room");
     equal(context.room, "room");
+    require(context.character.empty() && !context.generation && context.return_room.empty(),
+        "anonymous join gained participant fields");
     must_fail([] { (void)cross_context("MLC1 0 realm group room"); });
     must_fail([] { (void)cross_context("MLC1 1 realm group room extra"); });
+    // A participant declares character, hosting generation and return route
+    // together; every partial declaration is refused.
+    auto participant = cross_context("MLC1 1 realm group room ch hero-7 gen 12 ret home arena r1");
+    equal(participant.character, "hero-7");
+    require(participant.generation == 12, "hosting generation lost");
+    equal(participant.return_realm+"/"+participant.return_group+"/"+participant.return_room, "home/arena/r1");
+    for (const auto& partial : std::vector<std::string>{
+        "MLC1 1 realm group room ch hero",
+        "MLC1 1 realm group room ch hero gen 12",
+        "MLC1 1 realm group room ch hero gen 12 ret home arena",
+        "MLC1 1 realm group room gen 12",
+        "MLC1 1 realm group room ret home arena r1",
+        "MLC1 1 realm group room ch hero gen 0 ret home arena r1",
+        "MLC1 1 realm group room ch hero gen 12 ret home arena r1 extra",
+        "MLC1 1 realm group room ch her!o gen 12 ret home arena r1"})
+        must_fail([&] { (void)cross_context(partial); });
     CrossAdmission admission(1, 1, 1, 1);
     int a = 0, b = 0;
     require(admission.acquire(&a, context, 0).empty(), "first admission failed");
@@ -1175,7 +1193,11 @@ void lua_http() {
         "HOOK stop v1","HOOK shutdown v1","HOOK stop v2","HOOK shutdown v2"}, "Lua lifecycle order changed");
 }
 void cross_admission() {
-    Context c; write(c.path("cross.lua"), "return {message=function(p,c)return c.realm..':'..c.group..'/'..c.room..':'..p end}");
+    Context c; write(c.path("cross.lua"),
+        "return {message=function(p,c)"
+        " local who = c.character and c.character..':'..c.generation..':'"
+        " ..c.route.realm..'/'..c.route.group..'/'..c.route.room or 'anon'"
+        " return c.realm..'('..who..'):'..c.group..'/'..c.room..':'..p end}");
     const auto s0=port(), s1=port(), ingress=port(), ingress2=port();
     auto& shard = c.node("crossServer", s0, {"--script",c.path("cross.lua").string(),"--max-room-sessions","2"});
     c.node("crossServer", s1, {"--script",c.path("cross.lua").string(),"--max-room-sessions","2"});
@@ -1192,19 +1214,27 @@ void cross_admission() {
     {
         auto a=tcp(ingress), b=tcp(ingress);
         equal(join(*a,"a",rooms[0]),"MLC1 OK 1"); equal(join(*b,"b",rooms[0]),"MLC1 OK 1");
-        equal(a->request("x"),"a:g/"+rooms[0]+":x"); equal(b->request("x"),"b:g/"+rooms[0]+":x");
+        equal(a->request("x"),"a(anon):g/"+rooms[0]+":x"); equal(b->request("x"),"b(anon):g/"+rooms[0]+":x");
         for (auto entry : {ingress,ingress2}) {
             auto third=tcp(entry); equal(join(*third,"c",rooms[0]),"MLC1 ERR ROOM_FULL");
         }
         auto other=tcp(ingress); equal(join(*other,"c",rooms[1]),"MLC1 OK 1");
     }
     eventually([&] { auto released=tcp(ingress); return join(*released,"d",rooms[0])=="MLC1 OK 1"; });
+    {
+        // A full participant declaration reaches Lua; every partial one is refused.
+        auto hero=tcp(ingress);
+        equal(hero->request("MLC1 1 a g "+rooms[0]+" ch hero-3 gen 7 ret home arena r1"), "MLC1 OK 1");
+        equal(hero->request("x"), "a(hero-3:7:home/arena/r1):g/"+rooms[0]+":x");
+        auto partial=tcp(ingress);
+        equal(partial->request("MLC1 1 a g "+rooms[0]+" ch hero-3"), "MLC1 ERR INVALID");
+    }
     equal(tcp(ingress)->request("MLC1 2 a g r"),"MLC1 ERR EPOCH");
     equal(tcp(ingress)->request("invalid"),"MLC1 ERR INVALID");
     shard.signal(SIGTERM); require(shard.wait()==0,"shard shutdown failed");
     must_fail([&] { auto failed=tcp(ingress); (void)join(*failed,"a",rooms[0]); });
     auto healthy=tcp(ingress); equal(join(*healthy,"a",rooms[1]),"MLC1 OK 1");
-    equal(healthy->request("ok"),"a:g/"+rooms[1]+":ok");
+    equal(healthy->request("ok"),"a(anon):g/"+rooms[1]+":ok");
 }
 void probe_control() {
     Context c;

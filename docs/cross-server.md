@@ -39,6 +39,8 @@ Run each command in a separate terminal. Limits are illustrative, not measured c
 
 The first framed payload is ASCII: MLC1 1 realm-a group-1 room-42. Fields are protocol marker, route epoch, source realm, cross group and room. Identifiers contain 1–64 ASCII letters, digits, underscores or hyphens; the handshake is at most 256 bytes. Epoch is a positive decimal integer up to 1000000000.
 
+An optional participant context follows the room: `ch hero-7 gen 12 ret home arena r1` names the character identity, its hosting generation and the return route (realm/group/room). The three parts are declared together or not at all — any partial declaration is INVALID — and anonymous five-field joins keep working. Lua receives the participant fields as `character`, `generation` and a nested `route` table (see [Lua lifecycle](./lua)); they are routing metadata, not authentication, and durable character changes additionally require the [cross return protocol](./cross-return-protocol).
+
 cross admits and forwards the handshake to the selected crossServer. The crossServer performs final admission and returns MLC1 OK 1. Subsequent payloads reach Lua message with the context as its second argument. Failures return MLC1 ERR followed by INVALID, EPOCH, ROOM_FULL, GROUP_FULL or SHARD_FULL (or UPSTREAM for an incompatible crossServer response), then close. Transport errors and global connection admission can close without a response. Successful admission is neither authentication nor durability.
 
 | Option | Default | Meaning |

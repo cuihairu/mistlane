@@ -17,6 +17,7 @@
 #include <boost/redis/ignore.hpp>
 #include <boost/redis/src.hpp>
 #include <limits>
+#include <utility>
 #include <vector>
 #include <cstdlib>
 #include <cmath>
@@ -206,7 +207,7 @@ std::optional<std::string> LuaService::message(std::string_view payload, const C
     if (!lua_isfunction(state_, -1)) throw std::runtime_error("service.message is required");
     lua_pushlstring(state_, payload.data(), payload.size());
     // Game sessions carry their identity; cross sessions add their routing fields.
-    lua_createtable(state_, 0, 5);
+    lua_createtable(state_, 0, 9);
     if (context) {
         if (context->session) {
             lua_pushinteger(state_, static_cast<lua_Integer>(context->session));
@@ -221,6 +222,23 @@ std::optional<std::string> LuaService::message(std::string_view payload, const C
             lua_pushlstring(state_, context->group.data(), context->group.size()); lua_setfield(state_, -2, "group");
             lua_pushlstring(state_, context->room.data(), context->room.size()); lua_setfield(state_, -2, "room");
             lua_pushinteger(state_, context->epoch); lua_setfield(state_, -2, "epoch");
+        }
+        if (!context->character.empty()) {
+            // Participant context (cross return protocol): identity, hosting
+            // generation and the nested return route; absent for anonymous joins.
+            lua_pushlstring(state_, context->character.data(), context->character.size());
+            lua_setfield(state_, -2, "character");
+            lua_pushinteger(state_, static_cast<lua_Integer>(context->generation));
+            lua_setfield(state_, -2, "generation");
+            lua_createtable(state_, 0, 3);
+            const std::pair<const std::string*, const char*> route[] = {
+                {&context->return_realm, "realm"}, {&context->return_group, "group"},
+                {&context->return_room, "room"}};
+            for (const auto& field : route) {
+                lua_pushlstring(state_, field.first->data(), field.first->size());
+                lua_setfield(state_, -2, field.second);
+            }
+            lua_setfield(state_, -2, "route");
         }
     }
     check(protected_call(state_, 2, 1, guard.top+1));

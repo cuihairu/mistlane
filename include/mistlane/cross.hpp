@@ -8,13 +8,31 @@
 #include <string_view>
 #include <vector>
 namespace mistlane {
-struct CrossContext { std::string realm, group, room; unsigned epoch = 0; std::uint64_t session = 0, request = 0; };
+struct CrossContext {
+    std::string realm, group, room;
+    unsigned epoch = 0;
+    std::uint64_t session = 0, request = 0;
+    // Participant context (cross return protocol): a join declares all of it
+    // or none — a character without a hosting generation or a return route
+    // names nothing the home side could fence or route back to.
+    std::string character, return_realm, return_group, return_room;
+    std::uint64_t generation = 0;
+};
 inline CrossContext cross_context(std::string_view payload) {
     if (payload.size() > 256) throw std::invalid_argument("INVALID");
     std::istringstream in{std::string(payload)};
     std::string magic, epoch, extra;
     CrossContext c;
-    if (!(in >> magic >> epoch >> c.realm >> c.group >> c.room) || (in >> extra) || magic != "MLC1")
+    if (!(in >> magic >> epoch >> c.realm >> c.group >> c.room)) throw std::invalid_argument("INVALID");
+    // Optional trailing participant context: "ch <id> gen <n> ret <realm> <group> <room>".
+    std::string ch_tag, gen, gen_tag, ret_tag;
+    if ((in >> ch_tag) && !(in >> c.character >> gen_tag >> gen >> ret_tag
+            >> c.return_realm >> c.return_group >> c.return_room))
+        throw std::invalid_argument("INVALID");
+    // Keywords must name the three participant parts; a partial parse already
+    // threw above, so a non-empty tag means the full nine tokens parsed.
+    if ((in >> extra) || magic != "MLC1"
+            || (!ch_tag.empty() && (ch_tag != "ch" || gen_tag != "gen" || ret_tag != "ret")))
         throw std::invalid_argument("INVALID");
     auto identifier = [](const std::string& s) {
         if (s.empty() || s.size() > 64) return false;
@@ -24,14 +42,25 @@ inline CrossContext cross_context(std::string_view payload) {
         return true;
     };
     if (!identifier(c.realm) || !identifier(c.group) || !identifier(c.room)) throw std::invalid_argument("INVALID");
+    if (!c.character.empty() && (!identifier(c.character) || !identifier(c.return_realm)
+            || !identifier(c.return_group) || !identifier(c.return_room)))
+        throw std::invalid_argument("INVALID");
+    auto decimal = [](const std::string& s, std::uint64_t& out) {
+        if (s.empty()) return false;
+        std::uint64_t n = 0;
+        for (unsigned char ch : s) {
+            if (ch < '0' || ch > '9') return false;
+            n = n*10 + ch-'0';
+            if (n > 1000000000) return false;
+        }
+        if (!n) return false;
+        out = n;
+        return true;
+    };
     std::uint64_t n = 0;
-    for (unsigned char ch : epoch) {
-        if (ch < '0' || ch > '9') throw std::invalid_argument("INVALID");
-        n = n*10 + ch-'0';
-        if (n > 1000000000) throw std::invalid_argument("INVALID");
-    }
-    if (!n) throw std::invalid_argument("INVALID");
+    if (!decimal(epoch, n)) throw std::invalid_argument("INVALID");
     c.epoch = static_cast<unsigned>(n);
+    if (!c.character.empty() && !decimal(gen, c.generation)) throw std::invalid_argument("INVALID");
     return c;
 }
 // FNV-1a is fixed across processes/platforms; realm intentionally does not affect room affinity.
