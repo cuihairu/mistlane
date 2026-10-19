@@ -972,6 +972,8 @@ void transport_identity() {
         "--service-name", "game-1"});
     auto& open_node = c.spawn({self().string(), "--role", "gameServer", "--listen", endpoint(open_server),
         "--script", c.path("correlate.lua").string()});
+    node.ready("ready gameServer " + endpoint(gameServer));
+    open_node.ready("ready gameServer " + endpoint(open_server));
     c.node("gateway", gateway, {"--upstream", endpoint(gameServer),
         "--upstream-token", "s3cret", "--service-name", "gwy-1"});
     c.node("gateway", no_token, {"--upstream", endpoint(gameServer)});
@@ -1436,8 +1438,9 @@ void coordinator_placement() {
              token_registry = port(), token_member = port(), token_login = port(),
              wrong_login = port(), dead_login = port();
     auto& coord = c.node("coordinator", registry, {"--metrics-listen", endpoint(metrics)});
-    c.spawn({self().string(), "--role", "gameServer", "--listen", endpoint(member_listen),
+    auto& member = c.spawn({self().string(), "--role", "gameServer", "--listen", endpoint(member_listen),
              "--script", c.path("echo.lua").string(), "--coordinator", endpoint(registry)});
+    member.ready("ready gameServer " + endpoint(member_listen));
     eventually([&] { return members(metrics) == 1; }, 5s, "the member never registered");
     c.node("login", login, {"--script", c.path("place.lua").string(), "--coordinator", endpoint(registry)});
     // Registration precedes the first readiness heartbeat, so the ask waits
@@ -1450,9 +1453,10 @@ void coordinator_placement() {
     require(members(metrics) == 1, "login registered itself as a member");
     // A tokened coordinator gates the lookup behind MLS1.
     auto& token_coord = c.node("coordinator", token_registry, {"--service-token", "s3cret"});
-    c.spawn({self().string(), "--role", "gameServer", "--listen", endpoint(token_member),
+    auto& token_member_node = c.spawn({self().string(), "--role", "gameServer", "--listen", endpoint(token_member),
              "--script", c.path("echo.lua").string(), "--coordinator", endpoint(token_registry),
              "--upstream-token", "s3cret", "--service-name", "gs-token"});
+    token_member_node.ready("ready gameServer " + endpoint(token_member));
     c.node("login", token_login, {"--script", c.path("place.lua").string(),
         "--coordinator", endpoint(token_registry), "--upstream-token", "s3cret", "--service-name", "login-1"});
     c.node("login", wrong_login, {"--script", c.path("place.lua").string(),
@@ -1479,6 +1483,7 @@ void transport_push() {
     auto& node = c.spawn({self().string(), "--role", "gameServer", "--listen", endpoint(gameServer),
         "--script", c.path("push.lua").string(),
         "--listener", "ws://127.0.0.1:"+std::to_string(ws_port)});
+    node.ready("ready gameServer " + endpoint(gameServer));
     c.node("gateway", gateway, {"--upstream", endpoint(gameServer)});
     const auto send_frame = [](RawSocket& raw, std::string_view payload) {
         std::string frame(4, '\0');
