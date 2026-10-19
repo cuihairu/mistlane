@@ -15,7 +15,7 @@ find_package(CURL 8.23 CONFIG REQUIRED)
 find_package(Lua 5.5.1 REQUIRED)
 find_package(crashpad CONFIG REQUIRED)
 find_package(prometheus-cpp CONFIG REQUIRED)
-add_library(mistlane_core src/lua_service.cpp src/diagnostics.cpp src/api.cpp)
+add_library(mistlane_core src/lua_service.cpp src/diagnostics.cpp src/api.cpp src/entity_lua.cpp)
 target_include_directories(mistlane_core PUBLIC include)
 target_include_directories(mistlane_core SYSTEM PUBLIC ${LUA_INCLUDE_DIR})
 target_link_libraries(mistlane_core PUBLIC
@@ -65,6 +65,7 @@ if(BUILD_TESTING)
   foreach(test_case IN ITEMS core.contracts contract.tool sproto.golden rpc.lifecycle core.roles transport.tcp transport.websocket transport.http
       transport.push transport.correlate transport.identity transport.multiplex coordinator.registry
       entity.envelope
+      entity.properties
       coordinator.placement coordinator.routes coordinator.migration.commit coordinator.migration.abort
       coordinator.migration.recover coordinator.migration.stale coordinator.migration.order lua.lifecycle lua.http
       api.signature api.tamper api.replay api.acceptance api.ownership api.wire api.http

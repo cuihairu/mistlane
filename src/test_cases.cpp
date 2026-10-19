@@ -8,6 +8,8 @@
 #include "mistlane/entity_dispatch.hpp"
 #include "mistlane/entity_envelope.hpp"
 #include "mistlane/entity_runtime.hpp"
+#include "mistlane/entity_property.hpp"
+#include "mistlane/entity_lua.hpp"
 #include "mistlane/record.hpp"
 #include "mistlane/migration.hpp"
 #include "mistlane/http_client.hpp"
@@ -23,6 +25,7 @@
 #include <netinet/in.h>
 #include <sys/ioctl.h>
 #include <openssl/evp.h>
+#include <lua.hpp>
 
 namespace mistlane::test {
 void rpc_lifecycle() {
@@ -127,6 +130,151 @@ void entity_envelope() {
     require(runtime.deliver(client_origin, 14).ok, "zero hosting generation was fenced");
     std::cout << "entity.envelope fence: internal generation asserted, zero bypasses [PASS]\n";
     std::cout << "entity.envelope fence_before_slot: STALE does not consume correlation [PASS]\n";
+}
+// Controlled property store over the contract descriptor (item 102, property
+// half): defaults from the descriptor, typed writes through the dispatcher's
+// type rules, a read-only reserved proxy for retired ids, an audience view
+// for client surfaces, and a Lua binding that exposes the same store.
+void entity_properties() {
+    const EntityContract contract(R"(<Contracts><Types>
+        <Item><itemId id="0" type="UINT32"/><count id="1" type="UINT32" default="2"/></Item>
+        </Types>
+        <Entity name="Avatar" id="1">
+          <Properties>
+            <level id="1" type="UINT16" default="1" flags="OWN_CLIENT"/>
+            <name id="2" type="STRING" flags="OWN_CLIENT"/>
+            <gold id="3" type="INT32" default="-5" flags="ALL_CLIENTS"/>
+            <active id="4" type="BOOL" default="true"/>
+            <bag id="5" type="Item"/>
+            <tags id="6" type="ARRAY" of="UINT32"/>
+            <blob id="7" type="BYTES"/>
+          </Properties>
+          <Reserved><Property id="9"/></Reserved>
+        </Entity>
+        <Entity name="Monster" id="2">
+          <Properties><hp id="1" type="UINT32" flags="ALL_CLIENTS"/></Properties>
+        </Entity></Contracts>)");
+    PropertyStore store(contract, 1);
+    // Defaults come from the descriptor: explicit defaults win, otherwise the
+    // type rules apply (zero/false/empty string, empty array, per-field struct).
+    const auto* level = store.get("level");
+    require(level && std::get<std::int64_t>(level->data) == 1, "explicit UINT16 default lost");
+    require(store.get("name") && std::get<std::string>(store.get("name")->data).empty(), "STRING default is not empty");
+    require(std::get<std::int64_t>(store.get("gold")->data) == -5, "negative INT32 default lost");
+    require(std::get<bool>(store.get("active")->data) == true, "BOOL default lost");
+    const auto* bag = store.get("bag");
+    require(bag && std::get<std::int64_t>(std::get<EntityObject>(bag->data).at("count").data) == 2 &&
+            std::get<std::int64_t>(std::get<EntityObject>(bag->data).at("itemId").data) == 0,
+            "struct default did not fill per-field defaults");
+    require(store.get("tags") && std::get<EntityArray>(store.get("tags")->data).empty(), "ARRAY default is not empty");
+    require(std::get<std::string>(store.get("blob")->data).empty(), "BYTES default is not empty");
+    std::cout << "entity.properties defaults: descriptor-driven [PASS]\n";
+    // Controlled writes: every value passes the dispatcher's type rules.
+    require(store.set("level", std::int64_t{65535}), "valid UINT16 write refused");
+    require(!store.set("level", std::int64_t{65536}) && store.error().find("UINT16") != std::string::npos,
+            "UINT16 overflow accepted: "+store.error());
+    require(!store.set("level", std::string("oops")) && store.error().find("level") != std::string::npos,
+            "kind mismatch accepted");
+    require(!store.set("nope", std::int64_t{1}) && store.error().find("not a declared property") != std::string::npos,
+            "unknown property accepted");
+    require(!store.set("tags", std::string("not-an-array")), "scalar into ARRAY accepted");
+    require(store.set("tags", EntityArray{std::int64_t{0}, std::int64_t{1}, std::int64_t{2}}),
+            "valid array write refused");
+    require(!store.set("tags", EntityArray{std::int64_t{0}, std::string("x")}),
+            "wrong array element accepted");
+    require(store.set("bag", EntityObject{{"itemId", std::int64_t{7}}, {"count", std::int64_t{3}}}),
+            "valid struct write refused");
+    require(!store.set("bag", EntityObject{{"itemId", std::int64_t{7}}}), "incomplete struct accepted");
+    require(!store.set("bag", EntityObject{{"itemId", std::int64_t{7}}, {"count", std::int64_t{3}}, {"extra", std::int64_t{1}}}),
+            "extra struct field accepted");
+    require(std::get<EntityArray>(store.get("tags")->data).size() == 3, "refused writes must not land");
+    std::cout << "entity.properties typed writes: range/shape/unknown refusals [PASS]\n";
+    // Read-only reserved proxy: retired ids stay addressable, never writable.
+    require(store.reserved(9), "reserved id not reported");
+    require(!store.reserved(1), "live id reported as reserved");
+    require(store.by_id(9) == nullptr, "reserved id served a value");
+    require(!store.set_by_id(9, std::int64_t{1}) && store.error().find("read-only") != std::string::npos,
+            "write to a reserved id accepted: "+store.error());
+    require(store.by_id(1) == store.get("level"), "id-addressed access disagrees with name access");
+    require(store.set_by_id(1, std::int64_t{42}), "declared id write refused");
+    require(std::get<std::int64_t>(store.get("level")->data) == 42, "id-addressed write lost");
+    require(!store.set_by_id(77, std::int64_t{1}), "unknown id write accepted");
+    std::cout << "entity.properties reserved proxy: addressable, read-only [PASS]\n";
+    // Audience view: OWN_CLIENT+ALL_CLIENTS for the owner, ALL_CLIENTS for
+    // others, SERVER_ONLY for neither.
+    const auto owner = store.client_view(true);
+    const auto guest = store.client_view(false);
+    require(owner.count("level") == 1 && owner.count("name") == 1 && owner.count("gold") == 1,
+            "owner view lost a client-visible property");
+    require(owner.count("active") == 0 && owner.count("bag") == 0 && owner.count("tags") == 0 &&
+            owner.count("blob") == 0, "SERVER_ONLY properties leaked into the owner view");
+    require(guest.count("gold") == 1 && guest.count("level") == 0 && guest.count("name") == 0,
+            "guest view crossed the OWN_CLIENT boundary");
+    std::cout << "entity.properties audience view: owner/guest filtering [PASS]\n";
+    // One runtime for every entity type: Monster shares the machinery.
+    PropertyStore monster(contract, 2);
+    require(std::get<std::int64_t>(monster.get("hp")->data) == 0, "Monster default lost");
+    require(monster.set("hp", std::int64_t{100}), "Monster write refused");
+    require(std::get<std::int64_t>(store.get("level")->data) == 42, "stores share state");
+    require(store.set("level", std::int64_t{50}), "write refused");
+    require(std::get<std::int64_t>(monster.get("hp")->data) == 100, "Avatar write reached Monster");
+    bool unknown_type = false;
+    try { PropertyStore(contract, 99); } catch (const std::invalid_argument&) { unknown_type = true; }
+    require(unknown_type, "unknown entity type id was accepted");
+    std::cout << "entity.properties per-type stores: Avatar/Monster share one runtime [PASS]\n";
+    // Lua binding: the same store, same rules, table-style access.
+    lua_State* L = luaL_newstate();
+    require(L != nullptr, "cannot open Lua for the property binding");
+    luaL_openlibs(L);
+    require(push_entity_properties(L, &store), "property binding refused a bindable store");
+    lua_setglobal(L, "props");
+    const auto eval = [](lua_State* state, const char* code) {
+        if (luaL_dostring(state, code) != LUA_OK) {
+            const char* message = lua_tostring(state, -1);
+            lua_pop(state, 1);
+            return std::string("ERR:")+std::string(message ? message : "unknown Lua error");
+        }
+        std::string result = "nil";
+        if (lua_isboolean(state, -1)) result = lua_toboolean(state, -1) ? "true" : "false";
+        else if (lua_isinteger(state, -1)) result = std::to_string(lua_tointeger(state, -1));
+        else if (lua_isstring(state, -1)) { std::size_t n=0; const char* p=lua_tolstring(state,-1,&n); result.assign(p, n); }
+        lua_pop(state, 1);
+        return result;
+    };
+    const auto first_read = eval(L, "return props.level");
+    require(first_read == "50", "Lua read did not see the C++ value: got "+first_read);
+    require(eval(L, "props.level = 5; return props.level") == "5", "Lua write did not stick");
+    require(std::get<std::int64_t>(store.get("level")->data) == 5, "Lua write missed the store");
+    require(eval(L, "return props.gold") == "-5", "negative default misread from Lua");
+    require(eval(L, "props.active = false; return props.active") == "false", "BOOL round trip failed");
+    require(eval(L, "props.name = 'hero'; return props.name") == "hero", "STRING round trip failed");
+    require(eval(L, "props.tags = {1, 2, 3}; return #props.tags") == "3", "array write did not land");
+    require(std::get<EntityArray>(store.get("tags")->data).size() == 3, "Lua array write missed the store");
+    require(eval(L, "props.bag = {itemId = 7, count = 9}; return props.bag.count") == "9", "struct write did not land");
+    require(eval(L, "props.level = 70000").find("UINT16") != std::string::npos, "Lua range violation silenced");
+    require(eval(L, "props.missing = 1").find("not a declared property") != std::string::npos, "Lua unknown write silenced");
+    require(eval(L, "return props.missing").find("not a declared property") != std::string::npos, "Lua unknown read silenced");
+    require(eval(L, "props.tags = {1, 'x'}").find("tags") != std::string::npos, "Lua array element violation silenced");
+    require(eval(L, "props.bag = {itemId = 7}").find("bag") != std::string::npos, "Lua struct shape violation silenced");
+    require(eval(L, "props.names = {}").find("read-only") != std::string::npos, "method key was writable");
+    require(eval(L, "return #props:names()") == "7", "names() lost a property");
+    require(eval(L, "return props:reserved()[1]") == "9", "reserved() lost the retired id");
+    require(eval(L, "return props:view(true).level") == "5", "owner view lost a visible property");
+    require(eval(L, "return props:view(true).gold") == "-5", "owner view lost ALL_CLIENTS");
+    require(eval(L, "local v = props:view(true); return v.active") == "nil", "owner view leaked a SERVER_ONLY property");
+    require(eval(L, "local v = props:view(false); return v.gold") == "-5", "guest view lost an ALL_CLIENTS property");
+    require(eval(L, "local v = props:view(false); return v.level") == "nil", "guest view crossed OWN_CLIENT");
+    lua_close(L);
+    std::cout << "entity.properties lua binding: table access, shared refusals, views [PASS]\n";
+    // A property named like a binding method key must be refused at push time,
+    // not silently shadowed.
+    const EntityContract clash(R"(<Contracts><Entity name="Weird" id="1"><Properties><view id="1" type="UINT16"/></Properties></Entity></Contracts>)");
+    PropertyStore weird(clash, 1);
+    lua_State* W = luaL_newstate();
+    require(W != nullptr, "cannot open Lua for the clash probe");
+    require(!push_entity_properties(W, &weird), "a method-key property was silently shadowed");
+    lua_close(W);
+    std::cout << "entity.properties binding clash: refused at push [PASS]\n";
 }
 namespace {
 constexpr std::string_view echo = "return {message=function(p) return p end}";

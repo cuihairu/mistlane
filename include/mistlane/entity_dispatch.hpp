@@ -63,6 +63,9 @@ public:
 private:
  static EntityDispatchResult fail(EntityError error){EntityDispatchResult r;r.error=error;return r;}
  static std::string key(const std::string& e,const std::string& s,unsigned id){return e+"/"+s+"/"+std::to_string(id);}
+public:
+ // One type rule for every surface: wire arguments, responses and controlled
+ // property writes all share this validation.
  static bool value_valid(const std::string& type,const std::string& of,const EntityValue& value,
                          const std::map<std::string,ContractArgs>& structs){
    if(type=="ARRAY"){
@@ -83,6 +86,7 @@ private:
    if(spec==structs.end()||!object||object->size()!=spec->second.size())return false;
    for(const auto& f:spec->second){auto i=object->find(f.name);if(i==object->end()||!value_valid(f.type,f.of,i->second,structs))return false;}return true;
  }
+private:
  static bool valid(const ContractArgs& schema,const EntityValues& values,const std::map<std::string,ContractArgs>& structs){
    if(values.size()!=schema.size()) return false;
    for(const auto& f:schema){auto i=values.find(f.name);if(i==values.end())return false;
