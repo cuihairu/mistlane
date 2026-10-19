@@ -28,18 +28,58 @@ local full = {
   },
 }
 local empty = { level = 0, inventory = { capacity = 0, items = {} } }
+-- INT64 vectors: a negative beyond 2^53 (unrepresentable as a JS Number) and a
+-- positive 2^53+1, both exercising the 64-bit integer wire form.
+local wide_negative = { exp = -9007199254740993 }
+local wide_positive = { level = 65535, exp = 9007199254740993 }
 
 if MISTLANE_SPROTO_MODE == "parser" then
   print("UPSTREAM_SCHEMA_PARSE_OK Avatar sproto-bytes=" .. #packed_schema)
 elseif MISTLANE_SPROTO_MODE == "golden" then
   local full_bytes = sp:encode("Avatar", full)
   local empty_bytes = sp:encode("Avatar", empty)
+  local negative_bytes = sp:encode("Avatar", wide_negative)
+  local positive_bytes = sp:encode("Avatar", wide_positive)
   print("STANDARD_SPROTO_GOLDEN full=" .. hex(full_bytes))
   print("STANDARD_SPROTO_GOLDEN empty=" .. hex(empty_bytes))
+  print("STANDARD_SPROTO_GOLDEN int64_negative=" .. hex(negative_bytes))
+  print("STANDARD_SPROTO_GOLDEN int64_positive=" .. hex(positive_bytes))
   assert(hex(full_bytes) == "0400010000000000000004000000ffff00002e00000002000000000004000000ffff00001c000000060000000200020002000e00000002000000040004000000ffffff7f04000000ffffff7f",
     "full Avatar standard sproto golden changed")
   assert(hex(empty_bytes) == "03000100020000000a00000002000200000000000000",
     "empty Avatar standard sproto golden changed")
+  assert(hex(negative_bytes) == "02000700000008000000ffffffffffffdfff",
+    "negative INT64 standard sproto golden changed")
+  assert(hex(positive_bytes) == "0400010000000300000004000000ffff0000080000000100000000002000",
+    "positive INT64 standard sproto golden changed")
+  -- Absent fields are simply not decoded: sproto has no wire defaults, so the
+  -- contract's definition-time defaults stay an application concern.
+  local without_exp = sp:decode("Avatar", sp:encode("Avatar", { level = 1 }))
+  assert(without_exp.exp == nil and without_exp.level == 1, "absent INT64 did not decode as missing")
+  print("STANDARD_SPROTO_GOLDEN defaults: absent fields decode missing [PASS]")
+  -- A wire tag outside the schema is skipped, never misdelivered (upstream
+  -- sproto.c findtag miss continues): count 2, a gap word landing on tag 5
+  -- (past exp id 4), then an in-band word that decodes into no field.
+  local unknown = sp:decode("Avatar", "\x02\x00\x0b\x00\x02\x00")
+  assert(unknown ~= nil and next(unknown) == nil, "unknown wire tag was not skipped")
+  print("STANDARD_SPROTO_GOLDEN unknown_tag: skipped, nothing decoded [PASS]")
+  -- Locked upstream decoder defect, reproduced not hidden: todword() builds a
+  -- dword with int arithmetic, so a low dword whose top byte has the sign bit
+  -- set turns negative and sign-extends to size_t. ORing that with hi<<32 pins
+  -- bits 32-63 to all ones, so any INT64 with bit 31 of its low 32 bits set
+  -- decodes wrong. The encoder is honest; only the decoder is broken, and the
+  -- bug is live on upstream master as of 2026-10-20 (same todword).
+  -- The assert pins the return so a future vendored fix flips it loudly.
+  assert(sp:decode("Avatar", negative_bytes).exp == -1,
+    "upstream negative INT64 decode behaviour changed")
+  print("STANDARD_SPROTO_GOLDEN int64_negative decode=-1 (upstream todword defect, locked) [PASS]")
+  -- Malformed inputs fail closed: short header, short tag block, truncated
+  -- length-prefixed value.
+  for index, broken in ipairs({ "", full_bytes:sub(1, 3), full_bytes:sub(1, #full_bytes - 1), "\x03\x00\x01\x00" }) do
+    local ok, result = pcall(sp.decode, sp, "Avatar", broken)
+    assert(not ok or result == nil, "malformed buffer " .. index .. " decoded")
+  end
+  print("STANDARD_SPROTO_GOLDEN malformed: short/truncated buffers decode nil [PASS]")
 elseif MISTLANE_SPROTO_MODE == "sdk-vector" then
   local bytes = sp:encode("Avatar", { level = 1 })
   print("CPP_SPROTO_SDK_GOLDEN level=1 hex=" .. hex(bytes))
@@ -54,7 +94,17 @@ elseif MISTLANE_SPROTO_MODE == "roundtrip" then
   assert(decoded.inventory.items[1].itemId == 0 and decoded.inventory.items[1].count == 0)
   assert(decoded.inventory.items[2].itemId == 2147483647 and decoded.inventory.items[2].count == 1)
   assert(sp:encode("Avatar", decoded) == bytes)
-  print("LUA_SPROTO_ROUNDTRIP_OK encode→decode→encode bytes=" .. #bytes)
+  -- Only the positive vector round trips here: the upstream decoder defect
+  -- (todword int arithmetic, see the golden mode) breaks decode of INT64
+  -- values whose low 32 bits have bit 31 set, so wide_negative round trips
+  -- only through mistlane's independent codecs, not through vendored sproto.
+  for _, wide in ipairs({ wide_positive }) do
+    local wide_bytes = sp:encode("Avatar", wide)
+    local wide_decoded = sp:decode("Avatar", wide_bytes)
+    assert(wide_decoded.exp == wide.exp, "INT64 value did not round trip exactly")
+    assert(sp:encode("Avatar", wide_decoded) == wide_bytes, "INT64 re-encode changed the wire bytes")
+  end
+  print("LUA_SPROTO_ROUNDTRIP_OK encode→decode→encode bytes=" .. #bytes .. " int64=" .. #sp:encode("Avatar", wide_negative) .. "/" .. #sp:encode("Avatar", wide_positive))
 elseif MISTLANE_SPROTO_MODE == "dispatch" then
   local bytes = sp:request_encode("E1_Server_2", { account = 1234 })
   local decoded = sp:request_decode("E1_Server_2", bytes)
