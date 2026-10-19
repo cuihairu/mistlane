@@ -27,6 +27,11 @@ void coordinator_migration_abort();
 void coordinator_migration_recover();
 void coordinator_migration_stale();
 void coordinator_migration_order();
+void api_signature();
+void api_tamper();
+void api_replay();
+void api_acceptance();
+void api_ownership();
 void lua_lifecycle();
 void lua_http();
 void cross_admission();
@@ -57,7 +62,7 @@ int run_tests(int argc, char** argv) {
         if (key=="--help") {
             std::cout << "mistlane test [--suite NAME | --case NAME] [--list] [--keep-temp]\n"
                 "mistlane test --script FILE [--script FILE ...] [--case SUITE.CASE] [--timeout-ms N]\n"
-                "Suites: core, transport, lua, cross, probe, scaffold, config, cli, crashpad, redis, mysql.\n"
+                "Suites: core, contract, transport, coordinator, api, lua, cross, probe, scaffold, config, cli, crashpad, redis, mysql.\n"
                 "Default 'all' runs dependency-free suites; Redis/MySQL/Crashpad are opt-in.\n"
                 "  --crashpad-handler FILE  Handler used by the crashpad suite\n"
                 "  --list                   List matching cases without running them\n"
@@ -107,6 +112,11 @@ int run_tests(int argc, char** argv) {
         {"coordinator.migration.recover","coordinator",test::coordinator_migration_recover},
         {"coordinator.migration.stale","coordinator",test::coordinator_migration_stale},
         {"coordinator.migration.order","coordinator",test::coordinator_migration_order},
+        {"api.signature","api",test::api_signature},
+        {"api.tamper","api",test::api_tamper},
+        {"api.replay","api",test::api_replay},
+        {"api.acceptance","api",test::api_acceptance},
+        {"api.ownership","api",test::api_ownership},
         {"lua.lifecycle","lua",test::lua_lifecycle},
         {"lua.http","lua",test::lua_http},
         {"cross.admission","cross",test::cross_admission},

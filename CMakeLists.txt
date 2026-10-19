@@ -15,7 +15,7 @@ find_package(CURL 8.23 CONFIG REQUIRED)
 find_package(Lua 5.5.1 REQUIRED)
 find_package(crashpad CONFIG REQUIRED)
 find_package(prometheus-cpp CONFIG REQUIRED)
-add_library(mistlane_core src/lua_service.cpp src/diagnostics.cpp)
+add_library(mistlane_core src/lua_service.cpp src/diagnostics.cpp src/api.cpp)
 target_include_directories(mistlane_core PUBLIC include)
 target_include_directories(mistlane_core SYSTEM PUBLIC ${LUA_INCLUDE_DIR})
 target_link_libraries(mistlane_core PUBLIC
@@ -28,7 +28,7 @@ target_compile_options(mistlane_net PRIVATE -Wall -Wextra -Wpedantic)
 file(READ "${CMAKE_CURRENT_SOURCE_DIR}/lua/mistlane/min_heap.lua" MISTLANE_HEAP_SOURCE)
 configure_file(src/test_resources.hpp.in generated/test_resources.hpp @ONLY)
 add_executable(mistlane src/main.cpp src/scaffold.cpp src/contract_tool.cpp src/cli_client.cpp src/bot.cpp
-  src/selftest.cpp src/test_cases.cpp src/test_databases.cpp src/lua_tests.cpp)
+  src/selftest.cpp src/test_cases.cpp src/test_api.cpp src/test_databases.cpp src/lua_tests.cpp)
 target_include_directories(mistlane PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/generated")
 target_link_libraries(mistlane PRIVATE mistlane_net mistlane_http Boost::mysql)
 target_compile_options(mistlane PRIVATE -Wall -Wextra -Wpedantic)
@@ -65,6 +65,7 @@ if(BUILD_TESTING)
       transport.push transport.correlate transport.identity transport.multiplex coordinator.registry
       coordinator.placement coordinator.routes coordinator.migration.commit coordinator.migration.abort
       coordinator.migration.recover coordinator.migration.stale coordinator.migration.order lua.lifecycle lua.http
+      api.signature api.tamper api.replay api.acceptance api.ownership
       cross.admission cross.record cross.return.queue probe.control scaffold.init config.file cli.bot)
     string(REPLACE "." "_" test_name "${test_case}")
     add_test(NAME mistlane_${test_name} COMMAND mistlane test --case "${test_case}")

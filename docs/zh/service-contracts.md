@@ -51,8 +51,8 @@ apiServer 已实现且保持现状；本节记录其契约边界。
 | 传输 | 默认 HTTP/HTTPS；按现有监听模型可选 WS/WSS message 监听 |
 | 对端 | 入向：平台/运营系统。它不在玩家路径上，也不得成为隐蔽的游戏消息路由器 |
 | Lua 面 | `http(request)` 带 `before_request`/`after_request`/`on_error` 钩子；升级的监听上有 WS 生命周期钩子 |
-| 身份 | 当前为可信网络；`MLS1` 不适用于 HTTP。平台回调需要认证决策（签名/秘钥）才能上生产——本页不改变这一点 |
-| 幂等 | 持久、幂等的回调受理（平台回调条目）仍未实现；今天的处理器是请求作用域的 |
+| 身份 | 当前为可信网络；`MLS1` 不适用于 HTTP。平台回调认证决策已定为类型化 `MLA1` 契约（规范字节 + `HMAC-SHA256` + 防重放窗，[协议分析](./protocol-analysis.md#external-api-surface-first-slice)）；接入 HTTP 栈与凭据加载/轮换仍未做 |
+| 幂等 | 类型化受理语义已定：`(audience, principal, realm, character, idempotency_key)` 的 create-or-read，区分 `Inserted`/`Existing`/`Conflict`，附只读归属查询。在线处理器仍是请求作用域（未接线）；持久受理后端仍未实现 |
 | 寻址 | 触达玩家走角色的归属服务，绝不固化进程地址；apiServer 没有注册表成员身份，也不做承载决策 |
 
 ## 此处刻意不定的事项

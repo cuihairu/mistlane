@@ -23,6 +23,13 @@ struct MigrationRoute {
     std::uint64_t generation = 0;
     bool operator==(const MigrationRoute&) const = default;
 };
+enum class HomeOwnershipState { Active, Draining, Fenced };
+struct HomeOwnership {
+    std::optional<MigrationOwner> owner;
+    std::uint64_t generation = 0;
+    HomeOwnershipState state = HomeOwnershipState::Active;
+    bool operator==(const HomeOwnership&) const = default;
+};
 inline bool valid_migration_owner(const MigrationOwner& owner) {
     if (!record_identifier(owner.instance) || !record_identifier(owner.scene)) return false;
     if (owner.scope.kind == MigrationScope::Kind::Realm)
@@ -107,6 +114,19 @@ public:
       : home_(home), data_(std::move(checkpoint)) {}
     Snapshot snapshot() const { return data_; }
     const MigrationRoute& route() const { return data_.route; }
+    // Home facts, NOT the directory route. Querying never reserves a generation
+    // or changes a lease. A fenced gap has no owner until destination ACK.
+    std::optional<HomeOwnership> lookup_ownership(const MigrationKey& key) const {
+        if (key != data_.key) return std::nullopt;
+        const auto* row = entry(data_.current);
+        if (row && !terminal(row->state)) {
+            if (row->home_fenced && !row->destination_ready)
+                return HomeOwnership{std::nullopt, row->token.generation, HomeOwnershipState::Fenced};
+            if (!row->home_fenced)
+                return HomeOwnership{data_.home_owner.owner, data_.home_owner.generation, HomeOwnershipState::Draining};
+        }
+        return HomeOwnership{data_.home_owner.owner, data_.home_owner.generation, HomeOwnershipState::Active};
+    }
     const Entry* entry(std::string_view id) const {
         const auto it = data_.journal.find(std::string(id));
         return it == data_.journal.end() ? nullptr : &it->second;

@@ -51,8 +51,8 @@ apiServer is implemented and keeps its shape; this section records its contract 
 | Transport | HTTP/HTTPS by default; optional WS/WSS message listeners per the existing listener model |
 | Peers | Platform/operator systems inbound. It is not on the player path and must not be a hidden game-message router |
 | Lua surface | `http(request)` with `before_request`/`after_request`/`on_error` hooks; WS lifecycle hooks on upgraded listeners |
-| Identity | Trusted-network today; `MLS1` does not apply to HTTP. Platform callbacks need an authentication decision (signing/secret) before production use — unchanged by this page |
-| Idempotency | Persistent, idempotent callback acceptance (the platform-callback item) remains unimplemented; handlers today are request-scoped |
+| Identity | Trusted-network today; `MLS1` does not apply to HTTP. The platform-callback authentication decision is now the typed `MLA1` contract (canonical bytes + `HMAC-SHA256` + replay window, [protocol analysis](./protocol-analysis.md#external-api-surface-first-slice)); wiring it into the HTTP stack and credential loading/rotation remain open |
+| Idempotency | The typed acceptance semantics are fixed: `(audience, principal, realm, character, idempotency_key)` create-or-read distinguishing `Inserted`/`Existing`/`Conflict`, with a read-only ownership lookup. Live handlers are still request-scoped until wired; the durable acceptance backend remains unimplemented |
 | Addressing | Reaching a player goes through the character's home services, never a pinned process address; apiServer has no registry membership and makes no placement decisions |
 
 ## What is deliberately not here
