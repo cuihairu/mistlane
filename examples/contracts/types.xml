@@ -1,0 +1,4 @@
+<Types>
+  <Item><itemId id="0" type="UINT32"/><count id="1" type="UINT32" default="1"/></Item>
+  <Inventory><capacity id="0" type="UINT16"/><items id="1" type="ARRAY" of="Item"/></Inventory>
+</Types>

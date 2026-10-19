@@ -1,8 +1,5 @@
 <Contracts>
-  <Types>
-    <Item><itemId id="0" type="UINT32"/><count id="1" type="UINT32" default="1"/></Item>
-    <Inventory><capacity id="0" type="UINT16"/><items id="1" type="ARRAY" of="Item"/></Inventory>
-  </Types>
+  <TypesSource path="types.xml"/>
   <Entity name="Avatar" id="1">
     <Properties><level id="1" type="UINT16" flags="OWN_CLIENT"/><inventory id="2" type="Inventory"/><score id="3" type="INT32" flags="OWN_CLIENT"/><exp id="4" type="INT64"/><tags id="5" type="ARRAY" of="UINT32"/><totals id="6" type="ARRAY" of="INT64"/><active id="7" type="BOOL" flags="OWN_CLIENT"/><name id="8" type="STRING" flags="OWN_CLIENT"/><blob id="9" type="BYTES"/><flags id="10" type="ARRAY" of="BOOL"/><aliases id="11" type="ARRAY" of="STRING"/><blobs id="12" type="ARRAY" of="BYTES"/></Properties>
     <ServerMethods>

@@ -93,7 +93,13 @@ struct CompatDiff {
 };
 class EntityContract {
 public:
-    explicit EntityContract(std::string_view xml) { load(xml); }
+    // A type resolver maps a <TypesSource path> to the referenced type
+    // document. The XML reader never opens files, so external entities stay
+    // disabled; only a resolver a caller supplies may reach the filesystem.
+    explicit EntityContract(std::string_view xml,
+                            std::function<std::string(const std::string&)> type_resolver = {}) {
+        load(xml, std::move(type_resolver));
+    }
     const std::map<std::string, ContractArgs>& structs() const { return structs_; }
     const std::vector<ContractEntity>& entities() const { return entities_; }
     // Canonical dump of the resolved model: declaration order, no renumbering,
@@ -1368,8 +1374,6 @@ private:
                 throw ContractError(what+": persistent must be true or false");
             p.persistent = *persistent == "true";
         }
-        check_type(p.type, p.of, what);
-        check_default(ContractField{p.name, p.type, p.of, p.default_value, p.id}, what);
         return p;
     }
     void read_types(const Node& types) {
@@ -1390,6 +1394,50 @@ private:
                 fields.push_back(std::move(field));
             }
             structs_.emplace(struct_node.name, std::move(fields));
+        }
+    }
+    // <TypesSource path="..."> pulls a type document into the contract. The
+    // XML reader never opens files, so only a resolver a caller supplied may
+    // reach the filesystem; type documents merge through read_types, which
+    // already refuses a type defined twice.
+    void include_type_source(const Node& node, const std::function<std::string(const std::string&)>& type_resolver) {
+        if (!type_resolver) throw ContractError("TypesSource needs a type document resolver");
+        const std::string what = "TypesSource";
+        const std::string path = required(node, "path", what);
+        if (!node.children.empty())
+            throw ContractError(what+": <"+node.children.front().name+"> is not allowed inside a TypesSource");
+        const auto text = type_resolver(path);
+        const auto root = Reader(text).document();
+        if (root.name != "Types")
+            throw ContractError("type source '"+path+"' must be a <Types> document, not <"+root.name+">");
+        read_types(root);
+    }
+    void finalize() {
+        // Document order is irrelevant: entity groups may reference a type
+        // from a later TypesSource, so type/default checks run only after the
+        // whole document (and its sources) have been merged.
+        check_recursion();
+        for (auto& [name, fields] : structs_)
+            for (auto& f : fields) {
+                const auto what = "struct "+name+" field "+f.name;
+                check_type(f.type, f.of, what);
+                check_default(f, what);
+            }
+        for (const auto& e : entities_) {
+            const auto what = "entity "+e.name;
+            for (const auto& p : e.properties) {
+                check_type(p.type, p.of, what+" property "+p.name);
+                check_default(ContractField{p.name, p.type, p.of, p.default_value, p.id}, what+" property "+p.name);
+            }
+            const auto check_methods = [&](const std::vector<ContractMethod>& list, const char* side) {
+                for (const auto& m : list) {
+                    const auto mwhat = what+" method "+m.name+" ["+side+"]";
+                    for (auto& a : m.args) check_type(a.type, a.of, mwhat+" arg "+a.name);
+                    for (auto& r : m.returns) check_type(r.type, r.of, mwhat+" return "+r.name);
+                }
+            };
+            check_methods(e.server_methods, "server");
+            check_methods(e.client_methods, "client");
         }
     }
     void check_recursion() const {
@@ -1453,8 +1501,6 @@ private:
                         throw ContractError(what+": "+child.name+" id "+std::to_string(m.id)+" declared twice");
                     seen_ids.emplace(m.id, m.name);
                     claim_name(m.name);
-                    for (auto& a : m.args) check_type(a.type, a.of, what+" method "+m.name+" arg "+a.name);
-                    for (auto& r : m.returns) check_type(r.type, r.of, what+" method "+m.name+" return "+r.name);
                     (server_side ? e.server_methods : e.client_methods).push_back(std::move(m));
                 }
             } else if (child.name == "Reserved") {
@@ -1491,7 +1537,7 @@ private:
         collides(e.reserved_client_methods, client_ids, "client method");
         entities_.push_back(std::move(e));
     }
-    void load(std::string_view xml) {
+    void load(std::string_view xml, std::function<std::string(const std::string&)> type_resolver) {
         const auto root = Reader(xml).document();
         if (root.name == "Contracts") {
             bool types_seen = false;
@@ -1500,19 +1546,14 @@ private:
                     if (types_seen) throw ContractError("one Types block per document");
                     types_seen = true;
                     read_types(child);
-                } else if (child.name == "Entity") read_entity(child);
+                } else if (child.name == "TypesSource") include_type_source(child, type_resolver);
+                else if (child.name == "Entity") read_entity(child);
                 else throw ContractError("unexpected element <"+child.name+"> in Contracts");
             }
         } else if (root.name == "Types") read_types(root);
         else if (root.name == "Entity") read_entity(root);
         else throw ContractError("root element must be Contracts, Types or Entity, not <"+root.name+">");
-        check_recursion();
-        for (auto& [name, fields] : structs_)
-            for (auto& f : fields) {
-                const auto what = "struct "+name+" field "+f.name;
-                check_type(f.type, f.of, what);
-                check_default(f, what);
-            }
+        finalize();
     }
     std::map<std::string, ContractArgs> structs_;
     std::vector<ContractEntity> entities_;

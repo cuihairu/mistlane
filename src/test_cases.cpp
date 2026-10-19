@@ -2880,6 +2880,70 @@ void contract_tool() {
     require(reformatted_load.output().find("unsupported bundle format") != std::string::npos,
             "format report did not name the version: "+reformatted_load.output());
     std::cout << "contract.bundle load: ready/tampered/missing/unlisted/resigned/format refusals [PASS]\n";
+    // types.xml composite references: a <TypesSource path> inside <Contracts>
+    // pulls reusable structs from a sibling type document. The tool resolves
+    // the path (the XML reader never opens files, so external entities stay
+    // disabled); the merge is a per-document snapshot folded into that
+    // document's model, lock and digest; "a type is defined once" refuses a
+    // name that already exists; missing and escaping paths are refused.
+    const auto types_ctx = c.path("types-ctx");
+    fs::create_directories(types_ctx/"shared");
+    write(types_ctx/"shared"/"common.xml",
+        "<Types><Gold><amount id=\"0\" type=\"UINT32\"/><total id=\"1\" type=\"INT64\"/></Gold>"
+        "<Bag><capacity id=\"0\" type=\"UINT16\"/><slots id=\"1\" type=\"ARRAY\" of=\"Gold\"/></Bag></Types>");
+    const auto hero_def = types_ctx/"shared"/"hero.def";
+    write(hero_def, "<Contracts><TypesSource path=\"common.xml\"/>"
+        "<Entity name=\"Hero\" id=\"2\"><Properties><pouch id=\"1\" type=\"Bag\"/><coins id=\"2\" type=\"Gold\"/></Properties>"
+        "</Entity></Contracts>");
+    const auto hero_out = types_ctx/"hero";
+    require(c.command({self().string(), "contract", "build", "--out", hero_out.string(), hero_def.string()}) == 0,
+            "build rejected a def with a types.xml include");
+    const auto hero_bindings = read(hero_out/"hero.bindings.js");
+    require(hero_bindings.find("Gold: [{ id: 0, name: 'amount'") != std::string::npos &&
+            hero_bindings.find("Bag: [{ id: 0, name: 'capacity'") != std::string::npos &&
+            hero_bindings.find("name: 'pouch'") != std::string::npos &&
+            hero_bindings.find("name: 'coins'") != std::string::npos,
+            "included types did not reach the JS field tables");
+    require(read(hero_out/"hero.xsd").find("name=\"Gold\"") != std::string::npos &&
+            read(hero_out/"hero.lock").find("struct Gold") != std::string::npos &&
+            read(hero_out/"hero.lock").find("struct Bag") != std::string::npos,
+            "included types did not reach the schema and release lock");
+    const auto mage_def = types_ctx/"shared"/"mage.def";
+    write(mage_def, "<Contracts><TypesSource path=\"common.xml\"/>"
+        "<Entity name=\"Mage\" id=\"3\"><Properties><purse id=\"1\" type=\"Gold\"/></Properties></Entity></Contracts>");
+    const auto mage_out = types_ctx/"mage";
+    require(c.command({self().string(), "contract", "build", "--out", mage_out.string(), mage_def.string()}) == 0,
+            "a second document sharing a type file failed");
+    const auto hero_rebuild = types_ctx/"hero2";
+    require(c.command({self().string(), "contract", "build", "--out", hero_rebuild.string(), hero_def.string()}) == 0,
+            "hero rebuild failed");
+    equal(read(hero_out/"hero.bindings.js"), read(hero_rebuild/"hero.bindings.js"));
+    equal(read(hero_out/"hero.lock"), read(hero_rebuild/"hero.lock"));
+    const auto dup_def = types_ctx/"shared"/"dup.def";
+    write(dup_def, "<Contracts><Types><Bag><capacity id=\"0\" type=\"UINT16\"/></Bag></Types>"
+        "<TypesSource path=\"common.xml\"/>"
+        "<Entity name=\"Dup\" id=\"4\"><Properties><x id=\"1\" type=\"Bag\"/></Properties></Entity></Contracts>");
+    auto& dup = c.spawn({self().string(), "contract", "check", dup_def.string()});
+    require(dup.wait() != 0 && dup.output().find("defined once") != std::string::npos,
+            "a duplicated included type passed: "+dup.output());
+    const auto missing_def = types_ctx/"missing.def";
+    write(missing_def, "<Contracts><TypesSource path=\"nope.xml\"/>"
+        "<Entity name=\"M\" id=\"5\"><Properties><x id=\"1\" type=\"UINT32\"/></Properties></Entity></Contracts>");
+    auto& missing = c.spawn({self().string(), "contract", "check", missing_def.string()});
+    require(missing.wait() != 0 && missing.output().find("nope.xml") != std::string::npos,
+            "a missing type source passed: "+missing.output());
+    const auto escape_def = types_ctx/"escape.def";
+    write(escape_def, "<Contracts><TypesSource path=\"../../evil.xml\"/>"
+        "<Entity name=\"E\" id=\"6\"><Properties><x id=\"1\" type=\"UINT32\"/></Properties></Entity></Contracts>");
+    auto& escape = c.spawn({self().string(), "contract", "check", escape_def.string()});
+    require(escape.wait() != 0 && escape.output().find("escapes") != std::string::npos,
+            "an escaping type source passed: "+escape.output());
+    try {
+        EntityContract("<Contracts><TypesSource path=\"x\"/>"
+            "<Entity name=\"A\" id=\"1\"><Properties><x id=\"1\" type=\"UINT32\"/></Properties></Entity></Contracts>");
+        require(false, "TypesSource without a resolver was accepted");
+    } catch (const ContractError&) {}
+    std::cout << "contract.types source include: resolve/shared/dup/missing/escape [PASS]\n";
     require(read(one/"avatar.xsd").find("name=\"Avatar\"") != std::string::npos,
             "schema lost the entity");
     const EntityContract dispatch_contract(avatar);

@@ -3,8 +3,10 @@
 namespace mistlane {
 // `mistlane contract check|build|load` is the generation half of the entity
 // contract toolchain. check validates .def documents against the
-// definition-time rules in include/mistlane/entity_contract.hpp; build
-// validates first and only then emits the per-document project XSD, release
+// definition-time rules in include/mistlane/entity_contract.hpp;
+// <TypesSource path> pulls reusable structs from sibling type documents
+// (resolved by this tool, never by the XML reader). build validates first
+// and only then emits the per-document project XSD, release
 // lock, version digest, sproto schema, C++/JS/C# bindings, client-audience
 // JS/C# bindings (SERVER_ONLY properties and server-internal methods
 // excluded) and a bundle.manifest digesting every artifact. load verifies a

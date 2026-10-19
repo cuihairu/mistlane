@@ -209,7 +209,21 @@ int run_contract(int argc, char** argv) {
         std::ostringstream text;
         text << in.rdbuf();
         try {
-            const EntityContract contract(text.str());
+            const fs::path dir = fs::path(file).parent_path();
+            // Type sources are relative to the document that includes them and
+            // may not leave its directory: the XML reader itself never opens
+            // files, so this resolver is the only door to the filesystem.
+            const auto type_resolver = [&](const std::string& rel) -> std::string {
+                if (rel.empty() || rel.find("..") != std::string::npos)
+                    throw ContractError("type source path escapes the document directory: "+rel);
+                const fs::path target = dir/rel;
+                std::ifstream src(target, std::ios::binary);
+                if (!src) throw ContractError("type source not found: "+rel);
+                std::ostringstream buf;
+                buf << src.rdbuf();
+                return buf.str();
+            };
+            const EntityContract contract(text.str(), type_resolver);
             std::cout << file.string() << ": ok\n";
             if (verb == "build") {
                 const auto stem = fs::path(file).stem().string();

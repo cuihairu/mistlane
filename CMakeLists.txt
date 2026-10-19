@@ -48,6 +48,7 @@ add_custom_command(OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/sproto-fixture/avatar.spr
   COMMAND $<TARGET_FILE:mistlane> contract build --out "${CMAKE_CURRENT_BINARY_DIR}/sproto-fixture"
     "${CMAKE_CURRENT_SOURCE_DIR}/examples/contracts/avatar.def"
   DEPENDS mistlane "${CMAKE_CURRENT_SOURCE_DIR}/examples/contracts/avatar.def"
+    "${CMAKE_CURRENT_SOURCE_DIR}/examples/contracts/types.xml"
   VERBATIM)
 add_custom_target(mistlane_sproto_fixture DEPENDS "${CMAKE_CURRENT_BINARY_DIR}/sproto-fixture/avatar.sproto")
 add_dependencies(mistlane-sproto-probe mistlane_sproto_fixture)
