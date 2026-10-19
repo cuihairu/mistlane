@@ -2059,7 +2059,7 @@ void contract_tool() {
             read(one/"avatar.sproto").find("E1_Client_1 ") != std::string::npos &&
             read(one/"avatar.sproto").find("items 1 : *Item") != std::string::npos &&
             read(one/"avatar.sproto").find("active 4 : boolean") != std::string::npos &&
-            read(one/"avatar.sproto").find("E1_Server_2 131074") != std::string::npos,
+            read(one/"avatar.sproto").find("E1_Server_2 514") != std::string::npos,
             "sproto schema lost stable E1 side/method identifiers");
     // The lock's digest line, the digest file and the library digest agree.
     const auto lock_text = read(one/"avatar.lock");
@@ -2086,8 +2086,8 @@ void contract_tool() {
 }
 void sproto_golden() {
     // Fixture-only canonical TLV vectors. These intentionally are NOT sproto
-    // wire bytes; they lock value shape/widths until an upstream codec replaces
-    // this adapter. Each record is tag:u8, kind:u8, length:u16be, bytes.
+    // wire bytes; retain them as an internal-format fixture independent of the
+    // upstream sproto vectors. Each record is tag:u8, kind:u8, length:u16be, bytes.
     auto record = [](unsigned tag, unsigned kind, std::string_view value) {
         std::string out{static_cast<char>(tag), static_cast<char>(kind),
             static_cast<char>((value.size() >> 8) & 255), static_cast<char>(value.size() & 255)};

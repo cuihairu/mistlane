@@ -37,13 +37,13 @@
 
 ## sproto 实现路线
 
-决策：实体/RPC 消息编码使用 sproto。XML `.def` 和类型文件继续作为手写契约，sproto 是生成物。按[实体契约](./entity-contract.md#design-choice)，规划中的 Server bundle 包含 sproto schema、Lua bindings 和 digests。当前构建已生成经过校验的确定性 schema，以及 XSD、release lock 和 digest；尚无 Lua 绑定、实体调用运行时或 SDK 构建。
+决策：实体/RPC 消息编码使用 sproto。XML `.def` 和类型文件继续作为手写契约，sproto 是生成物。按[实体契约](./entity-contract.md#design-choice)，规划中的 Server bundle 包含 sproto schema、Lua bindings 和 digests。当前构建生成经过校验的确定性 schema、XSD、release lock 和 digest，并有仅供测试的 Lua codec 原型；实体运行时和 SDK 生成仍未实现。
 
 | 阶段 | 具体工作 | 验收证据形态 |
 |---|---|---|
-| 1. XML 契约生成 sproto schema | `.def` 保持源契约；先运行既有语义校验，再生成。保留来源说明，将 game-fogs 原始 sproto 文本标为未恢复。映射类型、字段、方法及 request/response 或单向通知；内部名固定为 `E{entityId}_{Server|Client}_{methodId}`。协议 tag 为 `entityId * 131072 + side * 65536 + methodId`，范围为 entity id ≤16383、method id ≤65535。 | `contract.tool` 检查类型映射、稳定命名和重复输出；CLI 在全部输入通过后生成 XSD、lock、digest 和 schema。 |
-| 2. 编解码边界与黄金向量 | 外层传输帧与载荷编码分开；用 fixture 专用规范 TLV 向量固定标量、数组、嵌套和边界值，并检查往返。 | `sproto.golden` 逐字节检查 fixture 向量。这些**不是上游 sproto 线格式**；后续以标准 sproto 替换测试适配器。 |
-| 3. Lua 原型与分发 | 生成/绑定 Lua 方法描述，解析实体与调用方上下文，分发 request/response 或单向方法。 | 可运行 Lua 原型覆盖服务端和客户端方法、类型化结果与拒绝场景。 |
+| 1. XML 契约生成 sproto schema | `.def` 保持源契约；先运行既有语义校验，再生成。保留来源说明，将 game-fogs 原始 sproto 文本标为未恢复。映射类型、字段、方法及 request/response 或单向通知；内部名固定为 `E{entityId}_{Server|Client}_{methodId}`。cloudwu/sproto parser 的 tag 上限为 0–32766；当前确定性映射为 `entityId * 512 + side * 256 + methodId`，entity id ≤63、method id ≤254。 | `contract.tool` 检查类型映射、稳定命名和重复输出；CLI 在全部输入通过后生成 XSD、lock、digest 和 schema。上游 parser 可解析生成的 `avatar.sproto`。 |
+| 2. 编解码边界与黄金向量 | 外层传输帧与载荷编码分开；使用 cloudwu/sproto 上游线格式覆盖标量、数组、嵌套和边界值。此前 fixture 专用规范 TLV 向量保留并明确标为内部格式。 | `mistlane_sproto_wire_golden` 对非空和空 Avatar 固定上游 sproto 字节；`mistlane_sproto_upstream_parser` 解析生成 schema。`sproto.golden` 保留为独立内部 TLV 检查。 |
+| 3. Lua 原型与分发 | 先使用生成 schema 和上游 Lua 绑定；后续再扩展方法描述符、entity/caller 上下文及 request/response 或单向分发。 | `mistlane_sproto_lua_roundtrip` 运行 `examples/sproto_lua.lua`，断言编码、解码、重编码一致。完整分发仍未完成。 |
 | 4. RPC harness 与生命周期 | 定义关联 ID、超时/取消、重复处理、响应归属和过期实体代次行为。 | 进程内及双进程 harness 覆盖请求/响应、push、超时、过期引用、错误调用方、断连和重复处理。 |
 | 5. SDK 兼容 | 从共享 schema 生成 JS/C# 绑定，并核对支持的客户端版本。 | JS/C# 编解码标准黄金向量；兼容检查发现已发布 ID 删除、重编号或改类型。 |
 | 6. 发布锁与发布闸门 | 在发布锁中持久记录协议 tag 和 schema digest，并与已发布 bundle 比较兼容性。 | 可复现 bundle 和兼容报告在发布前阻断破坏性变更。 |
@@ -52,9 +52,9 @@
 
 ## 已实现状态与证据
 
-前两个阶段**部分落地**：`mistlane contract build` 先执行既有 XML 语义校验，再生成 XSD、lock、digest 和确定性的 `.sproto`。`examples/contracts/avatar.def` 是新构造的最小 fixture，并非恢复出的 game-fogs 源文件。RPC 内部名采用稳定规则 `E{entityId}_{Server|Client}_{methodId}`。`contract.tool` 检查生成物稳定性和命名；`sproto.golden` 逐字节检查标量、数组、嵌套和边界 fixture 向量。fixture 编码器是项目自用测试格式，不是 sproto 序列化；没有引入第三方 sproto 代码。
+阶段 1 已实现。阶段 2 对当前 fixture 已完成：`mistlane contract build` 校验 XML 并生成确定性 `.sproto`；vendored 上游 parser 可解析；上游 Lua 绑定编码为标准线上字节，并以固定 hex 黄金向量校验后再解码。独立的 `sproto.golden` 仍是项目内部 TLV，未冒充 sproto 字节。`examples/contracts/avatar.def` 是新构造的 fixture，并非恢复出的 game-fogs 源文件。
 
-阶段 3–6 尚未实现：Lua 原型/分发、RPC 生命周期 harness、SDK 兼容、发布锁闸门。上游 parser 验证和标准 sproto 线上黄金向量也仍未完成。
+阶段 3 已有使用生成 schema 和上游绑定的 Lua 编码/解码/重编码原型。方法分发、caller/entity 上下文、负向用例和完整绑定生成尚未实现。阶段 4–6 尚未实现：RPC 生命周期 harness、SDK 兼容和发布锁闸门。证据见三个 `mistlane_sproto_*` CTest 用例及 `examples/sproto_lua.lua` 的运行命令。
 
 ## 范围与排除项
 

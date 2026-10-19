@@ -25,7 +25,11 @@ Boost.Charconv and other transitive requirements are supplied by the Boost.MySQL
 
 “Latest” here means versions supplied by the selected vcpkg baseline at the checking date. Boost and Lua also match the latest stable upstream releases. OpenSSL upstream has 4.0.3, while this baseline provides 3.6.5#2; the project uses the packaged port and does not claim to integrate 4.0.3. No prerelease or moving latest tag is used. VitePress uses npm's stable dist-tag, not its 2.x alpha line.
 
-The original project's log4cxx, Poco, Pion, jemalloc, custom MySQL/Redis/Lua extensions, LPeg, sproto, and channel SDKs are excluded from the extracted build. This work does not upgrade the original game build.
+The original project's log4cxx, Poco, Pion, jemalloc, custom MySQL/Redis/Lua extensions, and channel SDKs are excluded from the extracted server build. The test-only vendored sproto/LPeg sources below do not restore or upgrade the original game build.
+
+### Vendored protocol test sources
+
+The protocol conformance probe vendors two upstream source snapshots so a clean build and CTest run do not download parser or codec sources. `third_party/sproto/` contains cloudwu/sproto at commit `e93fd5a0653b2bcab38d3b830958bf2e3a901b5f` (MIT; upstream [repository](https://github.com/cloudwu/sproto)); `third_party/lpeg/` contains the `luvit/lpeg` mirror at commit `55bbd00e53890e50e05018907140f4f3d3e234f4` (LPeg upstream mirror; MIT; [mirror](https://github.com/luvit/lpeg), [upstream project](https://www.inf.puc-rio.br/~roberto/lpeg/)). The copied license texts are [licenses/sproto-MIT.txt](../licenses/sproto-MIT.txt) and [licenses/lpeg-MIT.txt](../licenses/lpeg-MIT.txt). CMake compiles these sources into the test-only `mistlane-sproto-probe`, linked against the already pinned Lua 5.5.1 dependency; they are not linked into the Mistlane server. LPeg is needed by cloudwu's text schema parser.
 
 ## Upgrade workflow
 

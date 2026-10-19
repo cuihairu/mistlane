@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 cmake_minimum_required(VERSION 3.25)
-project(mistlane VERSION 0.1.0 LANGUAGES CXX)
+project(mistlane VERSION 0.1.0 LANGUAGES C CXX)
 if(NOT CMAKE_SYSTEM_NAME STREQUAL "Linux")
   message(FATAL_ERROR "This release supports Linux; other platforms are not yet validated")
 endif()
@@ -32,6 +32,24 @@ add_executable(mistlane src/main.cpp src/scaffold.cpp src/contract_tool.cpp src/
 target_include_directories(mistlane PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/generated")
 target_link_libraries(mistlane PRIVATE mistlane_net mistlane_http Boost::mysql)
 target_compile_options(mistlane PRIVATE -Wall -Wextra -Wpedantic)
+add_executable(mistlane-sproto-probe
+  src/sproto_probe.cpp
+  third_party/sproto/sproto.c third_party/sproto/lsproto.c
+  third_party/lpeg/lpcap.c third_party/lpeg/lpcode.c third_party/lpeg/lpcset.c
+  third_party/lpeg/lpprint.c third_party/lpeg/lptree.c third_party/lpeg/lpvm.c)
+target_include_directories(mistlane-sproto-probe PRIVATE third_party/sproto third_party/lpeg ${LUA_INCLUDE_DIR})
+target_link_libraries(mistlane-sproto-probe PRIVATE ${LUA_LIBRARIES})
+target_compile_options(mistlane-sproto-probe PRIVATE -Wall -Wextra -Wpedantic)
+target_compile_definitions(mistlane-sproto-probe PRIVATE
+  MISTLANE_SPROTO_LUA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/third_party/sproto"
+  MISTLANE_LPEG_LUA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/third_party/lpeg")
+add_custom_command(OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/sproto-fixture/avatar.sproto"
+  COMMAND $<TARGET_FILE:mistlane> contract build --out "${CMAKE_CURRENT_BINARY_DIR}/sproto-fixture"
+    "${CMAKE_CURRENT_SOURCE_DIR}/examples/contracts/avatar.def"
+  DEPENDS mistlane "${CMAKE_CURRENT_SOURCE_DIR}/examples/contracts/avatar.def"
+  VERBATIM)
+add_custom_target(mistlane_sproto_fixture DEPENDS "${CMAKE_CURRENT_BINARY_DIR}/sproto-fixture/avatar.sproto")
+add_dependencies(mistlane-sproto-probe mistlane_sproto_fixture)
 add_library(mistlane::core ALIAS mistlane_core)
 add_library(mistlane::net ALIAS mistlane_net)
 add_library(mistlane_mysql INTERFACE)
@@ -50,6 +68,12 @@ if(BUILD_TESTING)
     add_test(NAME mistlane_${test_name} COMMAND mistlane test --case "${test_case}")
     set_tests_properties(mistlane_${test_name} PROPERTIES TIMEOUT 60)
   endforeach()
+  add_test(NAME mistlane_sproto_upstream_parser COMMAND mistlane-sproto-probe parser
+    "${CMAKE_CURRENT_BINARY_DIR}/sproto-fixture/avatar.sproto")
+  add_test(NAME mistlane_sproto_wire_golden COMMAND mistlane-sproto-probe golden
+    "${CMAKE_CURRENT_BINARY_DIR}/sproto-fixture/avatar.sproto")
+  add_test(NAME mistlane_sproto_lua_roundtrip COMMAND mistlane-sproto-probe roundtrip
+    "${CMAKE_CURRENT_BINARY_DIR}/sproto-fixture/avatar.sproto")
   if(EXISTS "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/tools/crashpad_handler")
     add_test(NAME mistlane_crashpad_startup COMMAND mistlane test --suite crashpad
       --crashpad-handler "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/tools/crashpad_handler")

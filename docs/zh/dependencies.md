@@ -25,7 +25,7 @@ Boost.Charconv 等间接依赖由 Boost.MySQL 的 port 和 CMake target 自动�
 
 这里“最新”指核对日期 vcpkg 固定 baseline 中提供的版本。Boost、Lua 同时与上游最新稳定版一致。OpenSSL 上游最新稳定版为 4.0.3，当前 vcpkg port 是 3.6.5#2；采用仓库已经集成的 port，未把上游 4.0.3 声称为已接入。本项目未集成 beta / alpha 或移动 latest 标签。
 
-旧项目使用的 log4cxx、Poco、Pion、jemalloc、自定义 MySQL/Redis/Lua 扩展、LPeg、sproto 和渠道 SDK 不进入此构建。此次升级只覆盖候选框架；原游戏根目录仍使用其旧构建。
+旧项目使用的 log4cxx、Poco、Pion、jemalloc、自定义 MySQL/Redis/Lua 扩展和渠道 SDK 不进入服务器构建。下文仅为测试用途 vendored 的 sproto/LPeg 源码不代表恢复或升级原游戏构建。
 
 升级流程：
 

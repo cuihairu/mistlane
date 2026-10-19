@@ -199,19 +199,22 @@ public:
             for (const auto& f : list) { ident(f.name); out << "\t" << f.name << " " << f.id << " : " << field_type(f.type, f.of) << '\n'; }
         };
         for (const auto& [name, members] : structs_) {
-            type_name(name); out << name << " {\n"; fields(members); out << "}\n\n";
+            type_name(name); out << "." << name << " {\n"; fields(members); out << "}\n\n";
         }
         for (const auto& e : entities_) {
-            type_name(e.name); out << e.name << " {\n";
+            type_name(e.name); out << "." << e.name << " {\n";
             for (const auto& p : e.properties) { ident(p.name); out << "\t" << p.name << " " << p.id << " : " << field_type(p.type, p.of) << '\n'; }
             out << "}\n\n";
             auto methods = [&](const char* side, const std::vector<ContractMethod>& list) {
                 for (const auto& m : list) {
                     ident(m.name);
-                    if (e.id > 16383 || m.id > 65535)
+                    // cloudwu/sproto packs protocol tags into a 16-bit parser
+                    // field as (tag + 1) * 2, so the largest supported tag is
+                    // 32766. Reserve 9 low bits for side + method id.
+                    if (e.id > 63 || m.id > 254)
                         throw ContractError("sproto protocol tag range exceeded for " + e.name + "." + m.name);
                     const unsigned long long side_id = std::string_view(side) == "Client" ? 1ull : 0ull;
-                    const unsigned long long tag = static_cast<unsigned long long>(e.id) * 131072ull + side_id * 65536ull + m.id;
+                    const unsigned long long tag = static_cast<unsigned long long>(e.id) * 512ull + side_id * 256ull + m.id;
                     const auto protocol = "E" + std::to_string(e.id) + "_" + side + "_" + std::to_string(m.id);
                     out << protocol << " " << tag << " {\n\trequest {\n"; fields(m.args); out << "\t}\n";
                     if (m.mode == "request") { out << "\tresponse {\n"; fields(m.returns); out << "\t}\n"; }
