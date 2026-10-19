@@ -864,6 +864,7 @@ void transport_correlate() {
     auto& node = c.spawn({self().string(), "--role", "gameServer", "--listen", endpoint(gameServer),
         "--script", c.path("correlate.lua").string(),
         "--listener", "ws://127.0.0.1:"+std::to_string(ws_port)});
+    node.ready("ready gameServer "+endpoint(gameServer));
     c.node("gateway", gateway, {"--upstream", endpoint(gameServer)});
     const auto send_frame = [](RawSocket& raw, std::string_view payload) {
         std::string frame(4, '\0');
