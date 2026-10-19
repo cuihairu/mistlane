@@ -44,7 +44,7 @@ Each scope needs an explicit authority for ownership changes. Election, recovery
 
 Entering crossServer changes execution placement, not the account, character identity or home data domain. Validated transfer context includes origin, character identity, hosting generation and return information. Current placement is resolved through coordinator; orders and durable records must not pin a gameServer address.
 
-The target keeps permanent data in its home region while moving character execution to crossServer. Cross-region changes return through home-side services to home data; crossServer need not hold every region's database addresses. The old CrossWorld → home World → Data/Cache path and its limits are documented in [players, scenes and cross-region execution](./player-scene-model.md). Mistlane's forwarding protocol, durable acknowledgement, generation/idempotency, transfer/write authority, retries/offline and failed return still need design. Data edges denote that service path, not direct cross-region database writes or concurrent character writers.
+The target keeps permanent data in its home region while moving character execution to crossServer. Cross-region changes return through home-side services to home data; crossServer need not hold every region's database addresses. The old CrossWorld → home World → Data/Cache path and its limits are documented in [players, scenes and cross-region execution](./player-scene-model.md); the decided participant-context, single-writer and MLD1 confirmation design is in the [cross return protocol](./cross-return-protocol.md), still unimplemented. Data edges denote that service path, not direct cross-region database writes or concurrent character writers.
 
 ## Legacy correspondence
 

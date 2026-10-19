@@ -32,7 +32,7 @@ flowchart TB
   data --> db["归属数据库"]
 ```
 
-这是一条旧实现保存路径，不是 Mistlane 当前已接通的服务链。目标采用“运行位置可迁移，长期数据回到归属 data 保存”的原则；跨服执行进程通过归属侧服务回传变更，持久记录/订单不固化承载地址。具体接线、保存确认、版本和幂等、重试/乱序、断线/离线、回服失败仍待协议设计。调用 save 或发送消息不能当成数据库提交完成。
+这是一条旧实现保存路径，不是 Mistlane 当前已接通的服务链。目标采用“运行位置可迁移，长期数据回到归属 data 保存”的原则；跨服执行进程通过归属侧服务回传变更，持久记录/订单不固化承载地址。具体接线、保存确认、版本和幂等、重试/乱序、断线/离线、回服失败仍待协议设计。调用 save 或发送消息不能当成数据库提交完成。已定的协议设计（参与者上下文、唯一写入权、MLD1 确认、故障规则）见[跨服回传与唯一写入权协议](./cross-return-protocol.md)；实现仍未开始。
 
 旧源码定位：`game/Hegel/Scene/SceneLogic.lua::doSwitchHegel`、`game/Data/RPC.lua::requesthegel2hegel`、`game/Common/CService/Server/GateService.lua::handleSwitchHegel`、`game/Hegel/Charactor/Charactor.lua::set/setDirty/save`、`game/World/Charactor/CharactorManager.lua::syncDataFromCross/onSyncDataFromCross`。
 
@@ -101,4 +101,4 @@ flowchart TB
 
 Mistlane 当前有网络通道、串行 message/http 执行及 gateway cross routing/crossServer 路由/准入原型；尚无完整 Avatar 承载/迁移、地图/场景运行层、上述归属保存链或无缝空间分区。已有 SIGHUP 替换 Lua VM 会重置模块状态，不能当作 Avatar 或场景迁移。
 
-后续任务在根目录 `todo.md`：先整理 C++ 基础契约和 Lua 钩子，再明确地图数据与场景生命周期、跨服变更回传与唯一写入权，最后实现并验证；不能只改运行角色名称就勾选完成。
+后续任务在根目录 `todo.md`：先整理 C++ 基础契约和 Lua 钩子，再明确地图数据与场景生命周期、跨服变更回传与唯一写入权，最后实现并验证；不能只改运行角色名称就勾选完成。gameServer 逐项评估（进程形态、场景模板/实例、计时、同步、释放）见[能力评估](./gameserver-capabilities.md)。

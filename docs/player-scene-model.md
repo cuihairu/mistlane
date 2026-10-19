@@ -32,7 +32,7 @@ flowchart TB
   data --> db["Home database"]
 ```
 
-This is an observed legacy path, not an already connected Mistlane service chain. The target retains movable execution and home-owned permanent data: cross-region changes return through home-side services. Orders/durable records do not pin execution addresses. Connections, durable acknowledgement, generation/idempotency, retries/reordering, disconnect/offline behavior and failed return still need protocol design. Calling save or sending a message is not a database commit.
+This is an observed legacy path, not an already connected Mistlane service chain. The target retains movable execution and home-owned permanent data: cross-region changes return through home-side services. Orders/durable records do not pin execution addresses. Connections, durable acknowledgement, generation/idempotency, retries/reordering, disconnect/offline behavior and failed return still need protocol design. Calling save or sending a message is not a database commit. The decided protocol design (participant context, single-writer authority, MLD1 confirmation, failure rules) is on the [cross return protocol](./cross-return-protocol.md) page; implementation remains pending.
 
 Legacy locations: `game/Hegel/Scene/SceneLogic.lua::doSwitchHegel`, `game/Data/RPC.lua::requesthegel2hegel`, `game/Common/CService/Server/GateService.lua::handleSwitchHegel`, `game/Hegel/Charactor/Charactor.lua::set/setDirty/save`, `game/World/Charactor/CharactorManager.lua::syncDataFromCross/onSyncDataFromCross`.
 

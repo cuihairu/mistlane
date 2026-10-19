@@ -130,4 +130,4 @@ mistlane bot --url tcp://127.0.0.1:<cross-port> --join "MLC1 1 realm g bench" --
 当前可选 `/metrics` 端点导出就绪状态、活动会话、准入拒绝、Lua 回调耗时、RSS、按方向的收发消息数与字节数（`mistlane_messages_total`、`mistlane_payload_bytes_total`）、客户端请求耗时（`mistlane_request_seconds`）、上游错误与截止超时计数（`mistlane_upstream_errors_total`、`mistlane_upstream_timeouts_total`），以及事件循环 tick 调度延迟（`mistlane_event_loop_lag_seconds` 及运行期最大值）。`mistlane_ready` 与探测应答使用同一个滞回准入状态，`mistlane_admission_rejections_total` 同时统计连接上限与 cross 准入拒绝。全部指标只带 role 标签，桶边界固定。Crashpad 可显式启用，并将报告保存在关闭上传的本地数据库。崩溃转储保留限制、CPU/内存 profiler 评估和目标环境过载演练仍待补齐。不会因节点暂时未就绪就自动把有状态房间转移到别的 crossServer。这些诊断能提供过载证据，但仍需目标环境压测才能得出容量结论。
 
 
-角色转移、归属保存与地图加载边界见[玩家、场景与跨服模型](./player-scene-model.md)。
+角色转移、归属保存与地图加载边界见[玩家、场景与跨服模型](./player-scene-model.md)；已定的回传与唯一写入权设计见[跨服回传与唯一写入权协议](./cross-return-protocol.md)。

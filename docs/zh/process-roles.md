@@ -44,7 +44,7 @@ coordinator 负责承载决策和注册状态；进程启动、重启与资源�
 
 进入 crossServer 改变运行位置，不自动改变账号、角色 ID 或数据所属区服。跨服参与上下文需携带可验证的来源区服、角色标识、承载版本及返回信息；路由通过 coordinator 查询/更新，不在订单或长期数据里固化 gameServer 地址。
 
-目标已明确为：角色可转移到 crossServer 执行，长期数据归属仍在原区服，跨服变更通过归属侧服务回传原 data 保存；不要求 crossServer 直接掌握各区服数据库地址。旧实现的 CrossWorld → 归属 World → Data/Cache 路径及其局限见[玩家、场景与跨服模型](./player-scene-model.md)。Mistlane 的具体回传协议、持久化确认、版本/幂等、迁移与写入权、重试/离线及回服恢复仍待设计。图中的数据访问边表示该服务路径，不代表跨服直接写库或两个角色同时写入。
+目标已明确为：角色可转移到 crossServer 执行，长期数据归属仍在原区服，跨服变更通过归属侧服务回传原 data 保存；不要求 crossServer 直接掌握各区服数据库地址。旧实现的 CrossWorld → 归属 World → Data/Cache 路径及其局限见[玩家、场景与跨服模型](./player-scene-model.md)；已定的参与者上下文、唯一写入权与 MLD1 确认设计见[跨服回传与唯一写入权协议](./cross-return-protocol.md)，均未实现。图中的数据访问边表示该服务路径，不代表跨服直接写库或两个角色同时写入。
 
 ## 旧代码对应关系
 

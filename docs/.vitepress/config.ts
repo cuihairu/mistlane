@@ -78,6 +78,7 @@ export default defineConfig({
         ] }, { text: '运行与扩展', items: [
         { text: 'Lua 与生命周期', link: '/zh/lua' },
         { text: '跨服与过载保护', link: '/zh/cross-server' },
+        { text: '跨服回传与唯一写入权协议', link: '/zh/cross-return-protocol' },
         { text: '依赖管理', link: '/zh/dependencies' },
         { text: '验证记录', link: '/zh/validation' }
       ] }],
@@ -95,6 +96,7 @@ export default defineConfig({
         ] }, { text: 'Runtime and extensions', items: [
         { text: 'Lua lifecycle', link: '/lua' },
         { text: 'Cross-server and overload', link: '/cross-server' },
+        { text: 'Cross return and single-writer protocol', link: '/cross-return-protocol' },
         { text: 'Dependencies', link: '/dependencies' },
         { text: 'Validation', link: '/validation' }
       ] }]
