@@ -17,7 +17,7 @@ The source material is a legacy game cluster. Everything business-specific was d
 
 ## What works today
 
-See [validation records](./docs/validation.md) for the tested list: framed TCP/WS/WSS transport with bounded pushes, request correlation, service identity and upstream multiplexing, coordinator registry and placement lookups, character route records (`MLR1 ROUTE`), the MLD1 record endpoint on the data role (receipts only), the entity-contract definition-time prototype with its `mistlane contract check`/`build` command, Lua module lifecycle with hot reload, HTTP/HTTPS apiServer with WebSocket lifecycle hooks, Redis Streams/leaderboard integration and crashpad startup.
+See [validation records](./docs/validation.md) for the tested list: framed TCP/WS/WSS transport with bounded pushes, request correlation, service identity and upstream multiplexing, coordinator registry and placement lookups, character route records (`MLR1 ROUTE`), the MLD1 record endpoint on the data role (receipts only), the entity-contract definition-time prototype with its `mistlane contract check`/`build` command and deterministic sproto schema emission, Lua module lifecycle with hot reload, HTTP/HTTPS apiServer with WebSocket lifecycle hooks, Redis Streams/leaderboard integration and crashpad startup.
 
 ## What is explicitly not here
 
