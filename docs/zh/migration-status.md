@@ -6,7 +6,7 @@
 |---|---|---|
 | 角色承载、Session/Avatar 与迁移 | 未完整抽取 | 旧角色在 Hegel/CrossHegel 间转移，原 Gate 保持连接；当前缺少通用 Avatar 生命周期、唯一写入权与可靠移交，见[模型说明](./player-scene-model.md)。 |
 | 地图模板、空间数据与场景实例 | 未迁移 | 旧 SceneManager/Scene 主要为 Lua；C++ 导航调用已注释，不能认定流式加载、空间 AOI 或无缝已实现。静态资源共享与可变实例需分别设计。逐项 gameServer 评估见[能力评估页](./gameserver-capabilities.md)。 |
-| 跨服变更回归属区服保存 | 未迁移 | 旧 set/setDirty 经 CrossWorld 和归属 World 发 Data/Cache；目标保留数据归属，回传、持久化确认、幂等和故障恢复待实现。 |
+| 跨服变更回归属区服保存 | 部分实现 | 旧 set/setDirty 经 CrossWorld 和归属 World 发 Data/Cache。目标保留数据归属：`data` 角色已应答 MLD1 归属侧端点（`LOAD`/`SUBMIT`），带承载版本栅栏、按角色序号纪律与重发去重，但仅作回执应答——无持久确认、无持久化链，crossServer 发送侧的有界重试队列未实现。见[跨服回传与唯一写入权协议](./cross-return-protocol.md)。 |
 | 进程启动、监听器、信号和退出 | 重新实现 | 新生命周期由 `Node` 管理，逐项核对见[旧生命周期核对](#旧生命周期核对)；不保留旧进程 API 或二进制兼容。 |
 | 异步 TCP 传输 | 重新实现 | 使用新的四字节长度头协议，并有会话限制和期限；不支持旧分帧及客户端协议。 |
 | WebSocket / 安全 WebSocket | 替换 | WS/WSS 由 Drogon/Trantor 处理，不迁移手写握手、掩码或控制帧解析。 |
