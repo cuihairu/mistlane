@@ -2,7 +2,7 @@
 
 > 研究设计笔记。构建期契约校验器、确定性 sproto schema/按字段 C++ 参数结构体生成器、上游 sproto 解码到分发 fixture、进程内实体路由及 RPC 生命周期 harness 已实现；网络运行时和属性同步仍不在当前范围。
 
-状态：构建期实现生成项目 XSD、发布锁、摘要、确定性 sproto schema、C++ 描述符/参数绑定、JavaScript JSDoc 类型与无依赖标量编码器，以及 C# record 类型与标量编码器。上游 Lua sproto 请求解码结果传给 `EntityDispatcher`；`EntityRuntime` 提供 fixture 驱动 spawn/route/destroy、重复投递和过期 incarnation 行为。`RpcHarness` 用注入的单调时钟验证关联配对、超时、迟到/重复响应和断连结果。这些均为进程内 harness，不代表已有网络实体运行时或持久化。其余类型映射为 `BOOL`→`boolean`、整数及 `EntityRef`→`integer`、`STRING`→`string`、`BYTES`→`binary`、结构按名称引用、数组使用 `*`。RPC 名采用 `E{entityId}_{Server|Client}_{methodId}`；cloudwu/sproto parser tag 使用 `entityId * 512 + side * 256 + methodId`，entity id ≤63、method id ≤254、tag ≤32766。Avatar fixture 已通过上游 parser 和标准字节向量。JS/C# 输出是最小 SDK 接口，不是完整客户端运行库。详见[路线及验收证据](./bigworld-like-protocol.md#已实现状态与证据)。仍缺网络运行时加载/路由、deadline/cancel 传输传播、hosting-generation 栅栏、服务端 bundle 加载、生产级 JS/C# codec 及自动属性同步。适用 Mistlane，不调整 Apollo 架构或进程命名。客户端目标为 JavaScript 和 C#；客户端随契约重新生成、构建和发布，服务器的业务契约更新不重新编译 C++ 二进制。
+状态：构建期实现生成项目 XSD、发布锁、摘要、确定性 sproto schema、C++ 描述符/参数绑定、JavaScript JSDoc 类型与无依赖标量编码器，以及 C# record 类型与标量编码器，客户端受众 JS/C# 绑定（服务器内部方法与 SERVER_ONLY 属性已剔除），以及由 `contract load` 全有或全无校验的逐工件 SHA-256 bundle 清单。上游 Lua sproto 请求解码结果传给 `EntityDispatcher`；`EntityRuntime` 提供 fixture 驱动 spawn/route/destroy、重复投递和过期 incarnation 行为。`RpcHarness` 用注入的单调时钟验证关联配对、超时、迟到/重复响应和断连结果。这些均为进程内 harness，不代表已有网络实体运行时或持久化。其余类型映射为 `BOOL`→`boolean`、整数及 `EntityRef`→`integer`、`STRING`→`string`、`BYTES`→`binary`、结构按名称引用、数组使用 `*`。RPC 名采用 `E{entityId}_{Server|Client}_{methodId}`；cloudwu/sproto parser tag 使用 `entityId * 512 + side * 256 + methodId`，entity id ≤63、method id ≤254、tag ≤32766。Avatar fixture 已通过上游 parser 和标准字节向量。JS/C# 输出是最小 SDK 接口，不是完整客户端运行库。详见[路线及验收证据](./bigworld-like-protocol.md#已实现状态与证据)。仍缺网络运行时加载/路由、deadline/cancel 传输传播、hosting-generation 栅栏、生产级 JS/C# codec 及自动属性同步。适用 Mistlane，不调整 Apollo 架构或进程命名。客户端目标为 JavaScript 和 C#；客户端随契约重新生成、构建和发布，服务器的业务契约更新不重新编译 C++ 二进制。
 
 ## 设计选择
 
@@ -352,7 +352,7 @@ inventory 及其类型须先在契约中声明；上述为行为示意，不是�
 
 1. 固定 `.def` 的 XSD、类型规则、编号锁文件、兼容规则、协议 envelope 和错误结构。XSD、类型规则与编号锁已实现；envelope 字段与封闭错误词表已定。`mistlane contract compat OLD.lock NEW.lock` 已提供发布兼容检查：两侧锁文本解析进同一共享条目模型，新增保持兼容，删除、改号、含义变化、退役 id 复用与退役留位删除一律拒绝。envelope/error 规范编码已实现为进程内编解码（`entity.envelope` 用例断言）；跨语言黄金向量仍开放；参数 codec 与进程内枚举结果不能代替此闸门。见[实现证据与剩余闸门](./protocol-analysis.md#缺口)，缺口 7。
 2. 做 C++/Lua、JS、C# 编解码原型；覆盖 INT64 边界、UTF-8、bytes、空值/空数组、嵌套结构、未知字段、截断和畸形输入；共享黄金字节样本。进展（2026-10-20）：INT64 边界向量（正负值超出 JS Number 安全域）、缺省字段、未知 tag 跳过与截断/畸形拒绝已在四语言锁定（上游 Lua、C++ probe 独立编解码、JS `bigint`、C# `long`），嵌套结构字段、整数数组（4/8 字节元素）与空数组也已锁定——JS/C# codec 升级为 schema 驱动（字段表携带 `kind`/`of`，decode 递归穿越结构与数组，C# 值模型扩到 `Dictionary<string,object>`）；上游 sproto `todword` 解码缺陷已复现、定位并在独立 codec 中规避（见验证记录）；UTF-8、bytes 与 BOOL 线形态（布尔 in-band 词、UTF-8 字符串与二进制标量、布尔/字符串/二进制数组及其空变体）也已在全语言锁定。
-3. 实现 bundle 原子加载与生成工具；同一输入可复现相同输出，非法/冲突/缺实现不能发布就绪；客户端产物不包含服务器内部方法和私有属性描述。
+3. 实现 bundle 原子加载与生成工具；同一输入可复现相同输出，非法/冲突/缺实现不能发布就绪；客户端产物不包含服务器内部方法和私有属性描述。*已于 2026-10-20 实现*：`contract build` 生成逐工件 `bundle.manifest`；`contract load DIR` 在报告就绪前逐个校验摘要、清扫未列出文件并核对发布锁的摘要；客户端受众绑定剔除 `caller="server"` 方法与 SERVER_ONLY 属性。
 4. 实现 Entity 身份、受控属性、RPC 分发与客户端代理；再接同步基线/增量和持久化，验证重连、离线、写冲突与损坏数据。
 5. 实现代码安全替换和协议版本进程迁移；在新旧 JS/C# 客户端矩阵下验证观察者同步、在途请求、失败恢复与回退。
 6. 验证同一个服务器二进制摘要，先后加载两版契约，完成新属性与新方法调用；只有这项通过才能声称业务协议更新不需要重编服务器。

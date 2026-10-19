@@ -22,6 +22,7 @@
 #include <sstream>
 #include <netinet/in.h>
 #include <sys/ioctl.h>
+#include <openssl/evp.h>
 
 namespace mistlane::test {
 void rpc_lifecycle() {
@@ -2628,7 +2629,7 @@ void contract_tool() {
     const auto one = c.path("bundle");
     require(c.command({self().string(), "contract", "build", "--out", one.string(), good.string()}) == 0,
             "build failed on a valid document");
-    for (const auto& name : {"avatar.xsd", "avatar.lock", "avatar.digest", "avatar.sproto", "avatar.bindings.hpp", "avatar.bindings.js", "avatar.bindings.cs"})
+    for (const auto& name : {"avatar.xsd", "avatar.lock", "avatar.digest", "avatar.sproto", "avatar.bindings.hpp", "avatar.bindings.js", "avatar.bindings.cs", "avatar.client.js", "avatar.client.cs", "bundle.manifest"})
         require(fs::is_regular_file(one/name), std::string("missing artifact: ")+name);
     const auto two = c.path("rebuild");
     require(c.command({self().string(), "contract", "build", "--out", two.string(), good.string()}) == 0,
@@ -2640,6 +2641,9 @@ void contract_tool() {
     equal(read(one/"avatar.bindings.hpp"), read(two/"avatar.bindings.hpp"));
     equal(read(one/"avatar.bindings.js"), read(two/"avatar.bindings.js"));
     equal(read(one/"avatar.bindings.cs"), read(two/"avatar.bindings.cs"));
+    equal(read(one/"avatar.client.js"), read(two/"avatar.client.js"));
+    equal(read(one/"avatar.client.cs"), read(two/"avatar.client.cs"));
+    equal(read(one/"bundle.manifest"), read(two/"bundle.manifest"));
     const auto generated_bindings=read(one/"avatar.bindings.hpp");
     require(generated_bindings.find("struct Avatar_server_attackArgs") != std::string::npos &&
             generated_bindings.find("std::int64_t target;") != std::string::npos &&
@@ -2677,6 +2681,50 @@ void contract_tool() {
             cs_bindings.find("\"aliases\", SprotoKind.StringArray, null") != std::string::npos &&
             cs_bindings.find("\"certs\", SprotoKind.BytesArray, null") != std::string::npos,
             "generated C# field tables lost kind/sub");
+    // Client-audience artifacts carry only what a client may see: OWN_CLIENT
+    // properties and owner-callable/notify methods. The server-internal method
+    // (caller="server") and every SERVER_ONLY property stay out. The codec body
+    // is byte-identical to the server one, so wire conformance is inherited.
+    const auto js_client = read(one/"avatar.client.js");
+    require(js_client.find("name: 'level'") != std::string::npos &&
+            js_client.find("name: 'gold'") != std::string::npos &&
+            js_client.find("name: 'inventory'") != std::string::npos &&
+            js_client.find("Avatar_attack_Args") != std::string::npos &&
+            js_client.find("Avatar_onReward_Args") != std::string::npos &&
+            js_client.find("export function encodeRecord") != std::string::npos,
+            "client JS artifact lost its client-visible surface");
+    require(js_client.find("getProfile") == std::string::npos &&
+            js_client.find("name: 'active'") == std::string::npos &&
+            js_client.find("name: 'nick'") == std::string::npos &&
+            js_client.find("name: 'blob'") == std::string::npos &&
+            js_client.find("name: 'flags'") == std::string::npos &&
+            js_client.find("name: 'aliases'") == std::string::npos &&
+            js_client.find("name: 'certs'") == std::string::npos &&
+            js_client.find("name: 'tags'") == std::string::npos,
+            "client JS artifact leaked a private property");
+    const auto cs_client = read(one/"avatar.client.cs");
+    require(cs_client.find("public sealed record Avatar(") != std::string::npos &&
+            cs_client.find("AvatarSchema") != std::string::npos &&
+            cs_client.find("SprotoKind.Struct, \"Inventory\"") != std::string::npos &&
+            cs_client.find("\"level\"") != std::string::npos &&
+            cs_client.find("\"gold\"") != std::string::npos &&
+            cs_client.find("Avatar_attackArgs") != std::string::npos &&
+            cs_client.find("Avatar_onRewardArgs") != std::string::npos,
+            "client C# artifact lost its client-visible surface");
+    require(cs_client.find("getProfile") == std::string::npos &&
+            cs_client.find("\"active\"") == std::string::npos &&
+            cs_client.find("\"nick\"") == std::string::npos &&
+            cs_client.find("\"blob\"") == std::string::npos &&
+            cs_client.find("\"certs\"") == std::string::npos,
+            "client C# artifact leaked a private descriptor");
+    const auto manifest = read(one/"bundle.manifest");
+    require(manifest.find("# mistlane server bundle manifest\n# format 1\n") == 0,
+            "bundle manifest header malformed: "+manifest);
+    for (const auto* listed : {"avatar.xsd", "avatar.lock", "avatar.digest", "avatar.sproto",
+            "avatar.bindings.hpp", "avatar.bindings.js", "avatar.bindings.cs", "avatar.client.js", "avatar.client.cs"})
+        require(manifest.find(std::string("file ")+listed+" sha256 ") != std::string::npos,
+                std::string("manifest lost ")+listed);
+    require(manifest.find("file bundle.manifest ") == std::string::npos, "manifest digests itself");
     const auto old_lock = c.path("old.lock"), compatible_lock = c.path("compatible.lock"), breaking_lock = c.path("breaking.lock");
     const auto release_lock = read(one/"avatar.lock");
     auto with_digest = [](std::string text, std::string_view digest) {
@@ -2765,6 +2813,73 @@ void contract_tool() {
     std::ostringstream hex;
     hex << std::hex << std::setw(16) << std::setfill('0') << EntityContract(avatar).digest();
     equal(hex.str(), read(one/"avatar.digest").substr(0, 16));
+    // Server bundle loading is all-or-nothing: a clean build reports ready,
+    // and a tampered artifact, a missing file, an unlisted stray, an
+    // internally inconsistent re-signed manifest and an unknown manifest
+    // format each refuse readiness and name the cause.
+    auto sha256_of = [](const std::string& data) {
+        unsigned char md[EVP_MAX_MD_SIZE]; std::size_t len = 0;
+        require(EVP_Q_digest(nullptr, "SHA256", nullptr, data.data(), data.size(), md, &len) == 1 && len == 32,
+                "sha256 of test data failed");
+        static const char* digits = "0123456789abcdef";
+        std::string out;
+        for (unsigned int i = 0; i < len; ++i) { out += digits[md[i] >> 4]; out += digits[md[i] & 15]; }
+        return out;
+    };
+    auto& ready = c.spawn({self().string(), "contract", "load", one.string()});
+    require(ready.wait() == 0, "bundle load rejected a clean build: "+ready.output());
+    require(ready.output().find("BUNDLE_READY") != std::string::npos,
+            "ready load did not report readiness: "+ready.output());
+    std::cout << ready.output();
+    write(one/"avatar.bindings.js", read(one/"avatar.bindings.js")+"\n");
+    auto& tampered = c.spawn({self().string(), "contract", "load", one.string()});
+    require(tampered.wait() != 0, "a tampered artifact became ready");
+    require(tampered.output().find("avatar.bindings.js") != std::string::npos &&
+            tampered.output().find("digest mismatch") != std::string::npos,
+            "tamper report did not name the artifact: "+tampered.output());
+    write(one/"avatar.bindings.js", read(two/"avatar.bindings.js"));
+    fs::remove(one/"avatar.sproto");
+    auto& incomplete = c.spawn({self().string(), "contract", "load", one.string()});
+    require(incomplete.wait() != 0 && incomplete.output().find("avatar.sproto") != std::string::npos,
+            "a bundle with a missing artifact became ready: "+incomplete.output());
+    write(one/"avatar.sproto", read(two/"avatar.sproto"));
+    write(one/"junk.txt", "x");
+    auto& swept = c.spawn({self().string(), "contract", "load", one.string()});
+    require(swept.wait() != 0 && swept.output().find("junk.txt") != std::string::npos,
+            "an unlisted file became ready: "+swept.output());
+    fs::remove(one/"junk.txt");
+    const auto resigned = c.path("resigned");
+    fs::create_directories(resigned);
+    for (const auto& entry : fs::directory_iterator(two))
+        if (entry.is_regular_file())
+            fs::copy_file(entry.path(), resigned/entry.path().filename(), fs::copy_options::overwrite_existing);
+    const std::string lied_digest = "deadbeefdeadbeef\n";
+    const auto digest_entry = std::string("file avatar.digest sha256 ");
+    auto resigned_manifest = read(resigned/"bundle.manifest");
+    write(resigned/"avatar.digest", lied_digest);
+    const auto entry_at = resigned_manifest.find(digest_entry);
+    require(entry_at != std::string::npos, "manifest lost the digest entry");
+    resigned_manifest.replace(entry_at+digest_entry.size(), 64, sha256_of(lied_digest));
+    write(resigned/"bundle.manifest", resigned_manifest);
+    auto& resigned_load = c.spawn({self().string(), "contract", "load", resigned.string()});
+    require(resigned_load.wait() != 0, "a re-signed internally inconsistent bundle became ready");
+    require(resigned_load.output().find("model digest") != std::string::npos,
+            "disagreement report did not name the model digest: "+resigned_load.output());
+    const auto reformatted = c.path("reformatted");
+    fs::create_directories(reformatted);
+    for (const auto& entry : fs::directory_iterator(two))
+        if (entry.is_regular_file())
+            fs::copy_file(entry.path(), reformatted/entry.path().filename(), fs::copy_options::overwrite_existing);
+    auto reformatted_manifest = read(reformatted/"bundle.manifest");
+    const auto format_at = reformatted_manifest.find("# format 1");
+    require(format_at != std::string::npos, "manifest lost its format line");
+    reformatted_manifest.replace(format_at, 10, "# format 2");
+    write(reformatted/"bundle.manifest", reformatted_manifest);
+    auto& reformatted_load = c.spawn({self().string(), "contract", "load", reformatted.string()});
+    require(reformatted_load.wait() != 0, "an unknown manifest format became ready");
+    require(reformatted_load.output().find("unsupported bundle format") != std::string::npos,
+            "format report did not name the version: "+reformatted_load.output());
+    std::cout << "contract.bundle load: ready/tampered/missing/unlisted/resigned/format refusals [PASS]\n";
     require(read(one/"avatar.xsd").find("name=\"Avatar\"") != std::string::npos,
             "schema lost the entity");
     const EntityContract dispatch_contract(avatar);
