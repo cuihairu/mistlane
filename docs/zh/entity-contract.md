@@ -240,7 +240,7 @@ flowchart TB
 
 ## 调用 envelope 与错误协议（已代决；规范进程内编解码已实现）
 
-下面的 envelope 固定目标网络调用字段。进程内 `EntityRuntime` 与 `RpcHarness` 夹具已实现寻址及部分生命周期结果；有界 `RpcQueue`（`include/mistlane/entity_runtime.hpp`）为内部调用设闸——容量溢出是类型化 `CAPACITY` 拒绝、期限与取消分别显式为 `TIMEOUT`/`CANCELLED`、迟到应答丢弃，非幂等超时绝不静默重试（重试须显式声明幂等且换新代号，投递层对被烧代号回 `CONFLICT`）。规范 envelope 字节与序列化错误应答已实现为进程内编解码（`include/mistlane/entity_envelope.hpp`），但尚无线上动词在真实传输上承载它们。字段语义已定，真实传输绑定尚未实现。
+下面的 envelope 固定目标网络调用字段。进程内 `EntityRuntime` 与 `RpcHarness` 夹具已实现寻址及部分生命周期结果；有界 `RpcQueue`（`include/mistlane/entity_runtime.hpp`）为内部调用设闸——容量溢出是类型化 `CAPACITY` 拒绝、期限与取消分别显式为 `TIMEOUT`/`CANCELLED`、迟到应答丢弃，非幂等超时绝不静默重试（重试须显式声明幂等且换新代号，投递层对被烧代号回 `CONFLICT`）。规范 envelope 字节与序列化错误应答已实现为进程内编解码（`include/mistlane/entity_envelope.hpp`），并照原样生成进 JS/C# 绑定（两侧 SDK golden 锁定），但尚无线上动词在真实传输上承载它们。字段语义已定，真实传输绑定尚未实现。
 
 实体调用是现有传输分帧（MLC1/MLC2/MLM1 帧或客户端会话通道）内的一种载荷，不是新的 TCP 协议，仍在 1 MiB 有界帧内。字段顺序：
 
@@ -350,7 +350,7 @@ inventory 及其类型须先在契约中声明；上述为行为示意，不是�
 
 ## 发布与验收顺序
 
-1. 固定 `.def` 的 XSD、类型规则、编号锁文件、兼容规则、协议 envelope 和错误结构。XSD、类型规则、types.xml 复合类型引用与编号锁已实现（types.xml 引用于 2026-10-20 落地，见上文类型一节）；envelope 字段与封闭错误词表已定。`mistlane contract compat OLD.lock NEW.lock` 已提供发布兼容检查：两侧锁文本解析进同一共享条目模型，新增保持兼容，删除、改号、含义变化、退役 id 复用与退役留位删除一律拒绝。envelope/error 规范编码已实现为进程内编解码（`entity.envelope` 用例断言）；跨语言黄金向量仍开放；参数 codec 与进程内枚举结果不能代替此闸门。见[实现证据与剩余闸门](./protocol-analysis.md#缺口)，缺口 7。
+1. 固定 `.def` 的 XSD、类型规则、编号锁文件、兼容规则、协议 envelope 和错误结构。XSD、类型规则、types.xml 复合类型引用与编号锁已实现（types.xml 引用于 2026-10-20 落地，见上文类型一节）；envelope 字段与封闭错误词表已定。`mistlane contract compat OLD.lock NEW.lock` 已提供发布兼容检查：两侧锁文本解析进同一共享条目模型，新增保持兼容，删除、改号、含义变化、退役 id 复用与退役留位删除一律拒绝。envelope/error 规范编码已实现为进程内编解码（`entity.envelope` 用例断言），同一编解码照原样生成进 JS/C# 绑定（全部受众），跨语言黄金向量已锁定——套件内 `examples/sproto_sdk_golden.mjs` 与 owner 自跑 `examples/sproto_sdk_golden.cs` 锁定规范/极端向量、应答字节与畸形拒绝；仅真实传输绑定仍开放。见[实现证据与剩余闸门](./protocol-analysis.md#缺口)，缺口 7。
 2. 做 C++/Lua、JS、C# 编解码原型；覆盖 INT64 边界、UTF-8、bytes、空值/空数组、嵌套结构、未知字段、截断和畸形输入；共享黄金字节样本。进展（2026-10-20）：INT64 边界向量（正负值超出 JS Number 安全域）、缺省字段、未知 tag 跳过与截断/畸形拒绝已在四语言锁定（上游 Lua、C++ probe 独立编解码、JS `bigint`、C# `long`），嵌套结构字段、整数数组（4/8 字节元素）与空数组也已锁定——JS/C# codec 升级为 schema 驱动（字段表携带 `kind`/`of`，decode 递归穿越结构与数组，C# 值模型扩到 `Dictionary<string,object>`）；上游 sproto `todword` 解码缺陷已复现、定位并在独立 codec 中规避（见验证记录）；UTF-8、bytes 与 BOOL 线形态（布尔 in-band 词、UTF-8 字符串与二进制标量、布尔/字符串/二进制数组及其空变体）也已在全语言锁定。
 3. 实现 bundle 原子加载与生成工具；同一输入可复现相同输出，非法/冲突/缺实现不能发布就绪；客户端产物不包含服务器内部方法和私有属性描述。*已于 2026-10-20 实现*：`contract build` 生成逐工件 `bundle.manifest`；`contract load DIR` 在报告就绪前逐个校验摘要、清扫未列出文件并核对发布锁的摘要；客户端受众绑定剔除 `caller="server"` 方法与 SERVER_ONLY 属性。
 4. 实现 Entity 身份、受控属性、RPC 分发与客户端代理；再接同步基线/增量和持久化，验证重连、离线、写冲突与损坏数据。*第一子片已于 2026-10-20 实现*：`PropertyStore`（`include/mistlane/entity_property.hpp`）纯由描述驱动缺省值、类型化写入、受众视图与只读保留代理；`push_entity_properties`（`src/entity_lua.cpp`）以表式代理把同一存储暴露给 Lua，拒绝语义一致。*嵌套半片已于 2026-10-20 实现*：绑定对结构/数组属性返回活嵌套代理，其写入直接落库并像 C++ 一样记日志。*投递半片已于 2026-10-20 实现（进程内）*：`PropertyChannel`/`SyncReceiver`（`include/mistlane/entity_sync.hpp`）投递基线与经观察者过滤的增量批次，逐观察者序列、原子应用或整批缺口拒绝（见验证记录）。身份/生命周期仍是进程内 `EntityRuntime` fixture；线上传输、重连与持久化仍开放。

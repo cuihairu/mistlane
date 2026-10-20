@@ -3,8 +3,9 @@ import { pathToFileURL } from 'node:url';
 
 const modulePath = process.argv[2];
 if (!modulePath) throw new Error('usage: node sproto_sdk_golden.mjs GENERATED.bindings.js');
-const { encodeRecord, decodeRecord, sprotoFields } = await import(pathToFileURL(modulePath));
+const { encodeRecord, decodeRecord, sprotoFields, encodeEnvelope, decodeEnvelope, encodeReply, decodeReply } = await import(pathToFileURL(modulePath));
 const hex = (bytes) => [...bytes].map((byte) => byte.toString(16).padStart(2, '0')).join('');
+const utf8 = (text) => new TextEncoder().encode(text);
 const unhex = (text) => Uint8Array.from(text.match(/../g), (pair) => parseInt(pair, 16));
 const expectThrow = (label, fn) => {
   try { fn(); } catch (error) {
@@ -142,3 +143,58 @@ expectThrow('unsupported kind', () => encodeRecord(unsupported, { zz: true }));
 expectThrow('unsupported in-band decode', () => decodeRecord(unsupported, unhex('01000200')));
 expectThrow('unsupported length-prefixed decode', () => decodeRecord(unsupported, unhex('0100000000000000')));
 console.log('JS_SPROTO_SDK_CODEC unsupported kinds refused [PASS]');
+
+// Invocation envelope and typed reply (docs/entity-contract.md): the C++
+// server bytes are the reference (the entity.envelope case pins them). The
+// generated client codec must encode the same fixed big-endian header byte
+// for byte — the canonical vector and the extremes with a negative entity id
+// and the maximum correlation — decode them exactly, and fail closed on
+// truncation, unknown side bytes, malformed reply kinds/codes, reason lengths
+// that do not match, reasons outside UTF-8 and trailing bytes.
+const canonicalBytes = '0000000700000001000000000000002a00000003010002112233445566778800000005000000fa7061796c6f6164';
+const canonical = encodeEnvelope(
+  { scope: 7, type_id: 1, entity_id: 42n, incarnation: 3, side: 1, method_id: 2,
+    correlation_id: 0x1122334455667788n, hosting_generation: 5, deadline_ms: 250 },
+  utf8('payload'));
+if (hex(canonical) !== canonicalBytes) throw new Error('envelope canonical bytes drifted');
+const decodedEnvelope = decodeEnvelope(unhex(canonicalBytes));
+if (!decodedEnvelope || decodedEnvelope.entity_id !== 42n || decodedEnvelope.correlation_id !== 0x1122334455667788n
+  || decodedEnvelope.side !== 1 || decodedEnvelope.deadline_ms !== 250
+  || hex(decodedEnvelope.payload) !== '7061796c6f6164')
+  throw new Error('envelope decode lost fields');
+const extremeBytes = 'ffffffff0000003ffffffffffffffffdffffffff0000fefffffffffffffffffffffffeffffffff';
+const extreme = decodeEnvelope(unhex(extremeBytes));
+if (extreme.entity_id !== -3n || extreme.correlation_id !== 0xffffffffffffffffn)
+  throw new Error('envelope signed entity id or unsigned correlation lost');
+const extremeRoundTrip = encodeEnvelope(extreme, extreme.payload);
+if (hex(extremeRoundTrip) !== extremeBytes) throw new Error('envelope extreme re-encode drifted');
+if (decodeEnvelope(unhex('0000000700000001000000000000002a00000003')) !== null)
+  throw new Error('truncated envelope decoded');
+const badSide = unhex(canonicalBytes);
+badSide[20] = 2;
+if (decodeEnvelope(badSide) !== null) throw new Error('unknown side byte decoded');
+expectThrow('envelope side range', () => encodeEnvelope({ side: 2 }, new Uint8Array(0)));
+expectThrow('envelope negative correlation', () => encodeEnvelope({ correlation_id: -1n }, new Uint8Array(0)));
+if (hex(encodeReply({ payload: utf8('returns') })) !== '0072657475726e73')
+  throw new Error('ok reply drifted');
+if (hex(encodeReply({ error: 'INVALID', reason: 'bad shape' })) !== '01000009626164207368617065')
+  throw new Error('INVALID reply drifted');
+if (hex(encodeReply({ error: 'STALE' })) !== '0102') throw new Error('STALE reply drifted');
+const decodedOk = decodeReply(unhex('0072657475726e73'));
+if (!decodedOk || decodedOk.error !== null || hex(decodedOk.payload) !== '72657475726e73')
+  throw new Error('ok reply decode failed');
+const decodedInvalid = decodeReply(unhex('01000009626164207368617065'));
+if (!decodedInvalid || decodedInvalid.error !== 'INVALID' || decodedInvalid.reason !== 'bad shape')
+  throw new Error('INVALID reply reason lost');
+const decodedStale = decodeReply(unhex('0102'));
+if (!decodedStale || decodedStale.error !== 'STALE') throw new Error('STALE reply decode failed');
+if (decodeReply(new Uint8Array(0)) !== null) throw new Error('empty reply decoded');
+if (decodeReply(unhex('0578')) !== null) throw new Error('unknown reply kind decoded');
+if (decodeReply(unhex('01c8')) !== null) throw new Error('unknown error code decoded');
+if (decodeReply(unhex('01')) !== null) throw new Error('truncated reply decoded');
+if (decodeReply(unhex('010000056162')) !== null) throw new Error('reason length mismatch decoded');
+if (decodeReply(unhex('010200')) !== null) throw new Error('trailing bytes after STALE decoded');
+if (decodeReply(unhex('01000002ffff')) !== null) throw new Error('invalid utf-8 reason decoded');
+expectThrow('reply reason on non-INVALID', () => encodeReply({ error: 'STALE', reason: 'x' }));
+expectThrow('reply unknown error', () => encodeReply({ error: 'NOPE' }));
+console.log('JS_ENTITY_ENVELOPE canonical/extremes/replies and malformed refusals [PASS]');

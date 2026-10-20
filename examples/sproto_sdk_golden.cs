@@ -15,6 +15,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Text;
 using Mistlane.Contracts;
 
 internal static class Program
@@ -170,12 +171,88 @@ internal static class Program
         ThrowsDecode("unsupported length-prefixed decode", new SprotoField[] { unsupported }, Unhex("0100000000000000"));
         Console.WriteLine("CS_SPROTO_SDK_ENCODE non-integer/shape/unsupported-kind rejected [PASS]");
     }
+    private static void AssertEnvelope()
+    {
+        // The invocation envelope and typed reply (docs/entity-contract.md):
+        // the C++ server bytes are the reference (the entity.envelope case pins
+        // them). The generated client codec encodes the same fixed big-endian
+        // header byte for byte — the canonical vector, then the extremes with
+        // a negative entity id and the maximum correlation — decodes them
+        // exactly, and fails closed on truncation, unknown side bytes and
+        // malformed replies (kind, code, reason length, UTF-8, trailing).
+        void Throws(string label, Func<byte[]> encode)
+        {
+            try { encode(); }
+            catch (InvalidDataException) { return; }
+            catch (Exception error) { throw new InvalidOperationException(label + ": unexpected error class " + error.GetType().Name); }
+            throw new InvalidOperationException(label + " encoded instead of throwing");
+        }
+        var canonical = new EntityEnvelope(7, 1, 42, 3, 1, 2, 0x1122334455667788UL, 5, 250,
+            Encoding.UTF8.GetBytes("payload"));
+        var canonicalBytes = Unhex("0000000700000001000000000000002a00000003010002112233445566778800000005000000fa7061796c6f6164");
+        if (!EntityEnvelopeCodec.Encode(canonical).SequenceEqual(canonicalBytes))
+            throw new InvalidOperationException("envelope canonical bytes drifted");
+        var decoded = EntityEnvelopeCodec.Decode(canonicalBytes);
+        if (decoded == null || decoded.Value.Scope != 7 || decoded.Value.EntityId != 42 ||
+            decoded.Value.Incarnation != 3 || decoded.Value.Side != 1 || decoded.Value.MethodId != 2 ||
+            decoded.Value.CorrelationId != 0x1122334455667788UL || decoded.Value.HostingGeneration != 5 ||
+            decoded.Value.DeadlineMs != 250 || !decoded.Value.Payload.SequenceEqual(canonical.Payload))
+            throw new InvalidOperationException("envelope decode lost fields");
+        var extremeBytes = Unhex("ffffffff0000003ffffffffffffffffdffffffff0000fefffffffffffffffffffffffeffffffff");
+        var extreme = EntityEnvelopeCodec.Decode(extremeBytes);
+        if (extreme == null || extreme.Value.EntityId != -3 || extreme.Value.CorrelationId != ulong.MaxValue)
+            throw new InvalidOperationException("envelope signed entity id or unsigned correlation lost");
+        if (!EntityEnvelopeCodec.Encode(extreme.Value).SequenceEqual(extremeBytes))
+            throw new InvalidOperationException("envelope extreme re-encode drifted");
+        if (EntityEnvelopeCodec.Decode(new byte[38]) != null)
+            throw new InvalidOperationException("truncated envelope decoded");
+        var badSide = (byte[])canonicalBytes.Clone();
+        badSide[20] = 2;
+        if (EntityEnvelopeCodec.Decode(badSide) != null)
+            throw new InvalidOperationException("unknown side byte decoded");
+        Throws("envelope side range", () => EntityEnvelopeCodec.Encode(new EntityEnvelope(0, 1, 0, 1, 2, 0, 0, 0, 0, Array.Empty<byte>())));
+        // Reply shape: one of returns or a typed error, never both.
+        if (!EntityEnvelopeCodec.EncodeReply(new EntityEnvelopeCodec.EntityReply(Encoding.UTF8.GetBytes("returns"), null, "")).SequenceEqual(Unhex("0072657475726e73")))
+            throw new InvalidOperationException("ok reply drifted");
+        if (!EntityEnvelopeCodec.EncodeReply(new EntityEnvelopeCodec.EntityReply(Array.Empty<byte>(), "INVALID", "bad shape")).SequenceEqual(Unhex("01000009626164207368617065")))
+            throw new InvalidOperationException("INVALID reply drifted");
+        if (!EntityEnvelopeCodec.EncodeReply(new EntityEnvelopeCodec.EntityReply(Array.Empty<byte>(), "STALE", "")).SequenceEqual(Unhex("0102")))
+            throw new InvalidOperationException("STALE reply drifted");
+        var replyOk = EntityEnvelopeCodec.DecodeReply(Unhex("0072657475726e73"));
+        if (replyOk == null || replyOk.Value.Error != null || !replyOk.Value.Payload.SequenceEqual(Encoding.UTF8.GetBytes("returns")))
+            throw new InvalidOperationException("ok reply decode failed");
+        var replyInvalid = EntityEnvelopeCodec.DecodeReply(Unhex("01000009626164207368617065"));
+        if (replyInvalid == null || replyInvalid.Value.Error != "INVALID" || replyInvalid.Value.Reason != "bad shape")
+            throw new InvalidOperationException("INVALID reply reason lost");
+        var replyStale = EntityEnvelopeCodec.DecodeReply(Unhex("0102"));
+        if (replyStale == null || replyStale.Value.Error != "STALE")
+            throw new InvalidOperationException("STALE reply decode failed");
+        if (EntityEnvelopeCodec.DecodeReply(Array.Empty<byte>()) != null)
+            throw new InvalidOperationException("empty reply decoded");
+        if (EntityEnvelopeCodec.DecodeReply(Unhex("0578")) != null)
+            throw new InvalidOperationException("unknown reply kind decoded");
+        if (EntityEnvelopeCodec.DecodeReply(Unhex("01c8")) != null)
+            throw new InvalidOperationException("unknown error code decoded");
+        if (EntityEnvelopeCodec.DecodeReply(Unhex("01")) != null)
+            throw new InvalidOperationException("truncated reply decoded");
+        if (EntityEnvelopeCodec.DecodeReply(Unhex("010000056162")) != null)
+            throw new InvalidOperationException("reason length mismatch decoded");
+        if (EntityEnvelopeCodec.DecodeReply(Unhex("010200")) != null)
+            throw new InvalidOperationException("trailing bytes after STALE decoded");
+        if (EntityEnvelopeCodec.DecodeReply(Unhex("01000002ffff")) != null)
+            throw new InvalidOperationException("invalid utf-8 reason decoded");
+        Throws("reply reason on non-INVALID", () => EntityEnvelopeCodec.EncodeReply(new EntityEnvelopeCodec.EntityReply(Array.Empty<byte>(), "STALE", "x")));
+        Throws("reply unknown error", () => EntityEnvelopeCodec.EncodeReply(new EntityEnvelopeCodec.EntityReply(Array.Empty<byte>(), "NOPE", "")));
+        Throws("reply reason too long", () => EntityEnvelopeCodec.EncodeReply(new EntityEnvelopeCodec.EntityReply(Array.Empty<byte>(), "INVALID", new string('a', 65536))));
+        Console.WriteLine("CS_ENTITY_ENVELOPE canonical/extremes/replies and malformed refusals [PASS]");
+    }
     public static int Main()
     {
         AssertVectors();
         AssertDecode();
         AssertMalformed();
         AssertEncodeRejections();
+        AssertEnvelope();
         Console.WriteLine("CS_SPROTO_SDK_OK scalar+struct+arrays+bool/string/bytes vectors and decode match the locked bytes");
         return 0;
     }
