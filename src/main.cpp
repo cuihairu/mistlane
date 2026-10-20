@@ -258,7 +258,9 @@ int main(int argc, char** argv) {
                              "SIGHUP: transactional script reload (state is reset)\n"
                              "  coordinator: --service-token TOKEN (require member identity); registry\n"
                              "    members connect with --coordinator IP:PORT [--scope NAME] and heartbeat\n"
-                             "    MLR1 REGISTER/QUERY/PLACE/ROUTE over framed TCP";
+                             "    MLR1 REGISTER/QUERY/PLACE/ROUTE over framed TCP; MLR1 MIG\n"
+                             "    OWNER/PREPARE/EVENT/COMMIT/ABORT/RETIRE/STATUS carry the migration\n"
+                             "    protocol for a (realm, character), idempotent by request id";
                 return 0;
             }
             if (++i >= tokens.size()) throw std::invalid_argument("missing value for "+key);

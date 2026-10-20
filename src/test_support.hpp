@@ -14,6 +14,7 @@
 #include <set>
 #include <spawn.h>
 #include <stdexcept>
+#include <source_location>
 #include <string>
 #include <sys/socket.h>
 #include <sys/wait.h>
@@ -31,9 +32,10 @@ inline fs::path self() { return fs::canonical("/proc/self/exe"); }
 inline void require(bool ok, const std::string& message) {
     if (!ok) throw std::runtime_error(message);
 }
-inline void equal(const std::string& actual, const std::string& expected) {
-    require(actual == expected, "response mismatch: expected " + std::to_string(expected.size()) +
-        " bytes, got " + std::to_string(actual.size()));
+inline void equal(const std::string& actual, const std::string& expected,
+                  const std::source_location& loc = std::source_location::current()) {
+    require(actual == expected, "L"+std::to_string(loc.line())+": response mismatch: expected " + std::to_string(expected.size()) +
+        " bytes, got " + std::to_string(actual.size())+"; want \""+expected+"\" got \""+actual+"\"");
 }
 template<class Work> void must_fail(Work work) {
     bool failed = false;

@@ -8,6 +8,7 @@
 #include "mistlane/transport.hpp"
 #include "mistlane/roles.hpp"
 #include "mistlane/record.hpp"
+#include "mistlane/migration.hpp"
 #include <utility>
 #include <boost/asio.hpp>
 #include <algorithm>
@@ -21,6 +22,7 @@
 #include <iostream>
 #include <deque>
 #include <map>
+#include <limits>
 #include <optional>
 #include <memory>
 #include <set>
@@ -1272,6 +1274,7 @@ public:
         if (found == members_.end() || found->second.second != owner) return false;
         members_.erase(found);
         drop_routes(scope, role, instance);
+        retire_members(scope, role, instance);
         return true;
     }
     // Character route record: the registry also remembers which live member
@@ -1313,6 +1316,34 @@ public:
         return found;
     }
     std::size_t size() const { return members_.size(); }
+    // Migration state, all on the node's event-loop thread like members_ and
+    // routes_: one volatile transaction per (realm, character), seeded from
+    // the home facts a service publishes. The coordinator stores facts, it is
+    // not the generation authority — home data publishes them, and the
+    // candidates handed out here are strictly newer than what was published.
+    bool owner_transaction(const MigrationKey& key, std::uint64_t generation, const MigrationOwner& owner) {
+        if (!valid_migration_owner(owner) || !generation) return false;
+        const auto found = migrations_.find(key);
+        if (found != migrations_.end()) {
+            // Facts are adopted once: a restatement must match the route the
+            // coordinator already holds, and a changed fact is a conflict.
+            return found->second.transaction->route() == MigrationRoute{owner, generation};
+        }
+        // The transaction holds the authority by reference, so both must share
+        // one lifetime in the map — a local authority would leave the reference
+        // dangling as soon as this function returns.
+        MigrationEntry fresh;
+        fresh.authority = std::make_shared<HomeGenerationAuthority>();
+        if (!fresh.authority->seed(key, generation)) return false; // already seeded, never reseeds
+        fresh.transaction = std::make_shared<MigrationTransaction>(
+            *fresh.authority, key, MigrationRoute{owner, generation});
+        migrations_.emplace(key, std::move(fresh));
+        return true;
+    }
+    std::shared_ptr<MigrationTransaction> transaction(const MigrationKey& key) {
+        const auto found = migrations_.find(key);
+        return found == migrations_.end() ? nullptr : found->second.transaction;
+    }
     static std::string line(const Member& member) {
         std::ostringstream out;
         out << "member " << member.role << ' ' << member.instance << ' ' << member.scope << ' '
@@ -1333,8 +1364,36 @@ private:
             else ++it;
         }
     }
+    // A member's leave is a retirement claim for every live transaction that
+    // depends on that process. The registry knows a process, not a scene, so
+    // the claim is matched on (scope, role, instance) and issued with the
+    // transaction's own owner value.
+    void retire_members(const std::string& scope, const std::string& role, const std::string& instance) {
+        const auto matches = [&](const MigrationOwner& owner) {
+            return owner.role == role && owner.instance == instance
+                && (owner.scope.realm == scope || owner.scope.cross_group == scope);
+        };
+        for (const auto& [key, entry] : migrations_) {
+            const auto& transaction = entry.transaction;
+            const auto snapshot = transaction->snapshot();
+            if (snapshot.current.empty()) continue;
+            const auto* row = transaction->entry(snapshot.current);
+            if (!row) continue;
+            if (matches(row->request.expected.owner))
+                transaction->retire_member(row->token, row->request.expected.owner);
+            else if (matches(row->request.destination))
+                transaction->retire_member(row->token, row->request.destination);
+        }
+    }
+    // The authority and its transaction share the map entry's lifetime: the
+    // transaction keeps the authority by reference.
+    struct MigrationEntry {
+        std::shared_ptr<HomeGenerationAuthority> authority;
+        std::shared_ptr<MigrationTransaction> transaction;
+    };
     std::map<std::string, std::pair<Member, void*>> members_;
     std::map<std::string, Route> routes_;
+    std::map<MigrationKey, MigrationEntry> migrations_;
 };
 // One coordinator control connection: a member registration with its heartbeat
 // channel, or a one-shot list/place query. The coordinator forwards no gameplay
@@ -1393,7 +1452,8 @@ private:
         close_with(std::string(magic)+" ERR "+reason);
     }
     void dispatch(std::string payload) {
-        if (payload.size() > 256) return refuse("INVALID"); // registry lines are tiny
+        // Registry lines are tiny; a migration line carries two owners.
+        if (payload.size() > (payload.starts_with("MLR1 MIG") ? 1024 : 256)) return refuse("INVALID");
         std::istringstream in(payload);
         std::string magic;
         in >> magic;
@@ -1402,6 +1462,7 @@ private:
         // handshake has to precede any registry traffic.
         if (!config_.service_token.empty() && !service_ok_) return refuse_service("MLS1", "TOKEN");
         if (magic != "MLR1") return refuse("UNEXPECTED");
+        if (payload.starts_with("MLR1 MIG")) return answer(migration_line(payload));
         if (!registered_) {
             if (payload.starts_with("MLR1 REGISTER")) return register_member(payload);
             return query(payload);
@@ -1534,6 +1595,204 @@ private:
             return answer(out.str());
         }
         return refuse("UNEXPECTED");
+    }
+    // MLR1 MIG: the migration model on the wire. It is registry traffic, so a
+    // tokened coordinator gates it behind MLS1 like any other leg, and every
+    // answer is keyed by the request id — a replayed frame repeats its verdict
+    // instead of allocating a newer generation. Facts arrive with OWNER; the
+    // coordinator stores them, it is not the generation authority.
+    //   MLR1 MIG OWNER   <realm> <character> <generation> <owner>
+    //   MLR1 MIG PREPARE <realm> <character> <id> <generation> <expected> <destination>
+    //   MLR1 MIG EVENT   <realm> <character> <id> <generation>
+    //     <DRAINED|FENCE|READY|CLEANUP>
+    //   MLR1 MIG COMMIT  <realm> <character> <id> <generation>
+    //   MLR1 MIG ABORT   <realm> <character> <id> <generation>
+    //   MLR1 MIG RETIRE  <realm> <character> <id> <generation> <owner>
+    //   MLR1 MIG STATUS  <realm> <character>
+    // where <owner> is "<realm|cross> <scope> <role> <instance> <scene>".
+    //   -> MLR1 MIG OWNER OK | PREPARED <id> <generation> | STEP <id> <STATE>
+    //    | COMMITTED <id> <owner> <generation> | ABORTING <id> | ABORTED <id>
+    //    | PENDING <id>
+    //    | STATE idle <owner> <generation> | STATE <id> <STATE> <drained|open>
+    //      <fenced|unfenced> <ready|notready> <generation>
+    //    | MLR1 EMPTY | MLR1 ERR INVALID | STALE | CONFLICT | ORDER | UNEXPECTED
+    static std::string owner_text(const MigrationOwner& owner) {
+        std::ostringstream out;
+        const bool realm = owner.scope.kind == MigrationScope::Kind::Realm;
+        out << (realm ? "realm" : "cross") << ' '
+            << (realm ? owner.scope.realm : owner.scope.cross_group)
+            << ' ' << owner.role << ' ' << owner.instance << ' ' << owner.scene;
+        return out.str();
+    }
+    static bool owner_fields(std::istream& in, MigrationOwner& owner) {
+        std::string kind, scope, role, instance, scene;
+        if (!(in >> kind >> scope >> role >> instance >> scene)) return false;
+        if (kind == "realm") {
+            owner.scope.kind = MigrationScope::Kind::Realm;
+            owner.scope.realm = scope;
+        } else if (kind == "cross") {
+            owner.scope.kind = MigrationScope::Kind::CrossGroup;
+            owner.scope.cross_group = scope;
+        } else return false;
+        owner.role = role;
+        owner.instance = instance;
+        owner.scene = scene;
+        return true;
+    }
+    static bool migration_generation(const std::string& text, std::uint64_t& generation) {
+        if (text.empty() || text.size() > 19) return false;
+        generation = 0;
+        for (unsigned char ch : text) {
+            if (ch < '0' || ch > '9') return false;
+            if (generation > (std::numeric_limits<std::uint64_t>::max() - (ch-'0'))/10) return false;
+            generation = generation*10 + (ch-'0');
+        }
+        return generation != 0;
+    }
+    static bool migration_token(std::istream& in, MigrationToken& token) {
+        std::string id, generation;
+        if (!(in >> token.id >> generation) || !record_identifier(token.id)) return false;
+        return migration_generation(generation, token.generation);
+    }
+    static std::string migration_state(MigrationState state) {
+        switch (state) {
+        case MigrationState::Preparing: return "PREPARING";
+        case MigrationState::Aborting: return "ABORTING";
+        case MigrationState::Recovering: return "RECOVERING";
+        case MigrationState::Committed: return "COMMITTED";
+        case MigrationState::Aborted: return "ABORTED";
+        default: return "IDLE";
+        }
+    }
+    static std::string migration_reason(MigrationResult result) {
+        switch (result) {
+        case MigrationResult::Stale: return "STALE";
+        case MigrationResult::Conflict: return "CONFLICT";
+        case MigrationResult::Order: return "ORDER";
+        case MigrationResult::Pending: return "PENDING";
+        default: return "INVALID";
+        }
+    }
+    // Applied and Duplicate answer the same line: idempotent by request id.
+    static std::string migration_verdict(const MigrationToken& token, MigrationResult result,
+                                         const std::string& success) {
+        if (result == MigrationResult::Applied || result == MigrationResult::Duplicate) return success;
+        if (result == MigrationResult::Pending) return "MLR1 MIG PENDING " + token.id;
+        return "MLR1 ERR " + migration_reason(result);
+    }
+    static std::string migration_state_line(const MigrationTransaction::Entry& row) {
+        std::ostringstream out;
+        out << "MLR1 MIG STATE " << row.token.id << ' ' << migration_state(row.state) << ' '
+            << (row.source_drained ? "drained" : "open") << ' '
+            << (row.home_fenced ? "fenced" : "unfenced") << ' '
+            << (row.destination_ready ? "ready" : "notready") << ' ' << row.token.generation;
+        return out.str();
+    }
+    std::string migration_line(const std::string& payload) {
+        std::istringstream in(payload);
+        std::string magic, tag, verb, realm, character, generation, event, extra;
+        if (!(in >> magic >> tag)) return "MLR1 ERR UNEXPECTED";
+        if (tag != "MIG") return "MLR1 ERR INVALID";
+        if (!(in >> verb)) return "MLR1 ERR UNEXPECTED";
+        if (!(in >> realm >> character) || !record_identifier(realm) || !record_identifier(character))
+            return "MLR1 ERR INVALID";
+        const MigrationKey key{realm, character};
+        if (verb == "OWNER") {
+            std::uint64_t value = 0;
+            MigrationOwner owner;
+            // A shape-invalid owner is INVALID; only a disagreement with facts
+            // the coordinator already holds is CONFLICT.
+            if (!(in >> generation) || !migration_generation(generation, value)
+                    || !owner_fields(in, owner) || !valid_migration_owner(owner) || (in >> extra))
+                return "MLR1 ERR INVALID";
+            if (!registry_.owner_transaction(key, value, owner)) return "MLR1 ERR CONFLICT";
+            return "MLR1 MIG OWNER OK";
+        }
+        if (verb == "PREPARE") {
+            MigrationToken token;
+            MigrationRequest request;
+            if (!migration_token(in, token) || !owner_fields(in, request.expected.owner)
+                    || !owner_fields(in, request.destination) || (in >> extra)) return "MLR1 ERR INVALID";
+            const auto tx = registry_.transaction(key);
+            if (!tx) return "MLR1 ERR EMPTY";
+            request.key = key;
+            request.id = token.id;
+            request.expected.generation = token.generation;
+            const auto result = tx->prepare(request);
+            if (result != MigrationResult::Applied && result != MigrationResult::Duplicate)
+                return "MLR1 ERR " + migration_reason(result);
+            const auto* row = tx->entry(token.id);
+            std::ostringstream out;
+            out << "MLR1 MIG PREPARED " << token.id << ' ' << (row ? row->token.generation : 0);
+            return out.str();
+        }
+        if (verb == "EVENT") {
+            MigrationToken token;
+            MigrationEvent step;
+            if (!migration_token(in, token) || !(in >> event) || (in >> extra)) return "MLR1 ERR INVALID";
+            token.key = key;
+            if (event == "DRAINED") step = MigrationEvent::SourceDrained;
+            else if (event == "FENCE") step = MigrationEvent::HomeFence;
+            else if (event == "READY") step = MigrationEvent::DestinationReady;
+            else if (event == "CLEANUP") step = MigrationEvent::Cleanup;
+            else return "MLR1 ERR INVALID";
+            const auto tx = registry_.transaction(key);
+            if (!tx) return "MLR1 ERR EMPTY";
+            const auto result = tx->apply(token, step);
+            // The step answer names the state the event produced, so read it
+            // strictly after apply — argument evaluation order is unspecified.
+            const std::string stepped = "MLR1 MIG STEP " + token.id + " " + migration_state(tx->state());
+            return migration_verdict(token, result, stepped);
+        }
+        if (verb == "COMMIT") {
+            MigrationToken token;
+            if (!migration_token(in, token) || (in >> extra)) return "MLR1 ERR INVALID";
+            token.key = key;
+            const auto tx = registry_.transaction(key);
+            if (!tx) return "MLR1 ERR EMPTY";
+            const auto result = tx->apply(token, MigrationEvent::Commit);
+            const auto* row = tx->entry(token.id);
+            // The route publishes only on commit, so the answer names the route
+            // this request committed, not the transaction's live route.
+            std::string committed;
+            if (row) committed = "MLR1 MIG COMMITTED " + token.id + " "
+                + owner_text(row->request.destination) + " " + std::to_string(row->token.generation);
+            return migration_verdict(token, result, committed);
+        }
+        if (verb == "ABORT") {
+            MigrationToken token;
+            if (!migration_token(in, token) || (in >> extra)) return "MLR1 ERR INVALID";
+            token.key = key;
+            const auto tx = registry_.transaction(key);
+            if (!tx) return "MLR1 ERR EMPTY";
+            // Abort only schedules the rollback; CLEANUP finishes it, so the
+            // word tells the caller which of the two just happened.
+            const auto result = tx->apply(token, MigrationEvent::Abort);
+            const char* word = tx->state() == MigrationState::Aborted
+                ? "MLR1 MIG ABORTED " : "MLR1 MIG ABORTING ";
+            return migration_verdict(token, result, word + token.id);
+        }
+        if (verb == "RETIRE") {
+            MigrationToken token;
+            MigrationOwner member;
+            if (!migration_token(in, token) || !owner_fields(in, member) || (in >> extra))
+                return "MLR1 ERR INVALID";
+            token.key = key;
+            const auto tx = registry_.transaction(key);
+            if (!tx) return "MLR1 ERR EMPTY";
+            return migration_verdict(token, tx->retire_member(token, member),
+                "MLR1 MIG ABORTED " + token.id);
+        }
+        if (verb == "STATUS") {
+            if ((in >> extra)) return "MLR1 ERR INVALID";
+            const auto tx = registry_.transaction(key);
+            if (!tx) return "MLR1 EMPTY";
+            const auto snapshot = tx->snapshot();
+            if (const auto* row = tx->entry(snapshot.current)) return migration_state_line(*row);
+            const auto route = tx->route();
+            return "MLR1 MIG STATE idle " + owner_text(route.owner) + " " + std::to_string(route.generation);
+        }
+        return "MLR1 ERR UNEXPECTED";
     }
     std::shared_ptr<Channel> channel_;
     asio::steady_timer timer_;
