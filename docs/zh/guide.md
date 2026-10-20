@@ -35,7 +35,7 @@ Release 使用 linux-release。首次配置由 vcpkg 安装依赖，之后复用
 ./build/debug/mistlane init ./my-service
 ```
 
-目标目录非空时会拒绝覆盖。生成内容包括逐进程配置 `config/instances/`、Lua 入口 `scripts/`、按项目根目录解析路径的 `ops/run-instance.sh`、支持本地启停/重启/状态/日志的 `ops/cluster.sh`，以及 `ops/systemd/` 下的 unit 模板。配置文件由启动脚本读取；运行时也可解析原生 `--config FILE` 格式（见下文）。旧项目部署结构和新模板设计依据见[架构对比](./architecture-comparison.md)。
+目标目录非空时会拒绝覆盖。生成内容包括逐进程配置 `config/instances/`——默认游戏集群外加 `coordinator`/`login`/`data` 注册表三件套（默认集群命令不启动它们；`login` 的样例在 `scripts/login.lua` 演示 `mistlane.place`，`data` 在脚本之外应答原生 `MLD1` 记录端点）、Lua 入口 `scripts/`、按项目根目录解析路径的 `ops/run-instance.sh`、支持本地启停/重启/状态/日志的 `ops/cluster.sh`，以及 `ops/systemd/` 下的 unit 模板。配置文件由启动脚本读取；运行时也可解析原生 `--config FILE` 格式（见下文）。旧项目部署结构和新模板设计依据见[架构对比](./architecture-comparison.md)。
 
 ## 启动三个进程
 
@@ -175,6 +175,8 @@ WSS 在 `config/instances/gateway-wss.env` 中设置 `CERT` 和 `KEY`，可填�
 | `SCRIPT` | 可选 | Lua 入口作为 `--script` 传入；相对路径按项目根目录解析。gateway 留空。 |
 | `UPSTREAMS` | 可选 | 逗号分隔的 `IP:PORT`（或 `IP:PORT:PROBE`，使 cross 按对端内部就绪探测挡住新加入）列表；每个条目展开为一个 `--upstream` 参数。 |
 | `ROUTE_EPOCH` | 可选 | gateway cross routing/crossServer 纪元作为 `--route-epoch` 传入；留空则省略该参数。 |
+| `COORDINATOR` | 可选 | 注册表端点作为 `--coordinator` 传入；仅 gameServer、crossServer、login 可用。 |
+| `SCOPE` | 可选 | 注册表作用域作为 `--scope` 传入；须与 `COORDINATOR` 同时设置。 |
 | `LISTENERS` | 可选 | 逗号分隔的 `PROTO://IP:PORT` 条目；每个条目展开为一个 `--listener` 参数，一个实例即可同时暴露 TCP、WS、WSS 与 HTTP。`wss`/`https` 条目可追加 `?cert=FILE&key=FILE`；query 路径原样传递，不按项目根目录解析。 |
 | `CERT`、`KEY` | 仅 wss/https | 证书链与私钥，绝对路径或项目根目录相对路径；启动器先确认两者可读。 |
 

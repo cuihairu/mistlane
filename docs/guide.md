@@ -35,7 +35,7 @@ Use `linux-release` for a Release build. Initial configuration installs the mani
 ./build/debug/mistlane init ./my-service
 ```
 
-The initializer refuses to overwrite a non-empty directory. It creates `config/instances/` with one trusted environment file per process, `scripts/` with Lua entrypoints, `ops/run-instance.sh` to resolve paths from the project root, `ops/cluster.sh` for local start/stop/restart/status/logs, and a systemd template under `ops/systemd/`. The generated config files are consumed by the shell launcher; the runtime also parses a native `--config FILE` format (below). See [architecture comparison](./architecture-comparison.md) for the old deployment layout and the reasoning behind the template.
+The initializer refuses to overwrite a non-empty directory. It creates `config/instances/` with one trusted environment file per process — the default game cluster plus the `coordinator`/`login`/`data` registry trio (not started by the default cluster command; `login` samples `mistlane.place` in `scripts/login.lua`, `data` answers the native `MLD1` record endpoint beside its script) — `scripts/` with Lua entrypoints, `ops/run-instance.sh` to resolve paths from the project root, `ops/cluster.sh` for local start/stop/restart/status/logs, and a systemd template under `ops/systemd/`. The generated config files are consumed by the shell launcher; the runtime also parses a native `--config FILE` format (below). See [architecture comparison](./architecture-comparison.md) for the old deployment layout and the reasoning behind the template.
 
 ## Run three processes
 
@@ -175,6 +175,8 @@ Each `config/instances/<name>.env` file is sourced as shell assignments by `ops/
 | `SCRIPT` | optional | Lua entrypoint passed as `--script`; relative paths resolve against the project root. Gateway leaves it empty. |
 | `UPSTREAMS` | optional | Comma-separated `IP:PORT` (or `IP:PORT:PROBE`, so cross nodes gate new joins on the peer's internal readiness probe) list; each entry becomes one `--upstream` flag. |
 | `ROUTE_EPOCH` | optional | Cross/crossServer epoch passed as `--route-epoch`; an empty value omits the flag. |
+| `COORDINATOR` | optional | Registry endpoint passed as `--coordinator`; valid for gameServer, crossServer and login. |
+| `SCOPE` | optional | Registry scope passed as `--scope`; requires `COORDINATOR` to be set. |
 | `LISTENERS` | optional | Comma-separated `PROTO://IP:PORT` entries; each becomes one `--listener` flag, so an instance can expose TCP, WS, WSS and HTTP side by side. `wss`/`https` entries may append `?cert=FILE&key=FILE`; those query paths are passed through verbatim, not root-resolved. |
 | `CERT`, `KEY` | `wss`/`https` only | Certificate chain and private key, absolute or project-root relative; the launcher verifies both are readable. |
 

@@ -51,6 +51,14 @@ MISTLANE_BIN=/path/to/mistlane ./ops/cluster.sh start
 
 The default set starts gameServer → gateway, two crossServer instances → gateway-cross, and apiServer. Run the TCP client against `127.0.0.1:7100`; the cross ingress listens on `127.0.0.1:7300`; HTTP listens on `127.0.0.1:7400`.
 
+## Registry and service roles
+
+The `coordinator`, `login` and `data` instances are not started by the default cluster command. `coordinator` (`127.0.0.1:7500`) is a registry only: it runs no script and forwards nothing. Point a gameServer or crossServer at it by adding `COORDINATOR=127.0.0.1:7500` (and an optional `SCOPE`) to its instance file; `login` already carries that line and asks `MLR1 PLACE` through `scripts/login.lua`, whose `mistlane.place` callback answers the client. `data` (`127.0.0.1:7700`) owns the native `MLD1` record endpoint and never registers with a coordinator; its script sees only non-record traffic, records stay process-local until a durable storage backend exists, and `ACK durable` is never sent today.
+
+```sh
+MISTLANE_BIN=/path/to/mistlane ./ops/cluster.sh start coordinator login data
+```
+
 ## Game clients over WebSocket
 
 The optional `gateway-ws` and `gateway-wss` instances connect game clients to the same TCP gameServer. They are not started by the default cluster command. Each WS message calls the gameServer's Lua `message` callback; apiServer instances use a separate `http` callback.
@@ -74,7 +82,7 @@ sudo systemctl status mistlane@gateway.service
 sudo systemctl stop mistlane@gateway.service mistlane@gameServer.service
 ```
 
-Instance names map to `config/instances/<name>.env`. Enable the crossServer, gateway-cross and apiServer instances separately when needed. This sample unit is a starting point; production users should set service users, filesystem permissions, resource limits and network policy for their deployment.
+Instance names map to `config/instances/<name>.env`. Enable the crossServer, gateway-cross and apiServer instances separately when needed, and the coordinator/login/data registry trio likewise. This sample unit is a starting point; production users should set service users, filesystem permissions, resource limits and network policy for their deployment.
 
 The crossServer Lua callback only echoes bytes. It does not implement gameplay, authentication or persistence.
 )MD"},
@@ -188,6 +196,73 @@ ROUTE_EPOCH=
 # override the global certificate pair.
 LISTENERS=ws://127.0.0.1:7082
 )ENV"},
+    TemplateFile{"scripts/login.lua", R"LUA(local M = {}
+
+function M.init(context)
+  print("login init", context.role, context.transport)
+end
+
+-- Placement replies must be sent from the callback: mistlane.place answers
+-- after this handler returns, so a return value cannot carry the address.
+function M.message(payload, context)
+  local role, scope = payload:match("place (%S+) ?(%S*)")
+  if not role then
+    return "usage: place <role> [scope]"
+  end
+  mistlane.place(role, scope ~= "" and scope or nil, function(err, address)
+    mistlane.session.send(context.session, err and ("ERR " .. err) or ("OK " .. address))
+  end)
+  return nil
+end
+
+function M.tick()
+end
+
+return M
+)LUA"},
+    TemplateFile{"scripts/record.lua", R"LUA(local M = {}
+
+function M.init(context)
+  -- MLD1 record frames (LOAD/SUBMIT) are answered natively by the data role;
+  -- this script only sees every other payload.
+  print("record data init", context.role, context.transport)
+end
+
+function M.message(payload)
+  return payload
+end
+
+function M.tick()
+end
+
+return M
+)LUA"},
+    TemplateFile{"config/instances/coordinator.env", R"ENV(ROLE=coordinator
+LISTEN=127.0.0.1:7500
+SCRIPT=
+TRANSPORT=tcp
+UPSTREAMS=
+ROUTE_EPOCH=
+# The registry only: no script and no upstream. gameServer/crossServer point
+# COORDINATOR here; login asks MLR1 PLACE on it.
+)ENV"},
+    TemplateFile{"config/instances/login.env", R"ENV(ROLE=login
+LISTEN=127.0.0.1:7600
+SCRIPT=scripts/login.lua
+TRANSPORT=tcp
+UPSTREAMS=
+ROUTE_EPOCH=
+COORDINATOR=127.0.0.1:7500
+SCOPE=main
+)ENV"},
+    TemplateFile{"config/instances/data.env", R"ENV(ROLE=data
+LISTEN=127.0.0.1:7700
+SCRIPT=scripts/record.lua
+TRANSPORT=tcp
+UPSTREAMS=
+ROUTE_EPOCH=
+# data owns the MLD1 record endpoint and never registers with a coordinator.
+)ENV"},
     TemplateFile{"ops/run-instance.sh", R"SH(#!/bin/sh
 set -eu
 instance=${1:?usage: run-instance.sh INSTANCE}
@@ -226,6 +301,8 @@ if [ -n "$UPSTREAMS" ]; then
   IFS=$old_ifs
 fi
 [ -z "$ROUTE_EPOCH" ] || set -- "$@" --route-epoch "$ROUTE_EPOCH"
+[ -z "${COORDINATOR:-}" ] || set -- "$@" --coordinator "$COORDINATOR"
+[ -z "${SCOPE:-}" ] || set -- "$@" --scope "$SCOPE"
 if [ -n "${LISTENERS:-}" ]; then
   old_ifs=$IFS; IFS=,
   for listener in $LISTENERS; do set -- "$@" --listener "$listener"; done
@@ -375,7 +452,8 @@ int run_scaffold(std::string_view command, int argc, char** argv) {
         std::string_view arg(argv[i]);
         if (arg == "--help" || arg == "-h") {
             std::cout << "Usage: mistlane init [DIRECTORY]\n"
-                         "Create a starter project with gateway/gameServer, crossServer with gateway routing, and apiServer Lua examples.\n"
+                         "Create a starter project with gateway/gameServer, crossServer with gateway routing, apiServer Lua examples,\n"
+                         "and coordinator/login/data registry templates.\n"
                          "The destination must be empty if it already exists.\n";
             return 0;
         }
