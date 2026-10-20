@@ -216,6 +216,34 @@ public:
         default: return MigrationResult::Invalid;
         }
     }
+    // The coordinator learned that a member this transaction depends on left
+    // the registry. Before the home fence the transaction can never complete,
+    // so it is aborted the way an explicit abort is. After the fence the
+    // tombstone is irreversible and no owner may be inferred, so the
+    // observation is acknowledged but changes nothing until an explicit
+    // takeover with a strictly newer generation.
+    MigrationResult retire_member(const MigrationToken& token, const MigrationOwner& member) {
+        if (token.key != data_.key || !valid_migration_owner(member)) return MigrationResult::Invalid;
+        auto it = data_.journal.find(token.id);
+        if (it == data_.journal.end() || token.generation != it->second.token.generation)
+            return MigrationResult::Stale;
+        auto& row = it->second;
+        if (terminal(row.state) || token.id != data_.current) return MigrationResult::Conflict;
+        if (row.home_fenced) return MigrationResult::Pending;
+        const bool source_retired = member == row.request.expected.owner;
+        if (!source_retired && member != row.request.destination) return MigrationResult::Invalid;
+        if (!data_.lease.drained()) {
+            // The source's work is gone with the process; the destination's
+            // retirement leaves a live source whose handler still owns admission.
+            if (source_retired) {
+                if (!data_.lease.drain_requests()) return MigrationResult::Order;
+            } else {
+                return MigrationResult::Pending;
+            }
+        }
+        row.state = MigrationState::Aborting;
+        return cleanup(row);
+    }
 private:
     static bool terminal(MigrationState state) {
         return state == MigrationState::Committed || state == MigrationState::Aborted;

@@ -34,7 +34,7 @@
 2. **进入上下文完整性——契约已解，A。** 原文（`fe8b2a6:docs/zh/service-contracts.md:22`）：“来源区服、角色标识与返回路由”。改后：响应补齐归属 data 签发的承载 generation 与 login 凭据。[login 生命周期](./service-contracts.md#login)明确分配 → data 授权 → 凭据/响应 → 接收宿主验证：新键从 1 开始；重新分配/接管须分配严格更大 generation 并按交接顺序栅栏旧授权；中止分配不复用。凭据同时绑定 generation、realm/character/target/expiry/nonce。证据：`include/mistlane/cross.hpp:19,63`、`src/lua_service.cpp:229–234` 已传递 generation；`fe8b2a6` 已定 data 为 generation 权威。授权线消息、密码原语和运行时有效授权校验仍归缺口 4，不冒充已实现。
 3. **持久确认应答格式——部分解，既有 B（`fe8b2a6`）+ C。** 格式/编解码/发送端校验已解：`MLD1 ACK durable <realm> <character> gen <n> seq <m>`，丢 ACK 按原幂等键重放。证据：`include/mistlane/record.hpp:52–69,228–236`；`cross.return.queue`。**未解·原因：**端点仅有易失记录、不发持久 ACK，发送端也不可恢复。**解锁条件：**状态/游标/栅栏原子持久事务，丢响应及 data 重启后重放已提交 ACK，并以崩溃测试覆盖可恢复的发送端重放来源。存储部分按 `fe8b2a6` 原记录继续开放。
 4. **归属权执行与端点检查——部分解，A/C（既有模型 B：`fe8b2a6`）。** [交接设计](./cross-return-protocol.md#写入租约交接)已固定顺序、旧源晚到写、在途工作与计时器；`WriterLease` 仅测试本地转换（`include/mistlane/record.hpp`（`WriterLease`）、`src/test_cases.cpp`（`cross_return_queue`））。**未解·原因：**孤立模型不构成共享权威；MLD1 SUBMIT 仍可凭更大 generation 和下一序号被接受（`record.hpp:121–151`），不查 owner 授权；MLS1 只认服务链路。持久租约/墓碑未接入 coordinator/data/Avatar，授权/撤销/到期消息未编码。**解锁条件：**认证且幂等的授权/撤销/接管线消息与持久 home 权威，Avatar 处理器/计时器闸门接线，以及双宿主竞争、到期、旧/伪造 generation 和各阶段崩溃恢复测试。不得凭模型标全解。
-5. **coordinator 路由与归属——部分解，B/C（第一片，2026-10-20）。** 原文（`b35786a`）：“路由只存 scope/role/instance，没有 generation 或迁移事务。”改后：[类型化事务协议与模型](#coordinator-migration-transaction-first-slice)绑定 home 键/请求 ID/generation，比对预期 owner/route，实现 prepare/commit、中止/清理与检查点恢复，拒绝在源排空 → home 栅栏 → 目标确认之前发布路由；显式记录区服/跨服组作用域及角色/实例/场景。证据：`include/mistlane/migration.hpp`（`MigrationRequest`、`HomeGenerationAuthority`、`MigrationTransaction`）、`include/mistlane/record.hpp`（`WriterLease`）、`src/test_cases.cpp` 五例 `coordinator.migration.commit/abort/recover/stale/order`。**未解·原因：**这是易失协议聚合模型，仅为测试将 home 事实、源租约与 coordinator journal 放在一起；MLR1 SET/GET 仍无事务/generation。检查点重建不等于持久进程恢复。**解锁条件：**认证线交换、持久 prepare/commit/abort journal 与 home 栅栏/最终序号权威、真实 coordinator/data/Avatar 和路由接线，以及跨服务崩溃/重复/成员退役/目标失效测试。MLR1 保持目录职责，home data 保持 generation 权威；路由不授予写租约。
+5. **coordinator 路由与归属——部分解，B/C（第一片，2026-10-20）。** 原文（`b35786a`）：“路由只存 scope/role/instance，没有 generation 或迁移事务。”改后：[类型化事务协议与模型](#coordinator-migration-transaction-first-slice)绑定 home 键/请求 ID/generation，比对预期 owner/route，实现 prepare/commit、中止/清理与检查点恢复，拒绝在源排空 → home 栅栏 → 目标确认之前发布路由；显式记录区服/跨服组作用域及角色/实例/场景。证据：`include/mistlane/migration.hpp`（`MigrationRequest`、`HomeGenerationAuthority`、`MigrationTransaction::retire_member`）、`include/mistlane/record.hpp`（`WriterLease::drain_requests`）、`src/test_cases.cpp` 六例 `coordinator.migration.commit/abort/recover/stale/order/retire`。**未解·原因：**这是易失协议聚合模型，仅为测试将 home 事实、源租约与 coordinator journal 放在一起；MLR1 SET/GET 仍无事务/generation。检查点重建不等于持久进程恢复。**解锁条件：**认证线交换与注册表驱动的退役观察、持久 prepare/commit/abort journal 与 home 栅栏/最终序号权威、真实 coordinator/data/Avatar 和路由接线、栅栏后以严格更大 generation 的接管，以及跨服务崩溃/重复/成员退役/目标失效测试（home 栅栏前的退役/目标失效半片已建模，见下）。MLR1 保持目录职责，home data 保持 generation 权威；路由不授予写租约。
 6. **apiServer 回调受理——部分解，A/B（第一片与 HTTP 传输均为 2026-10-20）。** 原文：「可信网络与请求级处理；平台签名/规范字节、密钥轮换、防重放窗口、幂等键作用域、持久受理响应及归属查询/重试消息均未定；login HMAC 决策不能替代 HTTP 回调认证。」改后：[类型化外部 API 协议与模型](#external-api-surface-first-slice)已定——规范 `MLA1` 字节 + 按 `(principal, key_id)` 的 `HMAC-SHA256` 凭据（含 realm 授权）；绝对 ±300 秒时间窗与按 `(audience, principal, nonce)` 的重放声明（时钟回拨即 fail closed）；按 `(audience, principal, (realm, character), idempotency_key)` 的原子 create-or-read 受理，区分 `Inserted`/`Existing`/`Conflict` 且重试取回同一回执；只读归属查询 `(realm, character) → owner/generation/状态`；以及[HTTP 传输](#http-transport-first-slice-2026-10-20)——HTTP 监听器上的 `POST /mla1`、逐字节严格解析、五词框定应答、结论到状态码映射，凭据仅由环境变量注入。证据：`src/api.cpp:30–47`（规范字节/HMAC）、`src/api.cpp:48–61`（重放声明）、`src/api.cpp:83–97`（原子受理）、`src/api.cpp`（`parse_api_body`/`api_reply_body`/`api_http_status`）、`src/node.cpp`（`/mla1` 拦截、`MISTLANE_MLA1_*` 加载）、`include/mistlane/migration.hpp:119–129`（归属事实）、`include/mistlane/api.hpp:22,33`（`ApiRequest`/`ApiCredential`）、`api.signature/tamper/replay/acceptance/ownership/wire/http`（`src/test_api.cpp`、`src/test_cases.cpp`）。**未解·原因：**验证器、重放声明与受理行均为进程内易失状态——无共享/持久声明或受理后端，归属查询在接入 home 事实来源前只能答 `NotFound`，密钥轮换仍只是静态 `(principal, key_id)` 环境变量表。**解锁条件：**持久受理后端及崩溃/丢回复测试、多进程重放声明、轮换/撤销语义、接入 home 事实的归属来源与 owner 迁移后的重试测试。HTTP 2xx 不能证明业务持久。
 7. **实体发布闸门——部分解，A/C（既有实现 `3326fd4`、`1048bcd`、`c0d9d82`、`49c59c2`、`dec204a`）。** 原文：“没有发布兼容流程”，没有运行时/黄金验收物。改后：`contract build` 已确定性生成 XSD/lock/digest/sproto/C++/JS/C#；`contract compat OLD.lock NEW.lock` 检查新增/删除/改分配（`src/contract_tool.cpp:57–77,123–143`）；已有上游 sproto 向量及派发器/实体/RPC 夹具（`include/mistlane/entity_runtime.hpp:11–72`、[验证记录](./validation.md)）；invocation envelope/error 规范编解码已进程内实现并带 hosting-generation 栅栏（`include/mistlane/entity_envelope.hpp`），INT64 边界/缺省/未知字段/畸形向量、嵌套结构/整数数组/空数组向量已在 C++/Lua/JS/C# 四语言锁定（JS/C# codec 已 schema 驱动），含上游 `todword` 解码缺陷的复现与规避（2026-10-20，[验证记录](./validation.md)）。**未解·原因：**参数/标量向量不覆盖完整 invocation/error envelope；EntityRef 参数仍映射为整数（`entity_dispatch.hpp:74–79`）；网络加载/路由、JS/C# UTF-8/bytes/BOOL codec 覆盖、嵌套复制与持久化仍缺失。**解锁条件：**冻结规范 envelope/error/EntityRef 字节及 C++/Lua/JS/C# 畸形输入向量，将 schema/绑定/锁/向量检查接入强制 bundle-load 闸门；再验证在线路由/deadline/cancel/栅栏及独立的复制/持久化闸门。进程内夹具与通过 lock diff 不能授权生产接入。[实体契约验收顺序](./entity-contract.md#发布与验收顺序)中的过时文字同步修正。
 
@@ -60,11 +60,27 @@
 | ABORT / `Abort`，再 `Cleanup` | 仅 home 栅栏前允许：进入 `aborting`，排空剩余处理，丢弃半建目标，恢复源旧代准入/计时器 | `aborted`；处理未排空时清理 `Pending`；保留已消耗的 generation |
 | RECOVER / `Recover` | 读取可信事务/home 检查点；栅栏前完成中止清理；栅栏后进入 `recovering`，等待真实目标 ACK 后提交 | 不猜 ACK、不复活旧授权；重复终态恢复 `Duplicate` |
 
-必须满足的发布顺序是：**源停止/排空 → home data 栅栏旧 generation 并提交最终序号 → 目标加载/起租并 ACK → coordinator CAS 发布路由及提交终态**。允许栅栏到目标起租之间暂不可用。栅栏前中止恢复为原路由值（此前始终未改）；栅栏后恢复必须向前完成。目标无法继续时保持 recovering，退役/换目标须通过 home 显式接管签发更大 generation，不能猜测失败或回滚；接管/退役交换不在本片。
+必须满足的发布顺序是：**源停止/排空 → home data 栅栏旧 generation 并提交最终序号 → 目标加载/起租并 ACK → coordinator CAS 发布路由及提交终态**。允许栅栏到目标起租之间暂不可用。栅栏前中止恢复为原路由值（此前始终未改）；栅栏后恢复必须向前完成。目标无法继续时保持 recovering，退役/换目标须通过 home 显式接管签发更大 generation，不能猜测失败或回滚。该交换中退役与放弃的那一半已在 home 栅栏前实现（见下）；栅栏后的接管仍需持久 home 权威，本片不建模。
 
 运行时持久契约要求：home 的 generation 预留/最终游标/墓碑与对应 home 事务事实原子记录后才暴露确认，coordinator 意图以及路由/终态持久完成后才确认 COMMIT。重启保留终态 ID 与已消耗 generation。跨服务按同一 token 查询/重放 home 权威事实，coordinator 超时或查不到记录不能证明中止。`Snapshot` 和 home 权威副本只是崩溃切点测试的可信内存检查点，尚无 journal 序列化、磁盘/WAL 存储、网络 codec/认证或进程重启保证。缺失持久证据时须保持不可用直到对账，不能产生第二写者。
 
 五例 `coordinator.migration.commit`、`.abort`、`.recover`、`.stale`、`.order` 分别覆盖正常提交、半途清理与版本不复用、七个崩溃切点重建（含栅栏后等待恢复）、旧版本/旧 COMMIT、提前栅栏/起租/发布及路由 CAS 冲突；均复用现有 `test_cases` 执行器。完整 coordinator/data/Avatar 接线、进程/场景生命周期集成、真实负载均衡和持久崩溃/退役验证继续保留。
+
+### 成员退役、目标失效与接管（第二片）
+
+2026-10-20 在同一模型内实现，仍未新增 CLI 或线上动词。`retire_member(token, member)` 表示某成员退出注册表而事务仍依赖它，是上文所述接管交换中 home 栅栏前的一半。
+
+声明先校验再采信：键必须与事务一致、generation 必须与 journal 条目一致（否则 `Stale`），事务必须是当前且非终态（否则 `Conflict`），`member` 必须是本事务真正依赖的合法 owner——预期源 owner 或目标。与事务无关的成员、不可识别的 owner 声明、跨区键一律 `Invalid`。
+
+| 退役的成员 | 效果 |
+|---|---|
+| 源，home 栅栏前 | 源进程已不存在，其在途处理永远不会自行结束。`WriterLease::drain_requests` 强制完成它们（租约离开 `Requested` 后拒绝），随后事务一步中止：丢弃半建目标，恢复源的旧 generation 授权、准入与计时器。路由保持原值不变 |
+| 目标，home 栅栏前 | 源仍然存活，其处理仍持有准入权。先答 `Pending` 等它结束，之后完全按普通中止收尾。事务绝不推进，且在 handoff 处于 `Requested` 的整个期间源的写入保持冻结 |
+| 栅栏后（任一成员） | `Pending`，零改动。归属保持 `Fenced`、旧授权保持已交出，`Recover` 仍等真实目标 ACK |
+
+「已消耗 generation」规则才是让接管安全而非取巧的关键：中止会让已分配的 generation 作废，之后同一路由的 PREPARE 分配下一个 generation（测试中 9 → 10）并提交到一个**存活**的目标。不猜测、不回滚、不跨越栅栏复活；`drain_requests` 在墓碑之后也不可能执行。
+
+`coordinator.migration.retire` 覆盖上表三行、租约级强制排空断言、拒绝矩阵（无关成员、畸形 owner、旧 generation、跨区键、终态事务），以及跨退役恢复的检查点不会重发 generation。ctest 53/53。
 
 ## 外部 API 面（第一片） {#external-api-surface-first-slice}
 
@@ -122,7 +138,7 @@
 |---|---|---|
 | crossServer 回传与唯一写入权（`todo.md:54`） | 归属持久事务/ACK/重放、可恢复发送源、有界队列/只读/最终回服接线、共享租约权威与 Avatar 集成 | 矛盾 4 的恢复部分；缺口 3/4 |
 | login/data/apiServer（`todo.md:56`） | C++ 凭据签发/验证、规范凭据传输与 home-data 授权消息；已定 MLA1 回调协议（签名/防重放/受理/归属已建模、HTTP 传输已接通）的持久受理后端与多进程重放声明 | 缺口 2（运行时归 4）、4/6 |
-| coordinator 归属/迁移（`todo.md:48`） | 迁移线消息认证、持久 journal/home 权威与真实路由/运行时接线；跨服务崩溃及成员退役/目标失效证据 | 缺口 5（类型协议/模型已实现） |
+| coordinator 归属/迁移（`todo.md:48`） | 迁移线消息认证、注册表驱动的退役观察、持久 journal/home 权威、栅栏后以严格更大 generation 的接管、真实路由/运行时接线 | 缺口 5（类型协议与模型已实现，含栅栏前退役；持久与线上证据仍缺） |
 | 实体实现链（`todo.md:76+`） | 完整 envelope/error/EntityRef 向量与 bundle-load 闸门、生产 codec/网络运行时、嵌套复制与持久化 | 缺口 7 |
 
 以上均为保留闸门，不是新增实现声明。每个部分/未解项必须连同上面的原因与解锁条件阅读；历史 todo 叙述不能覆盖当前代码证据。

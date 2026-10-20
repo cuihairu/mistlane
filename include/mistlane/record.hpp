@@ -252,6 +252,9 @@ public:
     bool start(std::uint64_t generation) { if (state_ != State::None || !generation) return false; generation_ = generation; state_ = State::Active; return true; }
     bool begin_request() { if (!write_allowed(generation_)) return false; ++in_flight_; return true; }
     bool finish_request() { if (state_ != State::Requested || !in_flight_) return false; --in_flight_; return true; }
+    // A retired member cannot finish its own in-flight handlers, so the
+    // coordinator force-completes them instead of waiting on a dead process.
+    bool drain_requests() { if (state_ != State::Requested) return false; in_flight_ = 0; return true; }
     bool request(std::uint64_t next) { if (state_ != State::Active || next <= generation_) return false; next_ = next; state_ = State::Requested; timers_running_ = false; return true; }
     bool drained() const { return state_ == State::Requested && !in_flight_; }
     // Only a pre-tombstone cancellation may restore the source generation.

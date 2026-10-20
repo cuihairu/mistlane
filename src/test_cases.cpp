@@ -3105,6 +3105,112 @@ void coordinator_migration_order() {
     require(tx.route() == MigrationRoute{f.target, 9}, "ordered commit did not publish");
     std::cout << "migration.order: premature fence/activation/publication and route CAS conflict rejected [PASS]\n";
 }
+void coordinator_migration_retire() {
+    // A member that leaves the registry cannot finish the transaction it was
+    // moving a participant to or from, so the transaction has to end instead
+    // of blocking every later prepare forever. The source's handler is dead
+    // with the process, so it is force-drained here; a destination retirement
+    // leaves a live source, whose handler still owns admission and is let
+    // finish first, exactly like any other abort.
+    {
+        MigrationFixture f;
+        auto tx = f.transaction();
+        require(tx.begin_request(), "retire fixture handler missing");
+        require(tx.prepare(f.request()) == MigrationResult::Applied, "retire prepare failed");
+        const auto token = tx.entry("move-1")->token;
+        require(tx.retire_member(token, f.source) == MigrationResult::Applied
+                && tx.state() == MigrationState::Aborted,
+                "a retired source did not drain its own handler and abort");
+        auto owner = tx.lookup_ownership(f.key);
+        require(tx.route() == f.request().expected && tx.write_allowed(f.source, 8)
+                && !tx.write_allowed(f.target, 9) && tx.timers_running()
+                && !tx.entry("move-1")->destination_staged
+                && owner && *owner == HomeOwnership{f.source, 8, HomeOwnershipState::Active}
+                && f.home.issued(f.key) == 9,
+                "source retirement left the staged target or froze the source");
+
+        // Takeover: the aborted generation is consumed and never reused, but
+        // the route still names the participant, so a strictly newer
+        // generation may move it onto a living member.
+        MigrationOwner alive = f.target; alive.instance = "xs-b";
+        MigrationRequest takeover{f.key, "takeover", f.request().expected, alive};
+        require(tx.prepare(takeover) == MigrationResult::Applied
+                && tx.entry("takeover")->token.generation == 10,
+                "takeover did not reserve a newer generation");
+        const auto next = tx.entry("takeover")->token;
+        migration_ready(tx, next);
+        migration_step(tx, next, MigrationEvent::Commit);
+        require(tx.state() == MigrationState::Committed && tx.route() == MigrationRoute{alive, 10}
+                && tx.write_allowed(alive, 10) && !tx.write_allowed(f.source, 8)
+                && !tx.write_allowed(f.target, 9), "takeover did not publish the living destination");
+        MigrationTransaction checkpoint(f.home, tx.snapshot());
+        require(checkpoint.state() == MigrationState::Committed && checkpoint.route() == MigrationRoute{alive, 10}
+                && checkpoint.apply(token, MigrationEvent::Recover) == MigrationResult::Duplicate
+                && f.home.issued(f.key) == 10, "retirement checkpoint did not restore its journal");
+    }
+    {
+        MigrationFixture f;
+        auto tx = f.transaction();
+        require(tx.begin_request(), "destination-retire fixture handler missing");
+        require(tx.prepare(f.request()) == MigrationResult::Applied, "destination-retire prepare failed");
+        const auto token = tx.entry("move-1")->token;
+        require(tx.retire_member(token, f.target) == MigrationResult::Pending
+                && tx.state() == MigrationState::Preparing && !tx.timers_running()
+                && !tx.write_allowed(f.source, 8),
+                "a retired destination advanced the transaction or resumed the source's writes");
+        require(tx.finish_request(), "the live source handler did not finish");
+        require(tx.retire_member(token, f.target) == MigrationResult::Applied
+                && tx.state() == MigrationState::Aborted && tx.write_allowed(f.source, 8)
+                && tx.timers_running() && !tx.entry("move-1")->destination_staged,
+                "destination retirement did not abort with the source restored");
+        require(tx.apply(token, MigrationEvent::Abort) == MigrationResult::Duplicate,
+                "abort replay after retirement changed the outcome");
+    }
+    {
+        MigrationFixture f;
+        auto tx = f.transaction();
+        require(tx.prepare(f.request()) == MigrationResult::Applied, "fenced-retire prepare failed");
+        const auto token = tx.entry("move-1")->token;
+        migration_step(tx, token, MigrationEvent::SourceDrained);
+        migration_step(tx, token, MigrationEvent::HomeFence);
+        auto fenced = tx.lookup_ownership(f.key);
+        require(fenced && fenced->state == HomeOwnershipState::Fenced && !tx.write_allowed(f.source, 8),
+                "fence fixture did not fence the source");
+        require(tx.retire_member(token, f.target) == MigrationResult::Pending
+                && tx.retire_member(token, f.source) == MigrationResult::Pending
+                && tx.state() == MigrationState::Preparing && !tx.write_allowed(f.source, 8)
+                && !tx.timers_running(),
+                "post-fence retirement mutated the fenced transaction");
+        auto still = tx.lookup_ownership(f.key);
+        require(still && still->state == HomeOwnershipState::Fenced
+                && tx.apply(token, MigrationEvent::Recover) == MigrationResult::Pending,
+                "fence retirement invented an owner or a destination acknowledgement");
+    }
+    {
+        MigrationFixture f;
+        auto tx = f.transaction();
+        require(tx.prepare(f.request()) == MigrationResult::Applied, "refusal prepare failed");
+        const auto token = tx.entry("move-1")->token;
+        MigrationOwner stranger = f.target; stranger.instance = "xs-b";
+        require(tx.retire_member(token, stranger) == MigrationResult::Invalid,
+                "retirement of a member the transaction does not depend on was accepted");
+        MigrationOwner malformed = f.source; malformed.scene.clear();
+        require(tx.retire_member(token, malformed) == MigrationResult::Invalid,
+                "an unidentifiable member claim was accepted");
+        MigrationToken old_generation = token; old_generation.generation = 8;
+        require(tx.retire_member(old_generation, f.source) == MigrationResult::Stale,
+                "a stale generation claimed a retirement");
+        MigrationToken wrong_key = token; wrong_key.key.first = "other";
+        require(tx.retire_member(wrong_key, f.source) == MigrationResult::Invalid,
+                "a cross-realm retirement claim was accepted");
+        migration_step(tx, token, MigrationEvent::Abort);
+        migration_step(tx, token, MigrationEvent::Cleanup);
+        require(tx.retire_member(token, f.source) == MigrationResult::Conflict
+                && tx.state() == MigrationState::Aborted, "retirement changed a terminal transaction");
+    }
+    std::cout << "migration.retire: source/destination retirement aborts pre-fence, fenced stays pending, "
+                 "takeover at gen 10 [PASS]\n";
+}
 void cross_return_queue() {
     const DurableAck ack{"realm-a", "same-id", 3, 5};
     const auto wire = encode_durable_ack(ack);
@@ -3127,6 +3233,15 @@ void cross_return_queue() {
     require(destination.start(1) && destination.request(9) && destination.relinquish() && destination.accept(9), "destination lease activation failed");
     require(!source.write_allowed(8) && destination.write_allowed(9), "late source write was not rejected after handoff");
     require(!destination.accept(9), "duplicate lease grant accepted");
+    {
+        // A retired member cannot finish its own in-flight handler, so the
+        // coordinator force-completes it instead of waiting forever.
+        WriterLease retired;
+        require(retired.start(8) && retired.begin_request() && retired.request(9), "retired lease fixture failed");
+        require(retired.drain_requests(), "a retired member could not force-drain");
+        require(retired.relinquish() && !retired.write_allowed(8), "a force-drained handoff was not fenced");
+        require(!retired.drain_requests(), "drain ran after the tombstone");
+    }
     ReturnSendQueue queue(2);
     queue.seed("realm-a", "same-id", 4);
     queue.seed("realm-b", "same-id", 0);
