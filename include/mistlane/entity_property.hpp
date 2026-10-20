@@ -37,6 +37,15 @@ struct ContainerHandle {
     std::string property;
     unsigned generation = 0;
 };
+// Shape of the value at one location: the declared type the descriptor
+// expects there, plus the element type when that type is ARRAY. ok is false
+// when the location itself is not addressable (unknown field, index into a
+// non-array). Controlled proxies use it to tell a scalar from a nested
+// container before touching storage.
+struct ValueShape {
+    bool ok = false;
+    std::string type, of;
+};
 // One instance's controlled property store, driven entirely by the contract
 // descriptor. Values are addressed by declared name (and by the stable
 // property id); every write passes the same type rules as EntityDispatcher,
@@ -99,6 +108,16 @@ public:
         }
         return at;
     }
+    // Shape of the value at (property, path): what the descriptor expects
+    // there, without touching storage.
+    ValueShape shape_at(const std::string& name, const TreePath& path) const {
+        const auto* prop = descriptor(name);
+        if (!prop) {
+            error_ = "property '"+name+"' is not a declared property on entity "+entity_->name;
+            return {};
+        }
+        return leaf_shape(*prop, name, path);
+    }
     // Set one leaf at a path; an empty path replaces the whole property.
     bool set_path(const std::string& name, TreePath path, EntityValue value) {
         const auto* prop = descriptor(name);
@@ -115,7 +134,11 @@ public:
         }
         EntityValue* at = &values_.find(name)->second;
         for (std::size_t i = 0; i + 1 < path.size(); ++i) at = descend(at, path[i]);
-        if (!assign_child(at, path.back(), std::move(value))) return false;
+        if (!assign_child(at, path.back(), value)) {
+            error_ = "property '"+name+"' path "+path_text(path)
+                     +": index out of range; arrays grow through insert/append";
+            return false;
+        }
         record_set(name, std::move(path), EntityValue(value));
         return true;
     }
@@ -133,8 +156,10 @@ public:
         }
         auto* array = array_at_value(name, path);
         if (position > array->size()) { error_ = "insert position "+std::to_string(position)+" is beyond array size"; return false; }
-        array->insert(array->begin()+static_cast<std::ptrdiff_t>(position), std::move(value));
+        // Journal before the array takes the element: the entry must carry
+        // the payload, not a moved-from husk.
         changes_.push_back(TreeChange{name, path, TreeChange::Kind::INSERT, position, EntityValue(value)});
+        array->insert(array->begin()+static_cast<std::ptrdiff_t>(position), std::move(value));
         structural(name);
         return true;
     }
@@ -216,11 +241,10 @@ private:
         }
         return true;
     }
-    struct Shape { bool ok = false; std::string type, of; };
     // Resolve the type at (property, path), validating every step against the
     // descriptor as it descends. A wrong kind, an out-of-range-free field or
     // an index through a non-array is a refused path before any write.
-    Shape leaf_shape(const ContractProperty& prop, const std::string& name, const TreePath& path) {
+    ValueShape leaf_shape(const ContractProperty& prop, const std::string& name, const TreePath& path) const {
         std::string type = prop.type, of = prop.of;
         for (std::size_t i = 0; i < path.size(); ++i) {
             const auto& step = path[i];
@@ -243,10 +267,10 @@ private:
             }
             (void)leaf_step;
         }
-        return Shape{true, type, of};
+        return ValueShape{true, type, of};
     }
-    Shape array_at(const ContractProperty& prop, const std::string& name, const TreePath& path) {
-        Shape shape = leaf_shape(prop, name, path);
+    ValueShape array_at(const ContractProperty& prop, const std::string& name, const TreePath& path) const {
+        ValueShape shape = leaf_shape(prop, name, path);
         if (!shape.ok) return {};
         if (shape.type != "ARRAY") { error_ = "property '"+name+"' path "+path_text(path)+" does not address an array"; return {}; }
         return shape;

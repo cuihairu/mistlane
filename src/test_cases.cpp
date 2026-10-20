@@ -134,10 +134,12 @@ void entity_envelope() {
 // Controlled property store over the contract descriptor (item 102, property
 // half): defaults from the descriptor, typed writes through the dispatcher's
 // type rules, a read-only reserved proxy for retired ids, an audience view
-// for client surfaces, and a Lua binding that exposes the same store.
+// for client surfaces, and a Lua binding that exposes the same store through
+// live nested proxies for struct fields and array cells.
 void entity_properties() {
     const EntityContract contract(R"(<Contracts><Types>
         <Item><itemId id="0" type="UINT32"/><count id="1" type="UINT32" default="2"/></Item>
+        <Inventory><capacity id="0" type="UINT16" default="10"/><items id="1" type="ARRAY" of="Item"/></Inventory>
         </Types>
         <Entity name="Avatar" id="1">
           <Properties>
@@ -148,6 +150,7 @@ void entity_properties() {
             <bag id="5" type="Item"/>
             <tags id="6" type="ARRAY" of="UINT32"/>
             <blob id="7" type="BYTES"/>
+            <inventory id="8" type="Inventory"/>
           </Properties>
           <Reserved><Property id="9"/></Reserved>
         </Entity>
@@ -257,13 +260,57 @@ void entity_properties() {
     require(eval(L, "props.tags = {1, 'x'}").find("tags") != std::string::npos, "Lua array element violation silenced");
     require(eval(L, "props.bag = {itemId = 7}").find("bag") != std::string::npos, "Lua struct shape violation silenced");
     require(eval(L, "props.names = {}").find("read-only") != std::string::npos, "method key was writable");
-    require(eval(L, "return #props:names()") == "7", "names() lost a property");
+    require(eval(L, "return #props:names()") == "8", "names() lost a property");
     require(eval(L, "return props:reserved()[1]") == "9", "reserved() lost the retired id");
     require(eval(L, "return props:view(true).level") == "5", "owner view lost a visible property");
     require(eval(L, "return props:view(true).gold") == "-5", "owner view lost ALL_CLIENTS");
     require(eval(L, "local v = props:view(true); return v.active") == "nil", "owner view leaked a SERVER_ONLY property");
     require(eval(L, "local v = props:view(false); return v.gold") == "-5", "guest view lost an ALL_CLIENTS property");
     require(eval(L, "local v = props:view(false); return v.level") == "nil", "guest view crossed OWN_CLIENT");
+    // Nested controlled proxies: struct fields and array cells address the
+    // live store instead of copies, so nothing nested is ever detached, and
+    // arrays grow only through the explicit :insert/:append/:remove methods.
+    store.take_changes();
+    require(eval(L, "props.bag.itemId = 11; return props.bag.itemId") == "11", "nested struct field write did not land");
+    require(std::get<std::int64_t>(store.get_path("bag", {TreeStep{false, "itemId", 0}})->data) == 11,
+            "nested Lua write missed the store");
+    require(eval(L, "props.tags[2] = 42; return props.tags[2]") == "42", "array cell write did not land");
+    require(std::get<std::int64_t>(store.get_path("tags", {TreeStep{true, "", 1}})->data) == 42,
+            "array cell Lua write missed the store");
+    require(eval(L, "props.tags:append(7); return #props.tags") == "4", ":append did not grow the array");
+    require(eval(L, "props.tags:insert(1, 99); return props.tags[1]") == "99", ":insert did not shift elements");
+    require(eval(L, "props.tags:remove(1); return #props.tags") == "4", ":remove did not shrink the array");
+    require(eval(L, "return props.tags[1]") == "1", ":remove lost the shifted element");
+    require(eval(L, "return props.tags[9]") == "nil", "absent array cells must read as nil");
+    require(eval(L, "props.inventory.items:append({itemId = 3, count = 1}); return #props.inventory.items") == "1",
+            "array-of-struct append did not land");
+    const TreePath deep{TreeStep{false, "items", 0}, TreeStep{true, "", 0}, TreeStep{false, "count", 0}};
+    require(eval(L, "props.inventory.items[1].count = 5; return props.inventory.items[1].count") == "5",
+            "three-level nested write did not land");
+    require(std::get<std::int64_t>(store.get_path("inventory", deep)->data) == 5,
+            "three-level Lua write missed the store");
+    require(eval(L, "props.bag.nope = 1").find("unknown") != std::string::npos, "unknown nested field silenced");
+    require(eval(L, "props.bag.count = 'x'").find("count") != std::string::npos, "nested field type violation silenced");
+    require(eval(L, "props.tags[9] = 1").find("range") != std::string::npos, "out-of-range array write silenced");
+    require(eval(L, "props.tags[1] = nil").find("remove") != std::string::npos, "nil array write silenced");
+    require(eval(L, "props.tags.grow = 1").find("index") != std::string::npos, "string key on array silenced");
+    // The journal sees Lua writes exactly like C++ ones, in application order.
+    const auto journal = store.take_changes();
+    require(journal.size() == 7, "nested Lua writes did not journal in application order");
+    require(journal[0].kind == TreeChange::Kind::SET && journal[0].property == "bag" &&
+            journal[0].path == TreePath{TreeStep{false, "itemId", 0}} &&
+            std::get<std::int64_t>(journal[0].value.data) == 11, "nested SET entry lost");
+    require(journal[2].kind == TreeChange::Kind::INSERT && journal[2].property == "tags" && journal[2].position == 3,
+            "append did not journal at the end");
+    require(journal[4].kind == TreeChange::Kind::REMOVE && journal[4].property == "tags" && journal[4].position == 0,
+            "remove did not journal at the head");
+    require(journal[5].kind == TreeChange::Kind::INSERT && journal[5].property == "inventory" &&
+            journal[5].path == TreePath{TreeStep{false, "items", 0}} && journal[5].position == 0 &&
+            std::get<std::int64_t>(std::get<EntityObject>(journal[5].value.data).at("itemId").data) == 3,
+            "nested INSERT entry lost its payload");
+    require(journal[6].kind == TreeChange::Kind::SET && journal[6].path == deep &&
+            std::get<std::int64_t>(journal[6].value.data) == 5, "deep SET entry lost");
+    std::cout << "entity.properties nested proxies: fields, cells, growth, journal [PASS]\n";
     lua_close(L);
     std::cout << "entity.properties lua binding: table access, shared refusals, views [PASS]\n";
     // A property named like a binding method key must be refused at push time,
