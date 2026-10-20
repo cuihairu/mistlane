@@ -603,6 +603,85 @@ void entity_sync() {
             "re-entry did not establish a current baseline");
     std::cout << "entity.sync observers: departure, re-entry baseline [PASS]\n";
 }
+// Bounded internal-RPC queue: capacity refusals are typed, deadlines and
+// cancellations surface, and a non-idempotent timeout can never be re-armed
+// through the table — the outcome is unknown, so retry lives behind an
+// explicit idempotent declaration and a fresh correlation id.
+void entity_rpc() {
+    RpcQueue queue(2);
+    require(!queue.call(0, 100) && queue.error() == EntityError::INVALID, "zero correlation admitted");
+    require(!queue.call(5, 0) && queue.error() == EntityError::INVALID, "zero deadline admitted");
+    require(queue.call(1, 100) && queue.call(2, 100), "bounded queue refused its capacity");
+    require(!queue.call(3, 100) && queue.error() == EntityError::CAPACITY, "overflow was not CAPACITY");
+    require(queue.state(1) == RpcQueue::State::PENDING, "refused call disturbed an admitted call");
+    require(!queue.call(1, 100) && queue.error() == EntityError::INVALID, "duplicate live correlation admitted");
+    const auto done = queue.complete(1, {{"level", std::int64_t{7}}});
+    require(done.state == RpcQueue::State::OK && std::get<std::int64_t>(done.response.at("level").data) == 7,
+            "completion lost the response");
+    require(queue.take(1).state == RpcQueue::State::OK, "retirement did not free the slot");
+    require(queue.call(3, 100), "freed slot was not reusable");
+    std::cout << "entity.rpc capacity: typed refusals, take frees slots [PASS]\n";
+
+    RpcQueue timed(4);
+    require(timed.call(10, 50) && timed.call(11, 500), "deadline section refused admission");
+    timed.advance(50);
+    require(timed.state(10) == RpcQueue::State::TIMED_OUT, "deadline did not burn the call");
+    const auto late = timed.complete(10);
+    require(late.error == EntityError::TIMEOUT, "late response was not discarded");
+    require(timed.state(10) == RpcQueue::State::TIMED_OUT, "late response resurrected the call");
+    require(timed.complete(999).error == EntityError::STALE, "unknown correlation was not STALE");
+    require(timed.cancel(11), "pending call was not cancelled");
+    require(!timed.cancel(999) && timed.error() == EntityError::INVALID, "unknown cancellation was silent");
+    const auto cancelled = timed.complete(11);
+    require(cancelled.state == RpcQueue::State::CANCELLED && cancelled.error == EntityError::CANCELLED,
+            "cancelled call accepted a response");
+    std::cout << "entity.rpc deadline_cancel: TIMEOUT discard, CANCELLED [PASS]\n";
+
+    RpcQueue guarded(4);
+    require(guarded.call(20, 50, false), "non-idempotent admission failed");
+    guarded.advance(50);
+    require(!guarded.retry(20, 21, 100), "timed-out non-idempotent call was re-armed");
+    require(guarded.error() == EntityError::INVALID, "non-idempotent retry must be a typed refusal");
+    require(!guarded.has(21), "refused retry allocated an admission");
+    require(guarded.state(20) == RpcQueue::State::TIMED_OUT, "burned admission was not surfaced");
+    require(guarded.take(20).state == RpcQueue::State::TIMED_OUT, "timed-out call was not collectable");
+    require(!guarded.has(20), "take did not retire the entry");
+    std::cout << "entity.rpc no_silent_retry: non-idempotent timeout stays surfaced [PASS]\n";
+
+    RpcQueue re(4);
+    require(re.call(30, 50, true), "idempotent admission failed");
+    re.advance(50);
+    require(re.retry(30, 31, 200), "idempotent timeout was not allowed a fresh admission");
+    require(!re.has(30) && re.state(31) == RpcQueue::State::PENDING, "retry kept the old admission alive");
+    require(!re.retry(31, 32, 200), "retry of a pending call was allowed");
+    re.advance(200);
+    require(!re.retry(31, 31, 300), "retry under the same correlation was allowed");
+    require(re.retry(31, 32, 300), "second retry lost the idempotent marker");
+    std::cout << "entity.rpc idempotent_retry: fresh correlation only [PASS]\n";
+
+    const EntityContract contract(R"(<Contracts><Entity name="Avatar" id="1"><ServerMethods><Method name="get" id="2" mode="request" caller="server"><Arg name="account" id="0" type="INT32"/><Returns><Field name="level" id="1" type="UINT16"/></Returns></Method></ServerMethods></Entity></Contracts>)");
+    EntityRuntime runtime(contract);
+    const EntityTarget target{1, 1, 3, 42};
+    runtime.dispatcher().bind("Avatar", "server", 2, [](const EntityCaller&, const EntityTarget&, const EntityValues&) {
+        return EntityValues{{"level", std::int64_t{7}}};
+    });
+    require(runtime.spawn(target), "entity spawn failed");
+    const EntityInvocation invocation{target, {"server", 9}, "server", 2, true, {{"account", std::int64_t{4}}}};
+    RpcQueue link(3);
+    require(link.call(40, 100, false), "first admission failed");
+    require(runtime.deliver(invocation, 40).ok, "first attempt did not dispatch");
+    link.advance(100);
+    require(link.state(40) == RpcQueue::State::TIMED_OUT, "lost reply did not time out");
+    require(runtime.deliver(invocation, 40).error == EntityError::CONFLICT,
+            "burned correlation re-applied silently");
+    require(!link.retry(40, 41, 100) && link.error() == EntityError::INVALID,
+            "non-idempotent timeout was re-armed end-to-end");
+    require(link.call(41, 300, true), "explicit fresh admission failed");
+    const auto second = runtime.deliver(invocation, 41);
+    require(second.ok, "fresh correlation did not dispatch");
+    require(link.complete(41, second.response).state == RpcQueue::State::OK, "fresh attempt did not complete");
+    std::cout << "entity.rpc runtime: burned id CONFLICT, fresh id completes [PASS]\n";
+}
 namespace {
 constexpr std::string_view echo = "return {message=function(p) return p end}";
 class RawSocket {

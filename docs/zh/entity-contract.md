@@ -240,7 +240,7 @@ flowchart TB
 
 ## 调用 envelope 与错误协议（已代决；规范进程内编解码已实现）
 
-下面的 envelope 固定目标网络调用字段。进程内 `EntityRuntime` 与 `RpcHarness` 夹具已实现寻址及部分生命周期结果；规范 envelope 字节与序列化错误应答已实现为进程内编解码（`include/mistlane/entity_envelope.hpp`），但尚无线上动词在真实传输上承载它们。字段语义已定，真实传输绑定尚未实现。
+下面的 envelope 固定目标网络调用字段。进程内 `EntityRuntime` 与 `RpcHarness` 夹具已实现寻址及部分生命周期结果；有界 `RpcQueue`（`include/mistlane/entity_runtime.hpp`）为内部调用设闸——容量溢出是类型化 `CAPACITY` 拒绝、期限与取消分别显式为 `TIMEOUT`/`CANCELLED`、迟到应答丢弃，非幂等超时绝不静默重试（重试须显式声明幂等且换新代号，投递层对被烧代号回 `CONFLICT`）。规范 envelope 字节与序列化错误应答已实现为进程内编解码（`include/mistlane/entity_envelope.hpp`），但尚无线上动词在真实传输上承载它们。字段语义已定，真实传输绑定尚未实现。
 
 实体调用是现有传输分帧（MLC1/MLC2/MLM1 帧或客户端会话通道）内的一种载荷，不是新的 TCP 协议，仍在 1 MiB 有界帧内。字段顺序：
 

@@ -236,7 +236,7 @@ References hide fixed IPs and hosts. Transfer needs updateable routes, bounded q
 
 ## Invocation envelope and error protocol (decided; canonical in-process codec implemented)
 
-The envelope below fixes the intended network invocation fields. In-process `EntityRuntime` and `RpcHarness` fixtures implement addressing and selected lifecycle outcomes; the canonical envelope bytes and the serialized error reply are implemented as an in-process codec (`include/mistlane/entity_envelope.hpp`), but no network verb carries them on a live transport yet. Field semantics are decided; live transport binding remains unimplemented.
+The envelope below fixes the intended network invocation fields. In-process `EntityRuntime` and `RpcHarness` fixtures implement addressing and selected lifecycle outcomes; a bounded `RpcQueue` (`include/mistlane/entity_runtime.hpp`) gates internal calls — capacity overflow is a typed `CAPACITY` refusal, deadlines and cancellation surface as `TIMEOUT`/`CANCELLED`, late responses are discarded, and a non-idempotent timeout is never silently retried (retry requires an explicit idempotent declaration and a fresh correlation id, and the delivery layer rejects the burned id as `CONFLICT`). The canonical envelope bytes and the serialized error reply are implemented as an in-process codec (`include/mistlane/entity_envelope.hpp`), but no network verb carries them on a live transport yet. Field semantics are decided; live transport binding remains unimplemented.
 
 An entity invocation is a payload kind inside the existing transport framing (MLC1/MLC2/MLM1 frames or a client session channel), not a new TCP protocol; it stays inside the bounded 1 MiB frame. Fields, in order:
 
