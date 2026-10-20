@@ -343,6 +343,93 @@ internal static class Program
             throw new InvalidOperationException("inbound notify accepted a client-side or malformed frame");
         Console.WriteLine("CS_ENTITY_CLIENT bounded queue, facade calls/notify/retry and malformed refusals [PASS]");
     }
+    private static Dictionary<string, object> PlainBaseline() => new Dictionary<string, object> {
+        ["level"] = 7L, ["tags"] = new List<long> { 1L, 2L }, ["score"] = 100L, ["active"] = true, ["name"] = "rei",
+    };
+    private static Dictionary<string, object> InventoryBaseline() => new Dictionary<string, object> {
+        ["exp"] = 40L, ["tags"] = new List<long> { 1L, 2L },
+        ["inventory"] = new Dictionary<string, object> { ["capacity"] = 10L,
+            ["items"] = new List<object> { new Dictionary<string, object> { ["itemId"] = 1L, ["count"] = 2L } } },
+    };
+    private static void AssertSync()
+    {
+        // Client property replica: the PropertySync mirror of the C++
+        // SyncReceiver — descriptor-driven baselines with defaults, gapless
+        // sequences, atomic batch rollback, stale-until-resync, and handlers
+        // that fire only for subscribed properties after the commit.
+        var seen = new List<string>();
+        var sync = new PropertySync("Avatar", new Dictionary<string, Action<PropertyEvent>> {
+            ["exp"] = e => seen.Add("exp:" + e.Kind + ":" + e.Value),
+            ["tags"] = e => seen.Add("tags:" + e.Kind + ":" + e.Position),
+        });
+        sync.Baseline(PlainBaseline());
+        if (sync.Sequence != 0 || sync.Stale) throw new InvalidOperationException("baseline does not reset state");
+        if (!Equals(sync.Get("exp"), 0L) || !(sync.Get("blob") is byte[]))
+            throw new InvalidOperationException("missing properties not defaulted");
+        if (((List<long>)sync.Get("tags"))[0] != 1L) throw new InvalidOperationException("baseline values not stored");
+        var original = sync.Get("tags");
+        if (!sync.Apply(new List<SyncDelta> { new(4, Array.Empty<SyncStep>(), "SET", 0, 99L, 1) })
+            || !Equals(sync.Get("exp"), 99L) || sync.Sequence != 1)
+            throw new InvalidOperationException("SET delta not applied");
+        if (seen[0] != "exp:SET:99") throw new InvalidOperationException("handler not fired in order");
+        if (sync.Apply(new List<SyncDelta> { new(4, Array.Empty<SyncStep>(), "SET", 0, 5L, 3) })
+            || !sync.Stale || !Equals(sync.Get("exp"), 99L))
+            throw new InvalidOperationException("sequence gap not refused with rollback");
+        if (sync.Apply(new List<SyncDelta> { new(4, Array.Empty<SyncStep>(), "SET", 0, 6L, 2) }))
+            throw new InvalidOperationException("stale receiver accepted work");
+        sync.Baseline(InventoryBaseline());
+        if (sync.Sequence != 0 || sync.Stale || !Equals(sync.Get("exp"), 40L))
+            throw new InvalidOperationException("baseline does not resync");
+        if (ReferenceEquals(sync.Get("tags"), original)) throw new InvalidOperationException("baseline aliased the caller list");
+        if (sync.Apply(new List<SyncDelta> {
+                new(4, Array.Empty<SyncStep>(), "SET", 0, 77L, 1),
+                new(99, Array.Empty<SyncStep>(), "SET", 0, 1L, 2),
+            }) || !sync.Stale || !Equals(sync.Get("exp"), 40L))
+            throw new InvalidOperationException("batch with unknown property not rolled back atomically");
+        sync.Baseline(InventoryBaseline());
+        if (!sync.Apply(new List<SyncDelta> {
+                new(5, Array.Empty<SyncStep>(), "INSERT", 0, 9L, 1),
+                new(5, Array.Empty<SyncStep>(), "REMOVE", 1, null, 2),
+            }) || ((List<long>)sync.Get("tags"))[0] != 9L || ((List<long>)sync.Get("tags"))[1] != 2L
+            || ((List<long>)sync.Get("tags")).Count != 2)
+            throw new InvalidOperationException("array insert/remove not applied");
+        if (sync.Apply(new List<SyncDelta> { new(5, Array.Empty<SyncStep>(), "INSERT", 5, 9L, 3) })
+            || !sync.Stale || ((List<long>)sync.Get("tags")).Count != 2)
+            throw new InvalidOperationException("impossible insert position not refused");
+        sync.Baseline(InventoryBaseline());
+        if (sync.Apply(new List<SyncDelta> {
+                new(4, new[] { new SyncStep(FieldId: 0) }, "SET", 0, "yes", 1),
+            }) || !sync.Stale)
+            throw new InvalidOperationException("non-struct path into int property accepted");
+        sync.Baseline(InventoryBaseline());
+        if (sync.Apply(new List<SyncDelta> { new(7, Array.Empty<SyncStep>(), "SET", 0, "yes", 1) })
+            || !sync.Stale || Equals(sync.Get("active"), "yes"))
+            throw new InvalidOperationException("wrong value type not refused with rollback");
+        sync.Baseline(InventoryBaseline());
+        if (!sync.Apply(new List<SyncDelta> { new(3, Array.Empty<SyncStep>(), "SET", 0, 11L, 1) }))
+            throw new InvalidOperationException("unsubscribed property SET refused");
+        if (seen.Count != 3) throw new InvalidOperationException("unsubscribed handler fired");
+        if (!sync.Apply(new List<SyncDelta> {
+                new(2, new[] { new SyncStep(FieldId: 0) }, "SET", 0, 30L, 2),
+                new(2, new[] { new SyncStep(FieldId: 1) }, "INSERT", 0,
+                    new Dictionary<string, object> { ["itemId"] = 5L, ["count"] = 1L }, 3),
+            }))
+            throw new InvalidOperationException("struct path batch refused");
+        var inv = (Dictionary<string, object>)sync.Get("inventory");
+        var items = (List<object>)inv["items"];
+        if (!Equals(inv["capacity"], 30L) || items.Count != 2
+            || !Equals(((Dictionary<string, object>)items[0])["itemId"], 5L))
+            throw new InvalidOperationException("struct path set and struct-array insert failed");
+        if (sync.Apply(new List<SyncDelta> {
+                new(2, new[] { new SyncStep(FieldId: 77) }, "SET", 0, 1L, 4),
+            }) || !sync.Stale || !Equals(inv["capacity"], 30L))
+            throw new InvalidOperationException("unknown struct field not refused with rollback");
+        try { new PropertySync("Nope"); throw new InvalidOperationException("unknown entity type accepted"); }
+        catch (InvalidDataException) { }
+        if (string.Join("|", seen) != "exp:SET:99|tags:INSERT:0|tags:REMOVE:1")
+            throw new InvalidOperationException("unexpected handler stream");
+        Console.WriteLine("CS_PROPERTY_SYNC baseline defaults, delta batches, atomic rollback and resync [PASS]");
+    }
     public static int Main()
     {
         AssertVectors();
@@ -351,6 +438,7 @@ internal static class Program
         AssertEncodeRejections();
         AssertEnvelope();
         AssertFacade();
+        AssertSync();
         Console.WriteLine("CS_SPROTO_SDK_OK scalar+struct+arrays+bool/string/bytes vectors and decode match the locked bytes");
         return 0;
     }

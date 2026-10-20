@@ -4,7 +4,7 @@ import { pathToFileURL } from 'node:url';
 const modulePath = process.argv[2];
 if (!modulePath) throw new Error('usage: node sproto_sdk_golden.mjs GENERATED.bindings.js');
 const { encodeRecord, decodeRecord, sprotoFields, encodeEnvelope, decodeEnvelope, encodeReply, decodeReply,
-  entityTypes, entityMethods, EntityRpcQueue, EntityClient } = await import(pathToFileURL(modulePath));
+  entityTypes, entityMethods, EntityRpcQueue, EntityClient, PropertySync } = await import(pathToFileURL(modulePath));
 const hex = (bytes) => [...bytes].map((byte) => byte.toString(16).padStart(2, '0')).join('');
 const utf8 = (text) => new TextEncoder().encode(text);
 const unhex = (text) => Uint8Array.from(text.match(/../g), (pair) => parseInt(pair, 16));
@@ -297,3 +297,77 @@ if (entityMethods.Avatar.outbound.attack.mode !== 'notify'
     throw new Error('malformed frame accepted as notify');
 }
 console.log('JS_ENTITY_CLIENT bounded queue, facade calls/notify/retry and malformed refusals [PASS]');
+{
+  // Client property replica: the PropertySync mirror of the C++
+  // SyncReceiver — descriptor-driven baselines with defaults, gapless
+  // sequences, atomic batch rollback, stale-until-resync, and handlers
+  // that fire only for subscribed properties after the commit.
+  const seen = [];
+  const sync = new PropertySync('Avatar', {
+    exp: (event) => seen.push('exp:' + event.kind + ':' + event.value),
+    tags: (event) => seen.push('tags:' + event.kind + ':' + event.position),
+  });
+  sync.baseline({ level: 7n, tags: [1n, 2n], score: 100n, active: true, name: 'rei' });
+  if (sync.sequence !== 0 || sync.stale !== false) throw new Error('baseline does not reset state');
+  if (sync.get('exp') !== 0n || !(sync.get('blob') instanceof Uint8Array)) throw new Error('missing properties not defaulted');
+  if (sync.get('tags')[0] !== 1n) throw new Error('baseline values not stored');
+  const original = sync.get('tags');
+  if (sync.apply([{ property_id: 4, path: [], kind: 'SET', position: 0, value: 99n, sequence: 1 }]) !== true
+    || sync.get('exp') !== 99n || sync.sequence !== 1)
+    throw new Error('SET delta not applied');
+  if (seen[0] !== 'exp:SET:99') throw new Error('handler not fired in order');
+  if (sync.apply([{ property_id: 4, path: [], kind: 'SET', position: 0, value: 5n, sequence: 3 }]) !== false
+    || sync.stale !== true || sync.get('exp') !== 99n)
+    throw new Error('sequence gap not refused with rollback');
+  if (sync.apply([{ property_id: 4, path: [], kind: 'SET', position: 0, value: 6n, sequence: 2 }]) !== false)
+    throw new Error('stale receiver accepted work');
+  sync.baseline({ exp: 40n, tags: [1n, 2n],
+    inventory: { capacity: 10n, items: [{ itemId: 1n, count: 2n }] } });
+  if (sync.sequence !== 0 || sync.stale !== false || sync.get('exp') !== 40n) throw new Error('baseline does not resync');
+  if (sync.get('tags') === original) throw new Error('baseline aliased the caller array');
+  if (sync.apply([
+    { property_id: 4, path: [], kind: 'SET', position: 0, value: 77n, sequence: 1 },
+    { property_id: 99, path: [], kind: 'SET', position: 0, value: 1n, sequence: 2 },
+  ]) !== false || sync.stale !== true || sync.get('exp') !== 40n)
+    throw new Error('batch with unknown property not rolled back atomically');
+  sync.baseline({ exp: 40n, tags: [1n, 2n],
+    inventory: { capacity: 10n, items: [{ itemId: 1n, count: 2n }] } });
+  if (sync.apply([
+    { property_id: 5, path: [], kind: 'INSERT', position: 0, value: 9n, sequence: 1 },
+    { property_id: 5, path: [], kind: 'REMOVE', position: 1, sequence: 2 },
+  ]) !== true || sync.get('tags')[0] !== 9n || sync.get('tags')[1] !== 2n || sync.get('tags').length !== 2)
+    throw new Error('array insert/remove not applied');
+  if (sync.apply([{ property_id: 5, path: [], kind: 'INSERT', position: 5, value: 9n, sequence: 3 }]) !== false
+    || sync.stale !== true || sync.get('tags').length !== 2)
+    throw new Error('impossible insert position not refused');
+  sync.baseline({ exp: 40n, tags: [1n, 2n],
+    inventory: { capacity: 10n, items: [{ itemId: 1n, count: 2n }] } });
+  if (sync.apply([{ property_id: 4, path: [{ field_id: 0 }], kind: 'SET', position: 0, value: 'yes', sequence: 1 }]) !== false
+    || sync.stale !== true)
+    throw new Error('non-struct path into int property accepted');
+  sync.baseline({ exp: 40n, tags: [1n, 2n],
+    inventory: { capacity: 10n, items: [{ itemId: 1n, count: 2n }] } });
+  if (sync.apply([{ property_id: 7, path: [], kind: 'SET', position: 0, value: 'yes', sequence: 1 }]) !== false
+    || sync.stale !== true || sync.get('active') === 'yes')
+    throw new Error('wrong value type not refused with rollback');
+  sync.baseline({ exp: 40n, tags: [1n, 2n],
+    inventory: { capacity: 10n, items: [{ itemId: 1n, count: 2n }] } });
+  if (sync.apply([{ property_id: 3, path: [], kind: 'SET', position: 0, value: 11n, sequence: 1 }]) !== true)
+    throw new Error('unsubscribed property SET refused');
+  if (seen.length !== 3) throw new Error('unsubscribed handler fired');
+  if (sync.apply([
+    { property_id: 2, path: [{ field_id: 0 }], kind: 'SET', position: 0, value: 30n, sequence: 2 },
+    { property_id: 2, path: [{ field_id: 1 }], kind: 'INSERT', position: 0,
+      value: { itemId: 5n, count: 1n }, sequence: 3 },
+  ]) !== true || sync.get('inventory').capacity !== 30n
+    || sync.get('inventory').items[0].itemId !== 5n || sync.get('inventory').items.length !== 2)
+    throw new Error('struct path set and struct-array insert failed');
+  if (sync.apply([{ property_id: 2, path: [{ field_id: 77 }], kind: 'SET', position: 0, value: 1n, sequence: 4 }]) !== false
+    || sync.stale !== true || sync.get('inventory').capacity !== 30n)
+    throw new Error('unknown struct field not refused with rollback');
+  let refused = false;
+  try { new PropertySync('Nope'); } catch { refused = true; }
+  if (!refused) throw new Error('unknown entity type accepted');
+  if (seen.join('|') !== 'exp:SET:99|tags:INSERT:0|tags:REMOVE:1') throw new Error('unexpected handler stream');
+}
+console.log('JS_PROPERTY_SYNC baseline defaults, delta batches, atomic rollback and resync [PASS]');
