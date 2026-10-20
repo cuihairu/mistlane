@@ -1173,6 +1173,42 @@ void core_contracts() {
     equal(participant.character, "hero-7");
     require(participant.generation == 12, "hosting generation lost");
     equal(participant.return_realm+"/"+participant.return_group+"/"+participant.return_room, "home/arena/r1");
+    require(!participant.ticket, "a join without a ticket gained one");
+    // The optional entry ticket rides the last trailing group as hex MLT1.
+    ApiSecret ticket_secret{};
+    for (std::size_t i = 0; i < ticket_secret.size(); ++i) ticket_secret[i] = static_cast<unsigned char>(i*7+1);
+    EntryTicket ticket;
+    ticket.character = {"home", "hero-7"};
+    ticket.instance = "gs-a";
+    ticket.generation = 12;
+    ticket.expires = 1'760'000'000;
+    ticket.nonce = "0123456789abcdef0123456789abcdef";
+    ticket.signature = entry_ticket_sign(ticket, ticket_secret);
+    const auto hex = entry_ticket_hex(ticket);
+    const auto with_ticket = "MLC1 1 realm group room ch hero-7 gen 12 ret home arena r1 tk " + hex;
+    const auto entered = cross_context(with_ticket);
+    require(entered.ticket && *entered.ticket == ticket, "the ticket did not round-trip the join");
+    // Decoding refuses anything off the wire, so a forged tail is an INVALID
+    // join instead of a partly-valid participant.
+    for (const auto& forged : std::vector<std::string>{
+            hex.substr(0, hex.size()-2),
+            hex.substr(1),
+            "0"+hex,
+            hex.substr(0, hex.size()-4)+"ZZZZ",
+            std::string(512, '0'),
+            "DEADBEEF"})
+        must_fail([&] { (void)cross_context("MLC1 1 realm group room ch hero-7 gen 12 ret home arena r1 tk "+forged); });
+    // The ticket is bound to the same identity and generation it names.
+    for (const auto& mismatch : std::vector<std::string>{
+            "MLC1 1 realm group room ch other gen 12 ret home arena r1",
+            "MLC1 1 realm group room ch hero-7 gen 13 ret home arena r1"})
+        must_fail([&] { (void)cross_context(mismatch+" tk "+hex); });
+    must_fail([&] { (void)cross_context("MLC1 1 realm group room tk "+hex); });
+    must_fail([&] { (void)cross_context("MLC1 1 realm group room ch hero-7 gen 12 ret home arena r1 tke "+hex); });
+    must_fail([&] { (void)cross_context("MLC1 1 realm group room ch hero-7 gen 12 ret home arena r1 tk "+std::string(420, 'a')); });
+    // Oversized tails are refused at the caps, not just by the decoder.
+    must_fail([&] { (void)cross_context("MLC1 1 realm group room ch hero-7 gen 12 ret home arena r1 tk "+std::string(1200, 'a')); });
+    must_fail([&] { (void)cross_context("MLC1 1 realm group room "+std::string(2000, 'x')); });
     for (const auto& partial : std::vector<std::string>{
         "MLC1 1 realm group room ch hero",
         "MLC1 1 realm group room ch hero gen 12",

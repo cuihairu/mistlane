@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
+#include "mistlane/entry_ticket.hpp"
 #include <cstdint>
 #include <map>
+#include <optional>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -17,22 +19,30 @@ struct CrossContext {
     // names nothing the home side could fence or route back to.
     std::string character, return_realm, return_group, return_room;
     std::uint64_t generation = 0;
+    // The optional entry ticket, hex MLT1 bytes on the same trailing group.
+    std::optional<EntryTicket> ticket;
 };
 inline CrossContext cross_context(std::string_view payload) {
-    if (payload.size() > 256) throw std::invalid_argument("INVALID");
+    // The cap fits the participant tail plus a ticket-shaped hex token.
+    if (payload.size() > 1200) throw std::invalid_argument("INVALID");
     std::istringstream in{std::string(payload)};
     std::string magic, epoch, extra;
     CrossContext c;
     if (!(in >> magic >> epoch >> c.realm >> c.group >> c.room)) throw std::invalid_argument("INVALID");
-    // Optional trailing participant context: "ch <id> gen <n> ret <realm> <group> <room>".
+    // Optional trailing participant context: "ch <id> gen <n> ret <realm>
+    // <group> <room> [tk <hex>]" — the entry ticket rides the last group.
     std::string ch_tag, gen, gen_tag, ret_tag;
     if ((in >> ch_tag) && !(in >> c.character >> gen_tag >> gen >> ret_tag
             >> c.return_realm >> c.return_group >> c.return_room))
         throw std::invalid_argument("INVALID");
-    // Keywords must name the three participant parts; a partial parse already
-    // threw above, so a non-empty tag means the full nine tokens parsed.
+    std::string ticket_tag, ticket_hex;
+    if (!c.character.empty() && (in >> ticket_tag))
+        if (!(in >> ticket_hex) || ticket_tag != "tk") throw std::invalid_argument("INVALID");
+    // Keywords must name the participant parts; a partial parse already threw
+    // above, so a non-empty tag means the full tokens parsed.
     if ((in >> extra) || magic != "MLC1"
-            || (!ch_tag.empty() && (ch_tag != "ch" || gen_tag != "gen" || ret_tag != "ret")))
+            || (!ch_tag.empty() && (ch_tag != "ch" || gen_tag != "gen" || ret_tag != "ret"))
+            || (c.character.empty() && !ticket_tag.empty()))
         throw std::invalid_argument("INVALID");
     auto identifier = [](const std::string& s) {
         if (s.empty() || s.size() > 64) return false;
@@ -61,6 +71,15 @@ inline CrossContext cross_context(std::string_view payload) {
     if (!decimal(epoch, n)) throw std::invalid_argument("INVALID");
     c.epoch = static_cast<unsigned>(n);
     if (!c.character.empty() && !decimal(gen, c.generation)) throw std::invalid_argument("INVALID");
+    // The ticket must name the same identity and hosting generation the join
+    // declares, and an undecodable tail refuses the join rather than dropping
+    // the ticket from a participant that claimed one.
+    if (!ticket_hex.empty()) {
+        auto ticket = parse_entry_ticket(ticket_hex);
+        if (!ticket || ticket->character.second != c.character
+                || ticket->generation != c.generation) throw std::invalid_argument("INVALID");
+        c.ticket = std::move(ticket);
+    }
     return c;
 }
 // FNV-1a is fixed across processes/platforms; realm intentionally does not affect room affinity.

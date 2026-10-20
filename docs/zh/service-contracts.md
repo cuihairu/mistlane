@@ -6,8 +6,8 @@
 
 - **MLD1 的归属侧端点就是 `data` 角色本身。** 归属区服的 gateway 可以为它做传输前置，但持久确认的权威是 data 服务——不是 coordinator，也不是 gameServer。此项关闭回传协议页上的未决问题。
 - **三个角色都复用现有运行时面**——带可选 `MLS1` 身份的帧式 TCP 会话、Lua `message`/`http` 钩子、`MLR1` 注册表访问，以及 apiServer 现有的 HTTP 栈。不为它们引入新传输层。
-- **login 与 data 已可作为普通脚本服务运行**（`--role login`/`--role data` 带 `--script` 启动，标准钩子与帧式会话，形同没有场景的 gameServer）。login 的分配查询、data 侧 MLD1 记录端点与进入凭据 C++ 原语已实现；凭据接线、持久加载与持久化流程仍是契约层。apiServer 已在运行，本页补契约文档，不加代码。
-- **服务间的进入凭据定为短时效 HMAC-SHA256 凭据**（2026-10-19 依据 2026-10-14 既有授权代决）：login 在自身凭据校验之后，以区服预共享秘钥（来自配置）对（realm、character、目标 instance、承载 generation、有效期、nonce）签发一张凭据，接收侧 gameServer/crossServer 先验证凭据再接受进入或移交——宿主绝不在裸声明上加载角色。被否选项：每客户端 PKI/mTLS（需要本部署不具备的 CA 与轮换运维）、外部 JWT/认证服务（新增进程，且把依赖压进入口热路径）、以及框架不出凭据（宿主将信任未验证声明，破坏唯一写入权规则）。C++ 原语已作为 MLT1 落地（`include/mistlane/entry_ticket.hpp`）：以共享的 `hmac_sha256` 对规范字节签发与验证，区服秘钥表、对照到达 character/instance/generation 的身份校验、含有效期末刻的过期判定、时钟回退闭环与有界已见声明表——无传输绑定、无真实秘钥，且声明表按进程隔离，`Replay` 只对单一接收方诚实。`MLS1` 预共享令牌仍是服务链路身份。
+- **login 与 data 已可作为普通脚本服务运行**（`--role login`/`--role data` 带 `--script` 启动，标准钩子与帧式会话，形同没有场景的 gameServer）。login 的分配查询、data 侧 MLD1 记录端点、进入凭据 C++ 原语与凭据的 `MLC1` 线形已实现；宿主的凭据验证与秘钥配置、持久加载与持久化流程仍是契约层。apiServer 已在运行，本页补契约文档，不加代码。
+- **服务间的进入凭据定为短时效 HMAC-SHA256 凭据**（2026-10-19 依据 2026-10-14 既有授权代决）：login 在自身凭据校验之后，以区服预共享秘钥（来自配置）对（realm、character、目标 instance、承载 generation、有效期、nonce）签发一张凭据，接收侧 gameServer/crossServer 先验证凭据再接受进入或移交——宿主绝不在裸声明上加载角色。被否选项：每客户端 PKI/mTLS（需要本部署不具备的 CA 与轮换运维）、外部 JWT/认证服务（新增进程，且把依赖压进入口热路径）、以及框架不出凭据（宿主将信任未验证声明，破坏唯一写入权规则）。C++ 原语已作为 MLT1 落地（`include/mistlane/entry_ticket.hpp`）：以共享的 `hmac_sha256` 对规范字节签发与验证，区服秘钥表、对照到达 character/instance/generation 的身份校验、含有效期末刻的过期判定、时钟回退闭环与有界已见声明表，外加线形（`entry_ticket_hex`/`parse_entry_ticket`：规范字节加原始签名的十六进制，作为 `MLC1` 可选 `tk` 尾缀组上行，绑定握手声明的 character 与承载版本）——但没有真实秘钥、没有秘钥配置加载、没有运行验证器的宿主，声明表仍按进程隔离，`Replay` 只对单一接收方诚实。`MLS1` 预共享令牌仍是服务链路身份。
 
 ## login
 
@@ -20,12 +20,12 @@ login 拥有进入流程：验证账号、展示角色列表、取得承载分�
 | Lua 面 | 同一套 `message`/`init`/`start`/`tick`/`stop`/`shutdown` 钩子；login 处理器应答认证、角色列表与进入请求；没有场景或 Avatar 对象 |
 | 承载分配 | login 向 coordinator 发 `MLR1 PLACE gameServer <scope>` 并在进入应答中带回分配地址；不得把地址写进持久记录（职责规则）；`MLR1 EMPTY` 是进入拒绝，不是可吞掉的错误 |
 | 进入上下文 | 进入应答携带来源区服、角色标识、归属 data 签发的承载 generation、返回路由及 login 凭据；gameServer 与后续 crossServer 使用同一参与者上下文 |
-| 认证边界 | 凭据验证是应用层 Lua 决策；服务之间，进入凭据是已拍板的 HMAC-SHA256 短时效凭据，其 C++ 签发/验证原语已作为 MLT1 实现（见上方决定）。尚无任何路径运行它：没有线上动词携带凭据，今天宿主在传输身份之外仍无法验证进入上下文 |
+| 认证边界 | 凭据验证是应用层 Lua 决策；服务之间，进入凭据是已拍板的 HMAC-SHA256 短时效凭据，其 C++ 签发/验证原语已作为 MLT1 实现（见上方决定）。线形已绑定：凭据随 `MLC1` 的 `tk` 尾缀上行，解码失败的尾缀整次握手拒绝。但尚无任何路径验证它：没有宿主运行验证器，今天宿主在传输身份之外仍无法验证进入上下文 |
 | 状态 | login 至多持有连接状态与未完成的承载记录；没有任何持久数据。进入应答之后，角色路由归属 gameServer/coordinator，而不是 login |
 
-generation 生命周期（设计，非运行时）：分配选出目标实例后，login 向归属 data 请求 `(realm, character, target instance)` 授权。归属 data 是唯一 generation 权威：新键从 1 开始；重新分配或接管须持久分配严格更大的 generation，栅栏/墓碑旧授权，并按[有序租约交接](./cross-return-protocol.md#写入租约交接)激活目标。中止或超时后不得复用已分配 generation。login 在进入上下文返回 data 签发的 generation，并与目标实例一起绑定进凭据；接收宿主在持久写前验证凭据及归属 data 的有效授权。宿主不能自发或推进 generation。当前 MLD1 LOAD 只观察内存记录，SUBMIT 接受更大数字不构成租约授权。授权/预留/激活线消息、持久权威与凭据线上传输仍归归属执行缺口（凭据编码本身已随 MLT1 实现），尚未实现。
+generation 生命周期（设计，非运行时）：分配选出目标实例后，login 向归属 data 请求 `(realm, character, target instance)` 授权。归属 data 是唯一 generation 权威：新键从 1 开始；重新分配或接管须持久分配严格更大的 generation，栅栏/墓碑旧授权，并按[有序租约交接](./cross-return-protocol.md#写入租约交接)激活目标。中止或超时后不得复用已分配 generation。login 在进入上下文返回 data 签发的 generation，并与目标实例一起绑定进凭据；接收宿主在持久写前验证凭据及归属 data 的有效授权。宿主不能自发或推进 generation。当前 MLD1 LOAD 只观察内存记录，SUBMIT 接受更大数字不构成租约授权。授权/预留/激活线消息、持久权威与宿主的凭据验证（含区服秘钥配置）仍归归属执行缺口，尚未实现；凭据编码与线形已随 `MLC1` 的 `tk` 尾缀落地。
 
-接线状态：已可作为脚本服务启动（`--role login` 加 `--script`，帧式会话与标准钩子）；`--coordinator ADDR:PORT [--scope NAME]` 接通注册表客户端——Lua `mistlane.place(role, scope?, callback)` 每次查询经新连接发起 `MLR1 PLACE`，把分配地址（或原因）交回脚本。进入凭据 C++ 原语已作为 MLT1 实现（规范字节签发/验证、区服秘钥、身份/过期/重放校验）但未接线：尚无线上动词携带凭据，Lua 沙箱也仍不开启任何密码库。同样未实现：分配外围的完整进入流程。
+接线状态：已可作为脚本服务启动（`--role login` 加 `--script`，帧式会话与标准钩子）；`--coordinator ADDR:PORT [--scope NAME]` 接通注册表客户端——Lua `mistlane.place(role, scope?, callback)` 每次查询经新连接发起 `MLR1 PLACE`，把分配地址（或原因）交回脚本。进入凭据 C++ 原语已作为 MLT1 实现（规范字节签发/验证、区服秘钥、身份/过期/重放校验），凭据也随 `MLC1` 的 `tk` 尾缀上行，但没有宿主验证它：尚无区服秘钥配置，Lua 沙箱也仍不开启任何密码库。同样未实现：分配外围的完整进入流程。
 
 ## data
 
@@ -57,7 +57,7 @@ apiServer 已实现且保持现状；本节记录其契约边界。
 
 ## 此处刻意不定的事项
 
-- 面向客户端的凭据格式与账号体系：应用域事务，刻意留在框架之外。服务侧凭据方案本身已拍板（HMAC-SHA256 短时效凭据、区服预共享秘钥），其 C++ 原语已作为 MLT1 实现；此处不有的是接线——线上动词与配置注入，Lua 沙箱仍不开启任何密码库。
+- 面向客户端的凭据格式与账号体系：应用域事务，刻意留在框架之外。服务侧凭据方案本身已拍板（HMAC-SHA256 短时效凭据、区服预共享秘钥），其 C++ 原语已作为 MLT1 实现；此处不有的是接线——宿主验证与秘钥注入，Lua 沙箱仍不开启任何密码库。
 - 角色状态 schema 与脏语义：实体契约链。
 - 结算与奖励规则：玩法。
 
