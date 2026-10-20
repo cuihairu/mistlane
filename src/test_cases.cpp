@@ -1779,6 +1779,33 @@ void api_http() {
         require(corrupt.wait() != 0 && corrupt.output().find("MLA1 credential") != std::string::npos,
                 "a malformed credential booted");
     }
+    // A rotation bound on the row: expired retires the key, live verifies.
+    {
+        ScopedEnv audience("MISTLANE_MLA1_AUDIENCE", "platform");
+        {
+            ScopedEnv expired("MISTLANE_MLA1_CREDENTIAL",
+                "ops-callback:key-2026:"+hex+":realm1:"+std::to_string(now-10));
+            const auto listen = port();
+            c.node("apiServer", listen, {"--script", c.path("api.lua").string()});
+            const auto sent = http("http://"+endpoint(listen)+"/mla1", "POST", accept_body("grant-old"));
+            require(sent.status == 401, "an expired rotation bound was not 401");
+            equal(sent.body, reply_body({"UNKNOWN_CREDENTIAL", "", "", "", ""}));
+        }
+        {
+            ScopedEnv bounded("MISTLANE_MLA1_CREDENTIAL",
+                "ops-callback:key-2026:"+hex+":realm1:"+std::to_string(now+3600));
+            const auto listen = port();
+            c.node("apiServer", listen, {"--script", c.path("api.lua").string()});
+            const auto sent = http("http://"+endpoint(listen)+"/mla1", "POST", accept_body("grant-live"));
+            require(sent.status == 200, "a live rotation bound refused a signed request");
+            equal(sent.body, reply_body({"OK", "INSERTED", "VOLATILE", "grant", ""}));
+        }
+        ScopedEnv bad("MISTLANE_MLA1_CREDENTIAL", "ops-callback:key-2026:"+hex+":realm1:soon");
+        auto& refused = c.spawn({self().string(), "--role", "apiServer", "--listen", endpoint(port()),
+            "--script", c.path("api.lua").string()});
+        require(refused.wait() != 0 && refused.output().find("rotation bound") != std::string::npos,
+                "a malformed rotation bound booted");
+    }
     std::cout << "api.http surface: signed POST /mla1 inserts, dedupes, refuses [PASS]\n";
     std::cout << "api.http config: env-only enablement, malformed credentials refuse startup [PASS]\n";
 }

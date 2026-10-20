@@ -35,6 +35,10 @@ struct ApiCredential {
     std::string principal, key_id;
     ApiSecret secret{};
     std::set<std::string> realms;
+    // Rotation overlaps rows: an old row keeps verifying through this second
+    // (inclusive), then answers UnknownCredential like an absent row, so a
+    // stale caller learns nothing beyond "not a live key". 0 = unbounded.
+    std::uint64_t valid_until = 0;
 };
 inline constexpr std::uint64_t api_window_seconds = 300;
 bool valid_api_request(const ApiRequest& request);

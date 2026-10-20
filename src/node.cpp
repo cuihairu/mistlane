@@ -12,6 +12,7 @@
 #include <boost/asio.hpp>
 #include <algorithm>
 #include <array>
+#include <charconv>
 #include <cctype>
 #include <csignal>
 #include <cstdlib>
@@ -56,8 +57,10 @@ std::string correlated_frame(std::uint64_t request, std::string_view payload) {
     return frame;
 }
 // MLA1 credential rows, ';'-separated: "principal:key_id:<64 lowercase hex
-// secret>:realm[,realm...]". Injected through the environment so no loader,
-// CLI secret flag or real credential ships inside the framework.
+// secret>:realm[,realm...][:until]". The optional tail is the rotation bound
+// as decimal epoch seconds (0 or absent = unbounded). Injected through the
+// environment so no loader, CLI secret flag or real credential ships inside
+// the framework.
 std::vector<ApiCredential> api_credentials(std::string_view text) {
     std::vector<ApiCredential> credentials;
     auto row = text;
@@ -73,6 +76,7 @@ std::vector<ApiCredential> api_credentials(std::string_view text) {
         ApiCredential credential;
         credential.principal = body.substr(0, first);
         credential.key_id = body.substr(first+1, second-first-1);
+        const auto fourth = third == std::string::npos ? std::string::npos : body.find(':', third+1);
         const auto hex = body.substr(second+1, third-second-1);
         const auto digit = [hex](std::size_t at) {
             const char ch = hex[at];
@@ -84,11 +88,18 @@ std::vector<ApiCredential> api_credentials(std::string_view text) {
             throw std::invalid_argument("MLA1 credential secret must be 64 lowercase hex digits");
         for (std::size_t i = 0; i < hex.size(); i += 2)
             credential.secret[i/2] = static_cast<unsigned char>(digit(i)*16 + digit(i+1));
-        auto realms = body.substr(third+1);
+        auto realms = body.substr(third+1, fourth == std::string_view::npos
+            ? std::string_view::npos : fourth-third-1);
         while (!realms.empty()) {
             const auto comma = realms.find(',');
             credential.realms.emplace(realms.substr(0, comma));
             realms = comma == std::string_view::npos ? std::string_view{} : realms.substr(comma+1);
+        }
+        if (fourth != std::string_view::npos) {
+            const auto until = body.substr(fourth+1);
+            const auto parsed = std::from_chars(until.data(), until.data()+until.size(), credential.valid_until);
+            if (until.empty() || parsed.ec != std::errc() || parsed.ptr != until.data()+until.size())
+                throw std::invalid_argument("MLA1 credential rotation bound must be decimal seconds");
         }
         credentials.push_back(std::move(credential));
     }

@@ -74,7 +74,7 @@ if(BUILD_TESTING)
       coordinator.placement coordinator.routes coordinator.migration.commit coordinator.migration.abort
       coordinator.migration.recover coordinator.migration.stale coordinator.migration.order
       coordinator.migration.retire lua.lifecycle lua.http
-      api.signature api.tamper api.replay api.acceptance api.ownership api.wire api.http
+      api.signature api.tamper api.rotation api.replay api.acceptance api.ownership api.wire api.http
       login.ticket
       cross.admission cross.record cross.return.queue probe.control scaffold.init config.file cli.bot)
     string(REPLACE "." "_" test_name "${test_case}")

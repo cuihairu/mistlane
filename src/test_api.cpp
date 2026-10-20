@@ -78,6 +78,53 @@ void api_tamper() {
     std::cout << "api.tamper nonce_reserved: failures claim nothing [PASS]\n";
 }
 
+void api_rotation() {
+    // Rotation overlaps: the old key stays valid through its bound inclusive
+    // while the new one already verifies, so no coordinated cutover exists.
+    ApiCredential old_row;
+    old_row.principal = "ops-callback";
+    old_row.key_id = "key-2025";
+    old_row.secret = test_secret(1);
+    old_row.realms = {"realm1"};
+    old_row.valid_until = 2'000;
+    ApiCredential new_row = old_row;
+    new_row.key_id = "key-2026";
+    new_row.valid_until = 0; // unbounded
+    ApiReplayGuard guard;
+    ApiVerifier verifier("platform", {old_row, new_row}, guard);
+    const auto signed_request = [](const char* key_id, const char* nonce, std::uint64_t timestamp) {
+        ApiRequest request = base_request();
+        request.key_id = key_id;
+        request.nonce = nonce;
+        request.timestamp = timestamp;
+        request.signature = api_sign(request, test_secret(1));
+        return request;
+    };
+    const auto overlap_old = signed_request("key-2025", "0123456789abcdef0123456789abcdef", 1'999);
+    const auto overlap_new = signed_request("key-2026", "fedcba9876544321fedcba9876544321", 1'999);
+    require(verifier.verify(overlap_old, 1'999) == ApiAuth::Ok, "the old key was refused inside the overlap");
+    require(verifier.verify(overlap_new, 1'999) == ApiAuth::Ok, "the new key was refused during rotation");
+    const auto boundary = signed_request("key-2025", "11112222333344445555666677778888", 2'000);
+    require(verifier.verify(boundary, 2'000) == ApiAuth::Ok, "the old key did not stay valid through its bound");
+    const auto stale = signed_request("key-2025", "aaaabbbbccccddddeeeeffff00001111", 2'001);
+    require(verifier.verify(stale, 2'001) == ApiAuth::UnknownCredential, "an expired key was not retired");
+    // A failed expiry check claims nothing: the same nonce under the live key
+    // still lands, because the claim key ignores key_id.
+    const auto reuse = signed_request("key-2026", "aaaabbbbccccddddeeeeffff00001111", 2'001);
+    require(verifier.verify(reuse, 2'001) == ApiAuth::Ok, "an expired check consumed the shared nonce slot");
+    require(verifier.verify(overlap_new, 2'001) == ApiAuth::Replay, "a live nonce stopped replaying after rotation");
+
+    // Revocation is removing the row: the same key that verified stops at once.
+    ApiReplayGuard revoked_guard;
+    ApiVerifier revocable("platform", {old_row, new_row}, revoked_guard);
+    const auto live = signed_request("key-2025", "22223333444455556666777788889999", 1'999);
+    require(revocable.verify(live, 1'999) == ApiAuth::Ok, "the row was not live before revocation");
+    ApiVerifier cut("platform", {new_row}, revoked_guard);
+    require(cut.verify(live, 1'999) == ApiAuth::UnknownCredential, "a revoked key still verified");
+    std::cout << "api.rotation overlap: old key live through its bound inclusive [PASS]\n";
+    std::cout << "api.rotation revoke: row removal stops the key at once [PASS]\n";
+}
+
 void api_replay() {
     ApiReplayGuard guard;
     ApiVerifier verifier = make_verifier(guard);

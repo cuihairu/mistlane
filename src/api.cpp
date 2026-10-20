@@ -89,6 +89,7 @@ ApiAuth ApiVerifier::verify(const ApiRequest& request, std::uint64_t now) const 
     if (!valid_api_request(request) || request.audience != audience_) return ApiAuth::Invalid;
     const auto key = credentials_.find({request.principal, request.key_id});
     if (key == credentials_.end()) return ApiAuth::UnknownCredential;
+    if (key->second.valid_until && now > key->second.valid_until) return ApiAuth::UnknownCredential;
     if (!key->second.realms.contains(request.character.first)) return ApiAuth::Forbidden;
     const auto expected = api_sign(request, key->second.secret);
     if (CRYPTO_memcmp(expected.data(), request.signature.data(), expected.size()) != 0) return ApiAuth::BadSignature;
