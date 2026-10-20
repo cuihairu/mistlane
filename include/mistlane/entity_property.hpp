@@ -5,6 +5,38 @@
 #include <stdexcept>
 
 namespace mistlane {
+// One step of a location inside a property: a struct field name or an array
+// position. Arrays grow only through ordered inserts; struct fields must
+// already exist.
+struct TreeStep {
+    bool by_index = false;
+    std::string field;
+    std::size_t index = 0;
+};
+inline bool operator==(const TreeStep& a, const TreeStep& b) {
+    return a.by_index == b.by_index && (a.by_index ? a.index == b.index : a.field == b.field);
+}
+using TreePath = std::vector<TreeStep>;
+// One journal entry. SET carries the new leaf value at (property, path);
+// INSERT/REMOVE carry the value/position applied to the array addressed by
+// (property, path). Entries replay in application order, so a receiver
+// walking the journal lands on the sender's state without rebasing.
+struct TreeChange {
+    enum class Kind { SET, INSERT, REMOVE };
+    std::string property;
+    TreePath path;
+    Kind kind = Kind::SET;
+    std::size_t position = 0;
+    EntityValue value{std::int64_t{0}};
+};
+// A container handle handed out to a controlled proxy. Any structural change
+// to its property (insert, remove, whole-property replacement) bumps the
+// generation, so a handle from before the change is refused: old container
+// handles never survive the mutation that moved members.
+struct ContainerHandle {
+    std::string property;
+    unsigned generation = 0;
+};
 // One instance's controlled property store, driven entirely by the contract
 // descriptor. Values are addressed by declared name (and by the stable
 // property id); every write passes the same type rules as EntityDispatcher,
@@ -33,20 +65,104 @@ public:
         return it == values_.end() ? nullptr : &it->second;
     }
     bool set(const std::string& name, EntityValue value) {
-        const auto prop = std::find_if(entity_->properties.begin(), entity_->properties.end(),
-                                       [&](const ContractProperty& p) { return p.name == name; });
-        if (prop == entity_->properties.end()) {
+        const auto* prop = descriptor(name);
+        if (!prop) {
             error_ = "property '"+name+"' is not a declared property on entity "+entity_->name;
             return false;
         }
-        if (!EntityDispatcher::value_valid(prop->type, prop->of, value, contract_->structs())) {
-            error_ = "property '"+name+"' is rejected by "
-                     +(prop->type == "ARRAY" ? "ARRAY of "+prop->of : prop->type)+" type rules";
-            return false;
-        }
+        if (!valid_shape(*prop, name, {}, value)) return false;
         values_.find(name)->second = std::move(value);
+        // A whole-property replacement re-creates the subtree: it absorbs the
+        // entries inside and is itself a structural change for old handles.
+        record_set(name, {}, EntityValue(values_.find(name)->second));
+        structural(name);
         error_.clear();
         return true;
+    }
+    // Read a value at a path of struct fields / array positions.
+    const EntityValue* get_path(const std::string& name, const TreePath& path) const {
+        const auto root = values_.find(name);
+        if (root == values_.end()) { error_ = "property '"+name+"' is not a declared property on entity "+entity_->name; return nullptr; }
+        const EntityValue* at = &root->second;
+        for (const auto& step : path) {
+            if (step.by_index) {
+                const auto* array = std::get_if<EntityArray>(&at->data);
+                if (!array || step.index >= array->size()) { error_ = "path index out of range"; return nullptr; }
+                at = &(*array)[step.index];
+            } else {
+                const auto* object = std::get_if<EntityObject>(&at->data);
+                if (!object) { error_ = "path field '"+step.field+"' on a non-struct"; return nullptr; }
+                const auto field = object->find(step.field);
+                if (field == object->end()) { error_ = "unknown struct field '"+step.field+"'"; return nullptr; }
+                at = &field->second;
+            }
+        }
+        return at;
+    }
+    // Set one leaf at a path; an empty path replaces the whole property.
+    bool set_path(const std::string& name, TreePath path, EntityValue value) {
+        const auto* prop = descriptor(name);
+        if (!prop) { error_ = "property '"+name+"' is not a declared property on entity "+entity_->name; return false; }
+        if (path.empty()) return set(name, std::move(value));
+        // Validate the leaf against the shape the descriptor expects there
+        // before touching storage, so a refused write lands nowhere.
+        const auto leaf = leaf_shape(*prop, name, path);
+        if (!leaf.ok) return false;
+        if (!EntityDispatcher::value_valid(leaf.type, leaf.of, value, contract_->structs())) {
+            error_ = "property '"+name+"' path "+path_text(path)+" is rejected by "
+                     +(leaf.type == "ARRAY" ? "ARRAY of "+leaf.of : leaf.type)+" type rules";
+            return false;
+        }
+        EntityValue* at = &values_.find(name)->second;
+        for (std::size_t i = 0; i + 1 < path.size(); ++i) at = descend(at, path[i]);
+        if (!assign_child(at, path.back(), std::move(value))) return false;
+        record_set(name, std::move(path), EntityValue(value));
+        return true;
+    }
+    // Insert an element before `position` in the array addressed by path
+    // (position == size appends). Arrays grow only through ordered inserts.
+    bool insert_at(const std::string& name, const TreePath& path, std::size_t position, EntityValue value) {
+        const auto* prop = descriptor(name);
+        if (!prop) { error_ = "property '"+name+"' is not a declared property on entity "+entity_->name; return false; }
+        const auto array_shape = array_at(*prop, name, path);
+        if (!array_shape.ok) return false;
+        if (!EntityDispatcher::value_valid(array_shape.of, {}, value, contract_->structs())) {
+            error_ = "property '"+name+"' path "+path_text(path)+" element is rejected by "
+                     +array_shape.of+" type rules";
+            return false;
+        }
+        auto* array = array_at_value(name, path);
+        if (position > array->size()) { error_ = "insert position "+std::to_string(position)+" is beyond array size"; return false; }
+        array->insert(array->begin()+static_cast<std::ptrdiff_t>(position), std::move(value));
+        changes_.push_back(TreeChange{name, path, TreeChange::Kind::INSERT, position, EntityValue(value)});
+        structural(name);
+        return true;
+    }
+    bool remove_at(const std::string& name, const TreePath& path, std::size_t position) {
+        const auto* prop = descriptor(name);
+        if (!prop) { error_ = "property '"+name+"' is not a declared property on entity "+entity_->name; return false; }
+        const auto array_shape = array_at(*prop, name, path);
+        if (!array_shape.ok) return false;
+        auto* array = array_at_value(name, path);
+        if (position >= array->size()) { error_ = "remove position "+std::to_string(position)+" is beyond array size"; return false; }
+        array->erase(array->begin()+static_cast<std::ptrdiff_t>(position));
+        changes_.push_back(TreeChange{name, path, TreeChange::Kind::REMOVE, position, EntityValue(std::int64_t{0})});
+        structural(name);
+        return true;
+    }
+    // Ordered change journal since the last rebaseline/take.
+    std::vector<TreeChange> take_changes() {
+        std::vector<TreeChange> taken;
+        taken.swap(changes_);
+        return taken;
+    }
+    void rebaseline() { changes_.clear(); }
+    // Container handles die on the next structural change of their property.
+    ContainerHandle handle(const std::string& name) const { return {name, generations_.count(name) ? generations_.at(name) : 0}; }
+    bool valid(const ContainerHandle& handle) const {
+        const auto gen = generations_.find(handle.property);
+        const unsigned current = gen == generations_.end() ? 0 : gen->second;
+        return values_.count(handle.property) && current == handle.generation;
     }
     const EntityValue* by_id(std::uint32_t id) const {
         const auto it = ids_.find(id);
@@ -84,6 +200,103 @@ public:
     }
     const std::string& error() const { return error_; }
 private:
+    const ContractProperty* descriptor(const std::string& name) const {
+        const auto prop = std::find_if(entity_->properties.begin(), entity_->properties.end(),
+                                       [&](const ContractProperty& p) { return p.name == name; });
+        return prop == entity_->properties.end() ? nullptr : &*prop;
+    }
+    bool valid_shape(const ContractProperty& prop, const std::string& name,
+                     const TreePath& path, const EntityValue& value) {
+        const auto leaf = leaf_shape(prop, name, path);
+        if (!leaf.ok) return false;
+        if (!EntityDispatcher::value_valid(leaf.type, leaf.of, value, contract_->structs())) {
+            error_ = "property '"+name+"'"+(path.empty() ? "" : " path "+path_text(path))
+                     +" is rejected by "+(leaf.type == "ARRAY" ? "ARRAY of "+leaf.of : leaf.type)+" type rules";
+            return false;
+        }
+        return true;
+    }
+    struct Shape { bool ok = false; std::string type, of; };
+    // Resolve the type at (property, path), validating every step against the
+    // descriptor as it descends. A wrong kind, an out-of-range-free field or
+    // an index through a non-array is a refused path before any write.
+    Shape leaf_shape(const ContractProperty& prop, const std::string& name, const TreePath& path) {
+        std::string type = prop.type, of = prop.of;
+        for (std::size_t i = 0; i < path.size(); ++i) {
+            const auto& step = path[i];
+            const bool leaf_step = i + 1 == path.size();
+            if (step.by_index) {
+                if (type != "ARRAY") { error_ = "property '"+name+"' path "+path_text(path)+": index into non-array"; return {}; }
+                // The parser already refuses ARRAY of ARRAY, so an indexed
+                // element is a scalar or struct; its own of is irrelevant.
+                type = of;
+                of.clear();
+            } else {
+                const auto structs = contract_->structs();
+                const auto spec = structs.find(type);
+                if (spec == structs.end()) { error_ = "property '"+name+"' path "+path_text(path)+": field '"+step.field+"' on a non-struct"; return {}; }
+                const auto field = std::find_if(spec->second.begin(), spec->second.end(),
+                                                [&](const ContractField& f) { return f.name == step.field; });
+                if (field == spec->second.end()) { error_ = "property '"+name+"' path "+path_text(path)+": unknown struct field '"+step.field+"'"; return {}; }
+                type = field->type;
+                of = field->of;
+            }
+            (void)leaf_step;
+        }
+        return Shape{true, type, of};
+    }
+    Shape array_at(const ContractProperty& prop, const std::string& name, const TreePath& path) {
+        Shape shape = leaf_shape(prop, name, path);
+        if (!shape.ok) return {};
+        if (shape.type != "ARRAY") { error_ = "property '"+name+"' path "+path_text(path)+" does not address an array"; return {}; }
+        return shape;
+    }
+    EntityArray* array_at_value(const std::string& name, const TreePath& path) {
+        EntityValue* at = &values_.find(name)->second;
+        for (const auto& step : path) at = descend(at, step);
+        return std::get_if<EntityArray>(&at->data);
+    }
+    static EntityValue* descend(EntityValue* at, const TreeStep& step) {
+        if (step.by_index) return &std::get<EntityArray>(at->data)[step.index];
+        return &std::get<EntityObject>(at->data).at(step.field);
+    }
+    static bool assign_child(EntityValue* at, const TreeStep& step, EntityValue value) {
+        if (step.by_index) {
+            auto* array = std::get_if<EntityArray>(&at->data);
+            if (!array || step.index >= array->size()) return false;
+            (*array)[step.index] = std::move(value);
+        } else {
+            auto* object = std::get_if<EntityObject>(&at->data);
+            if (!object || !object->count(step.field)) return false;
+            object->find(step.field)->second = std::move(value);
+        }
+        return true;
+    }
+    static std::string path_text(const TreePath& path) {
+        std::string text;
+        for (const auto& step : path) {
+            text += step.by_index ? "["+std::to_string(step.index)+"]" : "."+step.field;
+        }
+        return text;
+    }
+    // SET journal with path merge: a whole-subtree replacement absorbs prior
+    // entries inside that subtree, and two consecutive SETs at one path
+    // collapse to the newer value. INSERT/REMOVE always append.
+    void record_set(const std::string& name, TreePath path, EntityValue value) {
+        changes_.erase(std::remove_if(changes_.begin(), changes_.end(), [&](const TreeChange& entry) {
+            if (entry.property != name || entry.path.size() <= path.size()) return false;
+            return std::equal(path.begin(), path.end(), entry.path.begin());
+        }), changes_.end());
+        if (!changes_.empty()) {
+            auto& last = changes_.back();
+            if (last.property == name && last.kind == TreeChange::Kind::SET && last.path == path) {
+                last.value = std::move(value);
+                return;
+            }
+        }
+        changes_.push_back(TreeChange{name, std::move(path), TreeChange::Kind::SET, 0, std::move(value)});
+    }
+    void structural(const std::string& name) { ++generations_[name]; }
     // Missing defaults follow the type rules: zero/false/empty string, empty
     // array and per-field structure initialization; explicit defaults
     // (already validated by the contract parser) override them.
@@ -106,6 +319,8 @@ private:
     const ContractEntity* entity_ = nullptr;
     EntityValues values_;
     std::map<std::uint32_t, std::string> ids_;
-    std::string error_;
+    std::map<std::string, unsigned> generations_;
+    std::vector<TreeChange> changes_;
+    mutable std::string error_;
 };
 }

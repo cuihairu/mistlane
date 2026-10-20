@@ -276,6 +276,117 @@ void entity_properties() {
     lua_close(W);
     std::cout << "entity.properties binding clash: refused at push [PASS]\n";
 }
+// Bounded value tree over the controlled store (item 106 core, the
+// prerequisite of the nested-delta items): mutations through explicit paths
+// journal ordered change entries, a whole-property set absorbs the entries
+// recorded inside the replaced subtree (path merge across structural
+// changes), structural ops hand out generation-counted container handles
+// that die on the next structural change, and take_changes/rebaseline drain
+// or drop the backlog.
+void entity_tree() {
+    const EntityContract contract(R"(<Contracts><Types>
+        <Item><itemId id="0" type="UINT32"/><count id="1" type="UINT32" default="1"/></Item>
+        <Inventory><capacity id="0" type="UINT16"/><items id="1" type="ARRAY" of="Item"/></Inventory>
+        </Types>
+        <Entity name="Avatar" id="1">
+          <Properties>
+            <level id="1" type="UINT16" default="1" flags="OWN_CLIENT"/>
+            <inventory id="2" type="Inventory"/>
+            <tags id="3" type="ARRAY" of="UINT32"/>
+          </Properties>
+        </Entity></Contracts>)");
+    using Kind = TreeChange::Kind;
+    PropertyStore store(contract, 1);
+    const auto field = [](const char* name) { return TreeStep{false, name, 0}; };
+    const auto index = [](std::size_t at) { return TreeStep{true, std::string(), at}; };
+    // Nested writes through explicit paths: arrays grow only by ordered
+    // inserts, struct fields must exist, and every change lands in the
+    // journal in application order.
+    require(store.insert_at("inventory", {field("items")}, 0,
+                EntityValue(EntityObject{{"itemId", std::int64_t{7}}, {"count", std::int64_t{1}}})) &&
+            store.insert_at("inventory", {field("items")}, 1,
+                EntityValue(EntityObject{{"itemId", std::int64_t{9}}, {"count", std::int64_t{2}}})),
+            "ordered inserts into a nested array refused");
+    require(store.set_path("inventory", {field("items"), index(1), field("count")}, std::int64_t{5}),
+            "nested struct-in-array write refused");
+    const auto* count = store.get_path("inventory", {field("items"), index(1), field("count")});
+    require(count && std::get<std::int64_t>(count->data) == 5, "nested write did not land");
+    require(store.insert_at("tags", {}, std::size_t{0}, std::int64_t{30}) &&
+            store.insert_at("tags", {}, std::size_t{1}, std::int64_t{31}) &&
+            store.insert_at("tags", {}, std::size_t{2}, std::int64_t{32}),
+            "scalar array inserts refused");
+    require(store.set_path("tags", {index(1)}, std::int64_t{9}), "array element write refused");
+    auto changes = store.take_changes();
+    require(changes.size() == 7, "journal lost an entry");
+    require(changes[0].kind == Kind::INSERT && changes[0].property == "inventory" &&
+            changes[0].path.size() == 1 && changes[0].position == 0, "first insert entry wrong");
+    require(changes[2].kind == Kind::SET && changes[2].path.size() == 3 &&
+            std::get<std::int64_t>(changes[2].value.data) == 5, "nested set entry wrong");
+    require(changes[6].kind == Kind::SET && changes[6].path.size() == 1 &&
+            std::get<std::int64_t>(changes[6].value.data) == 9, "array element entry wrong");
+    require(store.take_changes().empty(), "take_changes did not drain the journal");
+    std::cout << "entity.tree path writes: ordered journal [PASS]\n";
+    // Path merge: a whole-property set absorbs every entry recorded inside
+    // the replaced subtree; a later nested change under an already-set
+    // ancestor stays behind it.
+    require(store.set_path("tags", {index(1)}, std::int64_t{90}), "second element write refused");
+    require(store.set_path("tags", {}, EntityArray{std::int64_t{1}, std::int64_t{2}, std::int64_t{3}}),
+            "whole-property write refused");
+    require(store.set_path("tags", {index(1)}, std::int64_t{91}), "nested write after whole refused");
+    changes = store.take_changes();
+    require(changes.size() == 2 && changes[0].kind == Kind::SET && changes[0].path.empty() &&
+            changes[1].path.size() == 1, "path merge did not absorb subtree entries");
+    require(store.set_path("tags", {index(1)}, std::int64_t{92}) &&
+            store.set_path("tags", {index(1)}, std::int64_t{93}), "same-path writes refused");
+    changes = store.take_changes();
+    require(changes.size() == 1 && std::get<std::int64_t>(changes[0].value.data) == 93,
+            "same-path set did not collapse");
+    require(store.set("level", std::int64_t{2}), "plain set refused");
+    changes = store.take_changes();
+    require(changes.size() == 1 && changes[0].property == "level" && changes[0].path.empty(),
+            "plain set did not journal");
+    std::cout << "entity.tree path merge: subtree absorption, same-path collapse [PASS]\n";
+    // Structural changes hand out container handles that die on the next
+    // structural change of that property; nested writes keep them alive.
+    auto handle = store.handle("tags");
+    require(store.valid(handle), "fresh handle invalid");
+    require(store.insert_at("tags", {}, std::size_t{3}, std::int64_t{33}), "append refused");
+    require(!store.valid(handle), "structural change did not invalidate the handle");
+    handle = store.handle("tags");
+    require(store.set_path("tags", {index(0)}, std::int64_t{5}), "nested write refused");
+    require(store.valid(handle), "nested write invalidated a handle");
+    require(store.set("tags", EntityArray{std::int64_t{1}}), "whole set refused");
+    require(!store.valid(handle), "whole-property set did not invalidate the handle");
+    std::cout << "entity.tree handles: structural invalidation only [PASS]\n";
+    // Boundedness: arrays grow only by insert, indexes are bounds-checked,
+    // wrong kinds and unknown fields are refused without landing.
+    require(!store.insert_at("tags", {}, std::size_t{5}, std::int64_t{1}), "insert beyond size+1 accepted");
+    require(!store.remove_at("tags", {}, std::size_t{9}), "remove beyond size accepted");
+    require(!store.set_path("tags", {index(9)}, std::int64_t{1}), "out-of-range element write accepted");
+    require(!store.set_path("inventory", {field("capacity")}, std::string("big")),
+            "wrong kind into struct field accepted");
+    require(!store.set_path("inventory", {field("nope")}, std::int64_t{1}), "unknown field accepted");
+    require(!store.set_path("nope", {}, std::int64_t{1}), "unknown property accepted");
+    require(!store.set_path("inventory", {field("items"), index(0), field("itemId")}, std::int64_t{-1}),
+            "negative element write accepted: "+store.error());
+    require(store.error().find("itemId") != std::string::npos, "nested refusal did not name the path");
+    require(std::get<std::int64_t>(store.get_path("inventory", {field("items"), index(0), field("itemId")})->data) == 7,
+            "refused nested write landed");
+    std::cout << "entity.tree bounds: indexes, kinds, unknown fields, no partial land [PASS]\n";
+    // Copy assignment: values handed out are snapshots; a later write never
+    // rewrites a copy, and no container is shared across properties.
+    const auto snapshot = *store.get_path("inventory", {field("items"), index(0)});
+    require(store.set_path("inventory", {field("items"), index(0), field("count")}, std::int64_t{77}),
+            "write after snapshot refused");
+    require(std::get<std::int64_t>(std::get<EntityObject>(snapshot.data).at("count").data) == 1,
+            "snapshot aliased the stored value");
+    require(std::get<EntityObject>(store.get("inventory")->data).at("items").data.index() ==
+            std::get<EntityObject>(store.get("inventory")->data).at("items").data.index(),
+            "container kind unstable");
+    store.rebaseline();
+    require(store.take_changes().empty(), "rebaseline left journal entries");
+    std::cout << "entity.tree snapshots: copy assignment, rebaseline [PASS]\n";
+}
 namespace {
 constexpr std::string_view echo = "return {message=function(p) return p end}";
 class RawSocket {

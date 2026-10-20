@@ -2,7 +2,7 @@
 
 > 研究设计笔记。构建期契约校验器、确定性 sproto schema/按字段 C++ 参数结构体生成器、上游 sproto 解码到分发 fixture、进程内实体路由及 RPC 生命周期 harness 已实现；网络运行时和属性同步仍不在当前范围。
 
-状态：构建期实现生成项目 XSD、发布锁、摘要、确定性 sproto schema、C++ 描述符/参数绑定、JavaScript JSDoc 类型与无依赖标量编码器，以及 C# record 类型与标量编码器，客户端受众 JS/C# 绑定（服务器内部方法与 SERVER_ONLY 属性已剔除），以及由 `contract load` 全有或全无校验的逐工件 SHA-256 bundle 清单；复用结构体经 `<TypesSource path>` 引入、由工具解析路径。上游 Lua sproto 请求解码结果传给 `EntityDispatcher`；`EntityRuntime` 提供 fixture 驱动 spawn/route/destroy、重复投递和过期 incarnation 行为。`RpcHarness` 用注入的单调时钟验证关联配对、超时、迟到/重复响应和断连结果。`PropertyStore` 把单个实体的描述解释为受控的类型化属性存储（缺省值、客户端受众视图、只读保留代理），`push_entity_properties` 经同一校验面把该存储绑进 Lua。这些均为进程内 harness，不代表已有网络实体运行时或持久化。其余类型映射为 `BOOL`→`boolean`、整数及 `EntityRef`→`integer`、`STRING`→`string`、`BYTES`→`binary`、结构按名称引用、数组使用 `*`。RPC 名采用 `E{entityId}_{Server|Client}_{methodId}`；cloudwu/sproto parser tag 使用 `entityId * 512 + side * 256 + methodId`，entity id ≤63、method id ≤254、tag ≤32766。Avatar fixture 已通过上游 parser 和标准字节向量。JS/C# 输出是最小 SDK 接口，不是完整客户端运行库。详见[路线及验收证据](./bigworld-like-protocol.md#已实现状态与证据)。仍缺网络运行时加载/路由、deadline/cancel 传输传播、hosting-generation 栅栏、生产级 JS/C# codec 及自动属性同步。适用 Mistlane，不调整 Apollo 架构或进程命名。客户端目标为 JavaScript 和 C#；客户端随契约重新生成、构建和发布，服务器的业务契约更新不重新编译 C++ 二进制。
+状态：构建期实现生成项目 XSD、发布锁、摘要、确定性 sproto schema、C++ 描述符/参数绑定、JavaScript JSDoc 类型与无依赖标量编码器，以及 C# record 类型与标量编码器，客户端受众 JS/C# 绑定（服务器内部方法与 SERVER_ONLY 属性已剔除），以及由 `contract load` 全有或全无校验的逐工件 SHA-256 bundle 清单；复用结构体经 `<TypesSource path>` 引入、由工具解析路径。上游 Lua sproto 请求解码结果传给 `EntityDispatcher`；`EntityRuntime` 提供 fixture 驱动 spawn/route/destroy、重复投递和过期 incarnation 行为。`RpcHarness` 用注入的单调时钟验证关联配对、超时、迟到/重复响应和断连结果。`PropertyStore` 把单个实体的描述解释为受控的类型化属性存储（缺省值、客户端受众视图、只读保留代理、有界路径写入+有序变更日志+结构失效容器句柄），`push_entity_properties` 经同一校验面把该存储绑进 Lua。这些均为进程内 harness，不代表已有网络实体运行时或持久化。其余类型映射为 `BOOL`→`boolean`、整数及 `EntityRef`→`integer`、`STRING`→`string`、`BYTES`→`binary`、结构按名称引用、数组使用 `*`。RPC 名采用 `E{entityId}_{Server|Client}_{methodId}`；cloudwu/sproto parser tag 使用 `entityId * 512 + side * 256 + methodId`，entity id ≤63、method id ≤254、tag ≤32766。Avatar fixture 已通过上游 parser 和标准字节向量。JS/C# 输出是最小 SDK 接口，不是完整客户端运行库。详见[路线及验收证据](./bigworld-like-protocol.md#已实现状态与证据)。仍缺网络运行时加载/路由、deadline/cancel 传输传播、hosting-generation 栅栏、生产级 JS/C# codec 及自动属性同步。适用 Mistlane，不调整 Apollo 架构或进程命名。客户端目标为 JavaScript 和 C#；客户端随契约重新生成、构建和发布，服务器的业务契约更新不重新编译 C++ 二进制。
 
 ## 设计选择
 
@@ -309,7 +309,7 @@ inventory 及其类型须先在契约中声明；上述为行为示意，不是�
 
 目标采用嵌套增量，不把“改一个物品字段就重发整个背包”作为正常同步方案。顶层全值替换保留给初始化、显式替换、重新建立基线或增量成本高于全值时的受控回退；即使最小原型先只实现标量，也不能据此宣称完整属性同步已完成。
 
-1. **追踪**：C++ 持有属性存储，Lua userdata 为受控入口。嵌套容器记录所属实体、顶层属性与父节点；修改沿所有权链登记路径，不每帧深比较全部实体。业务无需再调用 setDirty 或把同一个容器重新赋回顶层。
+1. **追踪**：C++ 持有属性存储，Lua userdata 为受控入口。嵌套容器记录所属实体、顶层属性与父节点；修改沿所有权链登记路径，不每帧深比较全部实体。业务无需再调用 setDirty 或把同一个容器重新赋回顶层。*核心已于 2026-10-20 落地*：`PropertyStore` 路径写入按序记日志并做子树吸收，结构代数使旧容器句柄失效（见验证记录）；Lua 嵌套代理与复制投递仍开放。
 2. **变更表示**：顶层属性 ID + 结构字段 ID/数组下标路径 + 操作 + 新值。结构字段 ID 来自契约；数组在线协议统一使用零基下标，Lua 一基由绑定转换。数组插入/删除以有序切片操作表达；接收者只在匹配的基线/序号上按顺序应用。
 3. **合并与回调**：没有结构变化时，同一路径重复赋值可合并最后值；数组插删、父节点替换前后的子路径不能无条件合并。客户端先原子应用一批属性变化再触发生成的属性回调，避免 UI 读到半批数据。回调是属性机制提供的入口，无需手写 ClientMethods 通知。
 4. **所有权与循环**：属性是有界的类型化值树，禁止循环引用；同一可变容器不能同时属于多个属性/实体，赋值采用校验后的值复制。被替换/移除的旧容器句柄失效，继续写入明确失败。跨实体关系用 EntityRef/数据库身份，不在属性树中嵌入另一个 Entity 对象。初期拒绝按值递归类型，并限制深度、元素数、值大小和每批变化量。

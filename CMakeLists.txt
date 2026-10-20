@@ -66,6 +66,7 @@ if(BUILD_TESTING)
       transport.push transport.correlate transport.identity transport.multiplex coordinator.registry
       entity.envelope
       entity.properties
+      entity.tree
       coordinator.placement coordinator.routes coordinator.migration.commit coordinator.migration.abort
       coordinator.migration.recover coordinator.migration.stale coordinator.migration.order lua.lifecycle lua.http
       api.signature api.tamper api.replay api.acceptance api.ownership api.wire api.http

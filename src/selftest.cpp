@@ -12,6 +12,7 @@ void sproto_golden();
 void rpc_lifecycle();
 void entity_envelope();
 void entity_properties();
+void entity_tree();
 void role_names();
 void transport_tcp();
 void transport_websocket();
@@ -101,6 +102,7 @@ int run_tests(int argc, char** argv) {
         {"rpc.lifecycle","contract",test::rpc_lifecycle},
         {"entity.envelope","contract",test::entity_envelope},
         {"entity.properties","contract",test::entity_properties},
+        {"entity.tree","contract",test::entity_tree},
         {"core.roles","core",test::role_names},
         {"transport.tcp","transport",test::transport_tcp},
         {"transport.websocket","transport",test::transport_websocket},
