@@ -11,6 +11,7 @@
 #include "mistlane/entity_property.hpp"
 #include "mistlane/entity_lua.hpp"
 #include "mistlane/entity_sync.hpp"
+#include "mistlane/entity_persist.hpp"
 #include "mistlane/record.hpp"
 #include "mistlane/migration.hpp"
 #include "mistlane/http_client.hpp"
@@ -681,6 +682,97 @@ void entity_rpc() {
     require(second.ok, "fresh correlation did not dispatch");
     require(link.complete(41, second.response).state == RpcQueue::State::OK, "fresh attempt did not complete");
     std::cout << "entity.rpc runtime: burned id CONFLICT, fresh id completes [PASS]\n";
+}
+// Home-data persistence snapshot model: only persistent descriptor properties
+// leave the store, a confirmed commit — never the send — clears dirty, and a
+// conditional save carries the hosting generation and the observed revision so
+// a save against a moved-on record refuses instead of overwriting.
+void entity_persist() {
+    const EntityContract contract(R"(<Contracts><Types>
+        <Item><itemId id="0" type="UINT32"/><count id="1" type="UINT32" default="2"/></Item>
+        </Types>
+        <Entity name="Avatar" id="1">
+          <Properties>
+            <level id="1" type="UINT16" default="1" persistent="true"/>
+            <gold id="2" type="UINT32" persistent="true"/>
+            <bag id="3" type="Item" persistent="true"/>
+            <title id="4" type="STRING"/>
+          </Properties>
+        </Entity></Contracts>)");
+    PropertyStore store(contract, 1);
+    PersistentStore p(store);
+
+    const auto unassigned = p.save(1, 0);
+    require(!unassigned.ok && unassigned.error == EntityError::NOT_READY, "save before assignment was not refused");
+    require(p.assume(1) && !p.assume(1), "generation was not monotone on assume");
+    require(p.set("level", EntityValue(std::int64_t{9})), "persistent write failed");
+    require(p.set("title", EntityValue(std::string("knight"))), "transient write failed");
+    require(p.revision() == 1, "a transient write advanced the persistent revision");
+    require(p.set_path("bag", TreePath{TreeStep{false, "count", 0}}, EntityValue(std::int64_t{5})),
+            "nested persistent write failed");
+    require(p.revision() == 2 && p.dirty(), "nested persistent write was not marked dirty");
+    require(!p.set("level", EntityValue(std::string("x"))), "malformed value was accepted");
+    require(p.revision() == 2, "a refused write advanced the revision");
+    std::cout << "entity.persist dirty: persistent-only revision, automatic flagging [PASS]\n";
+
+    const auto stale_gen = p.save(2, p.revision());
+    require(!stale_gen.ok && stale_gen.error == EntityError::STALE && stale_gen.reason == "generation",
+            "a save under a foreign generation was not STALE");
+    const auto stale_rev = p.save(1, 1);
+    require(!stale_rev.ok && stale_rev.error == EntityError::CONFLICT && stale_rev.reason == "revision",
+            "lost-update save was not CONFLICT");
+    const auto snapshot = p.save(1, p.revision());
+    require(snapshot.ok && snapshot.receipt.generation == 1 && snapshot.receipt.revision == 2,
+            "save receipt lost its fence values");
+    require(snapshot.snapshot.size() == 3 && !snapshot.snapshot.count("title"),
+            "the snapshot leaked a non-persistent property");
+    require(p.dirty(), "a send cleared dirty instead of a confirm");
+    require(!p.confirm(999), "a foreign save id was confirmed");
+    require(p.confirm(snapshot.receipt.save_id), "the honest confirm was refused");
+    require(!p.dirty() && p.revision() == 2, "confirm did not land the committed revision");
+    std::cout << "entity.persist save_gate: generation/revision fences, single entry [PASS]\n";
+
+    require(p.set("gold", EntityValue(std::int64_t{100})), "post-commit write failed");
+    const auto in_flight = p.save(1, p.revision());
+    require(in_flight.ok, "a save after commit was refused");
+    const auto second = p.save(1, p.revision());
+    require(!second.ok && second.error == EntityError::CONFLICT && second.reason == "in-flight",
+            "a second save overlapped an unconfirmed one");
+    p.set("level", EntityValue(std::int64_t{10}));
+    require(p.confirm(in_flight.receipt.save_id), "the pipelined confirm was refused");
+    require(p.dirty(), "confirm cleared writes made after the save");
+    std::cout << "entity.persist in_flight: one unconfirmed save, dirty survives send [PASS]\n";
+
+    PropertyStore migrated_store(contract, 1);
+    PersistentStore migrated(migrated_store);
+    const auto clean = migrated.restore(1, 0, snapshot.snapshot);
+    require(clean.ok && migrated.generation() == 1 && migrated.revision() == 0 && !migrated.dirty(),
+            "a clean restore did not re-establish the record");
+    const auto no_owner = migrated.restore(1, 1, {{"title", EntityValue(std::string("knight"))}});
+    require(!no_owner.ok && no_owner.refused == "title", "a non-persistent property rode the snapshot");
+    require(migrated.generation() == 1, "a refused restore advanced the assignment");
+    require(migrated.assume(2), "a higher generation was not accepted");
+    const auto stale_restore = migrated.restore(1, 0, snapshot.snapshot);
+    require(!stale_restore.ok && stale_restore.error == EntityError::STALE, "a lower generation restore was accepted");
+    const EntityContract grown(R"(<Contracts><Types>
+        <Item><itemId id="0" type="UINT32"/><count id="1" type="UINT32" default="2"/></Item>
+        </Types>
+        <Entity name="Avatar" id="1">
+          <Properties>
+            <level id="1" type="UINT16" default="1" persistent="true"/>
+            <gold id="2" type="UINT32" persistent="true"/>
+            <bag id="3" type="Item" persistent="true"/>
+            <mails id="4" type="UINT32" persistent="true"/>
+          </Properties>
+        </Entity></Contracts>)");
+    PropertyStore grown_store(grown, 1);
+    PersistentStore grown_p(grown_store);
+    const auto converted = grown_p.restore(2, 2, snapshot.snapshot);
+    require(converted.ok && converted.defaulted.size() == 1 && converted.defaulted[0] == "mails",
+            "a grown contract did not default the new persistent property");
+    require(grown_p.set("mails", EntityValue(std::int64_t{3})) && grown_p.revision() == 3,
+            "the defaulted property was not writable");
+    std::cout << "entity.persist restore: version conversion, whole-load refusal [PASS]\n";
 }
 namespace {
 constexpr std::string_view echo = "return {message=function(p) return p end}";

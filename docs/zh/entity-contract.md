@@ -2,7 +2,7 @@
 
 > 研究设计笔记。构建期契约校验器、确定性 sproto schema/按字段 C++ 参数结构体生成器、上游 sproto 解码到分发 fixture、进程内实体路由及 RPC 生命周期 harness 已实现；网络运行时和属性同步仍不在当前范围。
 
-状态：构建期实现生成项目 XSD、发布锁、摘要、确定性 sproto schema、C++ 描述符/参数绑定、JavaScript JSDoc 类型与无依赖标量编码器，以及 C# record 类型与标量编码器，客户端受众 JS/C# 绑定（服务器内部方法与 SERVER_ONLY 属性已剔除），以及由 `contract load` 全有或全无校验的逐工件 SHA-256 bundle 清单；复用结构体经 `<TypesSource path>` 引入、由工具解析路径。上游 Lua sproto 请求解码结果传给 `EntityDispatcher`；`EntityRuntime` 提供 fixture 驱动 spawn/route/destroy、重复投递和过期 incarnation 行为。`RpcHarness` 用注入的单调时钟验证关联配对、超时、迟到/重复响应和断连结果。`PropertyStore` 把单个实体的描述解释为受控的类型化属性存储（缺省值、客户端受众视图、只读保留代理、有界路径写入+有序变更日志+结构失效容器句柄），`push_entity_properties` 经同一校验面把该存储绑进 Lua。这些均为进程内 harness，不代表已有网络实体运行时或持久化。其余类型映射为 `BOOL`→`boolean`、整数及 `EntityRef`→`integer`、`STRING`→`string`、`BYTES`→`binary`、结构按名称引用、数组使用 `*`。RPC 名采用 `E{entityId}_{Server|Client}_{methodId}`；cloudwu/sproto parser tag 使用 `entityId * 512 + side * 256 + methodId`，entity id ≤63、method id ≤254、tag ≤32766。Avatar fixture 已通过上游 parser 和标准字节向量。JS/C# 输出是最小 SDK 接口，不是完整客户端运行库。详见[路线及验收证据](./bigworld-like-protocol.md#已实现状态与证据)。仍缺网络运行时加载/路由、deadline/cancel 传输传播、hosting-generation 栅栏、生产级 JS/C# codec 及自动属性同步。适用 Mistlane，不调整 Apollo 架构或进程命名。客户端目标为 JavaScript 和 C#；客户端随契约重新生成、构建和发布，服务器的业务契约更新不重新编译 C++ 二进制。
+状态：构建期实现生成项目 XSD、发布锁、摘要、确定性 sproto schema、C++ 描述符/参数绑定、JavaScript JSDoc 类型与无依赖标量编码器，以及 C# record 类型与标量编码器，客户端受众 JS/C# 绑定（服务器内部方法与 SERVER_ONLY 属性已剔除），以及由 `contract load` 全有或全无校验的逐工件 SHA-256 bundle 清单；复用结构体经 `<TypesSource path>` 引入、由工具解析路径。上游 Lua sproto 请求解码结果传给 `EntityDispatcher`；`EntityRuntime` 提供 fixture 驱动 spawn/route/destroy、重复投递和过期 incarnation 行为。`RpcHarness` 用注入的单调时钟验证关联配对、超时、迟到/重复响应和断连结果。`PropertyStore` 把单个实体的描述解释为受控的类型化属性存储（缺省值、客户端受众视图、只读保留代理、有界路径写入+有序变更日志+结构失效容器句柄），`push_entity_properties` 经同一校验面把该存储绑进 Lua。这些均为进程内 harness；`PersistentStore`（`include/mistlane/entity_persist.hpp`）补充建模持久化闸门——仅当写入落在持久化属性上才推进的 revision、单个在途强制保存、按 hosting generation/观测 revision 的条件保存与提交确认、对未知或非持久化快照键的整体拒绝加载。不代表已有网络实体运行时或存储后端。其余类型映射为 `BOOL`→`boolean`、整数及 `EntityRef`→`integer`、`STRING`→`string`、`BYTES`→`binary`、结构按名称引用、数组使用 `*`。RPC 名采用 `E{entityId}_{Server|Client}_{methodId}`；cloudwu/sproto parser tag 使用 `entityId * 512 + side * 256 + methodId`，entity id ≤63、method id ≤254、tag ≤32766。Avatar fixture 已通过上游 parser 和标准字节向量。JS/C# 输出是最小 SDK 接口，不是完整客户端运行库。详见[路线及验收证据](./bigworld-like-protocol.md#已实现状态与证据)。仍缺网络运行时加载/路由、deadline/cancel 传输传播、hosting-generation 栅栏、生产级 JS/C# codec 及自动属性同步。适用 Mistlane，不调整 Apollo 架构或进程命名。客户端目标为 JavaScript 和 C#；客户端随契约重新生成、构建和发布，服务器的业务契约更新不重新编译 C++ 二进制。
 
 ## 设计选择
 
@@ -313,7 +313,7 @@ inventory 及其类型须先在契约中声明；上述为行为示意，不是�
 2. **变更表示**：顶层属性 ID + 结构字段 ID/数组下标路径 + 操作 + 新值。结构字段 ID 来自契约；数组在线协议统一使用零基下标，Lua 一基由绑定转换。数组插入/删除以有序切片操作表达；接收者只在匹配的基线/序号上按顺序应用。
 3. **合并与回调**：没有结构变化时，同一路径重复赋值可合并最后值；数组插删、父节点替换前后的子路径不能无条件合并。客户端先原子应用一批属性变化再触发生成的属性回调，避免 UI 读到半批数据。回调是属性机制提供的入口，无需手写 ClientMethods 通知。
 4. **所有权与循环**：属性是有界的类型化值树，禁止循环引用；同一可变容器不能同时属于多个属性/实体，赋值采用校验后的值复制。被替换/移除的旧容器句柄失效，继续写入明确失败。跨实体关系用 EntityRef/数据库身份，不在属性树中嵌入另一个 Entity 对象。初期拒绝按值递归类型，并限制深度、元素数、值大小和每批变化量。
-5. **同步与保存**：嵌套变更同时标记所属持久化属性，但客户端增量与数据库提交分开；网络按路径发增量，首期数据库仍可保存整个持久化快照。复制序号、数据 revision 各自确认。背压导致积压时有明确合并/重建基线策略，不能无限累积路径日志。
+5. **同步与保存**：嵌套变更同时标记所属持久化属性，但客户端增量与数据库提交分开；网络按路径发增量，首期数据库仍可保存整个持久化快照。复制序号、数据 revision 各自确认。背压导致积压时有明确合并/重建基线策略，不能无限累积路径日志。*保存闸门模型已落地（2026-10-20）：*`PersistentStore`（`include/mistlane/entity_persist.hpp`）以仅持久化写入推进的 revision 自动标脏、按写入方 hosting generation 与观测 revision 为保存设闸、只确认在途回执——发送不清脏；数据库提交侧仍开放。
 
 应验证嵌套赋值、嵌套数组、头尾插删、先删除再修改、先子修改再父替换、跨属性复制、循环拒绝、旧句柄、重复值、基线丢失、混合版本观察者和保存并发。性能测试比较“大背包只改一个物品”的实际发送字节、分配次数和 CPU；不能只统计赋值接口耗时，也不预设增量对所有大小都更优。
 
@@ -325,7 +325,7 @@ inventory 及其类型须先在契约中声明；上述为行为示意，不是�
 
 加载路径：data 读记录 → 按记录版本解码 → 执行显式数据迁移/补默认值 → 校验 → 在取得写入权的宿主创建 Entity → 调用加载钩子 → 发布就绪。新对象与加载已有对象分开，缺记录不能默默覆盖创建，损坏数据不能以默认值冒充成功。
 
-保存路径：引擎收集持久化变更 → 归属 data 按 generation/revision 条件写入 → 数据库提交确认 → 确认该批 revision。写入期间的新变化继续保留，不在发出消息时清空；冲突/超时/失败须明确反馈。周期保存与迁移/退出保存共用该机制。
+保存路径：引擎收集持久化变更 → 归属 data 按 generation/revision 条件写入 → 数据库提交确认 → 确认该批 revision。写入期间的新变化继续保留，不在发出消息时清空；冲突/超时/失败须明确反馈。周期保存与迁移/退出保存共用该机制。*进程内保存闸门已落地（2026-10-20）：*捕获/栅栏/确认一半已建模并以 `entity.persist` 单测（整体拒绝加载、契约新增属性补默认值、generation 单调前进）；尚无存储后端。
 
 业务只保留一个强制保存入口，不使用含糊的 sync。提议放在只读引擎命名空间：`mistlane.entities.writeToDB(entity, callback)`，避免占用业务实体的方法名；这是方案中的待实现 API。回调只确认调用时捕获的持久化 revision 已提交，之后的新修改不自动包含在该确认中。它不是客户端同步接口，也不是支付多表事务的替代品。
 
