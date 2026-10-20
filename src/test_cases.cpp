@@ -10,6 +10,7 @@
 #include "mistlane/entity_runtime.hpp"
 #include "mistlane/entity_property.hpp"
 #include "mistlane/entity_lua.hpp"
+#include "mistlane/entity_sync.hpp"
 #include "mistlane/record.hpp"
 #include "mistlane/migration.hpp"
 #include "mistlane/http_client.hpp"
@@ -433,6 +434,174 @@ void entity_tree() {
     store.rebaseline();
     require(store.take_changes().empty(), "rebaseline left journal entries");
     std::cout << "entity.tree snapshots: copy assignment, rebaseline [PASS]\n";
+}
+// Baseline/delta delivery with observer filtering (items 104/105): observer
+// entry establishes a visible full baseline; later drains of the journal
+// travel as wire-shaped deltas (property id, field-id/0-based-index path,
+// operation, value) numbered consecutively per observer; the replica applies
+// a batch atomically or refuses the whole batch when sequences gap, and a
+// resync re-establishes the baseline. SERVER_ONLY never leaves the server and
+// OWN_CLIENT reaches owners only.
+void entity_sync() {
+    const EntityContract contract(R"(<Contracts><Types>
+        <Item><itemId id="0" type="UINT32"/><count id="1" type="UINT32" default="2"/></Item>
+        <Inventory><capacity id="0" type="UINT16" default="10"/><items id="1" type="ARRAY" of="Item"/></Inventory>
+        </Types>
+        <Entity name="Avatar" id="1">
+          <Properties>
+            <level id="1" type="UINT16" default="1" flags="OWN_CLIENT"/>
+            <gold id="2" type="INT32" default="-5" flags="ALL_CLIENTS"/>
+            <active id="3" type="BOOL" default="true"/>
+            <tags id="4" type="ARRAY" of="UINT32" flags="ALL_CLIENTS"/>
+            <bag id="5" type="Item"/>
+            <inventory id="6" type="Inventory"/>
+          </Properties>
+        </Entity></Contracts>)");
+    PropertyStore store(contract, 1);
+    const auto field = [](const char* name) { return TreeStep{false, name, 0}; };
+    const auto index = [](std::size_t at) { return TreeStep{true, std::string(), at}; };
+    store.set("level", std::int64_t{5});
+    store.set("gold", std::int64_t{100});
+    store.set("bag", EntityObject{{"itemId", std::int64_t{7}}, {"count", std::int64_t{9}}});
+    // Observer entry: one visible baseline per audience, nothing else.
+    PropertyChannel channel(&store);
+    require(channel.observe("owner", true) && channel.observe("guest", false), "observer entry refused");
+    require(!channel.observe("guest", false), "duplicate observer accepted");
+    const auto base = channel.deliver();
+    require(base.size() == 2, "observer entry did not deliver two baselines");
+    const auto& guest_base = base[0].kind == SyncMessage::Kind::BASELINE ? base[0] : base[1];
+    const auto& owner_base = base[0].kind == SyncMessage::Kind::BASELINE ? base[1] : base[0];
+    require(guest_base.kind == SyncMessage::Kind::BASELINE && owner_base.kind == SyncMessage::Kind::BASELINE,
+            "entry delivered something other than baselines");
+    require(guest_base.baseline.count("gold") == 1 && guest_base.baseline.count("tags") == 1 &&
+            guest_base.baseline.count("level") == 0 && guest_base.baseline.count("bag") == 0 &&
+            guest_base.baseline.count("active") == 0 && guest_base.baseline.count("inventory") == 0,
+            "guest baseline crossed an audience boundary");
+    require(owner_base.baseline.count("level") == 1 && owner_base.baseline.count("gold") == 1 &&
+            owner_base.baseline.count("tags") == 1 && owner_base.baseline.count("bag") == 0 &&
+            owner_base.baseline.count("inventory") == 0,
+            "owner baseline lost a visible property or leaked a private one");
+    SyncReceiver owner(contract, 1), guest(contract, 1);
+    owner.rebaseline(owner_base.baseline);
+    guest.rebaseline(guest_base.baseline);
+    require(std::get<std::int64_t>(owner.replica().get("level")->data) == 5 &&
+            std::get<std::int64_t>(guest.replica().get("level")->data) == 1,
+            "baseline did not establish the replica state");
+    std::cout << "entity.sync baseline: entry per audience [PASS]\n";
+    // Delta filtering: one drain, per-observer batches, per-observer sequences.
+    store.set_path("bag", {field("itemId")}, std::int64_t{11});          // SERVER_ONLY: nobody
+    store.set("level", std::int64_t{6});                                  // OWN_CLIENT: owner
+    store.insert_at("tags", {}, 0, std::int64_t{99});                     // ALL_CLIENTS: both
+    store.set("gold", std::int64_t{200});                                 // ALL_CLIENTS: both
+    const auto first = channel.deliver();
+    require(first.size() == 2, "delta drain did not reach both observers");
+    const SyncMessage* owner_batch = nullptr;
+    const SyncMessage* guest_batch = nullptr;
+    for (const auto& message : first)
+        (message.deltas.size() == 3 ? owner_batch : guest_batch) = &message;
+    require(owner_batch && guest_batch, "audience filtering lost a batch");
+    require(owner_batch->deltas.size() == 3 && guest_batch->deltas.size() == 2,
+            "delta batches did not respect the audience");
+    require(owner_batch->sequence == 1 && guest_batch->sequence == 1 &&
+            owner_batch->deltas.back().sequence == 3 && guest_batch->deltas.back().sequence == 2,
+            "per-observer sequences are not consecutive from one");
+    const auto& insert = guest_batch->deltas[0];
+    require(insert.kind == SyncDelta::Kind::INSERT && insert.property_id == 4 &&
+            insert.path.empty() && insert.position == 0,
+            "structural delta lost its wire shape (property id, path, 0-based position)");
+    const auto& gold_set = guest_batch->deltas[1];
+    require(gold_set.kind == SyncDelta::Kind::SET && gold_set.property_id == 2 &&
+            std::get<std::int64_t>(gold_set.value.data) == 200,
+            "scalar delta lost its wire shape");
+    require(owner.apply(owner_batch->deltas) && guest.apply(guest_batch->deltas), "valid batches refused");
+    require(std::get<std::int64_t>(owner.replica().get("gold")->data) == 200 &&
+            std::get<std::int64_t>(guest.replica().get("gold")->data) == 200,
+            "deltas did not land on the replicas");
+    require(std::get<std::int64_t>(guest.replica().get("level")->data) == 1 &&
+            std::get<std::int64_t>(std::get<EntityObject>(guest.replica().get("bag")->data).at("itemId").data) == 0,
+            "undelivered properties leaked into the guest replica");
+    require(std::get<EntityArray>(guest.replica().get("tags")->data).size() == 1,
+            "structural delta did not reach the replica");
+    std::cout << "entity.sync deltas: audience filter, wire shape, sequences [PASS]\n";
+    // Coalescing carries over: two consecutive scalar SETs deliver as one.
+    store.set("gold", std::int64_t{1});
+    store.set("gold", std::int64_t{2});
+    const auto second = channel.deliver();
+    for (const auto& message : second)
+        require(message.deltas.size() == 1 &&
+                std::get<std::int64_t>(message.deltas[0].value.data) == 2,
+                "consecutive scalar writes did not coalesce to the latest value");
+    require(guest.apply(second.front().deltas), "coalesced batch refused");
+    require(std::get<std::int64_t>(guest.replica().get("gold")->data) == 2, "coalesced value lost");
+    require(channel.deliver().empty(), "an empty journal still delivered");
+    std::cout << "entity.sync coalescing: latest value per batch [PASS]\n";
+    // Version filtering: a dropped message leaves a gap; the next batch is
+    // refused whole, without partial landing, and a resync re-establishes
+    // state.
+    store.set("gold", std::int64_t{300});
+    channel.deliver();  // the guest misses this batch
+    store.set("gold", std::int64_t{400});
+    const auto gapped = channel.deliver();
+    const SyncMessage* guest_gap = nullptr;
+    for (const auto& message : gapped)
+        if (message.deltas.size() == 1) guest_gap = &message;
+    require(guest_gap != nullptr, "gap drain lost the guest batch");
+    require(!guest.apply(guest_gap->deltas), "a sequence gap was applied");
+    require(guest.stale(), "gap did not mark the replica stale");
+    require(std::get<std::int64_t>(guest.replica().get("gold")->data) == 2,
+            "a refused batch landed partially");
+    const auto resync = channel.resync("guest");
+    require(resync.kind == SyncMessage::Kind::BASELINE &&
+            std::get<std::int64_t>(resync.baseline.find("gold")->second.data) == 400,
+            "resync baseline did not reflect current state");
+    guest.rebaseline(resync.baseline);
+    require(std::get<std::int64_t>(guest.replica().get("gold")->data) == 400, "resync lost state");
+    store.set("gold", std::int64_t{500});
+    const auto after = channel.deliver();
+    require(after.size() == 2, "post-resync drain lost an observer");
+    const SyncMessage* guest_next = nullptr;
+    for (const auto& message : after)
+        if (message.deltas.size() == 1 && message.deltas[0].sequence == 1) guest_next = &message;
+    require(guest_next != nullptr, "resync did not restart the observer sequence");
+    require(guest.apply(guest_next->deltas), "post-resync batch refused");
+    require(std::get<std::int64_t>(guest.replica().get("gold")->data) == 500, "post-resync value lost");
+    std::cout << "entity.sync version filter: gap refusal, atomicity, resync [PASS]\n";
+    // A gap inside one batch refuses the whole batch: the valid first delta
+    // must not land. The owner is at sequence 3 (the coalesced batch was
+    // applied only by the guest), so a head at sequence 4 is admissible and
+    // only the tail's jump to 6 betrays the tear.
+    const std::vector<SyncDelta> torn = [] {
+        std::vector<SyncDelta> batch;
+        SyncDelta head;
+        head.property_id = 2; head.kind = SyncDelta::Kind::SET;
+        head.value = EntityValue(std::int64_t{999}); head.sequence = 4;
+        batch.push_back(head);
+        SyncDelta tail = head;
+        tail.property_id = 1; tail.sequence = 6;
+        batch.push_back(tail);
+        return batch;
+    }();
+    require(!owner.apply(torn), "an internally torn batch was applied");
+    require(std::get<std::int64_t>(owner.replica().get("gold")->data) == 200 && owner.sequence() == 3,
+            "the valid half of a torn batch landed");
+    // Departure removes the stream; re-entry establishes a new baseline.
+    require(!channel.depart("ghost"), "unknown departure accepted");
+    require(channel.depart("guest") && !channel.depart("guest"), "departure did not remove the observer");
+    store.set("gold", std::int64_t{600});
+    const auto post = channel.deliver();
+    require(!post.empty(), "delta drain lost the remaining observer");
+    for (const auto& message : post)
+        require(message.deltas.size() == 1 && message.deltas[0].property_id == 2,
+                "a departed observer still received deltas");
+    require(channel.observe("guest", false), "re-entry refused");
+    const auto reentry = channel.deliver();
+    const SyncMessage* guest_reentry = nullptr;
+    for (const auto& message : reentry)
+        if (message.kind == SyncMessage::Kind::BASELINE) guest_reentry = &message;
+    require(guest_reentry != nullptr &&
+            std::get<std::int64_t>(guest_reentry->baseline.find("gold")->second.data) == 600,
+            "re-entry did not establish a current baseline");
+    std::cout << "entity.sync observers: departure, re-entry baseline [PASS]\n";
 }
 namespace {
 constexpr std::string_view echo = "return {message=function(p) return p end}";

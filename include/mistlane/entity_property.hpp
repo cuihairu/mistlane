@@ -181,6 +181,9 @@ public:
         taken.swap(changes_);
         return taken;
     }
+    // Journal length without draining — the position a fresh consumer's
+    // baseline already covers.
+    std::size_t pending_changes() const { return changes_.size(); }
     void rebaseline() { changes_.clear(); }
     // Container handles die on the next structural change of their property.
     ContainerHandle handle(const std::string& name) const { return {name, generations_.count(name) ? generations_.at(name) : 0}; }

@@ -67,6 +67,7 @@ if(BUILD_TESTING)
       entity.envelope
       entity.properties
       entity.tree
+      entity.sync
       coordinator.placement coordinator.routes coordinator.migration.commit coordinator.migration.abort
       coordinator.migration.recover coordinator.migration.stale coordinator.migration.order lua.lifecycle lua.http
       api.signature api.tamper api.replay api.acceptance api.ownership api.wire api.http
