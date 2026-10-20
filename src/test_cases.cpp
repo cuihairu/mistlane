@@ -326,6 +326,30 @@ void entity_properties() {
     require(!push_entity_properties(W, &weird), "a method-key property was silently shadowed");
     lua_close(W);
     std::cout << "entity.properties binding clash: refused at push [PASS]\n";
+    // Safe Lua replacement under an unchanged contract (item 118's
+    // foundation): the store, journal and revision are the entity — a
+    // rebuilt Lua state rebinds fresh proxies over the same storage, prior
+    // writes survive it, and the journal keeps its order across the swap.
+    store.set("level", std::int64_t{60});
+    lua_State* R = luaL_newstate();
+    require(R != nullptr, "cannot open Lua for the replacement probe");
+    luaL_openlibs(R);
+    require(push_entity_properties(R, &store), "replacement binding refused");
+    lua_setglobal(R, "props");
+    const auto after_swap = eval(R, "return props.level");
+    require(after_swap == "60", "the replaced state lost C++-side writes: got "+after_swap);
+    require(eval(R, "props.level = 61; return props.level") == "61", "write through the replaced state failed");
+    require(std::get<std::int64_t>(store.get("level")->data) == 61, "the replaced state missed the store");
+    require(eval(R, "return props.tags[1] .. ':' .. #props.inventory.items") == "1:1",
+            "nested state did not survive the replacement");
+    lua_close(R);
+    // The old state's handles died with it; the store still stands and the
+    // journal collapsed the swap-spanning writes to the newest value.
+    const auto across = store.take_changes();
+    require(across.size() == 1 && across[0].property == "level" && across[0].path.empty() &&
+            std::get<std::int64_t>(across[0].value.data) == 61,
+            "journal lost the writes spanning the state replacement");
+    std::cout << "entity.properties lua replacement: state rebuilt, entity intact [PASS]\n";
 }
 // Bounded value tree over the controlled store (item 106 core, the
 // prerequisite of the nested-delta items): mutations through explicit paths
