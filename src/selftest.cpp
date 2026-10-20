@@ -48,6 +48,7 @@ void api_http();
 void lua_lifecycle();
 void lua_http();
 void cross_admission();
+void cross_ticket();
 void cross_record();
 void cross_return_queue();
 void probe_control();
@@ -146,6 +147,7 @@ int run_tests(int argc, char** argv) {
         {"lua.lifecycle","lua",test::lua_lifecycle},
         {"lua.http","lua",test::lua_http},
         {"cross.admission","cross",test::cross_admission},
+        {"cross.ticket","cross",test::cross_ticket},
         {"cross.record","cross",test::cross_record},
         {"cross.return.queue","cross",test::cross_return_queue},
         {"probe.control","probe",test::probe_control},

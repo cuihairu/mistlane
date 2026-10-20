@@ -107,6 +107,56 @@ std::vector<ApiCredential> api_credentials(std::string_view text) {
     }
     return credentials;
 }
+// MLT1 per-realm secrets, comma-separated "realm:<64 lowercase hex>" rows.
+// Injected through the environment like the MLA1 credentials: no loader, CLI
+// secret flag or real secret ships inside the framework.
+std::map<std::string, ApiSecret> ticket_secrets(std::string_view text) {
+    std::map<std::string, ApiSecret> secrets;
+    auto row = text;
+    while (!row.empty()) {
+        const auto end = row.find(',');
+        const auto body = row.substr(0, end);
+        row = end == std::string_view::npos ? std::string_view{} : row.substr(end+1);
+        const auto colon = body.find(':');
+        if (colon == std::string_view::npos)
+            throw std::invalid_argument("MISTLANE_TICKET_SECRETS row needs realm:secret");
+        const auto realm = std::string(body.substr(0, colon));
+        const auto hex = body.substr(colon+1);
+        if (hex.size() != 64)
+            throw std::invalid_argument("MISTLANE_TICKET_SECRETS secret must be 64 lowercase hex digits");
+        const auto digit = [hex](std::size_t at) {
+            const char ch = hex[at];
+            if (ch >= '0' && ch <= '9') return static_cast<int>(ch-'0');
+            if (ch >= 'a' && ch <= 'f') return static_cast<int>(ch-'a'+10);
+            throw std::invalid_argument("MISTLANE_TICKET_SECRETS secret must be 64 lowercase hex digits");
+        };
+        ApiSecret secret{};
+        for (std::size_t i = 0; i < hex.size(); i += 2)
+            secret[i/2] = static_cast<unsigned char>(digit(i)*16 + digit(i+1));
+        if (!record_identifier(realm))
+            throw std::invalid_argument("MISTLANE_TICKET_SECRETS realm must be an identifier");
+        if (!secrets.emplace(realm, secret).second)
+            throw std::invalid_argument("MISTLANE_TICKET_SECRETS names a realm twice");
+    }
+    return secrets;
+}
+// The reason stays on the operator's side of the log; the join answers one word.
+std::string_view ticket_verdict_name(TicketVerdict verdict) {
+    switch (verdict) {
+        case TicketVerdict::Ok: return "ok";
+        case TicketVerdict::Malformed: return "malformed";
+        case TicketVerdict::BadSignature: return "bad-signature";
+        case TicketVerdict::Expired: return "expired";
+        case TicketVerdict::WrongInstance: return "wrong-instance";
+        case TicketVerdict::WrongCharacter: return "wrong-character";
+        case TicketVerdict::WrongGeneration: return "wrong-generation";
+        case TicketVerdict::Replay: return "replay";
+        case TicketVerdict::Full: return "claim-table-full";
+        case TicketVerdict::UnknownRealm: return "unknown-realm";
+        case TicketVerdict::Clock: return "clock";
+    }
+    return "unknown";
+}
 // The service identity frame: "MLS1 <role> <instance> <token>", four single
 // words with no quoting. role and instance only label the peer's logs; the
 // token is the whole of the authority.
@@ -626,11 +676,12 @@ public:
             Diagnostics& diagnostics, GameSessions* registry,
             std::function<void(Session*)> on_close, MuxLinks* mux_links = nullptr,
             std::function<void(std::shared_ptr<Channel>)> mux_upgrade = {},
-            bool internal = false, RecordStore* records = nullptr)
+            bool internal = false, RecordStore* records = nullptr,
+            const TicketVerifier* tickets = nullptr)
       : client_(std::move(client)), service_(service),
         timer_(client_->executor()), config_(config), admission_(admission), diagnostics_(diagnostics),
         registry_(registry), on_close_(std::move(on_close)), mux_upgrade_(std::move(mux_upgrade)),
-        internal_(internal), records_(records) {
+        internal_(internal), records_(records), ticket_verifier_(tickets) {
         if (upstream) {
             endpoint_ = tcp::endpoint(parse_address(upstream->address), upstream->port);
             // Multiplexing keeps one socket per upstream: the link owns the
@@ -747,6 +798,22 @@ private:
             try {
                 context_ = cross_context(payload);
                 if (context_.epoch != config_.route_epoch) return reject("EPOCH");
+                if (ticket_verifier_ && context_.ticket) {
+                    // The ticket keys to the participant's home realm, the
+                    // host's own instance name and the declared hosting
+                    // generation; a failed verdict refuses the whole join —
+                    // the context never drops a claimed ticket — with one
+                    // word, and the specific reason goes to the log only.
+                    const auto now = std::chrono::duration_cast<std::chrono::seconds>(
+                        std::chrono::system_clock::now().time_since_epoch()).count();
+                    const auto verdict = ticket_verifier_->verify(*context_.ticket,
+                        {context_.return_realm, context_.character}, context_.generation, now);
+                    if (verdict != TicketVerdict::Ok) {
+                        std::cerr << "entry ticket refused: " << ticket_verdict_name(verdict) << '\n';
+                        return reject("TICKET");
+                    }
+                    context_.verified = true;
+                }
                 auto index = config_.is_cross_gateway()
                     ? cross_shard(context_, config_.upstreams.size()) : 0;
                 auto error = admission_.acquire(this, context_, index);
@@ -1017,6 +1084,9 @@ private:
     tcp::endpoint endpoint_;
     const Config& config_;
     CrossAdmission& admission_;
+    // Null unless this node verifies MLT1 tickets on joins; the claims live on
+    // the node so a replay across connections on one process is still caught.
+    const TicketVerifier* ticket_verifier_ = nullptr;
     Diagnostics& diagnostics_;
     GameSessions* registry_;
     RecordStore* records_ = nullptr;
@@ -2193,6 +2263,19 @@ public:
                     [](const MigrationKey&) { return std::nullopt; });
             }
         }
+        if (const char* secrets = std::getenv("MISTLANE_TICKET_SECRETS")) {
+            // A host never loads a character on a bare claim: with secrets
+            // configured the crossServer verifies the join's ticket before
+            // admitting it. Anything else would silently run a host that
+            // looks verified but answers no.
+            if (config_.role != "crossServer")
+                throw std::invalid_argument("MISTLANE_TICKET_SECRETS only applies to the crossServer role");
+            if (!*secrets) throw std::invalid_argument("MISTLANE_TICKET_SECRETS is empty");
+            if (!record_identifier(config_.service_name))
+                throw std::invalid_argument("MISTLANE_TICKET_SECRETS requires --service-name");
+            ticket_verifier_ = std::make_unique<TicketVerifier>(
+                ticket_secrets(secrets), config_.service_name, ticket_claims_);
+        }
         for (const auto& e : config_.upstreams) (void)parse_address(e.address);
         for (const auto& item : config_.listeners) {
             if (item.protocol != "tcp") continue;
@@ -2303,7 +2386,7 @@ private:
                 publish_active();
             },
             config_.upstream_multiplex ? &mux_links_ : nullptr, std::move(mux_upgrade),
-            false, config_.role == "data" ? &records_ : nullptr);
+            false, config_.role == "data" ? &records_ : nullptr, ticket_verifier_.get());
         sessions_.insert(session);
         publish_active();
         session->start();
@@ -2348,7 +2431,8 @@ private:
                     for (auto i = sessions_.begin(); i != sessions_.end(); ++i)
                         if (i->get() == ptr) { sessions_.erase(i); break; }
                     publish_active();
-                }, nullptr, nullptr, true, config_.role == "data" ? &records_ : nullptr);
+                }, nullptr, nullptr, true, config_.role == "data" ? &records_ : nullptr,
+                ticket_verifier_.get());
             sessions_.insert(session);
             publish_active();
             session->start();
@@ -2490,6 +2574,10 @@ private:
     ApiMemoryAcceptanceStore api_store_;
     std::unique_ptr<ApiVerifier> api_verifier_;
     std::unique_ptr<ApiSurface> api_surface_;
+    // MLT1 host verification on the crossServer join path. The claims are
+    // volatile and per process, like the rest of the verifier's state.
+    TicketClaims ticket_claims_;
+    std::unique_ptr<TicketVerifier> ticket_verifier_;
     std::unique_ptr<Diagnostics> diagnostics_;
     std::shared_ptr<ProbeServer> probe_;
     std::exception_ptr startup_error_;

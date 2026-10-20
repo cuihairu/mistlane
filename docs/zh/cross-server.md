@@ -53,9 +53,9 @@ MLC1 1 realm-a group-1 room-42
 MLC1 1 realm-a group-1 room-42 ch hero-7 gen 12 ret home arena r1
 ```
 
-字段依次是版本标识、route epoch、来源区服、跨服组、房间；尾缀依次为角色标识、承载版本与返回路由（区服/组/房间）。标识符为 1–64 个 ASCII 字母、数字、下划线或连字符，握手最多 1200 字节，够容纳带入场凭据的参与者尾缀。epoch 与承载版本为 1–1000000000 的十进制正整数。参与者三部分要么齐备、要么全部缺省，任何部分声明都按 INVALID 拒绝；匿名五字段握手保持可用。可选最后一组 `tk <hex>` 携带入场凭据：`MLT1` 规范字节加原始 32 字节签名的十六进制，最多 1024 个十六进制字符。凭据必须与尾缀声明的 character 与承载版本一致；匿名握手不得携带凭据；解码失败或超长一律整次握手按 INVALID，绝不从声称持有凭据的参与者身上剥离凭据。cross 先准入、选择 crossServer，再转发握手；crossServer 再执行最终准入并返回 MLC1 OK 1。之后才发送普通应用 payload，Lua message 的第二个参数包含这些路由字段——参与者握手另含 `character`、`generation` 与嵌套 `route` 表（见[Lua 生命周期](./lua)）。参与者字段是路由元数据而非认证；持久角色变更另需[跨服回传协议](./cross-return-protocol)。
+字段依次是版本标识、route epoch、来源区服、跨服组、房间；尾缀依次为角色标识、承载版本与返回路由（区服/组/房间）。标识符为 1–64 个 ASCII 字母、数字、下划线或连字符，握手最多 1200 字节，够容纳带入场凭据的参与者尾缀。epoch 与承载版本为 1–1000000000 的十进制正整数。参与者三部分要么齐备、要么全部缺省，任何部分声明都按 INVALID 拒绝；匿名五字段握手保持可用。可选最后一组 `tk <hex>` 携带入场凭据：`MLT1` 规范字节加原始 32 字节签名的十六进制，最多 1024 个十六进制字符。凭据必须与尾缀声明的 character 与承载版本一致；匿名握手不得携带凭据；解码失败或超长一律整次握手按 INVALID，绝不从声称持有凭据的参与者身上剥离凭据。cross 先准入、选择 crossServer，再转发握手；crossServer 再执行最终准入并返回 MLC1 OK 1。之后才发送普通应用 payload，Lua message 的第二个参数包含这些路由字段——参与者握手另含 `character`、`generation` 与嵌套 `route` 表（见[Lua 生命周期](./lua)）。参与者字段是路由元数据；配置 `MISTLANE_TICKET_SECRETS` 的 crossServer 会额外验证凭据并在上下文中给出 `verified`；持久角色变更另需[跨服回传协议](./cross-return-protocol)。
 
-失败响应是 MLC1 ERR INVALID、EPOCH、ROOM_FULL、GROUP_FULL 或 SHARD_FULL（下游握手不兼容时为 UPSTREAM），然后关闭连接。网络连接、上游错误或节点全局连接上限可能直接关闭，不保证返回错误帧。不要把握手成功当成账号认证或持久化成功。
+失败响应是 MLC1 ERR INVALID、EPOCH、TICKET（所携凭据未通过宿主验证）、ROOM_FULL、GROUP_FULL 或 SHARD_FULL（下游握手不兼容时为 UPSTREAM），然后关闭连接。网络连接、上游错误或节点全局连接上限可能直接关闭，不保证返回错误帧。没有验证通过凭据的成功准入既不是账号认证也不是持久化成功。
 
 ### 配额与内存
 
@@ -70,7 +70,7 @@ MLC1 1 realm-a group-1 room-42 ch hero-7 gen 12 ret home arena r1
 
 cross 的配额按入口进程计算；crossServer 的准入按其全部入口连接统一计算，因此多个 cross 无法绕过该 crossServer 的房间上限。跨 crossServer 的 group 总量目前不是全局一致配额。会话断开、失败和超时均释放本地配额，空房间记录会删除。
 
-配额数的是**连接，不是去重后的玩家**。应用仍需验证玩家票据、限制重复登录、校验 realm/group/room 授权。该端口仅供可信内网；当前没有 mTLS、签名票据或外部身份验证。
+配额数的是**连接，不是去重后的玩家**。应用仍需限制重复登录、校验 realm/group/room 授权。该端口仅供可信内网；当前没有 mTLS；入场凭据是已签名的 `MLT1` 令牌，配置 `MISTLANE_TICKET_SECRETS` 的宿主会在握手上验证它。
 
 内存预算在会话创建前限制数量；消息上限 1 MiB，在 TCP 分配正文前检查，Drogon 也配置正文及 WS 消息上限。预算是估算，不是进程 RSS 硬限制，不覆盖 Lua 状态、TLS、分配器和所有第三方缓冲；生产还需实测并配置 cgroup。Lua 生成响应可能在网络大小检查之前分配，不能宣称内存已完全受控。
 

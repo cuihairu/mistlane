@@ -208,7 +208,7 @@ std::optional<std::string> LuaService::message(std::string_view payload, const C
     if (!lua_isfunction(state_, -1)) throw std::runtime_error("service.message is required");
     lua_pushlstring(state_, payload.data(), payload.size());
     // Game sessions carry their identity; cross sessions add their routing fields.
-    lua_createtable(state_, 0, 9);
+    lua_createtable(state_, 0, 10);
     if (context) {
         if (context->session) {
             lua_pushinteger(state_, static_cast<lua_Integer>(context->session));
@@ -240,6 +240,12 @@ std::optional<std::string> LuaService::message(std::string_view payload, const C
                 lua_setfield(state_, -2, field.second);
             }
             lua_setfield(state_, -2, "route");
+        }
+        if (context->verified) {
+            // The host verified this join's entry ticket; absent means the
+            // session carries no verified durable-write eligibility.
+            lua_pushboolean(state_, 1);
+            lua_setfield(state_, -2, "verified");
         }
     }
     check(protected_call(state_, 2, 1, guard.top+1));

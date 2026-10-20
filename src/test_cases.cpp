@@ -2764,6 +2764,107 @@ void cross_admission() {
     auto healthy=tcp(ingress); equal(join(*healthy,"a",rooms[1]),"MLC1 OK 1");
     equal(healthy->request("ok"),"a(anon):g/"+rooms[1]+":ok");
 }
+// Host-side entry ticket verification: a crossServer configured with per-realm
+// secrets verifies the join's MLT1 ticket against its own instance and the
+// declared identity, a replayed or forged ticket refuses the join with one
+// word, an unconfigured host admits the same join with no eligibility, and
+// broken secret configuration refuses startup.
+void cross_ticket() {
+    Context c; write(c.path("host.lua"),
+        "return {message=function(p,c)"
+        " return (c.character or 'anon')..' verified='..tostring(c.verified==true) end}");
+    ApiSecret secret{};
+    for (std::size_t i = 0; i < secret.size(); ++i) secret[i] = static_cast<unsigned char>(i*11+3);
+    static const char digits[] = "0123456789abcdef";
+    std::string hex;
+    for (unsigned char byte : secret) { hex += digits[byte/16]; hex += digits[byte%16]; }
+    ApiSecret forged{}; forged.fill(7);
+    const auto now = std::chrono::duration_cast<std::chrono::seconds>(
+        std::chrono::system_clock::now().time_since_epoch()).count();
+    const auto nonce = [](std::uint64_t serial) {
+        std::string out(32, '0');
+        for (int i = 31; i >= 0 && serial; --i, serial >>= 4)
+            out[static_cast<std::size_t>(i)] = "0123456789abcdef"[serial & 15];
+        return out;
+    };
+    // Serial keeps every minted nonce distinct; the replay probe reuses one.
+    const auto mint = [&](std::uint64_t serial, const std::string& instance, std::uint64_t expires,
+                          const ApiSecret& key, const std::string& character = "hero") {
+        EntryTicket ticket;
+        ticket.character = {"alpha", character};
+        ticket.instance = instance;
+        ticket.generation = 7;
+        ticket.expires = expires;
+        ticket.nonce = nonce(serial);
+        ticket.signature = entry_ticket_sign(ticket, key);
+        return ticket;
+    };
+    const auto join_with = [](cli::Client& peer, const std::string& tail) {
+        return peer.request("MLC1 1 alpha arena r1 ch hero gen 7 ret alpha arena r1"+tail);
+    };
+    const auto plain = port(), checking = port();
+    // Without secrets a carried ticket authorizes nothing: the join is valid
+    // wire shape, so an unconfigured host still admits it — eligibility only
+    // comes from verification, never from the token's presence.
+    c.node("crossServer", plain, {"--script", c.path("host.lua").string(), "--service-name", "xs-a"});
+    {
+        auto peer = tcp(plain);
+        equal(join_with(*peer, " tk "+entry_ticket_hex(mint(1, "xs-a", now+120, secret))), "MLC1 OK 1");
+        equal(peer->request("who"), "hero verified=false");
+    }
+    std::string carried;
+    {
+        ScopedEnv secrets("MISTLANE_TICKET_SECRETS", "alpha:"+hex);
+        c.node("crossServer", checking, {"--script", c.path("host.lua").string(), "--service-name", "xs-a"});
+    }
+    {   // An anonymous join stays admitted, and stays read-only.
+        auto anon = tcp(checking);
+        equal(anon->request("MLC1 1 alpha arena r1"), "MLC1 OK 1");
+        equal(anon->request("who"), "anon verified=false");
+    }
+    {   // The honest ticket verifies under the home realm secret, this
+        // instance and the declared generation.
+        auto peer = tcp(checking);
+        carried = entry_ticket_hex(mint(2, "xs-a", now+120, secret));
+        equal(join_with(*peer, " tk "+carried), "MLC1 OK 1");
+        equal(peer->request("who"), "hero verified=true");
+    }
+    {   // The same nonce never admits twice inside one process.
+        auto replay = tcp(checking);
+        equal(join_with(*replay, " tk "+carried), "MLC1 ERR TICKET");
+    }
+    // Every failed verdict answers the same one word; the specific reason
+    // stays on the operator's side of the log.
+    for (const auto& ticket : {
+            mint(3, "xs-b", now+120, secret),   // another host's ticket
+            mint(4, "xs-a", now-10, secret),    // expired before this join
+            mint(5, "xs-a", now+120, forged),   // signed by the wrong secret
+        })
+        { auto peer = tcp(checking); equal(join_with(*peer, " tk "+entry_ticket_hex(ticket)), "MLC1 ERR TICKET"); }
+    {   // A ticket naming a different character than the tail claims is an
+        // INVALID join — the wire binding refuses it before verification runs.
+        auto peer = tcp(checking);
+        equal(join_with(*peer, " tk "+entry_ticket_hex(mint(6, "xs-a", now+120, secret, "other"))),
+              "MLC1 ERR INVALID");
+    }
+    // Broken or misdirected secret configuration refuses startup, named.
+    const auto refuses = [&](const std::string& value, const char* role, const char* instance) {
+        ScopedEnv secrets("MISTLANE_TICKET_SECRETS", value);
+        std::vector<std::string> args{self().string(), "--role", role, "--listen", endpoint(port()),
+            "--script", c.path("host.lua").string()};
+        if (instance) { args.push_back("--service-name"); args.push_back(instance); }
+        auto& refused = c.spawn(args);
+        require(refused.wait() != 0 && refused.output().find("MISTLANE_TICKET_SECRETS") != std::string::npos,
+                "broken ticket secrets must refuse startup");
+    };
+    refuses("alpha:"+hex+",beta:short", "crossServer", "xs-c"); // bad hex row
+    refuses("alpha", "crossServer", "xs-c");                    // no secret at all
+    refuses("al!pha:"+hex, "crossServer", "xs-c");              // realm is not an identifier
+    refuses("alpha:"+hex, "crossServer", nullptr);              // host without a stable name
+    refuses("alpha:"+hex, "gameServer", "xs-c");                // secrets on a non-host role
+    std::cout << "cross.ticket: host verifies MLT1 on the join, replay/forgery/expiry refuse TICKET, "
+                 "unconfigured host admits without eligibility, bad secrets refuse startup [PASS]\n";
+}
 // Character route records: a route is only written against a registered
 // member, GET answers from the live member state, and a retiring member drops
 // every route that pointed at it.

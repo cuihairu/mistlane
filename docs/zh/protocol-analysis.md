@@ -145,7 +145,7 @@
 
 ### 进入凭据模型（MLT1，第一片，2026-10-20） {#entry-ticket-model-mlt1-first-slice-2026-10-20}
 
-已拍板的 login 凭据以类型化 C++ 模型落地于 `include/mistlane/entry_ticket.hpp`：`EntryTicket` 覆盖（realm、character、目标 instance、承载 generation、有效期、nonce），规范字节采用 `MLT1` 魔数（与 MLA1 相同的 `u32 BE` 长度方案，数字为十进制文本），以共享 `hmac_sha256` 原语按区服秘钥签名——凭据的 realm 决定秘钥表的键，两个区服绝不共享同一验证答案。`TicketVerifier::verify` 按固定顺序确定作答——畸形 `Malformed`、`UnknownRealm`（秘钥查找先于任何签名运算）、`BadSignature`（常数时间比较）、`Expired`（严格过期后拒绝，含有效期末刻内通过）、对照到达身份的 `WrongCharacter`/`WrongInstance`/`WrongGeneration`，最后才是重放声明——任何失败检查都不消耗 nonce。`TicketClaims` 是有界已见声明表：时钟回拨即 fail closed，仅逐出已过有效期的声明。线形已在第二片绑定（见下）：`entry_ticket_hex`/`parse_entry_ticket` 把规范字节加原始签名编码为十六进制，`MLC1` 握手以参与者尾缀的可选最后一组 `tk <hex>` 携带（`include/mistlane/cross.hpp`）；解码失败、超过 1024 个十六进制字符、凭据声明的 character 或承载版本与尾缀不符、或匿名握手携带凭据，一律整次握手按 INVALID，绝不从声称持有凭据的参与者身上剥离凭据。仍未做的：没有宿主运行验证器、秘钥表没有配置加载器、声明表按进程隔离——重启或多进程部署需要共享持久声明，`Replay` 才算诚实。
+已拍板的 login 凭据以类型化 C++ 模型落地于 `include/mistlane/entry_ticket.hpp`：`EntryTicket` 覆盖（realm、character、目标 instance、承载 generation、有效期、nonce），规范字节采用 `MLT1` 魔数（与 MLA1 相同的 `u32 BE` 长度方案，数字为十进制文本），以共享 `hmac_sha256` 原语按区服秘钥签名——凭据的 realm 决定秘钥表的键，两个区服绝不共享同一验证答案。`TicketVerifier::verify` 按固定顺序确定作答——畸形 `Malformed`、`UnknownRealm`（秘钥查找先于任何签名运算）、`BadSignature`（常数时间比较）、`Expired`（严格过期后拒绝，含有效期末刻内通过）、对照到达身份的 `WrongCharacter`/`WrongInstance`/`WrongGeneration`，最后才是重放声明——任何失败检查都不消耗 nonce。`TicketClaims` 是有界已见声明表：时钟回拨即 fail closed，仅逐出已过有效期的声明。线形已在第二片绑定（见下）：`entry_ticket_hex`/`parse_entry_ticket` 把规范字节加原始签名编码为十六进制，`MLC1` 握手以参与者尾缀的可选最后一组 `tk <hex>` 携带（`include/mistlane/cross.hpp`）；解码失败、超过 1024 个十六进制字符、凭据声明的 character 或承载版本与尾缀不符、或匿名握手携带凭据，一律整次握手按 INVALID，绝不从声称持有凭据的参与者身上剥离凭据。宿主现已运行验证器——第四片把它接到 crossServer 握手路径上，区服秘钥表经环境变量注入（见下）。仍未做的：声明表按进程且易失——重启或多进程部署需要共享持久声明，`Replay` 才算诚实。
 
 `login.ticket` 覆盖：签发/验证往返、对照手拼字节的逐字节规范框定、每个字段都移动签名、签发侧坏形状拒绝（空 instance、零 generation、过短或大写 nonce）与验证器构造拒绝（无秘钥、非标识符 instance）、完整结论阶梯（翻转签名位、失败后诚实重试、重放、错误 character/instance/generation、跨区服秘钥、未知区服）、含期末刻的有效期、确定性双次过期、时钟回拨与声明表容量。
 
@@ -153,7 +153,13 @@
 
 凭据线形为 `MLT1` 规范字节加原始签名后整体十六进制编码，由握手以参与者尾缀的可选最后一组携带（`include/mistlane/cross.hpp`，`entry_ticket_hex`/`parse_entry_ticket` 在 `include/mistlane/entry_ticket.hpp`）。尾缀是全有或全无：凭据解码失败、超过 1024 个十六进制字符、声明的 character 或承载版本与尾缀不符、或匿名握手携带凭据，一律整次握手按 INVALID——上下文绝不会从声称持有凭据的参与者身上剥离凭据。握手长度上限由 256 提高到 1200 字节以容纳凭据形握手；上限仍界定了单次握手的代价。
 
-绑定并不声称验证：没有任何宿主持有区服秘钥、握手路径不运行 `TicketVerifier`、声明表仍按进程隔离——所以带一张形制合法凭据的握手依然不是持久写授权，归属运行时仍归缺口 4。`core.contracts` 覆盖往返、伪造尾缀拒绝清单（奇数长度、非十六进制、字段长度谎报、截断与超长 blob、超上限尾缀）、character/generation 绑定、匿名握手携凭据、错拼尾缀关键字与握手长度上限。
+传输绑定并不声称验证：验证属第四片——配置了秘钥的宿主在握手路径上验证凭据（见下）。即便如此，声明表仍按进程隔离、也没有存储链，验证通过只标记脚本可读的准入资格，不等于已发生的持久写，归属运行时仍归缺口 4。`core.contracts` 覆盖往返、伪造尾缀拒绝清单（奇数长度、非十六进制、字段长度谎报、截断与超长 blob、超上限尾缀）、character/generation 绑定、匿名握手携凭据、错拼尾缀关键字与握手长度上限。
+
+### 宿主侧验证（`MLT1` verify，第四片 2026-10-21）
+
+2026-10-21 实现于 crossServer 握手路径（`src/node.cpp`）：以 `MISTLANE_TICKET_SECRETS` 启动的宿主（逗号分隔的 `realm:<64 位小写十六进制>` 行，经环境变量注入，与 MLA1 凭据同一方式——框架内不落任何加载器、CLI 秘钥参数或真实秘钥）在准入前验证握手的凭据。结论把凭据绑定到参与者家区服秘钥（`ret` 的区服决定秘钥表键）、宿主自身 `--service-name` 与声明的承载 generation；声明表挂在节点上，同一进程内跨连接的重放照样被拒。每个失败结论以一个词拒绝整次握手——`MLC1 ERR TICKET`——上下文绝不从声称持有凭据的参与者身上剥离凭据，跨服 gateway 原样转发该词；具体原因（`replay`、`expired`、`bad-signature`……）只进运维日志。匿名握手照常准入且保持只读；未配置宿主上的凭据同样准入但无任何资格——携带令牌本身从来不是授权。脚本经 `context.verified` 读取结论，仅在本宿主验证通过时为真。
+
+本片不声称：声明表仍按进程且易失，重启后或同区服第二宿主上的凭据重放不被捕获；`verified` 标记的是脚本可读的准入资格，不是已发生的持久写（没有存储链）；也没有任何东西把凭据与 coordinator 的路由或 generation 事实对照——绑定只在握手自己的措辞与凭据之间。坏配置拒绝启动并点名原因：坏十六进制行、空值、非标识符区服、重复区服、缺 `--service-name`、或该变量出现在任何非 crossServer 角色上。`cross.ticket` 覆盖未配置宿主、诚实准入（`verified=true`）、重放、错 instance/过期/错秘钥拒绝、尾缀绑定的 INVALID，以及启动拒绝矩阵。
 
 ## 命名与语义已对齐（有明确边界）
 

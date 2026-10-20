@@ -21,6 +21,9 @@ struct CrossContext {
     std::uint64_t generation = 0;
     // The optional entry ticket, hex MLT1 bytes on the same trailing group.
     std::optional<EntryTicket> ticket;
+    // True only when a host configured with per-realm secrets verified the
+    // ticket; carrying a ticket never implies eligibility by itself.
+    bool verified = false;
 };
 inline CrossContext cross_context(std::string_view payload) {
     // The cap fits the participant tail plus a ticket-shaped hex token.
