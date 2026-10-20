@@ -48,14 +48,16 @@ std::string api_canonical(const ApiRequest& r) {
             r.character.first, r.character.second, r.idempotency_key, r.payload}) field(bytes, value);
     return bytes;
 }
-ApiSignature api_sign(const ApiRequest& request, const ApiSecret& secret) {
-    const auto bytes = api_canonical(request);
+ApiSignature hmac_sha256(const ApiSecret& secret, std::string_view message) {
     ApiSignature signature{};
     std::size_t size = 0;
     if (!EVP_Q_mac(nullptr, "HMAC", nullptr, "SHA256", nullptr, secret.data(), secret.size(),
-            reinterpret_cast<const unsigned char*>(bytes.data()), bytes.size(), signature.data(), signature.size(), &size)
-            || size != signature.size()) throw std::runtime_error("API signature failed");
+            reinterpret_cast<const unsigned char*>(message.data()), message.size(), signature.data(), signature.size(), &size)
+            || size != signature.size()) throw std::runtime_error("HMAC-SHA256 failed");
     return signature;
+}
+ApiSignature api_sign(const ApiRequest& request, const ApiSecret& secret) {
+    return hmac_sha256(secret, api_canonical(request));
 }
 ApiAuth ApiReplayGuard::claim(const ApiRequest& request, std::uint64_t now) {
     std::lock_guard lock(mutex_);

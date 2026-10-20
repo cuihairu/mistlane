@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "test_support.hpp"
 #include "mistlane/api.hpp"
+#include "mistlane/entry_ticket.hpp"
 #include "mistlane/migration.hpp"
 
 namespace mistlane::test {
@@ -328,5 +329,164 @@ void api_ownership() {
             "an unknown character did not answer NotFound");
     std::cout << "api.ownership phases: Active->Draining->Fenced->Active [PASS]\n";
     std::cout << "api.ownership surface: deterministic Found/NotFound [PASS]\n";
+}
+
+void login_ticket() {
+    const RecordStore::RecordKey hero{"home", "hero"};
+    const auto field = [](std::string& bytes, const std::string& value) {
+        const auto size = static_cast<std::uint32_t>(value.size());
+        for (int shift = 24; shift >= 0; shift -= 8) bytes.push_back(static_cast<char>((size >> shift) & 255));
+        bytes += value;
+    };
+    const auto base = [] {
+        EntryTicket ticket;
+        ticket.character = {"home", "hero"};
+        ticket.instance = "gs-a";
+        ticket.generation = 9;
+        ticket.expires = 1'000;
+        ticket.nonce = "0123456789abcdef0123456789abcdef";
+        return ticket;
+    };
+
+    // Issue and verify: the roundtrip admits exactly the issued arrival, and
+    // the canonical bytes bind every field, so each one moves the signature.
+    TicketClaims roundtrip;
+    const TicketVerifier verifier(std::map<std::string, ApiSecret>{{"home", test_secret(3)}, {"foreign", test_secret(4)}},
+        "gs-a", roundtrip);
+    auto ticket = base();
+    ticket.signature = entry_ticket_sign(ticket, test_secret(3));
+    require(valid_entry_ticket(ticket), "a well-formed ticket was marked invalid");
+    require(verifier.verify(ticket, hero, 9, 999) == TicketVerdict::Ok, "a fresh ticket was refused");
+    require(entry_ticket_sign(ticket, test_secret(3)) == ticket.signature, "ticket signing was not deterministic");
+    std::string hand = "MLT1";
+    for (const auto& value : {std::string("home"), std::string("hero"), std::string("gs-a"),
+            std::string("9"), std::string("1000"), ticket.nonce}) field(hand, value);
+    require(entry_ticket_canonical(ticket) == hand, "ticket canonical bytes diverged from the framing");
+    const auto diverges = [&](EntryTicket changed) {
+        changed.signature = {};
+        return entry_ticket_canonical(changed) != entry_ticket_canonical(ticket);
+    };
+    auto changed = base();
+    changed.character.first = "foreign";
+    require(diverges(changed), "the realm did not change the canonical bytes");
+    changed = base();
+    changed.character.second = "sidekick";
+    require(diverges(changed), "the character did not change the canonical bytes");
+    changed = base();
+    changed.instance = "gs-b";
+    require(diverges(changed), "the instance did not change the canonical bytes");
+    changed = base();
+    changed.generation = 10;
+    require(diverges(changed), "the generation did not change the canonical bytes");
+    changed = base();
+    changed.expires = 2'000;
+    require(diverges(changed), "the expiry did not change the canonical bytes");
+    changed = base();
+    changed.nonce = "fedcba9876544321fedcba9876544321";
+    require(diverges(changed), "the nonce did not change the canonical bytes");
+
+    // Issuing refuses a bad shape outright; the verifier refuses bad inputs too.
+    const auto throws = [](const EntryTicket& bad) {
+        try {
+            entry_ticket_canonical(bad);
+            return false;
+        } catch (const std::exception&) {
+            return true;
+        }
+    };
+    auto broken = base();
+    broken.instance.clear();
+    require(throws(broken) && !valid_entry_ticket(broken), "an empty instance was accepted");
+    broken = base();
+    broken.generation = 0;
+    require(throws(broken) && !valid_entry_ticket(broken), "a zero generation was accepted");
+    broken = base();
+    broken.nonce.pop_back();
+    require(throws(broken) && !valid_entry_ticket(broken), "a short nonce was accepted");
+    broken = base();
+    broken.nonce = std::string(32, 'A');
+    require(throws(broken) && !valid_entry_ticket(broken), "an uppercase nonce was accepted");
+    const auto bad_verifier = [&](std::map<std::string, ApiSecret> secrets, const std::string& instance) {
+        try {
+            TicketClaims sink;
+            TicketVerifier draft(std::move(secrets), instance, sink);
+            return false;
+        } catch (const std::exception&) {
+            return true;
+        }
+    };
+    require(bad_verifier({}, "gs-a"), "a verifier without secrets was accepted");
+    require(bad_verifier({{"home", test_secret(3)}}, "gs a!"), "a non-identifier instance was accepted");
+
+    // The verdict ladder: a failed check claims nothing, so the honest retry
+    // of the same nonce still lands Ok and only the second use is a Replay.
+    TicketClaims ladder;
+    const TicketVerifier host(std::map<std::string, ApiSecret>{{"home", test_secret(3)}, {"foreign", test_secret(4)}},
+        "gs-a", ladder);
+    auto claim = base();
+    claim.signature = entry_ticket_sign(claim, test_secret(3));
+    auto flipped = claim;
+    flipped.signature.front() ^= 0x80; // one flipped signature bit
+    require(host.verify(flipped, hero, 9, 999) == TicketVerdict::BadSignature, "a flipped signature was accepted");
+    require(host.verify(claim, hero, 9, 999) == TicketVerdict::Ok, "a failed verify consumed the honest nonce");
+    require(host.verify(claim, hero, 9, 999) == TicketVerdict::Replay, "a byte-identical replay was accepted");
+    auto fresh = base();
+    fresh.nonce = "fedcba9876544321fedcba9876544321";
+    fresh.signature = entry_ticket_sign(fresh, test_secret(3));
+    require(host.verify(fresh, hero, 9, 999) == TicketVerdict::Ok, "a new nonce was refused");
+    const RecordStore::RecordKey other{"home", "sidekick"};
+    require(host.verify(fresh, other, 9, 999) == TicketVerdict::WrongCharacter, "a foreign character was admitted");
+    auto elsewhere = base();
+    elsewhere.instance = "gs-b";
+    elsewhere.signature = entry_ticket_sign(elsewhere, test_secret(3));
+    require(host.verify(elsewhere, hero, 9, 999) == TicketVerdict::WrongInstance, "a wrong instance was admitted");
+    require(host.verify(fresh, hero, 8, 999) == TicketVerdict::WrongGeneration, "a stale generation was admitted");
+    auto guest = base();
+    guest.character = {"foreign", "guest"};
+    guest.nonce = "11112222333344445555666677778888";
+    guest.signature = entry_ticket_sign(guest, test_secret(3)); // home's secret, not foreign's
+    require(host.verify(guest, guest.character, 9, 999) == TicketVerdict::BadSignature,
+            "a cross-realm secret was accepted");
+    guest.signature = entry_ticket_sign(guest, test_secret(4));
+    require(host.verify(guest, guest.character, 9, 999) == TicketVerdict::Ok,
+            "a foreign realm under its own secret was refused");
+    auto ghost = base();
+    ghost.character = {"elsewhere", "ghost"};
+    ghost.signature = entry_ticket_sign(ghost, test_secret(5));
+    require(host.verify(ghost, ghost.character, 9, 999) == TicketVerdict::UnknownRealm,
+            "an unknown realm was not refused before its signature mattered");
+
+    // Time: valid through expiry inclusively, expired strictly after, clock
+    // rollback fails closed without consuming anything.
+    TicketClaims time_claims;
+    const TicketVerifier timed(std::map<std::string, ApiSecret>{{"home", test_secret(3)}}, "gs-a", time_claims);
+    auto early = base();
+    early.signature = entry_ticket_sign(early, test_secret(3));
+    require(timed.verify(early, hero, 9, 999) == TicketVerdict::Ok, "a ticket before expiry was refused");
+    auto stale = base();
+    stale.nonce = "abcdef0123456789abcdef0123456789";
+    stale.signature = entry_ticket_sign(stale, test_secret(3));
+    require(timed.verify(stale, hero, 9, 1'001) == TicketVerdict::Expired, "an expired ticket was accepted");
+    require(timed.verify(stale, hero, 9, 1'001) == TicketVerdict::Expired, "expiry was not deterministic");
+    auto edge = base();
+    edge.nonce = "abcdef0123456789abcdef0123456789";
+    edge.signature = entry_ticket_sign(edge, test_secret(3));
+    require(timed.verify(edge, hero, 9, 1'000) == TicketVerdict::Ok,
+            "the expiry verdict consumed the nonce it refused");
+    auto rolled_back = base();
+    rolled_back.nonce = "99998888777766665555444433332222";
+    rolled_back.signature = entry_ticket_sign(rolled_back, test_secret(3));
+    require(timed.verify(rolled_back, hero, 9, 999) == TicketVerdict::Clock, "time moved backwards and was not refused");
+    TicketClaims full(1);
+    const TicketVerifier tight(std::map<std::string, ApiSecret>{{"home", test_secret(3)}}, "gs-a", full);
+    auto first = base();
+    first.signature = entry_ticket_sign(first, test_secret(3));
+    require(tight.verify(first, hero, 9, 999) == TicketVerdict::Ok, "the first claim did not fit");
+    auto second = base();
+    second.nonce = "fedcba9876544321fedcba9876544321";
+    second.signature = entry_ticket_sign(second, test_secret(3));
+    require(tight.verify(second, hero, 9, 999) == TicketVerdict::Full, "a full claim table admitted another nonce");
+    std::cout << "login.ticket roundtrip: issue then verify admits the arrival [PASS]\n";
+    std::cout << "login.ticket ladder: tamper/identity/expiry/replay/capacity all refused [PASS]\n";
 }
 }

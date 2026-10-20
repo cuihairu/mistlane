@@ -39,6 +39,9 @@ struct ApiCredential {
 inline constexpr std::uint64_t api_window_seconds = 300;
 bool valid_api_request(const ApiRequest& request);
 std::string api_canonical(const ApiRequest& request);
+// The shared HMAC-SHA256 primitive over exact bytes; MLA1 requests and the
+// entry tickets both sign through it.
+ApiSignature hmac_sha256(const ApiSecret& secret, std::string_view message);
 ApiSignature api_sign(const ApiRequest& request, const ApiSecret& secret);
 enum class ApiAuth { Ok, Invalid, UnknownCredential, Forbidden, BadSignature, Window, Replay, Clock, Full };
 
