@@ -16,6 +16,7 @@ void entity_tree();
 void entity_sync();
 void entity_rpc();
 void entity_persist();
+void entity_perf();
 void role_names();
 void transport_tcp();
 void transport_websocket();
@@ -109,6 +110,7 @@ int run_tests(int argc, char** argv) {
         {"entity.sync","contract",test::entity_sync},
         {"entity.rpc","contract",test::entity_rpc},
         {"entity.persist","contract",test::entity_persist},
+        {"entity.perf","contract",test::entity_perf},
         {"core.roles","core",test::role_names},
         {"transport.tcp","transport",test::transport_tcp},
         {"transport.websocket","transport",test::transport_websocket},

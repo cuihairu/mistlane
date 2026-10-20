@@ -22,6 +22,8 @@
 #include <cstdlib>
 #include <cstring>
 #include <iomanip>
+#include <malloc.h>
+#include <numeric>
 #include <future>
 #include <sstream>
 #include <netinet/in.h>
@@ -1004,7 +1006,134 @@ private:
     int fd_;
 };
 }
+// Big-bag single-item modification — the property design's cost question.
+// One nested write must journal exactly one delta (never a full-bag
+// rewrite), must advance the persistent revision and set dirty without any
+// setDirty or top-level reassignment, and its cost must not scale with bag
+// size. Byte counts use the wire-shape accounting below (u32 property id,
+// u16 field id or u32 index per path step, u8 kind, u32 position, fixed-
+// width values); the byte serializer itself arrives with wire transport.
+std::size_t wire_bytes(const EntityValue& value) {
+    if (auto* array = std::get_if<EntityArray>(&value.data))
+        return 4 + std::accumulate(array->begin(), array->end(), std::size_t{0},
+            [](std::size_t sum, const EntityValue& item) { return sum + wire_bytes(item); });
+    if (auto* object = std::get_if<EntityObject>(&value.data))
+        return std::accumulate(object->begin(), object->end(), std::size_t{0},
+            [](std::size_t sum, const auto& field) { return sum + 2 + wire_bytes(field.second); });
+    if (std::holds_alternative<std::string>(value.data)) return 4 + std::get<std::string>(value.data).size();
+    return std::holds_alternative<bool>(value.data) ? 1 : 8;
+}
+std::size_t delta_bytes(const SyncDelta& delta) {
+    std::size_t steps = 0;
+    for (const auto& step : delta.path) steps += step.by_index ? 4 : 2;
+    return 4 + steps + 1 + 4 + (delta.kind == SyncDelta::Kind::REMOVE ? 0 : wire_bytes(delta.value));
+}
+void entity_perf() {
+    const EntityContract contract(R"(<Contracts><Types>
+        <Item><itemId id="0" type="UINT32"/><count id="1" type="UINT32" default="1"/></Item>
+        <Inventory><capacity id="0" type="UINT16" default="512"/><items id="1" type="ARRAY" of="Item"/></Inventory>
+        </Types>
+        <Entity name="Avatar" id="1">
+          <Properties>
+            <level id="1" type="UINT16" default="1" flags="OWN_CLIENT"/>
+            <inventory id="2" type="Inventory" flags="OWN_CLIENT" persistent="true"/>
+          </Properties>
+        </Entity></Contracts>)");
+    PropertyStore store(contract, 1);
+    PersistentStore persist(store);
+    require(persist.assume(7), "hosting generation was not accepted");
+    const auto make_bag = [](std::size_t cells) {
+        EntityArray items;
+        for (std::size_t i = 0; i < cells; ++i)
+            items.push_back(EntityObject{{"itemId", std::int64_t{1000 + static_cast<std::int64_t>(i)}},
+                                         {"count", std::int64_t{3}}});
+        return EntityObject{{"capacity", std::int64_t{static_cast<std::int64_t>(cells)}},
+                            {"items", EntityValue{std::move(items)}}};
+    };
+    require(persist.set("inventory", EntityValue{make_bag(512)}), "the bag baseline write was refused");
+    const std::uint64_t after_baseline = persist.revision();
+    require(after_baseline >= 1, "the bag baseline write did not mark persistence");
+
+    // One single-item write: one journal delta, one revision, dirty — no
+    // setDirty, no top-level reassignment, no full-bag journal entry.
+    PropertyChannel channel(&store);
+    require(channel.observe("owner", true), "owner observer entry refused");
+    require(channel.deliver().size() == 1, "owner entry did not deliver one baseline");
+    require(persist.set_path("inventory",
+                             TreePath{TreeStep{false, "items", 0}, TreeStep{true, std::string(), 5},
+                                      TreeStep{false, "count", 0}},
+                             EntityValue{std::int64_t{4}}),
+            "the single-item write was refused");
+    require(persist.revision() == after_baseline + 1 && persist.dirty(),
+            "the single write did not mark persistence");
+    const auto drained = channel.deliver();
+    require(drained.size() == 1 && drained[0].kind == SyncMessage::Kind::DELTAS && drained[0].deltas.size() == 1,
+            "a single-item write did not journal exactly one delta");
+    const SyncDelta& delta = drained[0].deltas[0];
+    require(delta.kind == SyncDelta::Kind::SET && delta.property_id == 2 && delta.path.size() == 3 &&
+                delta.path[0].field_id == 1 && delta.path[1].by_index && delta.path[1].index == 5 &&
+                delta.path[2].field_id == 1,
+            "the delta lost its nested wire path");
+    require(std::get<std::int64_t>(delta.value.data) == 4, "the delta lost its leaf value");
+
+    // Bytes: the one write costs a fixed header plus the leaf value — orders
+    // of magnitude below rebaselining the same bag.
+    const std::size_t one = delta_bytes(delta);
+    const auto* root = store.get("inventory");
+    require(root, "the store lost the bag");
+    const std::size_t whole = 4 + wire_bytes(*root);
+    require(one * 64 < whole, "the incremental delta is not meaningfully smaller than a rebaseline");
+    std::cout << "entity.perf bytes: single-item delta " << one << " B vs full-bag rebaseline " << whole
+              << " B (" << (whole / one) << "x smaller) [PASS]\n";
+
+    // CPU: writes into a bigger bag must not cost proportionally more — the
+    // walk is O(path), not O(bag). Generous ceilings; this measures.
+    using steady = std::chrono::steady_clock;
+    const auto write_one = [&](std::size_t i, std::size_t cells) {
+        (void)persist.set_path("inventory",
+                               TreePath{TreeStep{false, "items", 0}, TreeStep{true, std::string(), i % cells},
+                                        TreeStep{false, "count", 0}},
+                               EntityValue{std::int64_t{static_cast<std::int64_t>(i % 1000) + 10}});
+        if ((i & 15) == 15) (void)channel.deliver();
+    };
+    double small_ns = 0, big_ns = 0;
+    for (int round = 0; round < 2; ++round) {
+        const std::size_t cells = round == 0 ? 512 : 4096;
+        require(persist.set("inventory", EntityValue{make_bag(cells)}), "the refill was refused");
+        (void)channel.deliver();
+        for (std::size_t i = 0; i < 200; ++i) write_one(i, cells);
+        (void)channel.deliver();
+        const std::size_t ops = 20000;
+        const auto begin = steady::now();
+        for (std::size_t i = 0; i < ops; ++i) write_one(i, cells);
+        (void)channel.deliver();
+        const auto end = steady::now();
+        const double ns = std::chrono::duration_cast<std::chrono::nanoseconds>(end - begin).count() / double(ops);
+        (round == 0 ? small_ns : big_ns) = ns;
+        std::cout << "entity.perf write+drain: " << cells << " cells -> " << ns << " ns/op\n";
+    }
+    require(small_ns < 200000, "a single-item write took unreasonably long");
+    require(big_ns < small_ns * 4, "per-write cost scaled with bag size (O(bag) walk?)");
+
+    // Allocation retention: after warmup, steady-state single-item writes
+    // must not keep growing the heap (the journal drains, cells are reused).
+    {
+        for (std::size_t i = 0; i < 500; ++i) write_one(i, 512);
+        (void)channel.deliver();
+        const auto before = mallinfo2();
+        const std::size_t ops = 20000;
+        for (std::size_t i = 0; i < ops; ++i) write_one(i, 512);
+        (void)channel.deliver();
+        const auto after = mallinfo2();
+        const double retained = double(after.uordblks) - double(before.uordblks);
+        require(retained < double(1 << 20), "steady-state single-item writes kept growing the heap");
+        std::cout << "entity.perf allocations: retained " << retained / double(ops)
+                  << " B/op over " << ops << " writes [PASS]\n";
+    }
+    std::cout << "entity.perf big-bag single-item modification [PASS]\n";
+}
 void core_contracts() {
+
     TokenBucket bucket(2, 0.000001);
     require(bucket.consume() && bucket.consume() && !bucket.consume(), "token budget is not enforced");
     must_fail([] { TokenBucket invalid(0, 1); });
