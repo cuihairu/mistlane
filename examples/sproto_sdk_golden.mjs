@@ -3,7 +3,8 @@ import { pathToFileURL } from 'node:url';
 
 const modulePath = process.argv[2];
 if (!modulePath) throw new Error('usage: node sproto_sdk_golden.mjs GENERATED.bindings.js');
-const { encodeRecord, decodeRecord, sprotoFields, encodeEnvelope, decodeEnvelope, encodeReply, decodeReply } = await import(pathToFileURL(modulePath));
+const { encodeRecord, decodeRecord, sprotoFields, encodeEnvelope, decodeEnvelope, encodeReply, decodeReply,
+  entityTypes, entityMethods, EntityRpcQueue, EntityClient } = await import(pathToFileURL(modulePath));
 const hex = (bytes) => [...bytes].map((byte) => byte.toString(16).padStart(2, '0')).join('');
 const utf8 = (text) => new TextEncoder().encode(text);
 const unhex = (text) => Uint8Array.from(text.match(/../g), (pair) => parseInt(pair, 16));
@@ -198,3 +199,101 @@ if (decodeReply(unhex('01000002ffff')) !== null) throw new Error('invalid utf-8 
 expectThrow('reply reason on non-INVALID', () => encodeReply({ error: 'STALE', reason: 'x' }));
 expectThrow('reply unknown error', () => encodeReply({ error: 'NOPE' }));
 console.log('JS_ENTITY_ENVELOPE canonical/extremes/replies and malformed refusals [PASS]');
+
+// Client-side facade and bounded queue (docs/entity-contract.md): typed
+// admissions, deadlines on an injected clock, surfaced timeout tombstones,
+// and a retry that only re-arms idempotent calls with a fresh correlation
+// id. The facade sends real envelope bytes straight off its own Avatar —
+// method names, sides and return tables come from the generated tables, so
+// there is no .server/.client intermediate layer.
+if (entityTypes.Avatar !== 1) throw new Error('entity type table wrong');
+if (entityMethods.Avatar.outbound.attack.mode !== 'notify'
+  || entityMethods.Avatar.outbound.getProfile.returns !== 'Avatar_getProfile_Returns'
+  || entityMethods.Avatar.inbound.onReward.args !== 'Avatar_onReward_Args')
+  throw new Error('method tables wrong');
+{
+  const q = new EntityRpcQueue(2);
+  if (q.call(100, false, null, 7) !== 7 || q.call(100, false, null, 8) !== 8) throw new Error('queue admission');
+  if (q.call(100, false, null, 7) !== null || q.error !== 'INVALID') throw new Error('duplicate not INVALID');
+  if (q.call(100) !== null || q.error !== 'CAPACITY') throw new Error('overflow not CAPACITY');
+  if (q.call(0, false, null, 9) !== null || q.error !== 'INVALID') throw new Error('zero deadline not INVALID');
+  if (q.advance(-1) !== false) throw new Error('negative clock accepted');
+  q.advance(100);
+  if (q.state(7) !== 'TIMED_OUT' || q.state(8) !== 'TIMED_OUT') throw new Error('deadlines not burned');
+  if (q.complete(7) !== 'TIMEOUT') throw new Error('late reply not TIMEOUT');
+  if (q.complete(99) !== 'STALE') throw new Error('unknown reply not STALE');
+  const tomb = q.take(7);
+  if (!tomb || tomb.state !== 'TIMED_OUT' || tomb.idempotent !== false) throw new Error('tombstone not surfaced');
+  if (q.size !== 1) throw new Error('take did not release the slot');
+  const c = q.call(50);
+  if (!q.cancel(c) || q.cancel(c) !== false || q.error !== 'INVALID') throw new Error('cancel discipline');
+  if (q.complete(c) !== 'CANCELLED') throw new Error('reply after cancel');
+  q.take(c);
+  const d = q.call(100);
+  if (q.complete(d) !== 'OK' || q.complete(d) !== 'CONFLICT') throw new Error('double reply not CONFLICT');
+  q.take(d);
+  q.call(100, false, null, 21);
+  q.advance(200);
+  if (q.retry(21, 300) !== null) throw new Error('non-idempotent timeout retried');
+  if (q.state(21) !== 'TIMED_OUT') throw new Error('tombstone vanished after refused retry');
+  q.take(8);  // free one slot; the table below stays at capacity through the retry
+  if (q.call(100, true, null, 31) !== 31) throw new Error('idempotent admission refused');
+  q.advance(400);
+  const fresh = q.retry(31, 300);  // full table: the tombstone slot is reused
+  if (fresh === null || fresh === 31 || q.state(31) !== null
+    || q.state(fresh) !== 'PENDING' || q.get(fresh).idempotent !== true) throw new Error('idempotent re-arm');
+}
+{
+  const sent = [];
+  const client = new EntityClient({ send: (bytes) => sent.push(bytes), type: 'Avatar', entity_id: 42n, incarnation: 3, capacity: 2 });
+  if (client.call('nope').ok !== false || client.call('attack').ok !== false
+    || client.notify('getProfile').ok !== false) throw new Error('facade mode misuse not INVALID');
+  const call = client.call('getProfile', { account: 9 }, { deadline_ms: 100, idempotent: true });
+  if (!call.ok) throw new Error('call refused');
+  const env = decodeEnvelope(sent[0]);
+  if (env.side !== 0 || env.method_id !== 2 || env.correlation_id !== BigInt(call.id)
+    || env.hosting_generation !== 0 || env.deadline_ms !== 100 || env.entity_id !== 42n)
+    throw new Error('facade envelope wrong');
+  if (hex(env.payload) !== hex(encodeRecord(sprotoFields.Avatar_getProfile_Args, { account: 9 })))
+    throw new Error('args payload wrong');
+  const c2 = client.call('getProfile', { account: 10 }, { deadline_ms: 100 });
+  if (!c2.ok) throw new Error('second call refused');
+  const c3 = client.call('getProfile', { account: 11 });
+  if (c3.ok || c3.error !== 'CAPACITY') throw new Error('facade overflow not typed');
+  const returns = encodeReply({ payload: encodeRecord(sprotoFields.Avatar_getProfile_Returns, { level: 7 }) });
+  if (client.on_reply(call.id, returns) !== 'OK') throw new Error('reply verdict');
+  const done = client.take(call.id);
+  if (!done || done.state !== 'OK' || done.error !== null || done.response.level !== 7n) throw new Error('typed return lost');
+  // a typed error settles the call: the verdict is OK, the entry carries STALE
+  if (client.on_reply(c2.id, encodeReply({ error: 'STALE' })) !== 'OK') throw new Error('error reply verdict');
+  const done2 = client.take(c2.id);
+  if (!done2 || done2.error !== 'STALE' || done2.response !== null) throw new Error('typed error lost');
+  const r1 = client.call('getProfile', { account: 12 }, { deadline_ms: 50, idempotent: true });
+  client.advance(1000);
+  const first = decodeEnvelope(sent[sent.length - 1]);
+  const fresh = client.retry(r1.id, 200);
+  if (fresh === null || fresh === r1.id) throw new Error('retry not fresh');
+  const resent = decodeEnvelope(sent[sent.length - 1]);
+  if (resent.correlation_id !== BigInt(fresh) || resent.method_id !== 2
+    || hex(resent.payload) !== hex(first.payload)) throw new Error('retry envelope wrong');
+  client.advance(1200);
+  if (client.on_reply(fresh, returns) !== 'TIMEOUT') throw new Error('late reply after deadline');
+  const m1 = client.call('getProfile', { account: 13 });
+  if (client.on_reply(m1.id, unhex('0578')) !== 'MALFORMED' || client.queue.state(m1.id) !== 'PENDING')
+    throw new Error('malformed reply consumed the slot');
+  let noticed = null;
+  const notifyBytes = encodeEnvelope(
+    { scope: 0, type_id: 1, entity_id: -1n, incarnation: 0, side: 1, method_id: 1,
+      correlation_id: 0n, hosting_generation: 0, deadline_ms: 0 },
+    encodeRecord(sprotoFields.Avatar_onReward_Args, { itemId: 77 }));
+  client.on_notify(notifyBytes, (name, args) => { noticed = [name, args]; });
+  if (!noticed || noticed[0] !== 'onReward' || noticed[1].itemId !== 77n) throw new Error('inbound notify lost');
+  const clientSide = encodeEnvelope(
+    { scope: 0, type_id: 1, entity_id: 42n, incarnation: 0, side: 0, method_id: 1,
+      correlation_id: 0n, hosting_generation: 0, deadline_ms: 0 }, new Uint8Array(0));
+  if (client.on_notify(clientSide, () => { throw new Error('client-side frame delivered as notify'); }) !== null)
+    throw new Error('client-side frame accepted as notify');
+  if (client.on_notify(unhex('0578'), () => { throw new Error('malformed frame delivered'); }) !== null)
+    throw new Error('malformed frame accepted as notify');
+}
+console.log('JS_ENTITY_CLIENT bounded queue, facade calls/notify/retry and malformed refusals [PASS]');

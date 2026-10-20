@@ -407,7 +407,10 @@ public:
         for (const auto& [name, fields] : structs_) emit_fields(name, fields);
         for (const auto& e : entities_) {
             emit_fields(e.name, properties_of(e));
-            for (const auto& m : e.server_methods) if (client_callable(m)) emit_fields(e.name+"_"+m.name+"_Args", m.args);
+            for (const auto& m : e.server_methods) if (client_callable(m)) {
+                emit_fields(e.name+"_"+m.name+"_Args", m.args);
+                if (!m.returns.empty()) emit_fields(e.name+"_"+m.name+"_Returns", m.returns);
+            }
             for (const auto& m : e.client_methods) emit_fields(e.name+"_"+m.name+"_Args", m.args);
         }
         out << "};\n\n"
@@ -775,6 +778,192 @@ public:
                "  }\n"
                "  if (bytes.length !== 2) return null;\n"
                "  return { error, reason: '', payload: new Uint8Array(0) };\n"
+               "}\n\n"
+               "// Generated per-entity method tables: outbound is what this\n"
+               "// audience may send (server methods), inbound is what it\n"
+               "// receives (client notifies). The client facade binds method\n"
+               "// names straight off its own Avatar — no .server/.client\n"
+               "// intermediate layer.\n"
+               "export const entityTypes = {\n";
+        for (const auto& e : entities_)
+            out << "  " << e.name << ": " << e.id << ",\n";
+        out << "};\n\nexport const entityMethods = {\n";
+        for (const auto& e : entities_) {
+            out << "  " << e.name << ": {\n    outbound: {";
+            bool first = true;
+            for (const auto& m : e.server_methods) {
+                if (!client_callable(m)) continue;
+                if (!first) out << ",";
+                first = false;
+                out << "\n      '" << m.name << "': { id: " << m.id << ", mode: '" << m.mode
+                    << "', args: '" << e.name << "_" << m.name << "_Args'"
+                    << ", returns: " << (m.returns.empty() ? std::string("null") : "'"+e.name+"_"+m.name+"_Returns'")
+                    << " }";
+            }
+            out << "\n    },\n    inbound: {";
+            first = true;
+            for (const auto& m : e.client_methods) {
+                if (!first) out << ",";
+                first = false;
+                out << "\n      '" << m.name << "': { id: " << m.id << ", args: '"
+                    << e.name << "_" << m.name << "_Args' }";
+            }
+            out << "\n    },\n  },\n";
+        }
+        out << "};\n\n"
+               "// Client-side outstanding-call discipline: the mirror of the server's\n"
+               "// bounded RpcQueue. Capacity is fixed at construction, admissions are\n"
+               "// typed refusals rather than silent drops, an injected clock makes\n"
+               "// deadlines testable, a timed-out call stays a surfaced tombstone until\n"
+               "// take() (its outcome is unknown — it may already have been applied), and\n"
+               "// retry() only re-arms a call admitted as idempotent with a fresh\n"
+               "// correlation id, so a non-idempotent timeout can never be silently\n"
+               "// retried. Replies carry no correlation on the wire, so the transport\n"
+               "// pairs a reply with the call it belongs to and passes that id here.\n"
+               "export class EntityRpcQueue {\n"
+               "  constructor(capacity = 64) {\n"
+               "    if (!Number.isInteger(capacity) || capacity < 1) throw new RangeError('capacity must be a positive integer');\n"
+               "    this.capacity = capacity;\n"
+               "    this.calls = new Map();\n"
+               "    this.clock = 0;\n"
+               "    this.next_id = 0;\n"
+               "    this.error = null;\n"
+               "  }\n"
+               "  call(deadline_ms, idempotent = false, tag = null, id = null) {\n"
+               "    this.error = null;\n"
+               "    const cid = id ?? ++this.next_id;\n"
+               "    if (!Number.isInteger(cid) || cid < 1 || !Number.isInteger(deadline_ms) || deadline_ms < 1) {\n"
+               "      this.error = 'INVALID';\n"
+               "      return null;\n"
+               "    }\n"
+               "    if (this.calls.has(cid)) { this.error = 'INVALID'; return null; }\n"
+               "    if (this.calls.size >= this.capacity) { this.error = 'CAPACITY'; return null; }\n"
+               "    this.calls.set(cid, { state: 'PENDING', deadline: this.clock + deadline_ms,\n"
+               "      idempotent, tag, response: null, error: null });\n"
+               "    return cid;\n"
+               "  }\n"
+               "  advance(now) {\n"
+               "    if (!Number.isInteger(now) || now < 0) return false;\n"
+               "    this.clock = Math.max(this.clock, now);\n"
+               "    for (const call of this.calls.values())\n"
+               "      if (call.state === 'PENDING' && this.clock >= call.deadline) call.state = 'TIMED_OUT';\n"
+               "    return true;\n"
+               "  }\n"
+               "  cancel(id) {\n"
+               "    this.error = null;\n"
+               "    const call = this.calls.get(id);\n"
+               "    if (!call || call.state !== 'PENDING') { this.error = 'INVALID'; return false; }\n"
+               "    call.state = 'CANCELLED';\n"
+               "    return true;\n"
+               "  }\n"
+               "  complete(id, response = null, error = null) {\n"
+               "    const call = this.calls.get(id);\n"
+               "    if (!call) return 'STALE';\n"
+               "    if (call.state === 'PENDING' && this.clock >= call.deadline) call.state = 'TIMED_OUT';\n"
+               "    if (call.state === 'TIMED_OUT') return 'TIMEOUT';\n"
+               "    if (call.state === 'CANCELLED') return 'CANCELLED';\n"
+               "    if (call.state === 'OK') return 'CONFLICT';\n"
+               "    call.state = 'OK';\n"
+               "    call.response = response;\n"
+               "    call.error = error;\n"
+               "    return 'OK';\n"
+               "  }\n"
+               "  retry(old_id, new_deadline_ms) {\n"
+               "    const call = this.calls.get(old_id);\n"
+               "    if (!call || call.state !== 'TIMED_OUT' || !call.idempotent\n"
+               "        || !Number.isInteger(new_deadline_ms) || new_deadline_ms < 1) return null;\n"
+               "    const cid = ++this.next_id;\n"
+               "    this.calls.delete(old_id);\n"
+               "    this.calls.set(cid, { state: 'PENDING', deadline: this.clock + new_deadline_ms,\n"
+               "      idempotent: true, tag: call.tag, response: null, error: null });\n"
+               "    return cid;\n"
+               "  }\n"
+               "  take(id) {\n"
+               "    const call = this.calls.get(id);\n"
+               "    if (!call || call.state === 'PENDING') return null;\n"
+               "    this.calls.delete(id);\n"
+               "    return call;\n"
+               "  }\n"
+               "  get(id) { return this.calls.get(id) ?? null; }\n"
+               "  state(id) { const call = this.calls.get(id); return call ? call.state : null; }\n"
+               "  get size() { return this.calls.size; }\n"
+               "}\n\n"
+               "// The direct Avatar facade: one instance per (type, entity), sending\n"
+               "// envelopes the caller's transport owns and decoding typed returns off\n"
+               "// the method tables above. A call is admitted to the bounded queue before\n"
+               "// anything is sent, so an overflow is refused rather than dropped, and\n"
+               "// the admitted entry keeps the args so a retry re-encodes the same\n"
+               "// payload under a fresh correlation id instead of resending blindly.\n"
+               "export class EntityClient {\n"
+               "  constructor(options = {}) {\n"
+               "    if (typeof options.send !== 'function') throw new RangeError('send must be a function');\n"
+               "    if (entityTypes[options.type] === undefined) throw new RangeError('unknown entity type ' + options.type);\n"
+               "    this.send = options.send;\n"
+               "    this.type = options.type;\n"
+               "    this.type_id = entityTypes[options.type];\n"
+               "    this.scope = options.scope ?? 0;\n"
+               "    this.entity_id = options.entity_id ?? 0;\n"
+               "    this.incarnation = options.incarnation ?? 0;\n"
+               "    this.deadline_ms = options.deadline_ms ?? 5000;\n"
+               "    this.queue = new EntityRpcQueue(options.capacity ?? 64);\n"
+               "  }\n"
+               "  envelope(info, args, deadline_ms, correlation_id) {\n"
+               "    return encodeEnvelope({\n"
+               "      scope: this.scope, type_id: this.type_id, entity_id: this.entity_id,\n"
+               "      incarnation: this.incarnation, side: 0, method_id: info.id,\n"
+               "      correlation_id, hosting_generation: 0, deadline_ms,\n"
+               "    }, encodeRecord(sprotoFields[info.args] ?? [], args ?? {}));\n"
+               "  }\n"
+               "  call(method, args, options = {}) {\n"
+               "    const info = entityMethods[this.type].outbound[method];\n"
+               "    if (!info || info.mode !== 'request') return { ok: false, error: 'INVALID' };\n"
+               "    const deadline_ms = options.deadline_ms ?? this.deadline_ms;\n"
+               "    const id = this.queue.call(deadline_ms, options.idempotent ?? false, { type: this.type, method, args });\n"
+               "    if (id === null) return { ok: false, error: this.queue.error };\n"
+               "    this.send(this.envelope(info, args, deadline_ms, BigInt(id)));\n"
+               "    return { ok: true, id };\n"
+               "  }\n"
+               "  notify(method, args, options = {}) {\n"
+               "    const info = entityMethods[this.type].outbound[method];\n"
+               "    if (!info || info.mode !== 'notify') return { ok: false, error: 'INVALID' };\n"
+               "    this.send(this.envelope(info, args, options.deadline_ms ?? this.deadline_ms, 0n));\n"
+               "    return { ok: true };\n"
+               "  }\n"
+               "  // Malformed replies drop without touching the queue: the correlation\n"
+               "  // stays outstanding rather than vanishing silently.\n"
+               "  on_reply(id, bytes) {\n"
+               "    const reply = decodeReply(bytes);\n"
+               "    if (!reply) return 'MALFORMED';\n"
+               "    if (reply.error) return this.queue.complete(id, null, reply.error);\n"
+               "    const entry = this.queue.get(id);\n"
+               "    if (!entry) return 'STALE';\n"
+               "    const info = entityMethods[entry.tag.type].outbound[entry.tag.method];\n"
+               "    const response = reply.payload.length && info.returns\n"
+               "      ? decodeRecord(sprotoFields[info.returns], reply.payload) : null;\n"
+               "    return this.queue.complete(id, response);\n"
+               "  }\n"
+               "  advance(now) { return this.queue.advance(now); }\n"
+               "  cancel(id) { return this.queue.cancel(id); }\n"
+               "  retry(old_id, deadline_ms = this.deadline_ms) {\n"
+               "    const entry = this.queue.get(old_id);\n"
+               "    if (!entry || !entry.tag) return null;\n"
+               "    const id = this.queue.retry(old_id, deadline_ms);\n"
+               "    if (id === null) return null;\n"
+               "    const info = entityMethods[entry.tag.type].outbound[entry.tag.method];\n"
+               "    this.send(this.envelope(info, entry.tag.args, deadline_ms, BigInt(id)));\n"
+               "    return id;\n"
+               "  }\n"
+               "  take(id) { return this.queue.take(id); }\n"
+               "  // Inbound notifies: side must be server, the method id must be this\n"
+               "  // audience's own, and the payload must decode against its table.\n"
+               "  on_notify(bytes, handler) {\n"
+               "    const env = decodeEnvelope(bytes);\n"
+               "    if (!env || env.side !== 1) return null;\n"
+               "    const hit = Object.entries(entityMethods[this.type].inbound)\n"
+               "      .find(([name, info]) => info.id === env.method_id);\n"
+               "    if (!hit) return null;\n"
+               "    return handler(hit[0], decodeRecord(sprotoFields[hit[1].args], env.payload));\n"
+               "  }\n"
                "}\n";
         return out.str();
     }
@@ -1104,7 +1293,10 @@ public:
         for (const auto& [name, fields] : structs_) emit(name, fields);
         for (const auto& e : entities_) {
             emit(e.name, properties_of(e));
-            for (const auto& m : e.server_methods) if (client_callable(m)) emit(e.name+"_"+m.name+"Args", m.args);
+            for (const auto& m : e.server_methods) if (client_callable(m)) {
+                emit(e.name+"_"+m.name+"Args", m.args);
+                if (!m.returns.empty()) emit(e.name+"_"+m.name+"Returns", m.returns);
+            }
             for (const auto& m : e.client_methods) emit(e.name+"_"+m.name+"Args", m.args);
         }
         // Invocation envelope and typed reply (docs/entity-contract.md): the
@@ -1195,6 +1387,226 @@ public:
                "      return value;\n"
                "    }\n"
                "  }\n"
+               "}\n\n"
+               "// Generated per-entity method tables: outbound is what this audience may\n"
+               "// send (server methods), inbound is what it receives (client notifies).\n"
+               "// The client facade binds method names straight off its own Avatar — no\n"
+               "// .server/.client intermediate layer.\n"
+               "public sealed record EntityMethodInfo(uint Id, string Mode, string Args, string? Returns);\n"
+               "public sealed record EntityNotifyInfo(uint Id, string Args);\n"
+               "public static class EntityMethods {\n";
+        out << "  public static readonly IReadOnlyDictionary<string, uint> TypeIds = new Dictionary<string, uint> {";
+        for (const auto& e : entities_)
+            out << " [\"" << e.name << "\"] = " << e.id << "U,";
+        out << " };\n";
+        out << "  public static readonly IReadOnlyDictionary<string, IReadOnlyDictionary<string, EntityMethodInfo>> Outbound =\n"
+               "    new Dictionary<string, IReadOnlyDictionary<string, EntityMethodInfo>> {\n";
+        for (const auto& e : entities_) {
+            out << "      [\"" << e.name << "\"] = new Dictionary<string, EntityMethodInfo> {";
+            bool first = true;
+            for (const auto& m : e.server_methods) {
+                if (!client_callable(m)) continue;
+                if (!first) out << ",";
+                first = false;
+                const std::string returns = m.returns.empty() ? std::string(", null)")
+                    : ", \""+e.name+"_"+m.name+"Returns\")";
+                out << "\n        [\"" << m.name << "\"] = new EntityMethodInfo(" << m.id << "U, \"" << m.mode << "\", \""
+                    << e.name << "_" << m.name << "Args\"" << returns;
+            }
+            out << "\n      },";
+        }
+        out << "\n    };\n";
+        out << "  public static readonly IReadOnlyDictionary<string, IReadOnlyDictionary<string, EntityNotifyInfo>> Inbound =\n"
+               "    new Dictionary<string, IReadOnlyDictionary<string, EntityNotifyInfo>> {\n";
+        for (const auto& e : entities_) {
+            out << "      [\"" << e.name << "\"] = new Dictionary<string, EntityNotifyInfo> {";
+            bool first = true;
+            for (const auto& m : e.client_methods) {
+                if (!first) out << ",";
+                first = false;
+                out << "\n        [\"" << m.name << "\"] = new EntityNotifyInfo(" << m.id << "U, \""
+                    << e.name << "_" << m.name << "Args\")";
+            }
+            out << "\n      },";
+        }
+        out << "\n    };\n";
+        out << "}\n\n"
+               "// Client-side outstanding-call discipline: the mirror of the server's bounded\n"
+               "// RpcQueue. Capacity is fixed at construction, admissions are typed refusals\n"
+               "// rather than silent drops, an injected clock makes deadlines testable, a\n"
+               "// timed-out call stays a surfaced tombstone until Take() (its outcome is\n"
+               "// unknown — it may already have been applied), and Retry() only re-arms a\n"
+               "// call admitted as idempotent with a fresh correlation id, so a\n"
+               "// non-idempotent timeout can never be silently retried. Replies carry no\n"
+               "// correlation on the wire, so the transport pairs a reply with the call it\n"
+               "// belongs to and passes that id here.\n"
+               "public sealed class EntityRpcQueue {\n"
+               "  public sealed class Entry {\n"
+               "    public string State = \"PENDING\";\n"
+               "    public bool Idempotent;\n"
+               "    public (string Type, string Method, IReadOnlyDictionary<string, object> Args)? Tag;\n"
+               "    public IReadOnlyDictionary<string, object>? Response;\n"
+               "    public string? Error;\n"
+               "    public long Deadline;\n"
+               "  }\n"
+               "  private readonly Dictionary<long, Entry> calls = new();\n"
+               "  private long clock;\n"
+               "  private long nextId;\n"
+               "  public EntityRpcQueue(int capacity = 64) {\n"
+               "    if (capacity < 1) throw new InvalidDataException(\"capacity must be a positive integer\");\n"
+               "    Capacity = capacity;\n"
+               "  }\n"
+               "  public int Capacity { get; }\n"
+               "  public int Size => calls.Count;\n"
+               "  public string? Error { get; private set; }\n"
+               "  public long Call(long deadlineMs, bool idempotent = false,\n"
+               "      (string Type, string Method, IReadOnlyDictionary<string, object> Args)? tag = null, long id = 0) {\n"
+               "    Error = null;\n"
+               "    var cid = id != 0 ? id : ++nextId;\n"
+               "    if (cid < 1 || deadlineMs < 1) { Error = \"INVALID\"; return 0; }\n"
+               "    if (calls.ContainsKey(cid)) { Error = \"INVALID\"; return 0; }\n"
+               "    if (calls.Count >= Capacity) { Error = \"CAPACITY\"; return 0; }\n"
+               "    calls[cid] = new Entry { Deadline = clock + deadlineMs, Idempotent = idempotent, Tag = tag };\n"
+               "    return cid;\n"
+               "  }\n"
+               "  public bool Advance(long now) {\n"
+               "    if (now < 0) return false;\n"
+               "    clock = Math.Max(clock, now);\n"
+               "    foreach (var call in calls.Values)\n"
+               "      if (call.State == \"PENDING\" && clock >= call.Deadline) call.State = \"TIMED_OUT\";\n"
+               "    return true;\n"
+               "  }\n"
+               "  public bool Cancel(long id) {\n"
+               "    Error = null;\n"
+               "    if (!calls.TryGetValue(id, out var call) || call.State != \"PENDING\") { Error = \"INVALID\"; return false; }\n"
+               "    call.State = \"CANCELLED\";\n"
+               "    return true;\n"
+               "  }\n"
+               "  public string Complete(long id, IReadOnlyDictionary<string, object>? response = null, string? error = null) {\n"
+               "    if (!calls.TryGetValue(id, out var call)) return \"STALE\";\n"
+               "    if (call.State == \"PENDING\" && clock >= call.Deadline) call.State = \"TIMED_OUT\";\n"
+               "    if (call.State == \"TIMED_OUT\") return \"TIMEOUT\";\n"
+               "    if (call.State == \"CANCELLED\") return \"CANCELLED\";\n"
+               "    if (call.State == \"OK\") return \"CONFLICT\";\n"
+               "    call.State = \"OK\";\n"
+               "    call.Response = response;\n"
+               "    call.Error = error;\n"
+               "    return \"OK\";\n"
+               "  }\n"
+               "  public long? Retry(long oldId, long newDeadlineMs) {\n"
+               "    if (!calls.TryGetValue(oldId, out var call) || call.State != \"TIMED_OUT\"\n"
+               "        || !call.Idempotent || newDeadlineMs < 1) return null;\n"
+               "    var cid = ++nextId;\n"
+               "    calls.Remove(oldId);\n"
+               "    calls[cid] = new Entry { Deadline = clock + newDeadlineMs, Idempotent = true, Tag = call.Tag };\n"
+               "    return cid;\n"
+               "  }\n"
+               "  public Entry? Take(long id) {\n"
+               "    if (!calls.TryGetValue(id, out var call) || call.State == \"PENDING\") return null;\n"
+               "    calls.Remove(id);\n"
+               "    return call;\n"
+               "  }\n"
+               "  public Entry? Get(long id) => calls.TryGetValue(id, out var call) ? call : null;\n"
+               "  public string? State(long id) => calls.TryGetValue(id, out var call) ? call.State : null;\n"
+               "}\n\n"
+               "// The direct Avatar facade: one instance per (type, entity), sending\n"
+               "// envelopes the caller's transport owns and decoding typed returns off the\n"
+               "// method tables above. A call is admitted to the bounded queue before\n"
+               "// anything is sent, so an overflow is refused rather than dropped, and the\n"
+               "// admitted entry keeps the args so a retry re-encodes the same payload under\n"
+               "// a fresh correlation id instead of resending blindly.\n"
+               "public sealed class EntityClient {\n"
+               "  private readonly Action<byte[]> send;\n"
+               "  public EntityClient(Action<byte[]> send, string type, long entityId, uint incarnation = 0,\n"
+               "      uint scope = 0, uint deadlineMs = 5000, int capacity = 64) {\n"
+               "    if (!EntityMethods.TypeIds.TryGetValue(type, out var typeId))\n"
+               "      throw new InvalidDataException(\"unknown entity type \" + type);\n"
+               "    this.send = send;\n"
+               "    Type = type;\n"
+               "    TypeId = typeId;\n"
+               "    EntityId = entityId;\n"
+               "    Incarnation = incarnation;\n"
+               "    Scope = scope;\n"
+               "    DefaultDeadlineMs = deadlineMs;\n"
+               "    Queue = new EntityRpcQueue(capacity);\n"
+               "  }\n"
+               "  public string Type { get; }\n"
+               "  public uint TypeId { get; }\n"
+               "  public long EntityId { get; }\n"
+               "  public uint Incarnation { get; }\n"
+               "  public uint Scope { get; }\n"
+               "  public uint DefaultDeadlineMs { get; }\n"
+               "  public EntityRpcQueue Queue { get; }\n"
+               "  private EntityMethodInfo? Outbound(string method) =>\n"
+               "    EntityMethods.Outbound.TryGetValue(Type, out var table)\n"
+               "      && table.TryGetValue(method, out var info) ? info : null;\n"
+               "  private byte[] Envelope(EntityMethodInfo info, IReadOnlyDictionary<string, object>? args, uint deadlineMs, ulong correlationId) {\n"
+               "    IReadOnlyList<SprotoField> fields = info.Args != null\n"
+               "      && ContractSchemas.Types.TryGetValue(info.Args, out var table) ? table : Array.Empty<SprotoField>();\n"
+               "    var payload = SprotoCodec.Encode(fields, args ?? new Dictionary<string, object>());\n"
+               "    return EntityEnvelopeCodec.Encode(new EntityEnvelope(Scope, TypeId, EntityId, Incarnation,\n"
+               "      0, (ushort)info.Id, correlationId, 0, deadlineMs, payload));\n"
+               "  }\n"
+               "  public (bool Ok, long Id, string? Error) Call(string method,\n"
+               "      IReadOnlyDictionary<string, object>? args = null, uint? deadlineMs = null, bool idempotent = false) {\n"
+               "    var info = Outbound(method);\n"
+               "    if (info == null || info.Mode != \"request\") return (false, 0, \"INVALID\");\n"
+               "    var deadline = deadlineMs ?? DefaultDeadlineMs;\n"
+               "    var id = Queue.Call(deadline, idempotent, (Type, method, args ?? new Dictionary<string, object>()));\n"
+               "    if (id == 0) return (false, 0, Queue.Error);\n"
+               "    send(Envelope(info, args, deadline, (ulong)id));\n"
+               "    return (true, id, null);\n"
+               "  }\n"
+               "  public (bool Ok, string? Error) Notify(string method, IReadOnlyDictionary<string, object>? args = null,\n"
+               "      uint? deadlineMs = null) {\n"
+               "    var info = Outbound(method);\n"
+               "    if (info == null || info.Mode != \"notify\") return (false, \"INVALID\");\n"
+               "    send(Envelope(info, args, deadlineMs ?? DefaultDeadlineMs, 0));\n"
+               "    return (true, null);\n"
+               "  }\n"
+               "  // Malformed replies drop without touching the queue: the correlation stays\n"
+               "  // outstanding rather than vanishing silently.\n"
+               "  public string OnReply(long id, byte[] bytes) {\n"
+               "    var reply = EntityEnvelopeCodec.DecodeReply(bytes);\n"
+               "    if (reply == null) return \"MALFORMED\";\n"
+               "    if (reply.Value.Error != null) return Queue.Complete(id, null, reply.Value.Error);\n"
+               "    var entry = Queue.Get(id);\n"
+               "    if (entry == null) return \"STALE\";\n"
+               "    IReadOnlyDictionary<string, object>? response = null;\n"
+               "    var info = entry.Tag != null ? Outbound(entry.Tag.Value.Method) : null;\n"
+               "    if (info != null && info.Returns != null && reply.Value.Payload.Length > 0\n"
+               "        && ContractSchemas.Types.TryGetValue(info.Returns, out var fields))\n"
+               "      response = SprotoCodec.Decode(fields, reply.Value.Payload);\n"
+               "    return Queue.Complete(id, response);\n"
+               "  }\n"
+               "  public bool Advance(long now) => Queue.Advance(now);\n"
+               "  public bool Cancel(long id) => Queue.Cancel(id);\n"
+               "  public long? Retry(long oldId, uint? deadlineMs = null) {\n"
+               "    var entry = Queue.Get(oldId);\n"
+               "    if (entry == null || entry.Tag == null) return null;\n"
+               "    var deadline = deadlineMs ?? DefaultDeadlineMs;\n"
+               "    var id = Queue.Retry(oldId, deadline);\n"
+               "    if (id == null) return null;\n"
+               "    var info = Outbound(entry.Tag.Value.Method);\n"
+               "    if (info != null) send(Envelope(info, entry.Tag.Value.Args, deadline, (ulong)id));\n"
+               "    return id;\n"
+               "  }\n"
+               "  public EntityRpcQueue.Entry? Take(long id) => Queue.Take(id);\n"
+               "  // Inbound notifies: side must be server, the method id must be this\n"
+               "  // audience's own, and the payload must decode against its table.\n"
+               "  public object? OnNotify(byte[] bytes,\n"
+               "      Func<string, IReadOnlyDictionary<string, object>, object> handler) {\n"
+               "    var env = EntityEnvelopeCodec.Decode(bytes);\n"
+               "    if (env == null || env.Value.Side != 1) return null;\n"
+               "    if (!EntityMethods.Inbound.TryGetValue(Type, out var table)) return null;\n"
+               "    foreach (var pair in table)\n"
+               "      if (pair.Value.Id == env.Value.MethodId) {\n"
+               "        IReadOnlyList<SprotoField> fields = pair.Value.Args != null\n"
+               "          && ContractSchemas.Types.TryGetValue(pair.Value.Args, out var table2) ? table2 : Array.Empty<SprotoField>();\n"
+               "        return handler(pair.Key, SprotoCodec.Decode(fields, env.Value.Payload));\n"
+               "      }\n"
+               "    return null;\n"
+               "  }\n"
                "}\n";
         auto emit_fields = [&](const std::string& name, const ContractArgs& fields) {
             out << "public static class " << name << "Schema { public static readonly SprotoField[] Fields = new SprotoField[] {";
@@ -1205,7 +1617,10 @@ public:
         for (const auto& [name, fields] : structs_) emit_fields(name, fields);
         for (const auto& e : entities_) {
             emit_fields(e.name, properties_of(e));
-            for (const auto& m : e.server_methods) if (client_callable(m)) emit_fields(e.name+"_"+m.name+"Args", m.args);
+            for (const auto& m : e.server_methods) if (client_callable(m)) {
+                emit_fields(e.name+"_"+m.name+"Args", m.args);
+                if (!m.returns.empty()) emit_fields(e.name+"_"+m.name+"Returns", m.returns);
+            }
             for (const auto& m : e.client_methods) emit_fields(e.name+"_"+m.name+"Args", m.args);
         }
         out << "public static class ContractSchemas { public static readonly IReadOnlyDictionary<string, IReadOnlyList<SprotoField>> Types = new Dictionary<string, IReadOnlyList<SprotoField>> {";

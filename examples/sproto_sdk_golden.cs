@@ -246,6 +246,103 @@ internal static class Program
         Throws("reply reason too long", () => EntityEnvelopeCodec.EncodeReply(new EntityEnvelopeCodec.EntityReply(Array.Empty<byte>(), "INVALID", new string('a', 65536))));
         Console.WriteLine("CS_ENTITY_ENVELOPE canonical/extremes/replies and malformed refusals [PASS]");
     }
+    private static void AssertFacade()
+    {
+        // Client-side bounded queue and the direct Avatar facade (the C#
+        // mirror of the JS golden): typed admissions, deadlines on an injected
+        // clock, surfaced timeout tombstones, retry only for idempotent calls
+        // with a fresh correlation id, and envelope bytes straight off the
+        // generated method tables — no .server/.client intermediate layer.
+        var q = new EntityRpcQueue(2);
+        if (q.Call(100, false, null, 7) != 7 || q.Call(100, false, null, 8) != 8)
+            throw new InvalidOperationException("queue admission");
+        if (q.Call(100, false, null, 7) != 0 || q.Error != "INVALID") throw new InvalidOperationException("duplicate not INVALID");
+        if (q.Call(100) != 0 || q.Error != "CAPACITY") throw new InvalidOperationException("overflow not CAPACITY");
+        if (q.Call(0, false, null, 9) != 0 || q.Error != "INVALID") throw new InvalidOperationException("zero deadline not INVALID");
+        if (!q.Advance(-1) == false) throw new InvalidOperationException("negative clock accepted");
+        q.Advance(100);
+        if (q.State(7) != "TIMED_OUT" || q.State(8) != "TIMED_OUT") throw new InvalidOperationException("deadlines not burned");
+        if (q.Complete(7) != "TIMEOUT") throw new InvalidOperationException("late reply not TIMEOUT");
+        if (q.Complete(99) != "STALE") throw new InvalidOperationException("unknown reply not STALE");
+        var tomb = q.Take(7);
+        if (tomb == null || tomb.State != "TIMED_OUT" || tomb.Idempotent) throw new InvalidOperationException("tombstone not surfaced");
+        if (q.Size != 1) throw new InvalidOperationException("take did not release the slot");
+        var cancelled = q.Call(50);
+        if (!q.Cancel(cancelled) || q.Cancel(cancelled) || q.Error != "INVALID") throw new InvalidOperationException("cancel discipline");
+        if (q.Complete(cancelled) != "CANCELLED") throw new InvalidOperationException("reply after cancel");
+        q.Take(cancelled);
+        var doubleReply = q.Call(100);
+        if (q.Complete(doubleReply) != "OK" || q.Complete(doubleReply) != "CONFLICT") throw new InvalidOperationException("double reply not CONFLICT");
+        q.Take(doubleReply);
+        q.Call(100, false, null, 21);
+        q.Advance(200);
+        if (q.Retry(21, 300) != null) throw new InvalidOperationException("non-idempotent timeout retried");
+        if (q.State(21) != "TIMED_OUT") throw new InvalidOperationException("tombstone vanished after refused retry");
+        q.Take(8);  // free one slot; the table below stays at capacity through the retry
+        if (q.Call(100, true, null, 31) != 31) throw new InvalidOperationException("idempotent admission refused");
+        q.Advance(400);
+        var fresh = q.Retry(31, 300);  // full table: the tombstone slot is reused
+        if (fresh == null || fresh == 31 || q.State(31) != null
+            || q.State(fresh.Value) != "PENDING" || !q.Get(fresh.Value).Idempotent)
+            throw new InvalidOperationException("idempotent re-arm");
+        var sent = new List<byte[]>();
+        var client = new EntityClient(sent.Add, "Avatar", 42, 3, 0, 5000, 2);
+        if (client.Call("nope").Ok || client.Call("attack").Ok || client.Notify("getProfile").Ok)
+            throw new InvalidOperationException("facade mode misuse not INVALID");
+        var call = client.Call("getProfile", new Dictionary<string, object> { ["account"] = 9L }, 100, true);
+        if (!call.Ok) throw new InvalidOperationException("call refused");
+        var env = EntityEnvelopeCodec.Decode(sent[0]);
+        if (env == null || env.Value.Side != 0 || env.Value.MethodId != 2 || env.Value.CorrelationId != (ulong)call.Id
+            || env.Value.HostingGeneration != 0 || env.Value.DeadlineMs != 100 || env.Value.EntityId != 42)
+            throw new InvalidOperationException("facade envelope wrong");
+        if (!env.Value.Payload.SequenceEqual(SprotoCodec.Encode(ContractSchemas.Types["Avatar_getProfileArgs"],
+            new Dictionary<string, object> { ["account"] = 9L })))
+            throw new InvalidOperationException("args payload wrong");
+        var second = client.Call("getProfile", new Dictionary<string, object> { ["account"] = 10L }, 100);
+        if (!second.Ok) throw new InvalidOperationException("second call refused");
+        var overflow = client.Call("getProfile", new Dictionary<string, object> { ["account"] = 11L });
+        if (overflow.Ok || overflow.Error != "CAPACITY") throw new InvalidOperationException("facade overflow not typed");
+        var returns = EntityEnvelopeCodec.EncodeReply(new EntityEnvelopeCodec.EntityReply(
+            SprotoCodec.Encode(ContractSchemas.Types["Avatar_getProfileReturns"], new Dictionary<string, object> { ["level"] = 7L }), null, ""));
+        if (client.OnReply(call.Id, returns) != "OK") throw new InvalidOperationException("reply verdict");
+        var done = client.Take(call.Id);
+        if (done == null || done.State != "OK" || done.Error != null || Convert.ToInt64(done.Response["level"]) != 7)
+            throw new InvalidOperationException("typed return lost");
+        // a typed error settles the call: the verdict is OK, the entry carries STALE
+        if (client.OnReply(second.Id, EntityEnvelopeCodec.EncodeReply(new EntityEnvelopeCodec.EntityReply(
+                Array.Empty<byte>(), "STALE", ""))) != "OK")
+            throw new InvalidOperationException("error reply verdict");
+        var settled = client.Take(second.Id);
+        if (settled == null || settled.Error != "STALE" || settled.Response != null)
+            throw new InvalidOperationException("typed error lost");
+        var retryable = client.Call("getProfile", new Dictionary<string, object> { ["account"] = 12L }, 50, true);
+        client.Advance(1000);
+        var first = EntityEnvelopeCodec.Decode(sent[sent.Count - 1]);
+        var resent = client.Retry(retryable.Id, 200);
+        if (resent == null || resent == retryable.Id) throw new InvalidOperationException("retry not fresh");
+        var resentEnv = EntityEnvelopeCodec.Decode(sent[sent.Count - 1]);
+        if (resentEnv.Value.CorrelationId != (ulong)resent.Value || resentEnv.Value.MethodId != 2
+            || !resentEnv.Value.Payload.SequenceEqual(first.Value.Payload))
+            throw new InvalidOperationException("retry envelope wrong");
+        client.Advance(1200);
+        if (client.OnReply(resent.Value, returns) != "TIMEOUT") throw new InvalidOperationException("late reply after deadline");
+        var pending = client.Call("getProfile", new Dictionary<string, object> { ["account"] = 13L });
+        if (client.OnReply(pending.Id, Unhex("0578")) != "MALFORMED" || client.Queue.State(pending.Id) != "PENDING")
+            throw new InvalidOperationException("malformed reply consumed the slot");
+        string noticedName = null;
+        IReadOnlyDictionary<string, object> noticedArgs = null;
+        var notifyBytes = EntityEnvelopeCodec.Encode(new EntityEnvelope(0, 1, -1, 0, 1, 1, 0, 0, 0,
+            SprotoCodec.Encode(ContractSchemas.Types["Avatar_onRewardArgs"], new Dictionary<string, object> { ["itemId"] = 77L })));
+        client.OnNotify(notifyBytes, (name, args) => { noticedName = name; noticedArgs = args; return null; });
+        if (noticedName != "onReward" || Convert.ToUInt32(noticedArgs["itemId"]) != 77U)
+            throw new InvalidOperationException("inbound notify lost");
+        if (client.OnNotify(EntityEnvelopeCodec.Encode(new EntityEnvelope(0, 1, 42, 0, 0, 1, 0, 0, 0, Array.Empty<byte>())),
+                (name, args) => throw new InvalidOperationException("client-side frame delivered as notify")) != null
+            || client.OnNotify(Unhex("0578"),
+                (name, args) => throw new InvalidOperationException("malformed frame delivered as notify")) != null)
+            throw new InvalidOperationException("inbound notify accepted a client-side or malformed frame");
+        Console.WriteLine("CS_ENTITY_CLIENT bounded queue, facade calls/notify/retry and malformed refusals [PASS]");
+    }
     public static int Main()
     {
         AssertVectors();
@@ -253,6 +350,7 @@ internal static class Program
         AssertMalformed();
         AssertEncodeRejections();
         AssertEnvelope();
+        AssertFacade();
         Console.WriteLine("CS_SPROTO_SDK_OK scalar+struct+arrays+bool/string/bytes vectors and decode match the locked bytes");
         return 0;
     }
