@@ -1422,21 +1422,31 @@ void core_contracts() {
         return schema.substr(at, end-at);
     };
     const auto hp = block("<xs:element name=\"hp\" ");
-    require(hp.find("<xs:enumeration xs:value=\"2\"/>") != std::string::npos &&
-            hp.find("<xs:enumeration xs:value=\"UINT32\"/>") != std::string::npos &&
+    require(hp.find("<xs:enumeration value=\"2\"/>") != std::string::npos &&
+            hp.find("<xs:enumeration value=\"UINT32\"/>") != std::string::npos &&
             hp.find("type=\"ReplicationFlags\"") != std::string::npos,
             "the schema does not pin a property's id, type and flags: "+hp);
-    require(block("<xs:element name=\"Property\" ").find("<xs:enumeration xs:value=\"5\"/>") !=
+    require(schema.find("<xs:element name=\"TypesSource\"") < schema.find("<xs:element name=\"Types\"") &&
+            schema.find("<xs:element name=\"Types\"") < schema.find("<xs:element name=\"Entity\"") &&
+            schema.find("<xs:complexType><xs:sequence>") != std::string::npos,
+            "the schema does not restate the shared document skeleton");
+    require(schema.find("<xs:attribute name=\"path\" use=\"required\"/>") != std::string::npos &&
+            schema.find("<xs:element name=\"Types\"") != std::string::npos,
+            "the schema lost the shared type-source rules");
+    require(block("<xs:element name=\"Property\" ").find("<xs:enumeration value=\"5\"/>") !=
             std::string::npos, "the schema does not pin a reserved property id");
-    require(block("<xs:element name=\"ClientMethod\" ").find("<xs:enumeration xs:value=\"7\"/>") !=
+    require(block("<xs:element name=\"ClientMethod\" ").find("<xs:enumeration value=\"7\"/>") !=
             std::string::npos, "the schema does not pin a reserved client method id");
-    require(block("<xs:element name=\"Field\" ").find("<xs:enumeration xs:value=\"UINT16\"/>") !=
+    require(block("<xs:element name=\"Field\" ").find("<xs:enumeration value=\"UINT16\"/>") !=
             std::string::npos, "the schema lost the request's typed return");
     const auto attr = [&](const char* key, const std::string& value) {
         return std::string("<xs:attribute name=\"")+key+"\" use=\"required\"><xs:simpleType>"
-            "<xs:restriction base=\"xs:string\"><xs:enumeration xs:value=\""+value+
+            "<xs:restriction base=\"xs:string\"><xs:enumeration value=\""+value+
             "\"/></xs:restriction></xs:simpleType></xs:attribute>";
     };
+    require(schema.find(attr("id", "2")) != std::string::npos &&
+            schema.find(attr("type", "UINT32")) != std::string::npos,
+            "the generated schema pins a member id and declared type");
     require(schema.find(attr("mode", "request")) != std::string::npos &&
             schema.find(attr("mode", "notify")) != std::string::npos,
             "the schema does not pin the declared modes");
@@ -1447,10 +1457,26 @@ void core_contracts() {
     require(schema.find(attr("name", "attack")) != std::string::npos &&
             schema.find(attr("id", "1")) != std::string::npos,
             "the schema does not pin member names and ids");
-    require(schema.find("<xs:enumeration xs:value=\"Inventory\"/>") != std::string::npos &&
+    require(schema.find("<xs:attribute name=\"id\"") != std::string::npos &&
+            schema.find("<xs:attribute name=\"type\"") != std::string::npos,
+            "the schema attribute order is malformed");
+    for (const auto* tag : {"TypesSource", "Types", "Entity", "Properties",
+                            "ServerMethods", "ClientMethods", "Reserved"})
+        require(schema.find("<xs:element name=\""+std::string(tag)+"\"") !=
+                std::string::npos &&
+                schema.find("<xs:element name=\""+std::string(tag)+"\"") ==
+                schema.rfind("<xs:element name=\""+std::string(tag)+"\""),
+                "the schema emitted duplicate shared element "+std::string(tag));
+    require(schema.find("<xs:enumeration value=\"Inventory\"/>") != std::string::npos &&
             schema.find("<xs:element name=\"Inventory\"") != std::string::npos &&
             schema.find("name=\"capacity\"") != std::string::npos,
             "the schema lost the declared structs");
+    for (const auto* reserved_name : {"Types", "Entity", "Properties",
+                                      "ServerMethods", "ClientMethods", "Reserved",
+                                      "Method", "Returns"}) {
+        const auto text = std::string("<Contracts><Types><")+reserved_name+"></"+reserved_name+"></Types></Contracts>";
+        must_fail([&] { (void)EntityContract(text); });
+    }
     require(contract.xsd().find("name=\"Reserved\"") == std::string::npos,
             "an empty Reserved group must not appear in the schema");
     require(!EntityContract::well_formed("<Contracts><A><B/></Contracts>"),

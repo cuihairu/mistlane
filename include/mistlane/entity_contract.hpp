@@ -222,6 +222,9 @@ public:
         enum_block(out, "ServerCaller", {"owner", "server"});
         enum_block(out, "ClientAudience", {"owner"});
         out << "  <xs:element name=\"Contracts\"><xs:complexType><xs:sequence>";
+        out << "<xs:element name=\"TypesSource\" minOccurs=\"0\" maxOccurs=\"1\">"
+            << "<xs:complexType><xs:attribute name=\"path\" use=\"required\"/></xs:complexType>"
+            << "</xs:element>";
         if (!structs_.empty()) {
             out << "<xs:element name=\"Types\" minOccurs=\"0\" maxOccurs=\"1\"><xs:complexType>"
                 << "<xs:choice>";
@@ -1946,12 +1949,12 @@ private:
     static void enum_block(std::ostringstream& out, const std::string& name,
                            const std::vector<std::string>& values) {
         out << "  <xs:simpleType name=\"" << name << "\"><xs:restriction base=\"xs:string\">";
-        for (const auto& value : values) out << "<xs:enumeration xs:value=\"" << value << "\"/>";
+        for (const auto& value : values) out << "<xs:enumeration value=\"" << value << "\"/>";
         out << "</xs:restriction></xs:simpleType>\n";
     }
     static void pinned(std::ostringstream& out, const char* key, const std::string& value) {
         out << "<xs:attribute name=\"" << key << "\" use=\"required\"><xs:simpleType>"
-            << "<xs:restriction base=\"xs:string\"><xs:enumeration xs:value=\"" << value
+            << "<xs:restriction base=\"xs:string\"><xs:enumeration value=\"" << value
             << "\"/></xs:restriction></xs:simpleType></xs:attribute>";
     }
     static void group(std::ostringstream& out, const std::string& group, const std::string& body) {
@@ -1977,8 +1980,10 @@ private:
         out << "</xs:complexType></xs:element>";
     }
     static void entity_element(std::ostringstream& out, const ContractEntity& e) {
-        out << "<xs:element name=\"Entity\" minOccurs=\"0\" maxOccurs=\"1\"><xs:complexType><xs:choice>";
-        out << "<xs:element name=\"" << e.name << "\" minOccurs=\"1\" maxOccurs=\"1\"><xs:complexType>";
+        out << "<xs:element name=\"Entity\" minOccurs=\"0\" maxOccurs=\"1\">"
+            << "<xs:complexType><xs:choice>";
+        out << "<xs:element name=\"" << e.name << "\" minOccurs=\"1\" maxOccurs=\"1\">"
+            << "<xs:complexType><xs:sequence>";
         std::ostringstream props, server, client, reserved;
         for (const auto& p : e.properties)
             member_element(props, ContractField{p.name, p.type, p.of, p.default_value, p.id}, true);
@@ -1997,6 +2002,7 @@ private:
         group(out, "ServerMethods", server.str());
         group(out, "ClientMethods", client.str());
         group(out, "Reserved", reserved.str());
+        out << "</xs:sequence>";
         pinned(out, "name", e.name);
         pinned(out, "id", std::to_string(e.id));
         out << "</xs:complexType></xs:element>";
@@ -2155,6 +2161,11 @@ private:
         for (unsigned char ch : name)
             if (!((ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || (ch >= '0' && ch <= '9') || ch == '_'))
                 throw ContractError(what+": name '"+name+"' is not [A-Za-z0-9_]");
+        static const std::set<std::string_view> reserved{
+            "Types", "TypesSource", "Entity", "Properties", "ServerMethods",
+            "ClientMethods", "Reserved", "Method", "Returns"};
+        if (reserved.count(name))
+            throw ContractError(what+": name '"+name+"' is a reserved XML element name");
     }
     static bool basic_type(const std::string& type) {
         return type == "BOOL" || type == "INT32" || type == "UINT16" || type == "UINT32"
