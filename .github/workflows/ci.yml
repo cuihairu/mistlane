@@ -9,7 +9,7 @@ jobs:
       VCPKG_ROOT: ${{ github.workspace }}/.vcpkg
       VCPKG_DISABLE_METRICS: '1'
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7.0.1
       - name: Bootstrap pinned vcpkg checkout
         run: |
           # Versioned ports may reference older trees: keep the registry history.
@@ -26,7 +26,7 @@ jobs:
       contents: read
       pages: read
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7.0.1
         with:
           fetch-depth: 0
       - uses: actions/setup-node@v7.1.0
