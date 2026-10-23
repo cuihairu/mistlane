@@ -4,7 +4,7 @@ permissions:
   contents: read
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
     env:
       VCPKG_ROOT: ${{ github.workspace }}/.vcpkg
       VCPKG_DISABLE_METRICS: '1'
@@ -21,7 +21,7 @@ jobs:
       - run: ctest --preset linux-debug
       - run: python3 tools/export.py
   docs:
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
     permissions:
       contents: read
       pages: read
@@ -48,7 +48,7 @@ jobs:
   deploy-docs:
     if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
     needs: docs
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
     permissions:
       pages: write
       id-token: write
