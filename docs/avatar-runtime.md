@@ -12,7 +12,7 @@ Status: decided design (2026-10-19). The framework today has sessions, framing, 
 | Lua execution | One VM per node, serial on the Asio thread; protected calls with an instruction-count budget (~1M instructions) catching runaway loops; `message` errors close the session, `tick` errors are logged |
 | Node hooks | `init`/`start`/`message`/`http`/`tick`/`stop`/`shutdown` and the websocket trio; **no player connect/disconnect hooks** |
 | Reload | SIGHUP loads a candidate VM, swaps, retires the old through `stop`/`shutdown`; reload resets module state and exports nothing |
-| Placement | `mistlane.place(role, scope?, callback)` against the coordinator registry |
+| Placement | `mistlane.place(role, namespace?, scope?, callback)` against the coordinator registry |
 | Avatar | Does not exist. No character object, no load path, no save entry, no transfer |
 
 A node that only provides `message` has request handling, not a character runtime. That gap is exactly why this page exists: lifetime, state ownership and transfer need their own contract.
@@ -91,7 +91,7 @@ Three properties are the point of this surface:
 
 - Handlers already executing finish before a transfer begins; handlers arriving during `transferring`/`loading`/`suspended` are refused with an explicit failure. Bounded queues remain where they are today: at the session and transport layer.
 - Avatar-owned timers stop when a transfer starts and re-arm only if the transferred snapshot declares them; undeclared timers do not travel.
-- A reconnect never resurrects a closed avatar. In this design the coordinator holds a per-character route record that sends a new session to the current host — the wire verbs exist as `MLR1 ROUTE SET/GET` (routes follow the member, GET answers live state), but there is no Lua binding yet, so a host would have to speak them over framed TCP; a failed transfer leaves the route on the source, and re-entry always goes through `loading`.
+- A reconnect never resurrects a closed avatar. In this design the coordinator holds a per-character route record that sends a new session to the current host — the wire verbs exist as `MLR1 ROUTE SET NS <namespace>`/`MLR1 ROUTE GET NS <namespace>` (the `NS` group is required, routes follow the member, GET answers live state), but there is no Lua binding yet, so a host would have to speak them over framed TCP; a failed transfer leaves the route on the source, and re-entry always goes through `loading`.
 - A VM replacement (SIGHUP) is a node-level retirement, not an avatar migration: every avatar in the old VM gets a best-effort `avatar_save` and then closes; sessions re-enter through `loading` after the swap. This keeps the existing honest rule — reload does not migrate state.
 
 ## Errors, timeouts and reentrancy

@@ -46,7 +46,7 @@ public:
     // Asks the coordinator registry for one placement and fires the callback
     // once on the event loop thread: address non-empty on success, otherwise
     // address empty and reason a short machine-readable word.
-    virtual void place(std::string_view role, std::string_view scope,
+    virtual void place(std::string_view role, std::string_view namespace_, std::string_view scope,
         std::function<void(std::string_view address, std::string_view reason)> answer) = 0;
 };
 class RedisRuntime {

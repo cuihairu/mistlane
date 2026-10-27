@@ -205,13 +205,15 @@ end
 -- Placement replies must be sent from the callback: mistlane.place answers
 -- after this handler returns, so a return value cannot carry the address.
 function M.message(payload, context)
-  local role, scope = payload:match("place (%S+) ?(%S*)")
+  local role, namespace_, scope = payload:match("place (%S+) ?(%S*) ?(%S*)")
   if not role then
-    return "usage: place <role> [scope]"
+    return "usage: place <role> [namespace] [scope]"
   end
-  mistlane.place(role, scope ~= "" and scope or nil, function(err, address)
+  local namespace_arg = namespace_ ~= "" and namespace_ ~= "-" and namespace_ or nil
+  mistlane.place(role, namespace_arg, scope ~= "" and scope or nil,
+    function(err, address)
     mistlane.session.send(context.session, err and ("ERR " .. err) or ("OK " .. address))
-  end)
+    end)
   return nil
 end
 

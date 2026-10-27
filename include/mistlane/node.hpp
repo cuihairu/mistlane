@@ -33,6 +33,8 @@ struct Config {
     // the deployment slice (a region or a cross-group) the member serves.
     Endpoint coordinator{"127.0.0.1", 7200};
     bool coordinator_enabled = false;
+    std::string namespace_;
+    bool namespace_wire = false;
     std::string scope = "main";
     std::string script;
     Endpoint redis{"127.0.0.1", 6379};

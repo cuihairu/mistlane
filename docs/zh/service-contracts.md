@@ -18,14 +18,14 @@ login 拥有进入流程：验证账号、展示角色列表、取得承载分�
 | 传输 | 与会话角色一致的帧式 TCP（或经 gateway 的 WS）；配置令牌时内部链路使用 `MLS1` 身份 |
 | 对端 | 入向：客户端与 gateway；出向：coordinator 注册表（以注册表客户端身份 `MLR1 QUERY`/`MLR1 PLACE`）、data（入场前必须取回的角色列表/存档） |
 | Lua 面 | 同一套 `message`/`init`/`start`/`tick`/`stop`/`shutdown` 钩子；login 处理器应答认证、角色列表与进入请求；没有场景或 Avatar 对象 |
-| 承载分配 | login 向 coordinator 发 `MLR1 PLACE gameServer <scope>` 并在进入应答中带回分配地址；不得把地址写进持久记录（职责规则）；`MLR1 EMPTY` 是进入拒绝，不是可吞掉的错误 |
+| 承载分配 | login 向 coordinator 发 `MLR1 PLACE gameServer [NS <namespace>] <scope>` 并在进入应答中带回分配地址；不得把地址写进持久记录（职责规则）；`MLR1 EMPTY` 是进入拒绝，不是可吞掉的错误 |
 | 进入上下文 | 进入应答携带来源区服、角色标识、归属 data 签发的承载 generation、返回路由及 login 凭据；gameServer 与后续 crossServer 使用同一参与者上下文 |
 | 认证边界 | 凭据验证是应用层 Lua 决策；服务之间，进入凭据是已拍板的 HMAC-SHA256 短时效凭据，其 C++ 签发/验证原语已作为 MLT1 实现（见上方决定）。线形已绑定：凭据随 `MLC1` 的 `tk` 尾缀上行，解码失败的尾缀整次握手拒绝。验证已接线：配置 `MISTLANE_TICKET_SECRETS` 的 crossServer 在握手上验证凭据（失败答 `MLC1 ERR TICKET`，脚本经 `context.verified` 读取结论）；声明表按进程且易失。仍未接线：login 侧签发路径（Lua 沙箱不开密码库）与围绕分配的完整入场流程 |
 | 状态 | login 至多持有连接状态与未完成的承载记录；没有任何持久数据。进入应答之后，角色路由归属 gameServer/coordinator，而不是 login |
 
 generation 生命周期（设计，非运行时）：分配选出目标实例后，login 向归属 data 请求 `(realm, character, target instance)` 授权。归属 data 是唯一 generation 权威：新键从 1 开始；重新分配或接管须持久分配严格更大的 generation，栅栏/墓碑旧授权，并按[有序租约交接](./cross-return-protocol.md#写入租约交接)激活目标。中止或超时后不得复用已分配 generation。login 在进入上下文返回 data 签发的 generation，并与目标实例一起绑定进凭据；接收宿主在持久写前验证凭据及归属 data 的有效授权。宿主不能自发或推进 generation。当前 MLD1 LOAD 只观察内存记录，SUBMIT 接受更大数字不构成租约授权。授权/预留/激活线消息、持久权威与宿主的凭据验证（含区服秘钥配置）仍归归属执行缺口，尚未实现；凭据编码与线形已随 `MLC1` 的 `tk` 尾缀落地。
 
-接线状态：已可作为脚本服务启动（`--role login` 加 `--script`，帧式会话与标准钩子）；`--coordinator ADDR:PORT [--scope NAME]` 接通注册表客户端——Lua `mistlane.place(role, scope?, callback)` 每次查询经新连接发起 `MLR1 PLACE`，把分配地址（或原因）交回脚本。进入凭据 C++ 原语已作为 MLT1 实现（规范字节签发/验证、区服秘钥、身份/过期/重放校验），凭据也随 `MLC1` 的 `tk` 尾缀上行，但没有宿主验证它：尚无区服秘钥配置，Lua 沙箱也仍不开启任何密码库。同样未实现：分配外围的完整进入流程。
+接线状态：已可作为脚本服务启动（`--role login` 加 `--script`，帧式会话与标准钩子）；`--coordinator ADDR:PORT [--namespace NAME] [--scope NAME]` 接通注册表客户端——Lua `mistlane.place(role, namespace?, scope?, callback)` 每次查询经新连接发起 `MLR1 PLACE`，把分配地址（或原因）交回脚本。进入凭据 C++ 原语已作为 MLT1 实现（规范字节签发/验证、区服秘钥、身份/过期/重放校验），凭据也随 `MLC1` 的 `tk` 尾缀上行，但没有宿主验证它：尚无区服秘钥配置，Lua 沙箱也仍不开启任何密码库。同样未实现：分配外围的完整进入流程。
 
 ## data
 

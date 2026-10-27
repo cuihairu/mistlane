@@ -9,7 +9,7 @@
 | 传输与监听 | TCP 使用四字节大端长度帧，载荷上限 1 MiB；WS 消息映射为单个载荷。HTTP/HTTPS 承载请求/响应；WS/WSS 监听器与升级分别进入游戏会话或 Lua HTTP 生命周期。每进程可配置多监听器。 | [architecture.md 执行与连接模型](../architecture.md#execution-and-connection-model)、[http.md 服务端、多监听器](../http.md#server) |
 | 传输控制 | 可选 `MLC2` 在载荷内增加 u32 BE 请求 ID（响应回显、推送用 0）；可选 `MLS1` 认证内部服务链路；可选 `MLM1` 在认证后的上游复用逻辑会话。三者属于不同层；`MLC1` 跨服路由不与 MLC2/MLM1 模式混用。 | [architecture.md:66–70](../architecture.md#execution-and-connection-model)、[validation.md 服务身份/多路复用行](../validation.md) |
 | 路由与跨服 | `MLC1` 是 gateway 跨服路由/准入握手，可选携带全有或全无的参与者后缀（`ch`、`gen`、`ret`）。它选择静态房间/组亲和与准入，不等于动态角色分配或迁移。`PROBE1` 提供就绪/过载检查。 | [cross-server.md](../cross-server.md)、[cross-return-protocol.md 参与者与返回上下文](../cross-return-protocol.md#参与者与返回上下文)、[architecture-comparison.md:53–60](../architecture-comparison.md) |
-| coordinator 控制面 | `MLR1` 在具名作用域内提供成员注册、心跳、QUERY/PLACE 和 ROUTE SET/GET。注册携带就绪/负载；现有路由记录指向当前已注册成员。类型化迁移事务模型由同一注册表链路上的 `MLR1 MIG` OWNER/PREPARE/EVENT/COMMIT/ABORT/RETIRE/STATUS 驱动（MLS1 门禁、按请求 ID 幂等、注册表驱动的退役）；状态仍仅存于内存，无共享归属权威。 | [process-roles.md 当前实现](../process-roles.md#当前实现)、todo.md:48–51 |
+| coordinator 控制面 | `MLR1` 在带命名空间的作用域内提供成员注册、心跳、QUERY/PLACE 和 ROUTE SET/GET。注册携带就绪/负载；现有路由记录指向当前已注册成员。类型化迁移事务模型由同一注册表链路上的 `MLR1 MIG` OWNER/PREPARE/EVENT/COMMIT/ABORT/RETIRE/STATUS 驱动（MLS1 门禁、按请求 ID 幂等、注册表驱动的退役）；状态仍仅存于内存，无共享归属权威。 | [process-roles.md 当前实现](../process-roles.md#当前实现)、todo.md:48–51 |
 | 回传与数据 | `MLD1 LOAD/SUBMIT` 是 `data` 上的帧式 TCP 端点；它执行 generation 栅栏、按 `(realm, character)` 连续序号及重复回执。`RECEIVED` 只是进程内回执；没有持久 ACK 或存储链。每参与者有序发送队列边界已实现但尚未接入 crossServer 运行时。 | [cross-return-protocol.md 回传与持久化确认](../cross-return-protocol.md#回传与持久化确认-mld1)、[service-contracts.md data](../service-contracts.md#data)、[validation.md MLD1 行](../validation.md) |
 | 实体契约与同步 | XML `.def` 已生成 XSD/lock/digest、sproto 及 C++/JS/C# 原型绑定，`contract compat` 比较发布锁。已有上游线向量、派发器与进程内实体/RPC 夹具。完整网络 envelope/error 编码、生产 codec、运行时加载、属性复制与持久化仍开放（缺口 7）。 | [entity-contract.md](./entity-contract.md)、[实现证据](./bigworld-like-protocol.md#已实现状态与证据)、[validation.md 契约/SDK 行](./validation.md) |
 | 服务契约 | `login` 是面向客户端的脚本角色与 MLR1 分配客户端；`data` 是归属侧记录端点；可选 `apiServer` 是外部 HTTP 入口。MLS1 是服务链路身份。login 凭据已决定为 HMAC-SHA256；MLT1 的 C++ 签发/验证原语已实现、凭据随 `MLC1` 的 `tk` 尾缀上行，但尚无宿主验证。 | [service-contracts.md](../service-contracts.md)、[process-roles.md 跨区数据归属](../process-roles.md#cross-region-data-ownership) |
@@ -88,15 +88,17 @@
 
 | 动词 | 行 | 判决 |
 |---|---|---|
-| `OWNER` | `MLR1 MIG OWNER <realm> <character> <gen> <owner>` | `OWNER OK`；与既有事实不一致 `ERR CONFLICT`；模型会拒绝的形状 `ERR INVALID` |
-| `PREPARE` | `... PREPARE <realm> <character> <id> <gen> <expected> <destination>` | `PREPARED <id> <next-gen>`；`ERR EMPTY`（无事实）、`STALE`（从未发布的预期路由）、`CONFLICT`（改动请求体或并发请求）、`ORDER`（源仍在执行） |
-| `EVENT` | `... EVENT <realm> <character> <id> <gen> <DRAINED\|FENCE\|READY\|CLEANUP>` | `STEP <id> <STATE>`；栅栏后工作等待中 `PENDING <id>`；跳步 `ERR ORDER` |
-| `COMMIT` | `... COMMIT <realm> <character> <id> <gen>` | `COMMITTED <id> <published-owner> <generation>`（含重放） |
-| `ABORT` | `... ABORT <realm> <character> <id> <gen>` | `ABORTING <id>`（回滚已排程）；终态后 `ABORTED <id>` |
-| `RETIRE` | `... RETIRE <realm> <character> <id> <gen> <owner>` | `ABORTED <id>` / `PENDING <id>` —— 与 `retire_member` 相同的裁定 |
-| `STATUS` | `... STATUS <realm> <character>` | `STATE idle <owner> <gen>`、`STATE <id> <STATE> <drained\|open> <fenced\|unfenced> <ready\|notready> <gen>` 或 `MLR1 EMPTY` |
+| `OWNER` | `MLR1 MIG OWNER [NS <ns>] <realm> <character> <gen> <owner>` | `OWNER OK`；与既有事实不一致 `ERR CONFLICT`；模型会拒绝的形状 `ERR INVALID` |
+| `PREPARE` | `... PREPARE [NS <ns>] <realm> <character> <id> <gen> <expected> <destination>` | `PREPARED <id> <next-gen>`；`ERR EMPTY`（无事实）、`STALE`（从未发布的预期路由）、`CONFLICT`（改动请求体或并发请求）、`ORDER`（源仍在执行） |
+| `EVENT` | `... EVENT [NS <ns>] <realm> <character> <id> <gen> <DRAINED\|FENCE\|READY\|CLEANUP>` | `STEP <id> <STATE>`；栅栏后工作等待中 `PENDING <id>`；跳步 `ERR ORDER` |
+| `COMMIT` | `... COMMIT [NS <ns>] <realm> <character> <id> <gen>` | `COMMITTED <id> <published-owner> <generation>`（含重放） |
+| `ABORT` | `... ABORT [NS <ns>] <realm> <character> <id> <gen>` | `ABORTING <id>`（回滚已排程）；终态后 `ABORTED <id>` |
+| `RETIRE` | `... RETIRE [NS <ns>] <realm> <character> <id> <gen> <owner>` | `ABORTED <id>` / `PENDING <id>` —— 与 `retire_member` 相同的裁定 |
+| `STATUS` | `... STATUS [NS <ns>] <realm> <character>` | `STATE idle <owner> <gen>`、`STATE <id> <STATE> <drained\|open> <fenced\|unfenced> <ready\|notready> <gen>` 或 `MLR1 EMPTY` |
 
-`<owner>` 形如 `<realm|cross> <scope> <role> <instance> <scene>`；标识符沿用注册表的 `[A-Za-z0-9_-]` 上限（64）。行长上限 1024 字节（小型注册表帧为 256），形状拒绝沿用注册表词汇（`ERR INVALID`/`ERR UNEXPECTED`）；成员离开注册表会退役认领了其 `(scope, role, instance)` 的在途事务——coordinator 从成员资格观察到这一点，无需任何消息。
+`NS <ns>` 组在每个动词上都是可选的，紧跟在动词之后——省略或写 `-` 即默认组；这里拒绝裸位置参数命名空间，使按两作用域语法写出的帧仍指默认组。`<owner>` 形如 `<realm|cross> NS <ns> <scope> <role> <instance> <scene>`，与注册表动词同一组写法，因此带命名空间的 owner 不会与默认组的同名。标识符沿用注册表的 `[A-Za-z0-9_-]` 上限（64）。行长上限 1024 字节（小型注册表帧为 256），形状拒绝沿用注册表词汇（`ERR INVALID`/`ERR UNEXPECTED`）；成员离开注册表会退役认领了其 `(namespace, scope, role, instance)` 的在途事务——coordinator 从成员资格观察到这一点，无需任何消息。
+
+**命名空间作用域（2026-10-27）。** 每个注册表动词都加入了命名空间：`REGISTER` 与 `QUERY` 取可选组（位置参数 `<namespace>` 或 `NS <namespace>`，`-` 为默认组），`PLACE` 取 `<role> [NS <ns>] <scope>`，`ROUTE SET`/`GET` 取**必填**的 `NS <ns>` 组——旧的两参数 `ROUTE GET` 会得 `ERR INVALID`，而不是被当成空命名空间——`MIG` 各动词在动词后取可选组，如上。路由记录与迁移事实以 `(namespace, realm, character)` 为键；成员资格、路由与退役声明以 `(namespace, scope, role, instance)` 为键，因此成员离开只退役认领了该命名空间身份的在途事务。成员用 `--namespace NAME` 选择组（仅在 gameServer/crossServer/login 有效，与 `--scope` 一并要求 `--coordinator`），`mistlane.place(role, namespace?, scope?, callback)` 可查询具名组——在空组查询得 `EMPTY`，绝不报解析错误。
 
 线协议继承模型的边界，不变：迁移线在 MLS1 之外不做对端认证，journal 与 generation 均易失，coordinator 从不自行发送事件（DRAINED 是源的断言，EVENT 不区分发送方），且没有栅栏后的接管。`coordinator.migration.wire`（ctest 56/56）覆盖完整 OWNER→COMMIT 正向路径、重放/过期/冲突/顺序拒绝、经 CLEANUP 完成的中止（generation 已消耗）、被 SIGTERM 成员的注册表驱动退役、两种 RETIRE 拒绝、tokened coordinator 上 MLS1 门禁与其自身事实，以及形状/负载拒绝矩阵。
 

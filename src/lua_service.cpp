@@ -339,16 +339,18 @@ int LuaService::placement_call(lua_State* l) {
         return std::string(data, size);
     };
     const auto role = word(1, "role");
+    std::string namespace_;
     std::string scope;
-    if (!lua_isnil(l, 2)) scope = word(2, "scope");
-    if (!lua_isfunction(l, 3)) throw std::runtime_error("last argument must be a callback function");
-    lua_pushvalue(l, 3);
+    if (!lua_isnil(l, 2)) namespace_ = word(2, "namespace");
+    if (!lua_isnil(l, 3)) scope = word(3, "scope");
+    if (!lua_isfunction(l, 4)) throw std::runtime_error("last argument must be a callback function");
+    lua_pushvalue(l, 4);
     const auto callback = luaL_ref(l, LUA_REGISTRYINDEX);
     const auto life = service->async_context_;
     if (!service->placement_sink_)
         return finish_lua(life, callback, "placement is disabled; start with --coordinator IP:PORT",
             [](lua_State* l) { lua_pushnil(l); }), 0;
-    service->placement_sink_->place(role, scope,
+    service->placement_sink_->place(role, namespace_, scope,
         [life, callback](std::string_view address, std::string_view reason) {
             if (!reason.empty())
                 return finish_lua(life, callback, std::string(reason), [](lua_State* l) { lua_pushnil(l); });

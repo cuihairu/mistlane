@@ -51,7 +51,7 @@ stateDiagram-v2
 `mistlane.websocket.send(id, payload)` 向一个 WebSocket 会话定向推送，成功返回 true，失败返回 false 与原因。详见[多监听与 WebSocket 生命周期](./http.md#多监听与-websocket-生命周期)。
 
 帧式游戏会话在监听组合含 tcp/ws/wss 时暴露 `mistlane.session.send(id, payload)` 与 `mistlane.session.broadcast(payload)`。`send` 成功返回 true，失败返回 false 与原因（`unknown session id`、`payload exceeds 1 MiB`、会话输出约 2 MiB 上限打满时的 `session backlogged`）；`broadcast` 向所有存活帧式会话投递并返回被接受的会话数。`id` 即 message context 中的会话身份。不回复的 handler（返回 nil）与推送可自由组合：写请求按通道排队，推送先于响应到达，顺序保持。关联模式（`MLC2`）下推送帧携带请求 ID 0，响应回显 `context.request`。
-以 `--coordinator IP:PORT` 启动的节点上的脚本另可使用 `mistlane.place(role, scope?, callback)`：向注册表查询一次分配，回调在 handler 返回之后才触发，参数为（`nil`, 监听地址）或（`reason`, `nil`），因此应答须在回调里用 `mistlane.session.send` 推送。没有 `--coordinator` 时该调用报 `placement is disabled; start with --coordinator IP:PORT`。
+以 `--coordinator IP:PORT` 启动的节点上的脚本另可使用 `mistlane.place(role, namespace?, scope?, callback)`：向注册表查询一次分配，回调在 handler 返回之后才触发，参数为（`nil`, 监听地址）或（`reason`, `nil`），因此应答须在回调里用 `mistlane.session.send` 推送。可选的 `namespace` 命名与 scope 独立的部署组，在空组查询得 `EMPTY` 而不是解析错误。没有 `--coordinator` 时该调用报 `placement is disabled; start with --coordinator IP:PORT`。
 
 除监听组合要求的 message/http 外均可选；nil 表示缺省。字段存在但不是函数会在调用时失败。没有 on_connect/on_disconnect 玩家登录钩子；连接生命周期不等同于业务登录。原游戏全局 Timer、SQLService、C_* 和协议没有直接迁入。
 

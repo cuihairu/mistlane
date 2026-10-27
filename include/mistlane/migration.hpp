@@ -11,6 +11,9 @@ struct MigrationScope {
     enum class Kind { Realm, CrossGroup };
     Kind kind = Kind::Realm;
     std::string realm, cross_group;
+    // Distinct coordinator groups may reuse a realm or cross-group name. An
+    // empty namespace is the wire-compatible default group.
+    std::string namespace_;
     bool operator==(const MigrationScope&) const = default;
 };
 struct MigrationOwner {
@@ -31,6 +34,7 @@ struct HomeOwnership {
     bool operator==(const HomeOwnership&) const = default;
 };
 inline bool valid_migration_owner(const MigrationOwner& owner) {
+    if (!owner.scope.namespace_.empty() && !record_identifier(owner.scope.namespace_)) return false;
     if (!record_identifier(owner.instance) || !record_identifier(owner.scene)) return false;
     if (owner.scope.kind == MigrationScope::Kind::Realm)
         return owner.role == "gameServer" && record_identifier(owner.scope.realm) && owner.scope.cross_group.empty();

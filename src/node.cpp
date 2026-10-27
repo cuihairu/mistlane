@@ -1317,34 +1317,39 @@ bool endpoint_text(std::string_view text, std::string& address, unsigned& port) 
 // lives, heartbeats only refresh readiness and load. Listing order is ready
 // first, then the lighter share of capacity, then the instance name, so a
 // placement is deterministic for a given snapshot.
+std::string registry_member_text(const std::string& namespace_) {
+    return namespace_.empty() ? "-" : namespace_;
+}
 class Registry {
 public:
     struct Member {
-        std::string role, instance, scope, listen;
+        std::string role, instance, scope, namespace_, listen;
         unsigned probe = 0;
         bool ready = false;
         std::size_t active = 0, capacity = 0;
     };
     bool upsert(Member member, void* owner) {
-        const auto key = member.scope+'\x1'+member.role+'\x1'+member.instance;
+        const auto key = member_key(member.namespace_, member.scope, member.role, member.instance);
         auto found = members_.find(key);
         if (found == members_.end()) {
             members_.emplace(std::move(key), std::make_pair(std::move(member), owner));
             return true;
         }
         // A duplicate key from another live connection loses: one owner per
-        // (scope, role, instance), and the freshest registration wins nothing.
+        // (namespace, scope, role, instance), and a freshest registration
+        // wins nothing.
         if (found->second.second != owner) return false;
         found->second.first = std::move(member);
         return true;
     }
-    bool retire(const std::string& scope, const std::string& role,
-                const std::string& instance, void* owner) {
-        auto found = members_.find(scope+'\x1'+role+'\x1'+instance);
+    bool retire(const std::string& namespace_, const std::string& scope, const std::string& role,
+                const std::string& instance,
+                void* owner) {
+        auto found = members_.find(member_key(namespace_, scope, role, instance));
         if (found == members_.end() || found->second.second != owner) return false;
         members_.erase(found);
-        drop_routes(scope, role, instance);
-        retire_members(scope, role, instance);
+        drop_routes(scope, namespace_, role, instance);
+        retire_members(scope, namespace_, role, instance);
         return true;
     }
     // Character route record: the registry also remembers which live member
@@ -1357,24 +1362,39 @@ public:
     };
     bool set_route(const std::string& scope, const std::string& realm,
                    const std::string& character, const std::string& role,
-                   const std::string& instance) {
-        if (!members_.count(scope+'\x1'+role+'\x1'+instance)) return false;
-        routes_[realm+'\x1'+character] = Route{scope, role, instance};
+                   const std::string& instance, const std::string& namespace_) {
+        if (!members_.count(member_key(namespace_, scope, role, instance))) return false;
+        routes_[route_key(namespace_, realm, character)] = Route{scope, role, instance};
         return true;
     }
-    const Member* route(const std::string& realm, const std::string& character) const {
-        const auto found = routes_.find(realm+'\x1'+character);
+    const Member* route(const std::string& namespace_, const std::string& realm,
+                        const std::string& character) const {
+        const auto found = routes_.find(route_key(namespace_, realm, character));
         if (found == routes_.end()) return nullptr;
         const auto& hosted = found->second;
         const auto member =
-            members_.find(hosted.scope+'\x1'+hosted.role+'\x1'+hosted.instance);
+            members_.find(member_key(namespace_, hosted.scope, hosted.role, hosted.instance));
         return member == members_.end() ? nullptr : &member->second.first;
+    }
+    static std::string member_key(const std::string& namespace_, const std::string& scope,
+                                  const std::string& role, const std::string& instance) {
+        return scope+'\x1'+role+'\x1'+instance+'\x1'+namespace_;
+    }
+    static std::string route_key(const std::string& namespace_, const std::string& realm,
+                                 const std::string& character) {
+        return namespace_+'\x1'+realm+'\x1'+character;
     }
     std::size_t routes() const { return routes_.size(); }
     std::vector<const Member*> list(const std::string& role, const std::string& scope) const {
+        return list("", role, scope);
+    }
+    std::vector<const Member*> list(const std::string& namespace_, const std::string& role,
+                                    const std::string& scope) const {
         std::vector<const Member*> found;
         for (const auto& [key, entry] : members_)
-            if ((role.empty() || entry.first.role == role) && (scope.empty() || entry.first.scope == scope))
+            if ((namespace_.empty() || entry.first.namespace_ == namespace_)
+                    && (role.empty() || entry.first.role == role)
+                    && (scope.empty() || entry.first.scope == scope))
                 found.push_back(&entry.first);
         std::sort(found.begin(), found.end(), [](const Member* a, const Member* b) {
             if (a->ready != b->ready) return a->ready;
@@ -1391,9 +1411,10 @@ public:
     // the home facts a service publishes. The coordinator stores facts, it is
     // not the generation authority — home data publishes them, and the
     // candidates handed out here are strictly newer than what was published.
-    bool owner_transaction(const MigrationKey& key, std::uint64_t generation, const MigrationOwner& owner) {
+    bool owner_transaction(const MigrationKey& key, std::uint64_t generation,
+                           const std::string& namespace_, const MigrationOwner& owner) {
         if (!valid_migration_owner(owner) || !generation) return false;
-        const auto found = migrations_.find(key);
+        const auto found = migrations_.find(migration_key(namespace_, key));
         if (found != migrations_.end()) {
             // Facts are adopted once: a restatement must match the route the
             // coordinator already holds, and a changed fact is a conflict.
@@ -1407,29 +1428,39 @@ public:
         if (!fresh.authority->seed(key, generation)) return false; // already seeded, never reseeds
         fresh.transaction = std::make_shared<MigrationTransaction>(
             *fresh.authority, key, MigrationRoute{owner, generation});
-        migrations_.emplace(key, std::move(fresh));
+        migrations_.emplace(migration_key(namespace_, key), std::move(fresh));
         return true;
     }
-    std::shared_ptr<MigrationTransaction> transaction(const MigrationKey& key) {
-        const auto found = migrations_.find(key);
+    std::shared_ptr<MigrationTransaction> transaction(const std::string& namespace_,
+                                                      const MigrationKey& key) {
+        const auto found = migrations_.find(migration_key(namespace_, key));
         return found == migrations_.end() ? nullptr : found->second.transaction;
+    }
+    static MigrationKey migration_key(const std::string& namespace_, const MigrationKey& key) {
+        return {namespace_+'\x1'+key.first+'\x1'+key.second, ""};
     }
     static std::string line(const Member& member) {
         std::ostringstream out;
-        out << "member " << member.role << ' ' << member.instance << ' ' << member.scope << ' '
+        out << "member " << member.role << ' ' << member.instance << ' '
+            << member_text(member.namespace_) << ' ' << member.scope << ' '
             << member.listen << ' ' << member.probe << ' '
             << (member.ready ? "ready" : "notready") << ' '
             << member.active << '/' << member.capacity;
         return out.str();
     }
+    static std::string member_text(const std::string& namespace_) {
+        return namespace_.empty() ? "-" : namespace_;
+    }
 private:
     // A member that retires orphans every route that pointed at it: routes
     // follow the member, they never outlive it.
-    void drop_routes(const std::string& scope, const std::string& role,
+    void drop_routes(const std::string& scope, const std::string& namespace_, const std::string& role,
                      const std::string& instance) {
         for (auto it = routes_.begin(); it != routes_.end();) {
+            const auto namespace_start = it->first.find('\x1');
             const auto& hosted = it->second;
-            if (hosted.scope == scope && hosted.role == role && hosted.instance == instance)
+            if (it->first.substr(0, namespace_start) == namespace_ && hosted.scope == scope
+                    && hosted.role == role && hosted.instance == instance)
                 it = routes_.erase(it);
             else ++it;
         }
@@ -1438,9 +1469,11 @@ private:
     // depends on that process. The registry knows a process, not a scene, so
     // the claim is matched on (scope, role, instance) and issued with the
     // transaction's own owner value.
-    void retire_members(const std::string& scope, const std::string& role, const std::string& instance) {
+    void retire_members(const std::string& scope, const std::string& namespace_, const std::string& role,
+                        const std::string& instance) {
         const auto matches = [&](const MigrationOwner& owner) {
-            return owner.role == role && owner.instance == instance
+            return owner.scope.namespace_ == namespace_ && owner.role == role
+                && owner.instance == instance
                 && (owner.scope.realm == scope || owner.scope.cross_group == scope);
         };
         for (const auto& [key, entry] : migrations_) {
@@ -1479,7 +1512,11 @@ public:
         if (closed_) return;
         closed_ = true;
         timer_.cancel();
-        if (member_) registry_.retire(member_->scope, member_->role, member_->instance, this);
+        if (member_) {
+            registry_.retire(member_->namespace_, member_->scope, member_->role,
+                member_->instance, this);
+            member_.reset();
+        }
         // Retiring a member may have dropped its routes; the gauge follows.
         diagnostics_.set_registry_routes(registry_.routes());
         channel_->close();
@@ -1496,7 +1533,6 @@ private:
     void pump() {
         if (closed_ || reading_) return;
         reading_ = true;
-        deadline(60); // members beat at least every half second
         channel_->read([self=shared_from_this()](Error ec, std::string payload) {
             self->reading_ = false;
             if (self->closed_) return;
@@ -1531,13 +1567,31 @@ private:
         // A tokened coordinator only serves identified connections: the
         // handshake has to precede any registry traffic.
         if (!config_.service_token.empty() && !service_ok_) return refuse_service("MLS1", "TOKEN");
-        if (magic != "MLR1") return refuse("UNEXPECTED");
-        if (payload.starts_with("MLR1 MIG")) return answer(migration_line(payload));
-        if (!registered_) {
-            if (payload.starts_with("MLR1 REGISTER")) return register_member(payload);
-            return query(payload);
+        if (magic != "MLR1") {
+            if (!member_) return refuse("UNEXPECTED");
+            std::istringstream status(payload);
+            std::string state, active_text, capacity_text, extra;
+            std::size_t active = 0, capacity = 0;
+            if (!(status >> state >> active_text >> capacity_text) || (status >> extra)
+                    || (state != "ready" && state != "notready")) return refuse("INVALID");
+            try {
+                active = static_cast<std::size_t>(std::stoull(active_text));
+                capacity = static_cast<std::size_t>(std::stoull(capacity_text));
+            } catch (...) {
+                return refuse("INVALID");
+            }
+            if (capacity == 0 || capacity > 1000000 || active > capacity) return refuse("INVALID");
+            member_->ready = state == "ready";
+            member_->active = active;
+            member_->capacity = capacity;
+            // A heartbeat moves the member in the listing, not just the copy.
+            if (!registry_.upsert(*member_, this)) return refuse("INVALID");
+            return reply("MLR1 OK");
         }
-        return heartbeat(payload);
+        if (payload.starts_with("MLR1 MIG")) return answer(migration_line(payload));
+        if (payload.starts_with("MLR1 REGISTER")) return register_member(payload);
+        if (member_) return heartbeat(payload);
+        return registry_query(payload);
     }
     // Identity stacks on the registry: the coordinator's MLS1 verdict precedes
     // the first MLR1 frame, and a stray handshake is refused like anywhere else.
@@ -1551,15 +1605,34 @@ private:
     }
     void register_member(const std::string& payload) {
         std::istringstream in(payload);
-        std::string magic, command, role, instance, scope, listen, probe = "0", extra;
-        in >> magic >> command >> role >> instance >> scope >> listen >> probe;
-        if (in >> extra) return refuse("INVALID");
+        std::string magic, command, role, instance, namespace_, scope, listen,
+                    probe = "0", extra;
+        in >> magic >> command >> role >> instance;
         if (role != "gameServer" && role != "crossServer") return refuse("INVALID");
-        if (instance.empty() || instance.size() > 64 || scope.empty() || scope.size() > 64)
-            return refuse("INVALID");
+        // "<namespace>|NS <namespace>" — a bare token names the group, so the
+        // positional spellings stay valid and "-" keeps the default one.
+        {
+            const auto tail = in.tellg();
+            std::string marker;
+            if (tail >= 0 && (in >> marker)) {
+                if (marker == "NS") {
+                    if (!namespace_fields(in, namespace_)) return refuse("INVALID");
+                } else if (marker.size() > 64 || (marker != "-" && !record_identifier(marker))) {
+                    return refuse("INVALID");
+                } else if (marker != "-") {
+                    namespace_ = marker;
+                }
+            } else if (tail >= 0) {
+                in.clear();
+                in.seekg(tail);
+            }
+        }
+        if (!(in >> scope >> listen >> probe) || (in >> extra)) return refuse("INVALID");
+        if (!record_identifier(instance) || !record_identifier(scope)) return refuse("INVALID");
         Registry::Member member;
         member.role = role;
         member.instance = instance;
+        member.namespace_ = namespace_;
         member.scope = scope;
         std::string address;
         unsigned port = 0;
@@ -1569,8 +1642,8 @@ private:
         member.probe = port;
         if (!registry_.upsert(member, this)) return refuse("INVALID");
         member_ = member;
-        registered_ = true;
-        std::cout << "member registered " << role << ' ' << instance << ' ' << scope << std::endl;
+        std::cout << "member registered " << role << ' ' << instance << ' '
+                  << namespace_ << ' ' << scope << std::endl;
         diagnostics_.set_registry_members(registry_.size());
         reply("MLR1 OK");
     }
@@ -1582,52 +1655,88 @@ private:
         std::istringstream in(payload);
         std::string magic, state, extra;
         std::size_t active = 0, capacity = 0;
-        in >> magic >> state;
-        if (!(in >> active >> capacity) || (in >> extra)) return refuse("INVALID");
+        in >> magic;
+        if (in >> state) {
+            const bool values = static_cast<bool>(in >> active >> capacity);
+            const bool trailing = static_cast<bool>(in >> extra);
+            if (!values || trailing) return refuse("INVALID");
+        }
         if ((state != "ready" && state != "notready") || capacity == 0 || capacity > 1000000
                 || active > capacity) return refuse("INVALID");
         member_->ready = state == "ready";
         member_->active = active;
         member_->capacity = capacity;
-        if (!registry_.upsert(*member_, this)) return refuse("INVALID");
+        const bool saved = registry_.upsert(*member_, this);
+        if (!saved) return refuse("INVALID");
         reply("MLR1 OK");
     }
-    void query(const std::string& payload) {
+    void registry_query(const std::string& payload) {
         if (payload.starts_with("MLR1 ROUTE")) return route_frame(payload);
         std::istringstream in(payload);
-        std::string magic, command, role, scope, extra;
-        in >> magic >> command >> role >> scope;
+        std::string magic, command, role, namespace_, scope, extra;
+        in >> magic;
+        const auto command_position = in.tellg();
+        in >> command >> role;
+        if (command != "QUERY" && command != "PLACE") {
+            if (command == "ready" && (role == "0" || role.empty()) && in.eof())
+                return heartbeat("ready 0 0");
+            if (command != "ready" && command != "notready") return refuse("UNEXPECTED");
+            if (command_position >= 0) { in.clear(); in.seekg(command_position); }
+            std::string state;
+            in >> state;
+            if (state == command && in.eof()) return heartbeat(state);
+            return refuse("UNEXPECTED");
+        }
+        // Tail grammar: "<role> [<namespace>|NS <namespace>] [<scope>]" — role
+        // "-" lists every role, "-" names the default group, and either filter
+        // may be omitted, so a bare "MLR1 QUERY -" lists the whole default
+        // group. The keyword and positional spellings both carry a namespace.
+        {
+            const auto tail = in.tellg();
+            std::string ns;
+            if (tail >= 0 && (in >> ns)) {
+                if (ns == "NS") {
+                    if (!namespace_fields(in, namespace_)) return refuse("INVALID");
+                    in >> scope;
+                } else {
+                    if (ns.size() > 64 || (ns != "-" && !record_identifier(ns))) return refuse("INVALID");
+                    if (ns != "-") namespace_ = ns;
+                    in >> scope;
+                }
+            }
+        }
+        if (scope == "-") scope.clear();
+        if (!scope.empty() && !record_identifier(scope)) return refuse("INVALID");
         if (in >> extra) return refuse("INVALID");
         if (command == "QUERY") {
-            const auto members = registry_.list(role, scope);
-            if (members.empty()) return close_with("MLR1 NONE");
+            const auto members = registry_.list(namespace_, role == "-" ? "" : role, scope);
+            if (members.empty()) {
+                return close_with("MLR1 NONE");
+            }
             std::ostringstream out;
             out << "MLR1 MEMBERS " << members.size();
             for (const auto* member : members) out << '\n' << Registry::line(*member);
             return close_with(out.str());
         }
-        if (command == "PLACE") {
-            if (role.empty() || scope.empty()) return refuse("INVALID");
-            for (const auto* member : registry_.list(role, scope)) {
-                if (!member->ready) continue;
-                std::ostringstream out;
-                out << "MLR1 PLACE " << member->instance << ' ' << member->listen << ' '
-                    << member->probe << " ready " << member->active << '/' << member->capacity;
-                return close_with(out.str());
-            }
-            return close_with("MLR1 EMPTY");
+        if (role.empty() || role == "-" || scope.empty()) return refuse("INVALID");
+        for (const auto* member : registry_.list(namespace_, role, scope)) {
+            if (!member->ready) continue;
+            std::ostringstream out;
+            out << "MLR1 PLACE " << member->instance << ' ' << member->listen << ' '
+                << member->probe << " ready " << member->active << '/' << member->capacity;
+            return close_with(out.str());
         }
-        return refuse("UNEXPECTED");
+        return close_with("MLR1 EMPTY");
     }
     // One-shot query legs close after the verdict, like QUERY/PLACE; a member's
     // control leg replies and keeps heartbeating.
     void answer(std::string payload) {
-        if (registered_) return reply(std::move(payload));
+        if (member_) return reply(std::move(payload));
         close_with(std::move(payload));
     }
-    // MLR1 ROUTE SET <scope> <realm> <character> <role> <instance>
+    // MLR1 ROUTE SET NS <namespace> <scope> <realm> <character> <role> <instance>
     //   -> MLR1 ROUTE OK | MLR1 ERR UNKNOWN | MLR1 ERR INVALID
-    // MLR1 ROUTE GET <realm> <character>
+    // MLR1 ROUTE GET NS <namespace> <realm> <character>
     //   -> MLR1 ROUTE AT <scope> <role> <instance> <listen> <probe>
     //      <ready|notready> <active>/<capacity>
     //   | MLR1 ROUTE EMPTY | MLR1 ERR INVALID
@@ -1636,8 +1745,13 @@ private:
     // from the live member state so a sick host reads as notready.
     void route_frame(const std::string& payload) {
         std::istringstream in(payload);
-        std::string magic, command, sub, spare;
+        std::string magic, command, sub, namespace_, spare, marker;
         in >> magic >> command >> sub;
+        if (sub != "SET" && sub != "GET") return refuse("UNEXPECTED");
+        // The NS group is required here: a route frame without it is the older
+        // two-argument spelling and must not read as the empty namespace.
+        if (!(in >> marker) || marker != "NS" || !namespace_fields(in, namespace_))
+            return refuse("INVALID");
         if (sub == "SET") {
             std::string scope, realm, character, role, instance;
             if (!(in >> scope >> realm >> character >> role >> instance) || (in >> spare))
@@ -1646,7 +1760,7 @@ private:
                     !record_identifier(character) || !record_identifier(instance) ||
                     (role != "gameServer" && role != "crossServer"))
                 return refuse("INVALID");
-            if (!registry_.set_route(scope, realm, character, role, instance))
+            if (!registry_.set_route(scope, realm, character, role, instance, namespace_))
                 return refuse("UNKNOWN");
             diagnostics_.set_registry_routes(registry_.routes());
             return answer("MLR1 ROUTE OK");
@@ -1655,7 +1769,7 @@ private:
             std::string realm, character;
             if (!(in >> realm >> character) || (in >> spare)) return refuse("INVALID");
             if (!record_identifier(realm) || !record_identifier(character)) return refuse("INVALID");
-            const auto* member = registry_.route(realm, character);
+            const auto* member = registry_.route(namespace_, realm, character);
             if (!member) return answer("MLR1 ROUTE EMPTY");
             std::ostringstream out;
             out << "MLR1 ROUTE AT " << member->scope << ' ' << member->role << ' '
@@ -1671,32 +1785,43 @@ private:
     // answer is keyed by the request id — a replayed frame repeats its verdict
     // instead of allocating a newer generation. Facts arrive with OWNER; the
     // coordinator stores them, it is not the generation authority.
-    //   MLR1 MIG OWNER   <realm> <character> <generation> <owner>
-    //   MLR1 MIG PREPARE <realm> <character> <id> <generation> <expected> <destination>
-    //   MLR1 MIG EVENT   <realm> <character> <id> <generation>
+    //   MLR1 MIG OWNER   [<namespace>] <realm> <character> <generation> <owner>
+    //   MLR1 MIG PREPARE [<namespace>] <realm> <character> <id> <generation>
+    //     <expected> <destination>
+    //   MLR1 MIG EVENT   [<namespace>] <realm> <character> <id> <generation>
     //     <DRAINED|FENCE|READY|CLEANUP>
-    //   MLR1 MIG COMMIT  <realm> <character> <id> <generation>
-    //   MLR1 MIG ABORT   <realm> <character> <id> <generation>
-    //   MLR1 MIG RETIRE  <realm> <character> <id> <generation> <owner>
-    //   MLR1 MIG STATUS  <realm> <character>
-    // where <owner> is "<realm|cross> <scope> <role> <instance> <scene>".
+    //   MLR1 MIG COMMIT  [<namespace>] <realm> <character> <id> <generation>
+    //   MLR1 MIG ABORT   [<namespace>] <realm> <character> <id> <generation>
+    //   MLR1 MIG RETIRE  [<namespace>] <realm> <character> <id> <generation> <member>
+    //   MLR1 MIG STATUS  [<namespace>] <realm> <character>
+    // where <namespace> is the optional "NS <identifier>" group — "-" or
+    // omitted names the default group, and a bare positional namespace is
+    // refused so an older frame keeps meaning the default group — and
+    // <owner> is "<realm|cross> NS <namespace> <scope> <role> <instance> <scene>".
     //   -> MLR1 MIG OWNER OK | PREPARED <id> <generation> | STEP <id> <STATE>
     //    | COMMITTED <id> <owner> <generation> | ABORTING <id> | ABORTED <id>
     //    | PENDING <id>
     //    | STATE idle <owner> <generation> | STATE <id> <STATE> <drained|open>
     //      <fenced|unfenced> <ready|notready> <generation>
     //    | MLR1 EMPTY | MLR1 ERR INVALID | STALE | CONFLICT | ORDER | UNEXPECTED
+    // Owner wire text: "<realm|cross> NS <namespace> <scope> <role>
+    // <instance> <scene>" — the same NS group as the registry verbs, so a
+    // namespaced owner and a default-group owner never read alike.
     static std::string owner_text(const MigrationOwner& owner) {
         std::ostringstream out;
         const bool realm = owner.scope.kind == MigrationScope::Kind::Realm;
-        out << (realm ? "realm" : "cross") << ' '
+        out << (realm ? "realm" : "cross") << " NS " << registry_member_text(owner.scope.namespace_) << ' '
             << (realm ? owner.scope.realm : owner.scope.cross_group)
             << ' ' << owner.role << ' ' << owner.instance << ' ' << owner.scene;
         return out.str();
     }
     static bool owner_fields(std::istream& in, MigrationOwner& owner) {
-        std::string kind, scope, role, instance, scene;
-        if (!(in >> kind >> scope >> role >> instance >> scene)) return false;
+        std::string kind, marker, namespace_, scope, role, instance, scene;
+        if (!(in >> kind >> marker >> namespace_ >> scope >> role >> instance >> scene)
+                || marker != "NS"
+                || (namespace_.size() > 64 || (namespace_ != "-" && !record_identifier(namespace_))))
+            return false;
+        if (namespace_ != "-") owner.scope.namespace_ = namespace_;
         if (kind == "realm") {
             owner.scope.kind = MigrationScope::Kind::Realm;
             owner.scope.realm = scope;
@@ -1718,6 +1843,26 @@ private:
             generation = generation*10 + (ch-'0');
         }
         return generation != 0;
+    }
+    static bool namespace_fields(std::istream& in, std::string& namespace_) {
+        std::string token;
+        if (!(in >> token)) {
+            namespace_.clear();
+            return true;
+        }
+        if (token.size() > 64 || (token != "-" && !record_identifier(token))) return false;
+        namespace_ = token == "-" ? std::string() : token;
+        return true;
+    }
+    static bool registry_namespace_fields(std::istream& in, std::string& namespace_) {
+        const auto position = in.tellg();
+        std::string marker;
+        if (position >= 0 && (in >> marker) && marker == "NS") {
+            return namespace_fields(in, namespace_);
+        }
+        if (position >= 0) { in.clear(); in.seekg(position); }
+        namespace_.clear();
+        return true;
     }
     static bool migration_token(std::istream& in, MigrationToken& token) {
         std::string id, generation;
@@ -1760,13 +1905,16 @@ private:
     }
     std::string migration_line(const std::string& payload) {
         std::istringstream in(payload);
-        std::string magic, tag, verb, realm, character, generation, event, extra;
+        std::string magic, tag, verb, namespace_, realm, character, generation, event, extra;
         if (!(in >> magic >> tag)) return "MLR1 ERR UNEXPECTED";
         if (tag != "MIG") return "MLR1 ERR INVALID";
         if (!(in >> verb)) return "MLR1 ERR UNEXPECTED";
-        if (!(in >> realm >> character) || !record_identifier(realm) || !record_identifier(character))
+        if (!registry_namespace_fields(in, namespace_)) return "MLR1 ERR INVALID";
+        if (!(in >> realm >> character) || !record_identifier(realm)
+                || !record_identifier(character))
             return "MLR1 ERR INVALID";
         const MigrationKey key{realm, character};
+        (void)Registry::migration_key(namespace_, key);
         if (verb == "OWNER") {
             std::uint64_t value = 0;
             MigrationOwner owner;
@@ -1775,7 +1923,8 @@ private:
             if (!(in >> generation) || !migration_generation(generation, value)
                     || !owner_fields(in, owner) || !valid_migration_owner(owner) || (in >> extra))
                 return "MLR1 ERR INVALID";
-            if (!registry_.owner_transaction(key, value, owner)) return "MLR1 ERR CONFLICT";
+            if (!registry_.owner_transaction(key, value, namespace_, owner))
+                return "MLR1 ERR CONFLICT";
             return "MLR1 MIG OWNER OK";
         }
         if (verb == "PREPARE") {
@@ -1783,7 +1932,7 @@ private:
             MigrationRequest request;
             if (!migration_token(in, token) || !owner_fields(in, request.expected.owner)
                     || !owner_fields(in, request.destination) || (in >> extra)) return "MLR1 ERR INVALID";
-            const auto tx = registry_.transaction(key);
+            const auto tx = registry_.transaction(namespace_, key);
             if (!tx) return "MLR1 ERR EMPTY";
             request.key = key;
             request.id = token.id;
@@ -1806,7 +1955,7 @@ private:
             else if (event == "READY") step = MigrationEvent::DestinationReady;
             else if (event == "CLEANUP") step = MigrationEvent::Cleanup;
             else return "MLR1 ERR INVALID";
-            const auto tx = registry_.transaction(key);
+            const auto tx = registry_.transaction(namespace_, key);
             if (!tx) return "MLR1 ERR EMPTY";
             const auto result = tx->apply(token, step);
             // The step answer names the state the event produced, so read it
@@ -1818,7 +1967,7 @@ private:
             MigrationToken token;
             if (!migration_token(in, token) || (in >> extra)) return "MLR1 ERR INVALID";
             token.key = key;
-            const auto tx = registry_.transaction(key);
+            const auto tx = registry_.transaction(namespace_, key);
             if (!tx) return "MLR1 ERR EMPTY";
             const auto result = tx->apply(token, MigrationEvent::Commit);
             const auto* row = tx->entry(token.id);
@@ -1833,7 +1982,7 @@ private:
             MigrationToken token;
             if (!migration_token(in, token) || (in >> extra)) return "MLR1 ERR INVALID";
             token.key = key;
-            const auto tx = registry_.transaction(key);
+            const auto tx = registry_.transaction(namespace_, key);
             if (!tx) return "MLR1 ERR EMPTY";
             // Abort only schedules the rollback; CLEANUP finishes it, so the
             // word tells the caller which of the two just happened.
@@ -1848,14 +1997,14 @@ private:
             if (!migration_token(in, token) || !owner_fields(in, member) || (in >> extra))
                 return "MLR1 ERR INVALID";
             token.key = key;
-            const auto tx = registry_.transaction(key);
+            const auto tx = registry_.transaction(namespace_, key);
             if (!tx) return "MLR1 ERR EMPTY";
             return migration_verdict(token, tx->retire_member(token, member),
                 "MLR1 MIG ABORTED " + token.id);
         }
         if (verb == "STATUS") {
             if ((in >> extra)) return "MLR1 ERR INVALID";
-            const auto tx = registry_.transaction(key);
+            const auto tx = registry_.transaction(namespace_, key);
             if (!tx) return "MLR1 EMPTY";
             const auto snapshot = tx->snapshot();
             if (const auto* row = tx->entry(snapshot.current)) return migration_state_line(*row);
@@ -1872,7 +2021,7 @@ private:
     std::function<void(RegistrySession*)> on_close_;
     std::optional<Registry::Member> member_;
     unsigned generation_ = 0;
-    bool registered_ = false, service_ok_ = false, reading_ = false, closed_ = false;
+    bool service_ok_ = false, reading_ = false, closed_ = false;
 };
 // Member side of MLR1: one outbound control connection that registers the
 // process and heartbeats its admission state. The registry informs placement,
@@ -1923,9 +2072,10 @@ private:
     }
     std::string register_line() const {
         const std::string instance = !config_.service_name.empty() ? config_.service_name
-            : config_.listen.address+':'+std::to_string(config_.listen.port);
+            : "node-"+std::to_string(config_.listen.port);
         std::ostringstream out;
-        out << "MLR1 REGISTER " << config_.role << ' ' << instance << ' ' << config_.scope << ' '
+        out << "MLR1 REGISTER " << config_.role << ' ' << instance << ' '
+            << registry_member_text(config_.namespace_) << ' ' << config_.scope << ' '
             << config_.listen.address << ':' << config_.listen.port << ' '
             << (config_.probe_enabled ? config_.probe_listen.address+':'
                 +std::to_string(config_.probe_listen.port) : "0");
@@ -1948,7 +2098,8 @@ private:
         if (phase_ == Phase::registering) {
             phase_ = Phase::live;
             std::cout << "registered with coordinator " << config_.coordinator.address << ':'
-                      << config_.coordinator.port << ' ' << config_.scope << std::endl;
+                      << config_.coordinator.port << ' ' << config_.namespace_ << ' '
+                      << config_.scope << std::endl;
             beat();
         }
         deadline(60);
@@ -1959,7 +2110,7 @@ private:
         heartbeat_.expires_after(std::chrono::milliseconds(500));
         heartbeat_.async_wait([self=shared_from_this()](Error ec) {
             if (ec || self->dead_ || self->phase_ != Phase::live) return;
-            self->write("MLR1 "+self->status_(), [self](Error) { self->pump(); });
+            self->write(self->status_(), [self](Error) { self->pump(); });
             self->beat();
         });
     }
@@ -2011,16 +2162,19 @@ class RegistryClient : public std::enable_shared_from_this<RegistryClient> {
 public:
     using Answer = std::function<void(std::string address, std::string reason)>;
     static void lookup(asio::io_context& io, const Config& config,
-                       std::string_view role, std::string_view scope, Answer answer) {
+                       std::string_view role, std::string_view namespace_, std::string_view scope,
+                       Answer answer) {
         std::shared_ptr<RegistryClient> self(new RegistryClient(io, config));
-        self->begin(std::string(role), !scope.empty() ? std::string(scope) : config.scope, std::move(answer));
+        self->begin(std::string(role), std::string(namespace_),
+                    !scope.empty() ? std::string(scope) : config.scope, std::move(answer));
     }
 private:
     RegistryClient(asio::io_context& io, const Config& config)
       : io_(io), config_(config), endpoint_(parse_address(config.coordinator.address), config.coordinator.port),
         channel_(std::make_shared<TcpChannel>(tcp::socket(io))), timer_(io) {}
-    void begin(std::string role, std::string scope, Answer answer) {
-        question_ = "MLR1 PLACE " + role + " " + scope;
+    void begin(std::string role, std::string namespace_, std::string scope, Answer answer) {
+        question_ = "MLR1 PLACE " + role + ' '
+            + (namespace_.empty() ? "-" : "NS " + namespace_) + ' ' + scope;
         answer_ = std::move(answer);
         deadline();
         channel_->socket().async_connect(endpoint_, [self=shared_from_this()](Error ec) {
@@ -2175,10 +2329,10 @@ class Node : public PlacementSink {
 public:
     // One placement question, one connection: login handlers ask the registry
     // through Lua; the answer callback runs back on this event loop.
-    void place(std::string_view role, std::string_view scope,
+    void place(std::string_view role, std::string_view namespace_, std::string_view scope,
         std::function<void(std::string_view address, std::string_view reason)> answer) override {
         if (!config_.coordinator_enabled) return answer({}, "disabled");
-        RegistryClient::lookup(io_, config_, role, scope, std::move(answer));
+        RegistryClient::lookup(io_, config_, role, namespace_, scope, std::move(answer));
     }
     explicit Node(Config config)
       : config_(std::move(config)), signals_(io_, SIGINT, SIGTERM, SIGHUP), tick_(io_),

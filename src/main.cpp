@@ -107,7 +107,8 @@ std::vector<std::pair<std::string, std::string>> config_flags(const std::filesys
         {"ROLE","--role",0,0,0}, {"ROUTING","--routing",0,0,0}, {"LISTEN","--listen",0,0,0}, {"TRANSPORT","--transport",0,0,0},
         {"SERVICE_TOKEN","--service-token",0,0,0}, {"UPSTREAM_TOKEN","--upstream-token",0,0,0},
         {"SERVICE_NAME","--service-name",0,0,0}, {"UPSTREAM_MULTIPLEX","--upstream-multiplex",0,0,0},
-        {"COORDINATOR","--coordinator",0,0,0}, {"SCOPE","--scope",0,0,0},
+        {"COORDINATOR","--coordinator",0,0,0}, {"NAMESPACE","--namespace",0,0,0},
+        {"SCOPE","--scope",0,0,0},
         {"SCRIPT","--script",1,0,0}, {"UPSTREAMS","--upstream",0,1,0}, {"CERT","--cert",1,0,0},
         {"KEY","--key",1,0,0}, {"LISTENERS","--listener",0,1,0}, {"REDIS","--redis",0,0,0},
         {"METRICS_LISTEN","--metrics-listen",0,0,0}, {"PROBE_LISTEN","--probe-listen",0,0,0},
@@ -197,7 +198,7 @@ int main(int argc, char** argv) {
             if (scaffold_result >= 0) return scaffold_result;
         }
         mistlane::Config config;
-        bool transport_selected = false, scope_selected = false;
+        bool transport_selected = false, namespace_selected = false, scope_selected = false;
         // --config entries expand in place: file values first, MISTLANE_<KEY>
         // environment overrides inside the reader, then any explicit flag after.
         std::vector<std::string> tokens;
@@ -233,11 +234,14 @@ int main(int argc, char** argv) {
                              "    --upstream-token TOKEN --service-name NAME (present MLS1 to each upstream)\n"
                              "    --upstream-multiplex on|off (gateway shares one upstream connection\n"
                              "      across sessions; requires --upstream-token, which identifies the peer)\n"
-                             "  gameServer/crossServer: --coordinator IP:PORT [--scope NAME] registers with\n"
-                             "      the coordinator and heartbeats readiness/load (--upstream-token presents\n"
-                             "      MLS1 when the coordinator requires identity)\n"
-                             "  login: --coordinator IP:PORT [--scope NAME] enables mistlane.place(role,\n"
-                             "      scope?, callback) placement lookups (no registration)\n"
+                             "  gameServer/crossServer: --coordinator IP:PORT [--namespace NAME]\n"
+                             "      [--scope NAME] registers with the coordinator and heartbeats\n"
+                             "      readiness/load (--upstream-token presents MLS1 when the coordinator\n"
+                             "      requires identity); NAMESPACE isolates routes/migrations when equal\n"
+                             "      scope names exist in distinct deployment groups (default empty)\n"
+                             "  login: --coordinator IP:PORT [--namespace NAME] [--scope NAME] enables\n"
+                             "      mistlane.place(role, namespace?, scope?, callback) placement lookups\n"
+                             "      (no registration)\n"
                              "  data: answers MLD1 LOAD/SUBMIT record frames on framed TCP (receipt only;\n"
                              "      no durable ack until a persistence chain exists)\n"
                              "  --transport tcp|ws|wss|http|https (wss/https require --cert FILE --key FILE)\n"
@@ -257,10 +261,11 @@ int main(int argc, char** argv) {
                              "    --max-group-sessions N --max-shard-sessions N\n"
                              "SIGHUP: transactional script reload (state is reset)\n"
                              "  coordinator: --service-token TOKEN (require member identity); registry\n"
-                             "    members connect with --coordinator IP:PORT [--scope NAME] and heartbeat\n"
+                             "    members connect with --coordinator IP:PORT [--namespace NAME]\n"
+                             "      [--scope NAME] and heartbeat\n"
                              "    MLR1 REGISTER/QUERY/PLACE/ROUTE over framed TCP; MLR1 MIG\n"
                              "    OWNER/PREPARE/EVENT/COMMIT/ABORT/RETIRE/STATUS carry the migration\n"
-                             "    protocol for a (realm, character), idempotent by request id";
+                             "    protocol for a (namespace, realm, character), idempotent by request id";
                 return 0;
             }
             if (++i >= tokens.size()) throw std::invalid_argument("missing value for "+key);
@@ -272,6 +277,7 @@ int main(int argc, char** argv) {
             else if (key == "--service-name") config.service_name = value;
             else if (key == "--upstream-multiplex") config.upstream_multiplex = switch_value(value);
             else if (key == "--coordinator") { config.coordinator = endpoint(value); config.coordinator_enabled = true; }
+            else if (key == "--namespace") { config.namespace_ = value; config.namespace_wire = true; namespace_selected = true; }
             else if (key == "--scope") { config.scope = value; scope_selected = true; }
             else if (key == "--upstream") config.upstreams.push_back(upstream(value));
             else if (key == "--routing") config.routing = value;
@@ -326,8 +332,8 @@ int main(int argc, char** argv) {
             // gameServer/crossServer register and heartbeat; login only asks
             // placements. The registry stays the coordinator's own job.
             throw std::invalid_argument("--coordinator applies to gameServer, crossServer and login");
-        if (!config.coordinator_enabled && scope_selected)
-            throw std::invalid_argument("--scope requires --coordinator");
+        if (!config.coordinator_enabled && (namespace_selected || scope_selected))
+            throw std::invalid_argument("--namespace and --scope require --coordinator");
         if (!config.coordinator_enabled && !config.upstream_token.empty() && config.role != "gateway")
             // Members present this identity when they register; anywhere else
             // the flag would silently do nothing.
@@ -376,7 +382,8 @@ int main(int argc, char** argv) {
             throw std::invalid_argument("apiServer requires http, https, ws or wss transport");
         if (config.crashpad_handler.empty() != config.crashpad_database.empty())
             throw std::invalid_argument("Crashpad requires both --crashpad-handler and --crashpad-database");
-        if ((config.is_cross_gateway() || config.role == "crossServer" || config.role == "coordinator") && any_non_tcp)
+        const bool cross_gateway = config.role == "gateway" && config.routing == "cross";
+        if ((cross_gateway || config.role == "crossServer" || config.role == "coordinator") && any_non_tcp)
             throw std::invalid_argument("cross routing and crossServer require internal TCP transport");
         return mistlane::run_node(std::move(config));
     } catch (const std::exception& e) {

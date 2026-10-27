@@ -1578,7 +1578,7 @@ void core_contracts() {
 }
 void role_names() {
     Context c;
-    write(c.path("echo.lua"), echo);
+    write(c.path("echo.lua"), correlate_lua);
     for (const auto& old : {"worker", "router", "cross", "shard"}) {
         auto& child = c.spawn({self().string(), "--role", old, "--script", c.path("echo.lua").string(),
                               "--upstream", endpoint(port())});
@@ -1873,7 +1873,7 @@ void api_http() {
 }
 void transport_listeners() {
     Context c; c.cert();
-    write(c.path("echo.lua"), echo);
+    write(c.path("echo.lua"), correlate_lua);
     write(c.path("ws.lua"), websocket_lua);
     // One process, three listeners: framed tcp plus ws and wss with a
     // per-listener certificate override. The ws listeners stay framed game
@@ -2425,8 +2425,8 @@ void coordinator_registry() {
     equal(read_frame(stranger), "MLR1 ERR UNEXPECTED");
     expect_close(stranger);
     // Malformed registrations report the shape.
-    for (const auto& bad : {"MLR1 REGISTER", "MLR1 REGISTER data gs-x alpha 127.0.0.1:1 0",
-                            "MLR1 REGISTER gameServer gs-x alpha not-an-endpoint 0"}) {
+    for (const auto& bad : {"MLR1 REGISTER", "MLR1 REGISTER data NS ns gs-x alpha 127.0.0.1:1 0",
+                            "MLR1 REGISTER gameServer NS ns gs-x alpha not-an-endpoint 0"}) {
         RawSocket malformed(registry);
         send_frame(malformed, bad);
         equal(read_frame(malformed), "MLR1 ERR INVALID");
@@ -2449,53 +2449,57 @@ void coordinator_registry() {
         return body;
     };
     const auto place = [&](const std::string& line) {
-        return query(line);
+        const auto response = query(line);
+        std::cout << "registry ask " << line << " => " << response << '\n';
+        return response;
     };
-    eventually([&] { return query("MLR1 QUERY").find("MLR1 MEMBERS 3") != std::string::npos; },
+    eventually([&] { return query("MLR1 QUERY -").find("MLR1 MEMBERS 3") != std::string::npos; },
         5s, "members never reached the registry");
-    require(body.find("member gameServer gs-a alpha") != std::string::npos &&
-            body.find("member gameServer gs-b alpha") != std::string::npos &&
-            body.find("member gameServer gs-c beta") != std::string::npos,
+    require(body.find("member gameServer gs-a - alpha") != std::string::npos &&
+            body.find("member gameServer gs-b - alpha") != std::string::npos &&
+            body.find("member gameServer gs-c - beta") != std::string::npos,
             "registry listing lost a member: "+body);
     // Scope filters narrow the listing and placement.
-    query("MLR1 QUERY gameServer beta");
+    query("MLR1 QUERY gameServer - beta");
     require(body.find("gs-c") != std::string::npos && body.find("gs-a") == std::string::npos,
             "scope filter leaked another scope: "+body);
     const auto beta_place = "MLR1 PLACE gs-c 127.0.0.1:"+std::to_string(third)+" 0 ready 0/42";
-    eventually([&] { return place("MLR1 PLACE gameServer beta") == beta_place; },
+    eventually([&] { return place("MLR1 PLACE gameServer - beta") == beta_place; },
         5s, "gs-c never became placeable");
-    equal(place("MLR1 PLACE gameServer beta"), beta_place);
-    equal(place("MLR1 PLACE gameServer gamma"), "MLR1 EMPTY");
+    equal(place("MLR1 PLACE gameServer - beta"), beta_place);
+    equal(place("MLR1 PLACE gameServer - gamma"), "MLR1 EMPTY");
     // Placement prefers the less loaded member once real load differs.
     {
         RawSocket load(first);
         send_frame(load, "ping"); equal(read_frame(load), "ping");
-        eventually([&] { return place("MLR1 PLACE gameServer alpha") ==
+        eventually([&] { return place("MLR1 PLACE gameServer - alpha") ==
             "MLR1 PLACE gs-b 127.0.0.1:"+std::to_string(second)+" 0 ready 0/42"; },
             5s, "placement ignored member load");
         // Saturation flips readiness, and the registry follows the heartbeats.
         RawSocket full(first);
         send_frame(full, "ping"); equal(read_frame(full), "ping");
-        eventually([&] { return query("MLR1 QUERY gameServer alpha").find(
-            "member gameServer gs-a alpha 127.0.0.1:"+std::to_string(first)+" 0 notready 2/4")
+        eventually([&] { return query("MLR1 QUERY gameServer - alpha").find(
+            "member gameServer gs-a - alpha 127.0.0.1:"+std::to_string(first)+" 0 notready 2/4")
             != std::string::npos; }, 5s, "readiness did not follow the heartbeat");
     }
     std::this_thread::sleep_for(600ms);
-    eventually([&] { return query("MLR1 QUERY gameServer alpha").find(
-        "member gameServer gs-a alpha 127.0.0.1:"+std::to_string(first)+" 0 ready 0/4")
+    eventually([&] { return query("MLR1 QUERY gameServer - alpha").find(
+        "member gameServer gs-a - alpha 127.0.0.1:"+std::to_string(first)+" 0 ready 0/4")
         != std::string::npos; }, 5s, "readiness did not recover");
     // A disconnect drops the member from the registry.
     gs_c.signal(SIGTERM);
-    eventually([&] { return query("MLR1 QUERY").find("MLR1 MEMBERS 2") != std::string::npos; },
-        5s, "a dead member stayed registered");
+    auto live = http("http://"+endpoint(metrics)+"/metrics").body;
+    eventually([&] {
+        live = http("http://"+endpoint(metrics)+"/metrics").body;
+        return live.find("mistlane_registry_members{role=\"coordinator\"} 2") != std::string::npos;
+    }, 5s, "a dead member stayed registered");
     // The registry gauge follows the live membership.
-    const auto live = http("http://"+endpoint(metrics)+"/metrics").body;
     require(live.find("mistlane_registry_members{role=\"coordinator\"} 2") != std::string::npos,
             "registry gauge missing from the exposition");
     // Identity stacks on the registry: an unnamed member is refused, an
     // identified one registers normally.
     RawSocket anonymous(tokened);
-    send_frame(anonymous, "MLR1 REGISTER gameServer gs-x alpha 127.0.0.1:1 0");
+    send_frame(anonymous, "MLR1 REGISTER gameServer gs-x NS ns alpha 127.0.0.1:1 0");
     equal(read_frame(anonymous), "MLS1 ERR TOKEN");
     expect_close(anonymous);
     auto& gs_d = c.node("gameServer", port(), {"--script", c.path("echo.lua").string(),
@@ -2504,12 +2508,12 @@ void coordinator_registry() {
         RawSocket raw(tokened);
         send_frame(raw, "MLS1 registryClient query-1 s3cret");
         equal(read_frame(raw), "MLS1 OK");
-        send_frame(raw, "MLR1 QUERY");
+        send_frame(raw, "MLR1 QUERY -");
         body = read_frame(raw);
         expect_close(raw);
         return body;
     };
-    eventually([&] { return identified().find("member gameServer gs-d main") != std::string::npos; },
+    eventually([&] { return identified().find("member gameServer gs-d - main") != std::string::npos; },
         5s, "an identified member never registered");
     require(gs_a.output().find("registered") != std::string::npos &&
             gs_d.output().find("registered") != std::string::npos,
@@ -2527,7 +2531,7 @@ void coordinator_registry() {
                 "gateway accepted a coordinator");
         auto& scoped = c.spawn({self().string(), "--role", "gameServer", "--listen", endpoint(port()),
             "--script", c.path("echo.lua").string(), "--scope", "alpha"});
-        require(scoped.wait() != 0 && scoped.output().find("--scope requires --coordinator") != std::string::npos,
+        require(scoped.wait() != 0 && scoped.output().find("--namespace and --scope require --coordinator") != std::string::npos,
                 "scope accepted without a coordinator");
     }
     for (const auto* member : {&gs_a, &gs_b})
@@ -2542,9 +2546,11 @@ void coordinator_placement() {
     write(c.path("echo.lua"), echo);
     write(c.path("place.lua"),
         "return {message=function(p,c)"
-        " local role, scope = p:match('place (%S+) ?(%S*)')\n"
+        " local role, namespace_, scope = p:match('place (%S+) ?(%S*) ?(%S*)')\n"
         " if not role then return 'usage' end\n"
-        " mistlane.place(role, scope ~= '' and scope or nil, function(err, address)\n"
+        " namespace_ = namespace_ ~= '' and namespace_ ~= '-' and namespace_ or nil\n"
+        " mistlane.place(role, namespace_,"
+        " scope ~= '' and scope or nil, function(err, address)\n"
         "   mistlane.session.send(c.session, err and ('ERR '..err) or ('OK '..address))\n"
         " end)\n"
         " return nil end}");
@@ -2578,12 +2584,15 @@ void coordinator_placement() {
              "--script", c.path("echo.lua").string(), "--coordinator", endpoint(registry)});
     member.ready("ready gameServer " + endpoint(member_listen));
     eventually([&] { return members(metrics) == 1; }, 5s, "the member never registered");
-    c.node("login", login, {"--script", c.path("place.lua").string(), "--coordinator", endpoint(registry)});
+    c.node("login", login, {"--script", c.path("place.lua").string(), "--transport", "tcp",
+        "--coordinator", endpoint(registry)});
     // Registration precedes the first readiness heartbeat, so the ask waits
     // for the ready verdict instead of racing it.
     eventually([&] { return place(login, "place gameServer")
         == "OK 127.0.0.1:"+std::to_string(member_listen); }, 5s, "placement never saw the ready member");
-    equal(place(login, "place gameServer nobody"), "ERR EMPTY");
+    equal(place(login, "place gameServer - nobody"), "ERR EMPTY");
+    equal(place(login, "place gameServer - shop"), "ERR EMPTY");
+    equal(place(login, "place gameServer shop nobody"), "ERR EMPTY");
     equal(place(login, "place crossServer"), "ERR EMPTY");
     equal(place(login, "where"), "usage");
     require(members(metrics) == 1, "login registered itself as a member");
@@ -2593,15 +2602,16 @@ void coordinator_placement() {
              "--script", c.path("echo.lua").string(), "--coordinator", endpoint(token_registry),
              "--upstream-token", "s3cret", "--service-name", "gs-token"});
     token_member_node.ready("ready gameServer " + endpoint(token_member));
-    c.node("login", token_login, {"--script", c.path("place.lua").string(),
+    c.node("login", token_login, {"--script", c.path("place.lua").string(), "--transport", "tcp",
         "--coordinator", endpoint(token_registry), "--upstream-token", "s3cret", "--service-name", "login-1"});
-    c.node("login", wrong_login, {"--script", c.path("place.lua").string(),
+    c.node("login", wrong_login, {"--script", c.path("place.lua").string(), "--transport", "tcp",
         "--coordinator", endpoint(token_registry), "--upstream-token", "nope"});
     eventually([&] { return place(token_login, "place gameServer")
         == "OK 127.0.0.1:"+std::to_string(token_member); }, 5s, "identity did not reach the tokened registry");
     equal(place(wrong_login, "place gameServer"), "ERR TOKEN");
     // A dead coordinator reports a reason instead of holding the session.
-    c.node("login", dead_login, {"--script", c.path("place.lua").string(), "--coordinator", endpoint(port())});
+    c.node("login", dead_login, {"--script", c.path("place.lua").string(), "--transport", "tcp",
+        "--coordinator", endpoint(port())});
     equal(place(dead_login, "place gameServer"), "ERR unreachable");
     // The registry stays the coordinator's job: data never presents itself.
     auto& data = c.spawn({self().string(), "--role", "data", "--listen", endpoint(port()),
@@ -2896,7 +2906,7 @@ void cross_ticket() {
 // every route that pointed at it.
 void coordinator_routes() {
     Context c;
-    write(c.path("echo.lua"), correlate_lua);
+    write(c.path("echo.lua"), echo);
     const auto registry = port(), metrics = port(), tokened = port(),
               first = port(), second = port();
     auto& coord = c.node("coordinator", registry, {"--metrics-listen", endpoint(metrics)});
@@ -2930,18 +2940,18 @@ void coordinator_routes() {
         expect_close(raw);
         return body;
     };
-    eventually([&] { return ask("MLR1 QUERY").find("MLR1 MEMBERS 2") != std::string::npos; },
+    eventually([&] { return ask("MLR1 QUERY -").find("MLR1 MEMBERS 2") != std::string::npos; },
         5s, "members never reached the registry");
     // GET before any SET is an honest empty, not an error.
-    equal(ask("MLR1 ROUTE GET mist eve"), "MLR1 ROUTE EMPTY");
+    equal(ask("MLR1 ROUTE GET NS - mist eve"), "MLR1 ROUTE EMPTY");
     // Malformed shapes and unknown verbs report the right word.
     for (const auto& [line, word] : std::vector<std::pair<std::string, std::string>>{
-            {"MLR1 ROUTE SET alpha mist eve gameServer", "MLR1 ERR INVALID"},
-            {"MLR1 ROUTE SET alpha mist eve gameServer gs-a extra", "MLR1 ERR INVALID"},
-            {"MLR1 ROUTE SET alpha mi!t eve gameServer gs-a", "MLR1 ERR INVALID"},
-            {"MLR1 ROUTE SET alpha mist eve data gs-a", "MLR1 ERR INVALID"},
-            {"MLR1 ROUTE GET mist", "MLR1 ERR INVALID"},
-            {"MLR1 ROUTE GET mist ev!", "MLR1 ERR INVALID"},
+            {"MLR1 ROUTE SET NS ns alpha mist eve gameServer", "MLR1 ERR INVALID"},
+            {"MLR1 ROUTE SET NS ns alpha mist eve gameServer gs-a extra", "MLR1 ERR INVALID"},
+            {"MLR1 ROUTE SET NS ns alpha mi!t eve gameServer gs-a", "MLR1 ERR INVALID"},
+            {"MLR1 ROUTE SET NS ns alpha mist eve data gs-a", "MLR1 ERR INVALID"},
+            {"MLR1 ROUTE GET ns mist", "MLR1 ERR INVALID"},
+            {"MLR1 ROUTE GET ns mist ev!", "MLR1 ERR INVALID"},
             {"MLR1 ROUTE LIST", "MLR1 ERR UNEXPECTED"},
             {"MLR1 ROUTE", "MLR1 ERR UNEXPECTED"}}) {
         RawSocket raw(registry);
@@ -2950,53 +2960,53 @@ void coordinator_routes() {
         expect_close(raw);
     }
     // A route needs a live host: an unregistered instance is refused by name.
-    equal(ask("MLR1 ROUTE SET alpha mist eve gameServer gs-z"), "MLR1 ERR UNKNOWN");
-    equal(ask("MLR1 ROUTE SET alpha mist eve gameServer gs-a"), "MLR1 ROUTE OK");
+    equal(ask("MLR1 ROUTE SET NS - alpha mist eve gameServer gs-z"), "MLR1 ERR UNKNOWN");
+    equal(ask("MLR1 ROUTE SET NS - alpha mist eve gameServer gs-a"), "MLR1 ROUTE OK");
     auto live = http("http://"+endpoint(metrics)+"/metrics").body;
     require(live.find("mistlane_registry_routes{role=\"coordinator\"} 1") != std::string::npos,
             "route gauge did not follow the record count");
     const auto eve_at = "MLR1 ROUTE AT alpha gameServer gs-a 127.0.0.1:"+
         std::to_string(first)+" 0 ready 0/42";
-    eventually([&] { return ask("MLR1 ROUTE GET mist eve") == eve_at; },
+    eventually([&] { return ask("MLR1 ROUTE GET NS - mist eve") == eve_at; },
         5s, "route did not follow the live member state");
     // A second SET for the same character overwrites; the count stays at one.
-    equal(ask("MLR1 ROUTE SET alpha mist eve gameServer gs-b"), "MLR1 ROUTE OK");
+    equal(ask("MLR1 ROUTE SET NS - alpha mist eve gameServer gs-b"), "MLR1 ROUTE OK");
     const auto eve_moved = "MLR1 ROUTE AT alpha gameServer gs-b 127.0.0.1:"+
         std::to_string(second)+" 0 ready 0/42";
-    eventually([&] { return ask("MLR1 ROUTE GET mist eve") == eve_moved; },
+    eventually([&] { return ask("MLR1 ROUTE GET NS - mist eve") == eve_moved; },
         5s, "route overwrite did not stick");
     // A registered member publishes routes on its own control leg and the leg
     // keeps heartbeating; GET mirrors the heartbeat state it announces.
     {
         RawSocket host(registry);
-        send_frame(host, "MLR1 REGISTER gameServer gs-r alpha 127.0.0.1:1 0");
+        send_frame(host, "MLR1 REGISTER gameServer gs-r NS - alpha 127.0.0.1:1 0");
         equal(read_frame(host), "MLR1 OK");
-        send_frame(host, "MLR1 ROUTE SET alpha mist rogue gameServer gs-r");
+        send_frame(host, "MLR1 ROUTE SET NS - alpha mist rogue gameServer gs-r");
         equal(read_frame(host), "MLR1 ROUTE OK");
         send_frame(host, "MLR1 notready 0 42");
         equal(read_frame(host), "MLR1 OK");
-        equal(ask("MLR1 ROUTE GET mist rogue"),
+        equal(ask("MLR1 ROUTE GET NS - mist rogue"),
               "MLR1 ROUTE AT alpha gameServer gs-r 127.0.0.1:1 0 notready 0/42");
         send_frame(host, "MLR1 ready 1 42");
         equal(read_frame(host), "MLR1 OK");
-        equal(ask("MLR1 ROUTE GET mist rogue"),
+        equal(ask("MLR1 ROUTE GET NS - mist rogue"),
               "MLR1 ROUTE AT alpha gameServer gs-r 127.0.0.1:1 0 ready 1/42");
         live = http("http://"+endpoint(metrics)+"/metrics").body;
         require(live.find("mistlane_registry_routes{role=\"coordinator\"} 2") != std::string::npos,
                 "route gauge missed the second record");
     } // the host retires here
-    eventually([&] { return ask("MLR1 ROUTE GET mist rogue") == "MLR1 ROUTE EMPTY"; },
+    eventually([&] { return ask("MLR1 ROUTE GET NS - mist rogue") == "MLR1 ROUTE EMPTY"; },
         5s, "a retired host kept its route");
     live = http("http://"+endpoint(metrics)+"/metrics").body;
     require(live.find("mistlane_registry_routes{role=\"coordinator\"} 1") != std::string::npos,
             "route gauge did not follow the retirement");
     // Placement beside the route verbs stays member placement.
-    eventually([&] { return ask("MLR1 PLACE gameServer alpha") ==
+    eventually([&] { return ask("MLR1 PLACE gameServer - alpha") ==
         "MLR1 PLACE gs-a 127.0.0.1:"+std::to_string(first)+" 0 ready 0/42"; },
         5s, "placement broke beside the route verbs");
     // Identity gates routes like everything else on a tokened coordinator.
     RawSocket anonymous(tokened);
-    send_frame(anonymous, "MLR1 ROUTE GET mist eve");
+    send_frame(anonymous, "MLR1 ROUTE GET NS - mist eve");
     equal(read_frame(anonymous), "MLS1 ERR TOKEN");
     expect_close(anonymous);
     c.node("gameServer", port(), {"--script", c.path("echo.lua").string(),
@@ -3010,9 +3020,9 @@ void coordinator_routes() {
         expect_close(raw);
         return body;
     };
-    eventually([&] { return identified("MLR1 ROUTE SET main mist kate gameServer gs-d") ==
+    eventually([&] { return identified("MLR1 ROUTE SET NS - main mist kate gameServer gs-d") ==
         "MLR1 ROUTE OK"; }, 5s, "an identified route publish never landed");
-    body = identified("MLR1 ROUTE GET mist kate");
+    body = identified("MLR1 ROUTE GET NS - mist kate");
     require(body.starts_with("MLR1 ROUTE AT main gameServer gs-d "), "route answer wrong shape: "+body);
     require(gs_a.output().find("callback failed") == std::string::npos &&
             gs_b.output().find("callback failed") == std::string::npos,
@@ -3406,7 +3416,7 @@ void coordinator_migration_retire() {
 // coordinator, idempotent by request id.
 void coordinator_migration_wire() {
     Context c;
-    write(c.path("echo.lua"), correlate_lua);
+    write(c.path("echo.lua"), echo);
     const auto registry = port(), metrics = port(), tokened = port(),
               first = port(), second = port(), third = port();
     c.node("coordinator", registry, {"--metrics-listen", endpoint(metrics)});
@@ -3453,129 +3463,138 @@ void coordinator_migration_wire() {
             throw std::runtime_error("L"+std::to_string(loc.line())+" "+line+": "+error.what());
         }
     };
-    eventually([&] { return ask("MLR1 QUERY").find("MLR1 MEMBERS 3") != std::string::npos; },
+    eventually([&] { return ask("MLR1 QUERY -").find("MLR1 MEMBERS 3") != std::string::npos; },
         5s, "members never reached the registry");
-    const std::string source = "realm alpha gameServer gs-a town";
-    const std::string target = "cross arena crossServer xs-a room-1";
+    const std::string source = "realm NS - alpha gameServer gs-a town";
+    const std::string target = "cross NS - arena crossServer xs-a room-1";
     // A participant key with no published home facts is EMPTY, not an error.
-    equal(ask("MLR1 MIG STATUS home hero"), "MLR1 EMPTY");
-    equal(ask("MLR1 MIG PREPARE home hero move-1 8 "+source+" "+target), "MLR1 ERR EMPTY");
-    equal(ask("MLR1 MIG OWNER home hero 8 "+source), "MLR1 MIG OWNER OK");
-    equal(ask("MLR1 MIG OWNER home hero 8 "+source), "MLR1 MIG OWNER OK"); // idempotent
-    equal(ask("MLR1 MIG OWNER home hero 9 "+source), "MLR1 ERR CONFLICT"); // never adopts facts
-    equal(ask("MLR1 MIG OWNER home hero 8 realm home crossServer gs-a town"), "MLR1 ERR INVALID");
-    equal(ask("MLR1 MIG STATUS home hero"), "MLR1 MIG STATE idle "+source+" 8");
+    equal(ask("MLR1 MIG STATUS NS - home hero"), "MLR1 EMPTY");
+    equal(ask("MLR1 MIG PREPARE NS - home hero move-1 8 "+source+" "+target), "MLR1 ERR EMPTY");
+    equal(ask("MLR1 MIG OWNER NS - home hero 8 "+source), "MLR1 MIG OWNER OK");
+    equal(ask("MLR1 MIG OWNER NS - home hero 8 "+source), "MLR1 MIG OWNER OK"); // idempotent
+    equal(ask("MLR1 MIG OWNER NS - home hero 9 "+source), "MLR1 ERR CONFLICT"); // never adopts facts
+    equal(ask("MLR1 MIG OWNER NS - home hero 8 realm NS - home crossServer gs-a town"), "MLR1 ERR INVALID");
+    equal(ask("MLR1 MIG STATUS NS - home hero"), "MLR1 MIG STATE idle "+source+" 8");
     // A request naming a generation the coordinator never published is STALE
     // while the transaction is idle, and it reserves nothing.
-    equal(ask("MLR1 MIG PREPARE home hero stale-1 7 "+source+" "+target), "MLR1 ERR STALE");
+    equal(ask("MLR1 MIG PREPARE NS - home hero stale-1 7 "+source+" "+target), "MLR1 ERR STALE");
     // Preparing reserves the next generation; the same PREPARE replays as the
     // same verdict and never allocates again.
-    equal(ask("MLR1 MIG PREPARE home hero move-1 8 "+source+" "+target), "MLR1 MIG PREPARED move-1 9");
-    equal(ask("MLR1 MIG PREPARE home hero move-1 8 "+source+" "+target), "MLR1 MIG PREPARED move-1 9");
-    equal(ask("MLR1 MIG PREPARE home hero move-1 8 "+source+" realm alpha gameServer gs-a hall"),
+    equal(ask("MLR1 MIG PREPARE NS - home hero move-1 8 "+source+" "+target), "MLR1 MIG PREPARED move-1 9");
+    equal(ask("MLR1 MIG PREPARE NS - home hero move-1 8 "+source+" "+target), "MLR1 MIG PREPARED move-1 9");
+    equal(ask("MLR1 MIG PREPARE NS - home hero move-1 8 "+source+" realm NS - alpha gameServer gs-a hall"),
         "MLR1 ERR CONFLICT");
-    equal(ask("MLR1 MIG PREPARE home hero concurrent-1 9 "+source+" realm alpha gameServer gs-a hall"),
+    equal(ask("MLR1 MIG PREPARE NS - home hero concurrent-1 9 "+source+" realm NS - alpha gameServer gs-a hall"),
         "MLR1 ERR CONFLICT");
-    equal(ask("MLR1 MIG PREPARE home hero junk-1 8 realm alpha gameServer "+source+" "+target),
+    equal(ask("MLR1 MIG PREPARE NS - home hero junk-1 8 realm NS - alpha gameServer "+source+" "+target),
         "MLR1 ERR INVALID");
-    equal(ask("MLR1 MIG STATUS home hero"), "MLR1 MIG STATE move-1 PREPARING open unfenced notready 9");
+    equal(ask("MLR1 MIG STATUS NS - home hero"), "MLR1 MIG STATE move-1 PREPARING open unfenced notready 9");
     // The order gates still hold over the wire, and a skipped step is an error
     // rather than a silent retry.
-    equal(ask("MLR1 MIG COMMIT home hero move-1 9"), "MLR1 ERR ORDER");
-    equal(ask("MLR1 MIG EVENT home hero move-1 9 READY"), "MLR1 ERR ORDER");
-    equal(ask("MLR1 MIG EVENT home hero move-1 9 FENCE"), "MLR1 ERR ORDER");
-    equal(ask("MLR1 MIG EVENT home hero move-1 9 DRAINED"), "MLR1 MIG STEP move-1 PREPARING");
-    equal(ask("MLR1 MIG EVENT home hero move-1 9 DRAINED"), "MLR1 MIG STEP move-1 PREPARING");
-    equal(ask("MLR1 MIG EVENT home hero move-1 9 FENCE"), "MLR1 MIG STEP move-1 PREPARING");
-    equal(ask("MLR1 MIG EVENT home hero move-1 9 READY"), "MLR1 MIG STEP move-1 PREPARING");
-    equal(ask("MLR1 MIG COMMIT home hero move-1 9"), "MLR1 MIG COMMITTED move-1 "+target+" 9");
-    equal(ask("MLR1 MIG COMMIT home hero move-1 9"), "MLR1 MIG COMMITTED move-1 "+target+" 9");
-    equal(ask("MLR1 MIG STATUS home hero"), "MLR1 MIG STATE move-1 COMMITTED drained fenced ready 9");
+    equal(ask("MLR1 MIG COMMIT NS - home hero move-1 9"), "MLR1 ERR ORDER");
+    equal(ask("MLR1 MIG EVENT NS - home hero move-1 9 READY"), "MLR1 ERR ORDER");
+    equal(ask("MLR1 MIG EVENT NS - home hero move-1 9 FENCE"), "MLR1 ERR ORDER");
+    equal(ask("MLR1 MIG EVENT NS - home hero move-1 9 DRAINED"), "MLR1 MIG STEP move-1 PREPARING");
+    equal(ask("MLR1 MIG EVENT NS - home hero move-1 9 DRAINED"), "MLR1 MIG STEP move-1 PREPARING");
+    equal(ask("MLR1 MIG EVENT NS - home hero move-1 9 FENCE"), "MLR1 MIG STEP move-1 PREPARING");
+    equal(ask("MLR1 MIG EVENT NS - home hero move-1 9 READY"), "MLR1 MIG STEP move-1 PREPARING");
+    equal(ask("MLR1 MIG COMMIT NS - home hero move-1 9"), "MLR1 MIG COMMITTED move-1 "+target+" 9");
+    equal(ask("MLR1 MIG COMMIT NS - home hero move-1 9"), "MLR1 MIG COMMITTED move-1 "+target+" 9");
+    equal(ask("MLR1 MIG STATUS NS - home hero"), "MLR1 MIG STATE move-1 COMMITTED drained fenced ready 9");
     // A terminal replay of the same request re-answers the recorded verdict
     // instead of reserving a newer generation.
-    equal(ask("MLR1 MIG PREPARE home hero move-1 8 "+source+" "+target), "MLR1 MIG PREPARED move-1 9");
+    equal(ask("MLR1 MIG PREPARE NS - home hero move-1 8 "+source+" "+target), "MLR1 MIG PREPARED move-1 9");
     // The published route is the new expectation, and the next candidate is
     // strictly newer.
-    equal(ask("MLR1 MIG PREPARE home hero move-2 9 "+target+" realm alpha gameServer gs-a hall"),
+    equal(ask("MLR1 MIG PREPARE NS - home hero move-2 9 "+target+" realm NS - alpha gameServer gs-a hall"),
         "MLR1 MIG PREPARED move-2 10");
     // Abort only schedules the rollback; CLEANUP finishes it, and the replies
     // never claim a terminal word that has not happened yet.
-    equal(ask("MLR1 MIG ABORT home hero move-2 10"), "MLR1 MIG ABORTING move-2");
-    equal(ask("MLR1 MIG ABORT home hero move-2 10"), "MLR1 MIG ABORTING move-2");
-    equal(ask("MLR1 MIG EVENT home hero move-2 10 CLEANUP"), "MLR1 MIG STEP move-2 ABORTED");
-    equal(ask("MLR1 MIG ABORT home hero move-2 10"), "MLR1 MIG ABORTED move-2");
-    equal(ask("MLR1 MIG STATUS home hero"), "MLR1 MIG STATE move-2 ABORTED open unfenced notready 10");
+    equal(ask("MLR1 MIG ABORT NS - home hero move-2 10"), "MLR1 MIG ABORTING move-2");
+    equal(ask("MLR1 MIG ABORT NS - home hero move-2 10"), "MLR1 MIG ABORTING move-2");
+    equal(ask("MLR1 MIG EVENT NS - home hero move-2 10 CLEANUP"), "MLR1 MIG STEP move-2 ABORTED");
+    equal(ask("MLR1 MIG ABORT NS - home hero move-2 10"), "MLR1 MIG ABORTED move-2");
+    equal(ask("MLR1 MIG STATUS NS - home hero"), "MLR1 MIG STATE move-2 ABORTED open unfenced notready 10");
     // Aborted generations are burned: the next PREPARE gets 11, not 10.
-    equal(ask("MLR1 MIG PREPARE home hero move-3 9 "+target+" realm alpha gameServer gs-a hall"),
+    equal(ask("MLR1 MIG PREPARE NS - home hero move-3 9 "+target+" realm NS - alpha gameServer gs-a hall"),
         "MLR1 MIG PREPARED move-3 11");
     // A retiring member retires the live transaction that depends on it; the
     // coordinator sees the leave from the registry, no message is needed.
-    const std::string doomed_owner = "realm beta gameServer gs-b town";
-    equal(ask("MLR1 MIG OWNER home hero-2 8 "+doomed_owner), "MLR1 MIG OWNER OK");
-    equal(ask("MLR1 MIG PREPARE home hero-2 move-4 8 "+doomed_owner+" realm alpha gameServer gs-a hall"),
+    const std::string doomed_owner = "realm NS - beta gameServer gs-b town";
+    equal(ask("MLR1 MIG OWNER NS - home hero-2 8 "+doomed_owner), "MLR1 MIG OWNER OK");
+    equal(ask("MLR1 MIG PREPARE NS - home hero-2 move-4 8 "+doomed_owner+" realm NS - alpha gameServer gs-a hall"),
         "MLR1 MIG PREPARED move-4 9");
     doomed.signal(SIGTERM);
-    eventually([&] { return ask("MLR1 MIG STATUS home hero-2")
+    eventually([&] { return ask("MLR1 MIG STATUS NS - home hero-2")
         == "MLR1 MIG STATE move-4 ABORTED open unfenced notready 9"; }, 5s,
         "member retirement did not abort the transaction that depended on it");
-    equal(ask("MLR1 MIG STATUS home hero-2"), "MLR1 MIG STATE move-4 ABORTED open unfenced notready 9");
+    equal(ask("MLR1 MIG STATUS NS - home hero-2"), "MLR1 MIG STATE move-4 ABORTED open unfenced notready 9");
     // RETIRE validates the member identity against the migration's own
     // source/destination, not against the registry.
-    equal(ask("MLR1 MIG PREPARE home hero-2 move-5 8 "+doomed_owner+" realm alpha gameServer gs-a hall"),
+    equal(ask("MLR1 MIG PREPARE NS - home hero-2 move-5 8 "+doomed_owner+" realm NS - alpha gameServer gs-a hall"),
         "MLR1 MIG PREPARED move-5 10");
-    equal(ask("MLR1 MIG RETIRE home hero-2 move-5 10 realm alpha gameServer gs-z hall"),
+    equal(ask("MLR1 MIG RETIRE NS - home hero-2 move-5 10 realm NS - alpha gameServer gs-z hall"),
         "MLR1 ERR INVALID");
     // RETIRE matches the transaction's own dependency, so a process that is
     // already gone still retires the migration that claimed it.
-    equal(ask("MLR1 MIG RETIRE home hero-2 move-5 10 "+doomed_owner), "MLR1 MIG ABORTED move-5");
-    equal(ask("MLR1 MIG PREPARE home hero-2 move-6 8 "+doomed_owner+" realm alpha gameServer gs-a hall"),
+    equal(ask("MLR1 MIG RETIRE NS - home hero-2 move-5 10 "+doomed_owner), "MLR1 MIG ABORTED move-5");
+    equal(ask("MLR1 MIG PREPARE NS - home hero-2 move-6 8 "+doomed_owner+" realm NS - alpha gameServer gs-a hall"),
         "MLR1 MIG PREPARED move-6 11");
     // A member the transaction does not depend on is not a retirement claim.
-    equal(ask("MLR1 MIG RETIRE home hero-2 move-6 11 realm gamma gameServer gs-c hall"),
+    equal(ask("MLR1 MIG RETIRE NS - home hero-2 move-6 11 realm NS - gamma gameServer gs-c hall"),
         "MLR1 ERR INVALID");
-    equal(ask("MLR1 MIG RETIRE home hero-2 move-6 11 realm alpha gameServer gs-a hall"),
+    equal(ask("MLR1 MIG RETIRE NS - home hero-2 move-6 11 realm NS - alpha gameServer gs-a hall"),
         "MLR1 MIG ABORTED move-6");
-    equal(ask("MLR1 MIG STATUS home hero-2"),
+    equal(ask("MLR1 MIG STATUS NS - home hero-2"),
         "MLR1 MIG STATE move-6 ABORTED open unfenced notready 11");
     // After the home fence nothing rolls back: retirement and abort only
     // acknowledge, and recovery keeps waiting for the destination. Every
     // candidate stays newer than the last even though the published route is
     // still the one the aborted migrations never replaced.
-    equal(ask("MLR1 MIG PREPARE home hero-2 move-7 8 "+doomed_owner+" realm alpha gameServer gs-a hall"),
+    equal(ask("MLR1 MIG PREPARE NS - home hero-2 move-7 8 "+doomed_owner+" realm NS - alpha gameServer gs-a hall"),
         "MLR1 MIG PREPARED move-7 12");
-    equal(ask("MLR1 MIG EVENT home hero-2 move-7 12 DRAINED"), "MLR1 MIG STEP move-7 PREPARING");
-    equal(ask("MLR1 MIG EVENT home hero-2 move-7 12 FENCE"), "MLR1 MIG STEP move-7 PREPARING");
-    equal(ask("MLR1 MIG RETIRE home hero-2 move-7 12 realm alpha gameServer gs-a hall"),
+    equal(ask("MLR1 MIG EVENT NS - home hero-2 move-7 12 DRAINED"), "MLR1 MIG STEP move-7 PREPARING");
+    equal(ask("MLR1 MIG EVENT NS - home hero-2 move-7 12 FENCE"), "MLR1 MIG STEP move-7 PREPARING");
+    equal(ask("MLR1 MIG RETIRE NS - home hero-2 move-7 12 realm NS - alpha gameServer gs-a hall"),
         "MLR1 MIG PENDING move-7");
-    equal(ask("MLR1 MIG ABORT home hero-2 move-7 12"), "MLR1 ERR ORDER");
-    equal(ask("MLR1 MIG STATUS home hero-2"),
+    equal(ask("MLR1 MIG ABORT NS - home hero-2 move-7 12"), "MLR1 ERR ORDER");
+    equal(ask("MLR1 MIG STATUS NS - home hero-2"),
         "MLR1 MIG STATE move-7 PREPARING drained fenced notready 12");
     // The tokened coordinator keeps its own registry, so it only sees this
     // key after its own hand identifies and publishes the facts.
     {
         RawSocket raw(tokened);
-        send_frame(raw, "MLR1 MIG STATUS home hero-2");
+        send_frame(raw, "MLR1 MIG STATUS NS - home hero-2");
         equal(read_frame(raw), "MLS1 ERR TOKEN");
     }
-    equal(ask_tokened("MLR1 MIG STATUS home hero-2"), "MLR1 EMPTY");
-    equal(ask_tokened("MLR1 MIG OWNER home hero-2 8 "+doomed_owner), "MLR1 MIG OWNER OK");
-    equal(ask_tokened("MLR1 MIG OWNER home hero-2 9 "+doomed_owner), "MLR1 ERR CONFLICT");
-    equal(ask_tokened("MLR1 MIG PREPARE home hero-2 wire-1 8 "+doomed_owner+" "+target),
+    equal(ask_tokened("MLR1 MIG STATUS NS - home hero-2"), "MLR1 EMPTY");
+    equal(ask_tokened("MLR1 MIG OWNER NS - home hero-2 8 "+doomed_owner), "MLR1 MIG OWNER OK");
+    equal(ask_tokened("MLR1 MIG OWNER NS - home hero-2 9 "+doomed_owner), "MLR1 ERR CONFLICT");
+    equal(ask_tokened("MLR1 MIG PREPARE NS - home hero-2 wire-1 8 "+doomed_owner+" "+target),
         "MLR1 MIG PREPARED wire-1 9");
-    equal(ask_tokened("MLR1 MIG EVENT home hero-2 wire-1 9 DRAINED"),
+    equal(ask_tokened("MLR1 MIG EVENT NS - home hero-2 wire-1 9 DRAINED"),
         "MLR1 MIG STEP wire-1 PREPARING");
-    equal(ask_tokened("MLR1 MIG STATUS home hero-2"),
+    equal(ask_tokened("MLR1 MIG STATUS NS - home hero-2"),
         "MLR1 MIG STATE wire-1 PREPARING drained unfenced notready 9");
+    // The same participant coordinates independently in a named namespace.
+    const std::string named_source = "realm NS shop alpha gameServer gs-a town";
+    const std::string named_target = "cross NS shop arena crossServer xs-a room-1";
+    equal(ask("MLR1 MIG STATUS NS shop home hero"), "MLR1 EMPTY");
+    equal(ask("MLR1 MIG OWNER NS shop home hero 8 "+named_source), "MLR1 MIG OWNER OK");
+    equal(ask("MLR1 MIG PREPARE NS shop home hero ns-1 8 "+named_source+" "+named_target),
+        "MLR1 MIG PREPARED ns-1 9");
+    equal(ask("MLR1 MIG STATUS NS shop home hero"),
+        "MLR1 MIG STATE ns-1 PREPARING open unfenced notready 9");
     // Shape refusals close the leg with the same words as the registry verbs.
     equal(ask("MLR1 MIG"), "MLR1 ERR UNEXPECTED");
-    equal(ask("MLR1 MIG OWNER home hero"), "MLR1 ERR INVALID");
-    equal(ask("MLR1 MIG OWNER home hero 8 "+source+" junk"), "MLR1 ERR INVALID");
-    equal(ask("MLR1 MIG PREPARE home hero move-1 8 "+source), "MLR1 ERR INVALID");
-    equal(ask("MLR1 MIG EVENT home hero move-1 9 JUMP"), "MLR1 ERR INVALID");
-    equal(ask("MLR1 MIG STATUS home hero extra"), "MLR1 ERR INVALID");
-    equal(ask("MLR1 MIG STATUS "+std::string(260, 'x')+" hero"), "MLR1 ERR INVALID");
-    equal(ask("MLR1 MIG PREPARE home hero move-1 8 "+std::string(1000, 'x')), "MLR1 ERR INVALID");
-    equal(ask("MLR1 MIG STATUS no.such.key hero"), "MLR1 ERR INVALID");
+    equal(ask("MLR1 MIG OWNER NS - home hero"), "MLR1 ERR INVALID");
+    equal(ask("MLR1 MIG OWNER NS - home hero 8 "+source+" junk"), "MLR1 ERR INVALID");
+    equal(ask("MLR1 MIG PREPARE NS - home hero move-1 8 "+source), "MLR1 ERR INVALID");
+    equal(ask("MLR1 MIG EVENT NS - home hero move-1 9 JUMP"), "MLR1 ERR INVALID");
+    equal(ask("MLR1 MIG STATUS NS - home hero extra"), "MLR1 ERR INVALID");
+    equal(ask("MLR1 MIG STATUS NS - "+std::string(260, 'x')+" hero"), "MLR1 ERR INVALID");
+    equal(ask("MLR1 MIG PREPARE NS - home hero move-1 8 "+std::string(1000, 'x')), "MLR1 ERR INVALID");
+    equal(ask("MLR1 MIG STATUS NS - no.such.key hero"), "MLR1 ERR INVALID");
     std::cout << "migration.wire: OWNER/PREPARE/STEP/COMMIT/ABORT/RETIRE/STATUS over TCP, "
         "MLS1-gated, idempotent by request id, retirement observed from the registry [PASS]\n";
 }
