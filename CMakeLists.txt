@@ -71,6 +71,7 @@ if(BUILD_TESTING)
       entity.tree
       entity.sync
       entity.rpc
+      entity.endpoint
       entity.persist
       entity.perf
       coordinator.placement coordinator.routes coordinator.migration.commit coordinator.migration.abort

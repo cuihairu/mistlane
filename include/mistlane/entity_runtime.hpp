@@ -2,6 +2,7 @@
 #pragma once
 #include "mistlane/entity_dispatch.hpp"
 #include <map>
+#include <optional>
 #include <set>
 #include <tuple>
 
@@ -18,23 +19,34 @@ public:
  }
  EntityDispatchResult deliver(const EntityInvocation& call, std::uint64_t correlation_id) {
    if (!correlation_id) return fail(EntityError::INVALID);
+   if (const auto fenced = fence(call, correlation_id)) return fail(*fenced);
+   return dispatcher_.dispatch(call);
+ }
+ // Hosting fence without dispatching: routes the target, asserts the entity's
+ // current ownership generation and registers the correlation slot for a
+ // request (a zero correlation is a notify and registers nothing). Returns
+ // nullopt when the call may proceed to argument decode and dispatch, else the
+ // typed error to answer. A fenced call never consumes a correlation slot, so
+ // the sender may retry under a fresh id. The transport endpoint calls this
+ // before the wire codec so a stale or duplicate call spends no decode work.
+ std::optional<EntityError> fence(const EntityInvocation& call, std::uint64_t correlation_id) {
    const auto a=address(call.target); const auto it=entities_.find(a);
    if (it==entities_.end()) {
      for (const auto& [known,generation]:entities_) {
        (void)generation;
        if (std::get<0>(known)==call.target.scope && std::get<1>(known)==call.target.type_id && std::get<2>(known)==call.target.entity_id)
-         return fail(EntityError::STALE);
+         return EntityError::STALE;
      }
-     return fail(EntityError::UNROUTED);
+     return EntityError::UNROUTED;
    }
    // Hosting-generation fence (docs/entity-contract.md): internal routing
    // asserts the entity's current ownership generation; a call from an older
    // or unknown generation is STALE, matching the MLD1 durable fence. Zero
    // marks a client-originated call, which asserts no generation. The fence
    // precedes correlation registration, so a fenced call consumes no slot.
-   if (call.hosting_generation && call.hosting_generation != it->second) return fail(EntityError::STALE);
-   if (!delivered_.emplace(a,correlation_id).second) return fail(EntityError::CONFLICT);
-   return dispatcher_.dispatch(call);
+   if (call.hosting_generation && call.hosting_generation != it->second) return EntityError::STALE;
+   if (correlation_id && !delivered_.emplace(a,correlation_id).second) return EntityError::CONFLICT;
+   return std::nullopt;
  }
  bool destroy(EntityTarget ref) { return entities_.erase(address(ref)) != 0; }
 private:

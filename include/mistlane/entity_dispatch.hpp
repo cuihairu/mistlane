@@ -36,6 +36,7 @@ class EntityDispatcher {
 public:
  using Handler = std::function<EntityValues(const EntityCaller&, const EntityTarget&, const EntityValues&)>;
  explicit EntityDispatcher(const EntityContract& contract) : contract_(contract) {}
+ const EntityContract& contract() const { return contract_; }
  void bind(std::string entity, std::string side, unsigned method, Handler handler) {
    handlers_[key(entity, side, method)] = std::move(handler);
  }

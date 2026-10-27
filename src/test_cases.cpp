@@ -7,6 +7,7 @@
 #include "mistlane/entity_contract.hpp"
 #include "mistlane/entity_dispatch.hpp"
 #include "mistlane/entity_envelope.hpp"
+#include "mistlane/entity_endpoint.hpp"
 #include "mistlane/entity_runtime.hpp"
 #include "mistlane/entity_property.hpp"
 #include "mistlane/entity_lua.hpp"
@@ -708,6 +709,113 @@ void entity_rpc() {
     require(second.ok, "fresh correlation did not dispatch");
     require(link.complete(41, second.response).state == RpcQueue::State::OK, "fresh attempt did not complete");
     std::cout << "entity.rpc runtime: burned id CONFLICT, fresh id completes [PASS]\n";
+}
+// Hosting-side transport binding (MLE1): an invocation rides the existing
+// bounded frames as a marker + envelope payload, the endpoint fences before it
+// decodes arguments, and every request answers exactly one typed EntityReply
+// carrying the inner correlation id so a gateway can route it back.
+namespace {
+struct StubCodec : EntityCodec {
+    bool decode_args(const ContractArgs& args, std::string_view payload, EntityValues& out, std::string& reason) const override {
+        if (args.empty()) {
+            if (!payload.empty()) { reason = "unexpected payload"; return false; }
+            return true;
+        }
+        if (args.size() == 1 && args[0].type == "INT32" && payload.size() == 4) {
+            const auto b = [&](std::size_t i) { return static_cast<unsigned char>(payload[i]); };
+            out.emplace(args[0].name, std::int64_t{static_cast<std::int32_t>(b(0) << 24 | b(1) << 16 | b(2) << 8 | b(3))});
+            return true;
+        }
+        reason = "unsupported argument shape";
+        return false;
+    }
+    std::optional<std::string> encode_returns(const ContractArgs& returns, const EntityValues& values) const override {
+        if (returns.size() != 1 || returns[0].type != "UINT16") return std::nullopt;
+        const auto it = values.find(returns[0].name);
+        if (it == values.end()) return std::nullopt;
+        const auto* n = std::get_if<std::int64_t>(&it->second.data);
+        if (!n || *n < 0 || *n > 0xffff) return std::nullopt;
+        std::string out;
+        out.push_back(static_cast<char>(*n >> 8));
+        out.push_back(static_cast<char>(*n & 0xff));
+        return out;
+    }
+};
+}
+void entity_endpoint() {
+    const EntityContract contract(R"(<Contracts><Entity name="Avatar" id="1"><ServerMethods><Method name="get" id="2" mode="request" caller="server"><Arg name="account" id="0" type="INT32"/><Returns><Field name="level" id="1" type="UINT16"/></Returns></Method><Method name="touch" id="3" mode="notify" caller="server"><Arg name="x" id="0" type="INT32"/></Method></ServerMethods></Entity></Contracts>)");
+    StubCodec codec;
+    EntityEndpoint endpoint(contract, &codec);
+    endpoint.runtime().dispatcher().bind("Avatar", "server", 2,
+        [](const EntityCaller&, const EntityTarget&, const EntityValues&) { return EntityValues{{"level", std::int64_t{7}}}; });
+    bool touched = false;
+    endpoint.runtime().dispatcher().bind("Avatar", "server", 3,
+        [&](const EntityCaller&, const EntityTarget&, const EntityValues& args) {
+            touched = std::get<std::int64_t>(args.at("x").data) == 4;
+            return EntityValues{};
+        });
+    require(endpoint.runtime().spawn({1, 1, 3, 42}, 5), "endpoint spawn failed");
+    const auto account4 = std::string("\x00\x00\x00\x04", 4);
+    const auto request = [&](std::uint64_t correlation, std::uint32_t generation, std::uint32_t method,
+                             std::uint32_t type_id, const std::string& payload) {
+        return "MLE1" + encode_entity_envelope({1, type_id, 3, 42, kEntitySideServer,
+            static_cast<std::uint16_t>(method), correlation, generation, 0, payload});
+    };
+    const auto reply = [](const std::optional<std::string>& frame) -> EntityReply {
+        require(frame.has_value() && frame->starts_with("MLE1") && frame->size() >= 12,
+                "expected an MLE1 reply frame");
+        const auto decoded = decode_entity_reply(std::string_view(*frame).substr(12));
+        require(decoded.has_value(), "reply body did not decode");
+        return *decoded;
+    };
+    const auto correlation = [](const std::optional<std::string>& frame) {
+        require(frame.has_value() && frame->size() >= 12, "reply frame too short");
+        std::uint64_t value = 0;
+        for (std::size_t i = 4; i < 12; ++i) value = value << 8 | static_cast<unsigned char>((*frame)[i]);
+        return value;
+    };
+    std::string result;
+    auto ok = endpoint.handle(request(10, 5, 2, 1, account4), {"server", 9}, result);
+    require(result == "ok" && correlation(ok) == 10, "happy reply lost the correlation id");
+    const auto got = reply(ok);
+    require(!got.is_error && got.payload == std::string("\x00\x07", 2), "typed return payload mismatch");
+    std::cout << "entity.endpoint request: MLE1 envelope, typed return, correlation routed [PASS]\n";
+
+    require(!endpoint.handle("MLD1 LOAD x y", {"server", 9}, result).has_value(), "non-entity frame was consumed");
+    std::cout << "entity.endpoint marker: non-entity frames pass through [PASS]\n";
+
+    auto malformed = endpoint.handle("MLE1short", {"server", 9}, result);
+    require(result == "malformed" && correlation(malformed) == 0
+            && reply(malformed).is_error && reply(malformed).error == EntityError::INVALID
+            && reply(malformed).reason == "malformed envelope", "malformed envelope was not a typed INVALID");
+    std::cout << "entity.endpoint malformed: typed INVALID with a reason, correlation zero [PASS]\n";
+
+    auto stale = endpoint.handle(request(11, 4, 2, 1, account4), {"server", 9}, result);
+    require(result == "stale" && correlation(stale) == 11 && reply(stale).error == EntityError::STALE,
+            "older hosting generation was not fenced");
+    std::cout << "entity.endpoint fence: stale generation answered STALE [PASS]\n";
+
+    auto unrouted = endpoint.handle(request(12, 5, 2, 7, account4), {"server", 9}, result);
+    require(result == "unrouted" && reply(unrouted).error == EntityError::UNROUTED, "unknown entity was not UNROUTED");
+    std::cout << "entity.endpoint route: unknown entity answered UNROUTED [PASS]\n";
+
+    auto duplicate = endpoint.handle(request(10, 5, 2, 1, account4), {"server", 9}, result);
+    require(result == "conflict" && reply(duplicate).error == EntityError::CONFLICT,
+            "duplicate correlation was not CONFLICT");
+    std::cout << "entity.endpoint slot: repeated correlation answered CONFLICT [PASS]\n";
+
+    auto forbidden = endpoint.handle(request(13, 5, 2, 1, account4), {"server", 0}, result);
+    require(result == "forbidden" && reply(forbidden).error == EntityError::FORBIDDEN,
+            "zero caller id was not FORBIDDEN");
+    std::cout << "entity.endpoint permission: zero caller id answered FORBIDDEN [PASS]\n";
+
+    const auto notified = endpoint.handle(request(0, 5, 3, 1, account4), {"server", 9}, result);
+    require(notified.has_value() && notified->empty() && result == "notify" && touched,
+            "notify was not handled without a reply");
+    const auto notify_fail = endpoint.handle(request(0, 5, 3, 7, account4), {"server", 9}, result);
+    require(notify_fail.has_value() && notify_fail->empty() && result == "notify-error",
+            "unrouted notify did not surface a label");
+    std::cout << "entity.endpoint notify: handled and answered nothing, failure surfaced [PASS]\n";
 }
 // Home-data persistence snapshot model: only persistent descriptor properties
 // leave the store, a confirmed commit — never the send — clears dirty, and a
