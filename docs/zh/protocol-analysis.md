@@ -84,7 +84,7 @@
 
 ### 注册表线动词（`MLR1 MIG`，第三片 2026-10-20） {#registry-wire-verbs-mlr1-mig-third-slice-2026-10-20}
 
-2026-10-20 实现于 coordinator 注册表链路（`src/node.cpp` 的 `migration_line` 与 `Registry` 迁移表）：上述模型现已可经分帧 TCP 到达，与 `--service-token` coordinator 上的其他注册表帧一样受 MLS1 门禁。home 事实随 `OWNER` 到达，每个 `(realm, character)` 只采纳一次——重申必须逐字重复，任何不一致回答 `ERR CONFLICT`；coordinator 记录事实，但从不充当 generation 权威。各动词按请求 ID 幂等：重放帧重复其判决（`PREPARED <id> <generation>`、`STEP`、`COMMITTED`、终态 `ABORTED`）而不预留新的 generation。
+2026-10-20 实现于 coordinator 注册表链路（`src/node.cpp` 的 `migration_line` 与 `Registry` 迁移表）：上述模型现已可经分帧 TCP 到达，与 `--service-token` coordinator 上的其他注册表帧一样受 MLS1 门禁。home 事实随 `OWNER` 到达，每个 `(namespace, realm, character)` 只采纳一次——重申必须逐字重复，任何不一致回答 `ERR CONFLICT`；coordinator 记录事实，但从不充当 generation 权威。各动词按请求 ID 幂等：重放帧重复其判决（`PREPARED <id> <generation>`、`STEP`、`COMMITTED`、终态 `ABORTED`）而不预留新的 generation。
 
 | 动词 | 行 | 判决 |
 |---|---|---|

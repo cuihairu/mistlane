@@ -84,7 +84,7 @@ The consumed-generation rule is what makes takeover safe rather than clever. An 
 
 ### Registry wire verbs (`MLR1 MIG`, third slice 2026-10-20)
 
-Implemented 2026-10-20 on the coordinator registry leg in `src/node.cpp` (`migration_line` and the `Registry` migration map): the model above is now reachable over framed TCP, gated by MLS1 exactly like every other registry frame on a `--service-token` coordinator. Home facts arrive with `OWNER` and are adopted once per `(realm, character)` — a restatement must repeat them exactly, anything else answers `ERR CONFLICT`, and the coordinator stores facts without ever being the generation authority. The verbs are idempotent by request id: a replayed frame repeats its verdict (`PREPARED <id> <generation>`, `STEP`, `COMMITTED`, terminal `ABORTED`) without reserving a newer generation.
+Implemented 2026-10-20 on the coordinator registry leg in `src/node.cpp` (`migration_line` and the `Registry` migration map): the model above is now reachable over framed TCP, gated by MLS1 exactly like every other registry frame on a `--service-token` coordinator. Home facts arrive with `OWNER` and are adopted once per `(namespace, realm, character)` — a restatement must repeat them exactly, anything else answers `ERR CONFLICT`, and the coordinator stores facts without ever being the generation authority. The verbs are idempotent by request id: a replayed frame repeats its verdict (`PREPARED <id> <generation>`, `STEP`, `COMMITTED`, terminal `ABORTED`) without reserving a newer generation.
 
 | Verb | Line | Verdict |
 |---|---|---|

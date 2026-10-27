@@ -68,7 +68,7 @@ The old `requesthegel2hegel` transfer passes through Gate to change the route an
 | `gameServer` | Lua message execution, lifecycle/reload, direct TCP/WS/WSS with bounded session push/broadcast; existing HTTP adapter retained | Character/scene/instance hosting and persistence chain |
 | `crossServer` | TCP cross context, Lua execution and final connection admission | Character transfer, cross-region scenes and home-data updates |
 | `apiServer` | Lua HTTP/HTTPS hooks, HTTP by default, optional WS/WSS message transport | Platform business callbacks, reliable internal calls and multiple listeners |
-| `coordinator` | TCP-only registry: members register, heartbeat readiness and load, QUERY/PLACE answer in a named scope, disconnect retires the member | Placement and ownership states, region/group scope authority, transfer handshake, high availability and recovery |
+| `coordinator` | TCP-only registry: members register, heartbeat readiness and load, QUERY/PLACE answer per namespace and scope, disconnect retires the member | Placement and ownership states, region/group scope authority, transfer handshake, high availability and recovery |
 | `login` | Runnable as a script-backed service (framed sessions, standard Lua hooks); `--coordinator` wires the registry client behind Lua `mistlane.place` placement lookups | Authentication design, character list and the full entry flow |
 | `data` | Runnable as a script-backed service; `MLS1` on every leg with `--service-token`; the MLD1 record endpoint answers LOAD/SUBMIT with the generation fence, per-character sequence discipline and receipt-only verdicts (no durable ack today) | Persistence chain and `ACK durable`, the durable load path, saves |
 

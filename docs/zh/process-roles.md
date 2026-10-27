@@ -68,7 +68,7 @@ coordinator 负责承载决策和注册状态；进程启动、重启与资源�
 | `gameServer` | Lua message 执行，生命周期与重载，直接 TCP/WS/WSS；也保留已有 HTTP 适配 | 完整角色、场景、副本与持久化链路 |
 | `crossServer` | TCP 跨服上下文与 Lua 执行、最终连接准入 | 跨服角色迁移、场景与回传保存 |
 | `apiServer` | Lua HTTP/HTTPS 请求钩子；不带 transport 时默认 HTTP；可选 WS/WSS message | 平台回调业务、可靠内部调用及多监听 |
-| `coordinator` | 仅 TCP 的注册表：成员注册、心跳上报就绪与负载，按命名作用域回答 QUERY/PLACE，断连即退役成员 | 承载决策与归属状态、区服/跨服组作用域、迁移握手、高可用与恢复 |
+| `coordinator` | 仅 TCP 的注册表：成员注册、心跳上报就绪与负载，按命名空间与作用域回答 QUERY/PLACE，断连即退役成员 | 承载决策与归属状态、区服/跨服组作用域、迁移握手、高可用与恢复 |
 | `login` | 已可按脚本服务启动（帧式会话、标准 Lua 钩子）；`--coordinator` 接通注册表客户端，Lua `mistlane.place` 执行分配查询 | 认证设计、角色列表与完整进入流程 |
 | `data` | 已可按脚本服务启动；`--service-token` 使每条链路要求 `MLS1`；MLD1 记录端点应答 LOAD/SUBMIT，含承载版本栅栏、按角色序号纪律与仅回执裁决（今日无 durable ack） | 持久化链与 `ACK durable`、持久加载路径、保存 |
 
