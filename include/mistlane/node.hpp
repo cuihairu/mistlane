@@ -36,8 +36,9 @@ struct Config {
     std::string namespace_;
     bool namespace_wire = false;
     std::string scope = "main";
-    // SQLite journal path for the coordinator's migration transactions. An
-    // empty value keeps the registry volatile (the historical default).
+    // SQLite journal path for the coordinator's migration transactions and
+    // the data role's durable MLD1 records. An empty value keeps both stores
+    // volatile (the historical default).
     std::string journal;
     std::string script;
     Endpoint redis{"127.0.0.1", 6379};

@@ -1267,6 +1267,44 @@ void core_contracts() {
     equal(records.handle("MLD1 LOAD away hero", result), "MLD1 STATE gen 1 seq 1 hp=3");
     equal(records.handle("MLD1 NOPE", result), "MLD1 ERR INVALID");
     require(result == "invalid", "malformed frame mislabeled");
+    // Durable mode: acceptance echoes the committed ACK, save failures refuse
+    // the write, and a fresh store rebuilt from the backend sees the same state.
+    struct FakeRecordBackend : RecordBackend {
+        std::vector<RecordSnapshot> rows;
+        bool fail = false;
+        void save_record(const RecordSnapshot& row) override {
+            if (fail) throw std::runtime_error("storage down");
+            std::vector<RecordSnapshot> kept;
+            for (auto& old : rows)
+                if (old.realm != row.realm || old.character != row.character) kept.push_back(std::move(old));
+            rows = std::move(kept);
+            rows.push_back(row);
+        }
+        std::vector<RecordSnapshot> restore_records() const override { return rows; }
+    };
+    FakeRecordBackend backend;
+    RecordStore durable;
+    durable.attach_backend(&backend);
+    require(durable.durable() && !records.durable(), "durability switch is wrong");
+    equal(durable.handle("MLD1 SUBMIT home hero gen 5 seq 1 hp=10", result),
+        "MLD1 ACK durable home hero gen 5 seq 1");
+    require(result == "accepted", "durable submit was not accepted");
+    equal(durable.handle("MLD1 SUBMIT home hero gen 5 seq 1 hp=99", result),
+        "MLD1 ACK durable home hero gen 5 seq 1");
+    require(result == "duplicate", "durable resend was not deduplicated");
+    equal(durable.handle("MLD1 LOAD home hero", result), "MLD1 STATE gen 5 seq 1 hp=10");
+    RecordStore reloaded;
+    reloaded.attach_backend(&backend);
+    equal(reloaded.handle("MLD1 LOAD home hero", result), "MLD1 STATE gen 5 seq 1 hp=10");
+    equal(reloaded.handle("MLD1 SUBMIT home hero gen 6 seq 2 hp=20", result),
+        "MLD1 ACK durable home hero gen 6 seq 2");
+    backend.fail = true;
+    equal(reloaded.handle("MLD1 SUBMIT home hero gen 6 seq 3 fail", result), "MLD1 ERR STORAGE");
+    require(result == "storage", "storage failure mislabeled");
+    equal(reloaded.handle("MLD1 LOAD home hero", result), "MLD1 STATE gen 6 seq 2 hp=20");
+    backend.fail = false;
+    equal(reloaded.handle("MLD1 SUBMIT home hero gen 6 seq 3 committed", result),
+        "MLD1 ACK durable home hero gen 6 seq 3");
     // Entity contract prototype: the design page's example parses, resolves
     // and digests; every listed semantic rule refuses its violation.
     const auto document = R"(<Contracts>
@@ -3152,6 +3190,67 @@ void cross_record() {
         RawSocket game(plain);
         equal(ask(game, "MLD1 LOAD home hero"), "MLD1 LOAD home hero");
     }
+}
+void cross_record_journal() {
+    Context c;
+    write(c.path("echo.lua"), echo);
+    const auto first = port(), second = port(), isolated = port();
+    const auto journal = c.path("records.sqlite");
+    auto& initial = c.node("data", first, {"--script", c.path("echo.lua").string(),
+        "--journal", journal.string()});
+    const auto send_frame = [](RawSocket& raw, std::string_view payload) {
+        std::string frame(4, '\0');
+        auto length = static_cast<std::uint32_t>(payload.size());
+        for (int i = 3; i >= 0; --i) { frame[i] = static_cast<char>(length & 255); length >>= 8; }
+        raw.send(frame + std::string(payload));
+    };
+    const auto read_frame = [](RawSocket& raw) {
+        std::size_t length = 0;
+        for (unsigned char ch : raw.receive(4)) length = (length << 8) | ch;
+        return raw.receive(length);
+    };
+    const auto ask = [&send_frame, &read_frame](unsigned listen, const std::string& line) {
+        RawSocket raw(listen);
+        send_frame(raw, line);
+        return read_frame(raw);
+    };
+    // A durable data node answers ACK durable only after the write is stored.
+    equal(ask(first, "MLD1 LOAD home hero"), "MLD1 EMPTY");
+    equal(ask(first, "MLD1 SUBMIT home hero gen 5 seq 1 hp=10 mp=5"),
+        "MLD1 ACK durable home hero gen 5 seq 1");
+    equal(ask(first, "MLD1 LOAD home hero"), "MLD1 STATE gen 5 seq 1 hp=10 mp=5");
+    equal(ask(first, "MLD1 SUBMIT home hero gen 5 seq 1 hp=99"),
+        "MLD1 ACK durable home hero gen 5 seq 1");
+    equal(ask(first, "MLD1 LOAD home hero"), "MLD1 STATE gen 5 seq 1 hp=10 mp=5");
+    equal(ask(first, "MLD1 SUBMIT home hero gen 6 seq 2 hp=12"),
+        "MLD1 ACK durable home hero gen 6 seq 2");
+    equal(ask(first, "MLD1 SUBMIT home hero gen 5 seq 3 late"), "MLD1 ERR STALE gen 6");
+    equal(ask(first, "MLD1 SUBMIT home hero gen 7 seq 9 jump"), "MLD1 ERR SEQ seq 3");
+    equal(ask(first, "MLD1 SUBMIT away hero gen 1 seq 1 hp=3"),
+        "MLD1 ACK durable away hero gen 1 seq 1");
+    initial.signal(SIGTERM);
+    require(initial.wait() == 0, "durable data node did not stop cleanly");
+
+    // Crash reload: LOAD, fence, sequence and the committed ACK all survive.
+    c.node("data", second, {"--script", c.path("echo.lua").string(),
+        "--journal", journal.string()});
+    equal(ask(second, "MLD1 LOAD home hero"), "MLD1 STATE gen 6 seq 2 hp=12");
+    equal(ask(second, "MLD1 LOAD away hero"), "MLD1 STATE gen 1 seq 1 hp=3");
+    // A lost durable reply replays the committed ACK without altering state.
+    equal(ask(second, "MLD1 SUBMIT home hero gen 6 seq 2 hp=99"),
+        "MLD1 ACK durable home hero gen 6 seq 2");
+    equal(ask(second, "MLD1 LOAD home hero"), "MLD1 STATE gen 6 seq 2 hp=12");
+    equal(ask(second, "MLD1 SUBMIT home hero gen 5 seq 3 late"), "MLD1 ERR STALE gen 6");
+    equal(ask(second, "MLD1 SUBMIT home hero gen 7 seq 9 jump"), "MLD1 ERR SEQ seq 3");
+    equal(ask(second, "MLD1 SUBMIT home hero gen 7 seq 3 recovered"), "MLD1 ACK durable home hero gen 7 seq 3");
+    equal(ask(second, "MLD1 SUBMIT home hero gen 8 seq 5 after"), "MLD1 ERR SEQ seq 4");
+    equal(ask(second, "MLD1 SUBMIT home hero gen 8 seq 4 after"), "MLD1 ACK durable home hero gen 8 seq 4");
+    // A data node without a store stays volatile: no ACK, no fabricated state.
+    c.node("data", isolated, {"--script", c.path("echo.lua").string()});
+    equal(ask(isolated, "MLD1 LOAD home hero"), "MLD1 EMPTY");
+    equal(ask(isolated, "MLD1 SUBMIT home hero gen 1 seq 1 x"), "MLD1 RECEIVED gen 1 seq 1");
+    std::cout << "record.journal: durable MLD1 write survives restart, ACK durable is the "
+        "only commitment and replay is idempotent [PASS]\n";
 }
 namespace {
 struct MigrationFixture {

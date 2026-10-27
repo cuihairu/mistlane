@@ -53,7 +53,7 @@ The default set starts gameServer → gateway, two crossServer instances → gat
 
 ## Registry and service roles
 
-The `coordinator`, `login` and `data` instances are not started by the default cluster command. `coordinator` (`127.0.0.1:7500`) is a registry only: it runs no script and forwards nothing. Point a gameServer or crossServer at it by adding `COORDINATOR=127.0.0.1:7500` (and an optional `SCOPE`) to its instance file; `login` already carries that line and asks `MLR1 PLACE` through `scripts/login.lua`, whose `mistlane.place` callback answers the client. `data` (`127.0.0.1:7700`) owns the native `MLD1` record endpoint and never registers with a coordinator; its script sees only non-record traffic, records stay process-local until a durable storage backend exists, and `ACK durable` is never sent today.
+The `coordinator`, `login` and `data` instances are not started by the default cluster command. `coordinator` (`127.0.0.1:7500`) is a registry only: it runs no script and forwards nothing. Point a gameServer or crossServer at it by adding `COORDINATOR=127.0.0.1:7500` (and an optional `SCOPE`) to its instance file; `login` already carries that line and asks `MLR1 PLACE` through `scripts/login.lua`, whose `mistlane.place` callback answers the client. `data` (`127.0.0.1:7700`) owns the native `MLD1` record endpoint and never registers with a coordinator; its script sees only non-record traffic, and `JOURNAL=record.sqlite` turns on durable writes (`ACK durable` only after commit); without a store records stay process-local and `ACK durable` is never sent.
 
 ```sh
 MISTLANE_BIN=/path/to/mistlane ./ops/cluster.sh start coordinator login data
@@ -264,6 +264,7 @@ TRANSPORT=tcp
 UPSTREAMS=
 ROUTE_EPOCH=
 # data owns the MLD1 record endpoint and never registers with a coordinator.
+# JOURNAL=record.sqlite enables the durable record store and ACK durable.
 )ENV"},
     TemplateFile{"ops/run-instance.sh", R"SH(#!/bin/sh
 set -eu

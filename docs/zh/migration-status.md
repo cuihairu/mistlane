@@ -6,7 +6,7 @@
 |---|---|---|
 | 角色承载、Session/Avatar 与迁移 | 已设计、未抽取 | 旧角色在 Hegel/CrossHegel 间转移，原 Gate 保持连接；框架无 Avatar 类型。对象拆分、生命周期状态、钩子面、迁移与加载保存规则见[Avatar 运行时契约](./avatar-runtime.md)页；通用 Avatar 生命周期、唯一写入权与可靠移交仍未实现，见[模型说明](./player-scene-model.md)。 |
 | 地图模板、空间数据与场景实例 | 已设计、未迁移 | 旧 SceneManager/Scene 主要为 Lua；C++ 导航调用已注释，框架无场景/地图/实体对象。分层、准备状态、空间缓存引用与释放、清理顺序见[场景生命周期页](./scene-lifecycle.md)；大地图三轴与流式/空间分区需求见[大地图页](./big-map.md)。流式、空间 AOI 与无缝仍只是需求。逐项 gameServer 评估见[能力评估页](./gameserver-capabilities.md)。 |
-| 跨服变更回归属区服保存 | 部分实现 | 旧 set/setDirty 经 CrossWorld 和归属 World 发 Data/Cache。目标保留数据归属：`data` 角色已应答 MLD1 归属侧端点（`LOAD`/`SUBMIT`），带承载版本栅栏、按角色序号纪律与重发去重，但仅作回执应答——无 `ACK durable`。持久化链的 coordinator journal 半片现已落 SQLite（`--journal`，见[协议分析](./protocol-analysis.md)）；data 侧持久确认与 crossServer 发送侧有界重试队列仍未实现。见[跨服回传与唯一写入权协议](./cross-return-protocol.md)。 |
+| 跨服变更回归属区服保存 | 部分实现 | 旧 set/setDirty 经 CrossWorld 和归属 World 发 Data/Cache。目标保留数据归属：`data` 角色已应答 MLD1 归属侧端点（`LOAD`/`SUBMIT`），带承载版本栅栏、按角色序号纪律、重发去重，并在 `--journal FILE` 下以存储后端的 `ACK durable` 应答（已提交行跨 data 重启保留，提交失败回 `ERR STORAGE`）；无存储时仅作回执应答。coordinator journal 与 MLD1 记录存储共享同一 SQLite 边界（见[协议分析](./protocol-analysis.md)）；crossServer 发送侧有界重试队列与 home 最终序号/墓碑权威仍未实现。见[跨服回传与唯一写入权协议](./cross-return-protocol.md)。 |
 | 进程启动、监听器、信号和退出 | 重新实现 | 新生命周期由 `Node` 管理，逐项核对见[旧生命周期核对](#旧生命周期核对)；不保留旧进程 API 或二进制兼容。 |
 | 异步 TCP 传输 | 重新实现 | 使用新的四字节长度头协议，并有会话限制和期限；不支持旧分帧及客户端协议。 |
 | WebSocket / 安全 WebSocket | 替换 | WS/WSS 由 Drogon/Trantor 处理，不迁移手写握手、掩码或控制帧解析。 |

@@ -78,7 +78,8 @@ if(BUILD_TESTING)
       coordinator.migration.retire coordinator.migration.wire coordinator.migration.journal cross.ticket lua.lifecycle lua.http
       api.signature api.tamper api.rotation api.replay api.acceptance api.ownership api.wire api.http
       login.ticket
-      cross.admission cross.record cross.return.queue probe.control scaffold.init config.file cli.bot)
+      cross.admission cross.record cross.record.journal cross.return.queue probe.control scaffold.init
+      config.file cli.bot)
     string(REPLACE "." "_" test_name "${test_case}")
     add_test(NAME mistlane_${test_name} COMMAND mistlane test --case "${test_case}")
     set_tests_properties(mistlane_${test_name} PROPERTIES TIMEOUT 60)

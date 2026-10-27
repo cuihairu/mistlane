@@ -153,7 +153,7 @@ coordinator 是注册表，不是转发面。用 `--role coordinator --listen AD
 
 `data` 角色拥有跨服回传协议的归属侧记录端点，由框架而不是脚本应答：`MLD1 LOAD <realm> <character>` 应答 `MLD1 EMPTY` 或 `MLD1 STATE gen <n> seq <m> [<payload>]`，`MLD1 SUBMIT <realm> <character> gen <n> seq <m> [<payload>]` 应答 `MLD1 RECEIVED gen <n> seq <m>`。栅栏按承载版本判定——更低的版本得到 `MLD1 ERR STALE gen <当前版本>`；序号按角色标识单调且跨代连续——下一序号必须恰好比已存序号大一（否则得到 `MLD1 ERR SEQ seq <期望值>`），对已存序号的重发去重为第二次回执且不改动已存变更集。格式错误回复 `MLD1 ERR INVALID`，存满后的新记录回复 `MLD1 ERR FULL`；`mistlane_record_results_total{role="data",result=...}` 按闭集结果词（loaded/empty/accepted/duplicate/stale/seq/invalid/full）统计每次裁决。
 
-`RECEIVED` 是回执而非持久性声明：data 侧持久化链尚未实现，记录仅存在于 data 进程内，重启后同样回复 `MLD1 EMPTY`——今天任何地方都不会发出 `ACK durable`。存储只保留每个角色标识最新被接受的变更集；把变更集合并入实体状态是暂缓的实体契约工作。同一连接上的任何非 `MLD1` 帧仍是脚本流量；带 `--service-token` 启动的 data 在任何记录帧之前仍要求 `MLS1` 握手（否则 `MLS1 ERR TOKEN`）。只有 data 角色解释 `MLD1`——其他角色看到的就是普通脚本 payload。
+`RECEIVED` 是回执而非持久性声明。带 `--journal FILE` 的 data 先持久化每个被接受的变更集再应答 `ACK durable`，重启即恢复，已存序号的重发回弹已提交 ACK 且不改写载荷；无存储时记录仅在进程内，重启后同样回复 `MLD1 EMPTY`。存储只保留每个角色标识最新被接受的变更集；把变更集合并入实体状态是暂缓的实体契约工作。同一连接上的任何非 `MLD1` 帧仍是脚本流量；带 `--service-token` 启动的 data 在任何记录帧之前仍要求 `MLS1` 握手（否则 `MLS1 ERR TOKEN`）。只有 data 角色解释 `MLD1`——其他角色看到的就是普通脚本 payload。
 
 ### 初始化模板中的配置
 

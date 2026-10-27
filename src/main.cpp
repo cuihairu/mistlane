@@ -242,8 +242,8 @@ int main(int argc, char** argv) {
                              "  login: --coordinator IP:PORT [--namespace NAME] [--scope NAME] enables\n"
                              "      mistlane.place(role, namespace?, scope?, callback) placement lookups\n"
                              "      (no registration)\n"
-                             "  data: answers MLD1 LOAD/SUBMIT record frames on framed TCP (receipt only;\n"
-                             "      no durable ack until a persistence chain exists)\n"
+                             "  data: answers MLD1 LOAD/SUBMIT record frames on framed TCP;\n"
+                             "      --journal FILE enables durable writes and ACK durable\n"
                              "  --transport tcp|ws|wss|http|https (wss/https require --cert FILE --key FILE)\n"
                              "  --listener PROTO://IP:PORT (repeat; independent extra listener, mixed\n"
                              "    plaintext/TLS allowed; wss/https may add ?cert=FILE&key=FILE overrides)\n"
@@ -263,7 +263,8 @@ int main(int argc, char** argv) {
                              "  coordinator: --service-token TOKEN (require member identity); registry\n"
                              "    members connect with --coordinator IP:PORT [--namespace NAME]\n"
                              "      [--scope NAME] and heartbeat\n"
-                             "    --journal FILE (optional; SQLite migration journal, restored on restart)\n"
+                             "    --journal FILE (optional; SQLite migration journal for coordinator,\n"
+                             "      durable MLD1 records for data; both are restored on restart)\n"
                              "    MLR1 REGISTER/QUERY/PLACE/ROUTE over framed TCP; MLR1 MIG\n"
                              "    OWNER/PREPARE/EVENT/COMMIT/ABORT/RETIRE/STATUS carry the migration\n"
                              "    protocol for a (namespace, realm, character), idempotent by request id";
@@ -328,8 +329,8 @@ int main(int argc, char** argv) {
             // The registry is state, not a forwarding or scripting plane.
             throw std::invalid_argument("coordinator requires no script and no upstream");
         }
-        if (!config.journal.empty() && config.role != "coordinator")
-            throw std::invalid_argument("--journal applies to coordinator only");
+        if (!config.journal.empty() && config.role != "coordinator" && config.role != "data")
+            throw std::invalid_argument("--journal applies to coordinator or data only");
         // Registration is a member duty; gateways route, coordinators collect.
         if (config.coordinator_enabled && config.role != "gameServer" && config.role != "crossServer"
                 && config.role != "login")

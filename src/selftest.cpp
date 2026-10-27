@@ -51,6 +51,7 @@ void lua_http();
 void cross_admission();
 void cross_ticket();
 void cross_record();
+void cross_record_journal();
 void cross_return_queue();
 void probe_control();
 void scaffold_init();
@@ -151,6 +152,7 @@ int run_tests(int argc, char** argv) {
         {"cross.admission","cross",test::cross_admission},
         {"cross.ticket","cross",test::cross_ticket},
         {"cross.record","cross",test::cross_record},
+        {"cross.record.journal","cross",test::cross_record_journal},
         {"cross.return.queue","cross",test::cross_return_queue},
         {"probe.control","probe",test::probe_control},
         {"scaffold.init","scaffold",test::scaffold_init},

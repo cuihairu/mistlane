@@ -27,6 +27,56 @@ void sqlite_exec(sqlite3* db, const char* sql) {
     }
 }
 
+void sqlite_record_exec(sqlite3* db, const char* sql) {
+    char* error = nullptr;
+    const int code = sqlite3_exec(db, sql, nullptr, nullptr, &error);
+    if (code != SQLITE_OK) {
+        const std::string message = error ? error : "sqlite error";
+        sqlite3_free(error);
+        throw std::runtime_error("record store schema failed: "+message);
+    }
+}
+
+class RecordStatement {
+public:
+    RecordStatement(sqlite3* db, const char* sql) : db_(db) {
+        if (sqlite3_prepare_v2(db, sql, -1, &stmt_, nullptr) != SQLITE_OK)
+            sqlite_throw(db, "record store prepare failed");
+    }
+    ~RecordStatement() {
+        if (stmt_) sqlite3_finalize(stmt_);
+    }
+    RecordStatement(const RecordStatement&) = delete;
+    RecordStatement& operator=(const RecordStatement&) = delete;
+    sqlite3_stmt* get() { return stmt_; }
+    void bind_int(int index, int value) {
+        if (sqlite3_bind_int(stmt_, index, value) != SQLITE_OK)
+            sqlite_throw(db_, "record store bind int failed");
+    }
+    void bind_u64(int index, std::uint64_t value) {
+        if (sqlite3_bind_int64(stmt_, index, static_cast<sqlite3_int64>(value)) != SQLITE_OK)
+            sqlite_throw(db_, "record store bind int failed");
+    }
+    void bind_text(int index, std::string_view value) {
+        if (sqlite3_bind_text(stmt_, index, value.data(), static_cast<int>(value.size()),
+                SQLITE_TRANSIENT) != SQLITE_OK)
+            sqlite_throw(db_, "record store bind text failed");
+    }
+    void bind_blob(int index, const std::vector<unsigned char>& value) {
+        if (sqlite3_bind_blob64(stmt_, index, value.data(),
+                static_cast<sqlite3_uint64>(value.size()), SQLITE_TRANSIENT) != SQLITE_OK)
+            sqlite_throw(db_, "record store bind blob failed");
+    }
+    void step(const char* what) {
+        const int code = sqlite3_step(stmt_);
+        if (code != SQLITE_DONE && code != SQLITE_ROW)
+            sqlite_throw(db_, what);
+    }
+private:
+    sqlite3* db_;
+    sqlite3_stmt* stmt_ = nullptr;
+};
+
 class Statement {
 public:
     Statement(sqlite3* db, const char* sql) : db_(db) {
@@ -82,6 +132,12 @@ void put_string(std::vector<unsigned char>& out, std::string_view value) {
     out.insert(out.end(), value.begin(), value.end());
 }
 void put_bool(std::vector<unsigned char>& out, bool value) { put_u8(out, value ? 1 : 0); }
+
+void put_record(std::vector<unsigned char>& out, const RecordSnapshot& snapshot) {
+    put_u64(out, snapshot.generation);
+    put_u64(out, snapshot.sequence);
+    put_string(out, snapshot.payload);
+}
 
 class Reader {
 public:
@@ -191,6 +247,16 @@ std::vector<unsigned char> encode_snapshot(const MigrationTransaction::Snapshot&
     return out;
 }
 
+RecordSnapshot read_record(const std::string& realm, const std::string& character, Reader& in) {
+    RecordSnapshot snapshot;
+    snapshot.realm = realm;
+    snapshot.character = character;
+    snapshot.generation = in.u64();
+    snapshot.sequence = in.u64();
+    snapshot.payload = in.text();
+    return snapshot;
+}
+
 MigrationOwner read_owner(Reader& in) {
     MigrationOwner owner;
     const auto kind = in.byte();
@@ -290,6 +356,10 @@ struct MigrationJournal::Impl {
             "version INTEGER NOT NULL, namespace TEXT NOT NULL, realm TEXT NOT NULL,"
             "character TEXT NOT NULL, snapshot BLOB NOT NULL,"
             "PRIMARY KEY(namespace, realm, character))");
+        sqlite_record_exec(db,
+            "CREATE TABLE IF NOT EXISTS record_store ("
+            "version INTEGER NOT NULL, realm TEXT NOT NULL, character TEXT NOT NULL,"
+            "snapshot BLOB NOT NULL, PRIMARY KEY(realm, character))");
         // A WAL/schema setting is a process-level hint; this pins the row
         // format so a future incompatible writer refuses old files instead of
         // silently decoding garbage.
@@ -348,6 +418,50 @@ std::vector<MigrationJournalRecord> MigrationJournal::restore() const {
         if (snapshot.key != MigrationKey{key_realm, key_character})
             throw std::runtime_error("migration journal snapshot key mismatch");
         records.push_back({std::move(ns), {std::move(key_realm), std::move(key_character)}, std::move(snapshot)});
+    }
+    return records;
+}
+
+void MigrationJournal::save_record(const RecordSnapshot& snapshot) {
+    if (impl_->db == nullptr) throw std::runtime_error("record store is closed");
+    if (!record_identifier(snapshot.realm) || !record_identifier(snapshot.character)
+            || !snapshot.generation || !snapshot.sequence)
+        throw std::invalid_argument("invalid record store key or fence");
+    std::vector<unsigned char> bytes;
+    put_record(bytes, snapshot);
+    RecordStatement upsert(impl_->db, "INSERT INTO record_store(version, realm, character, snapshot) "
+        "VALUES(?, ?, ?, ?) ON CONFLICT(realm, character) DO UPDATE SET "
+        "version=excluded.version, snapshot=excluded.snapshot");
+    upsert.bind_int(1, static_cast<int>(kVersion));
+    upsert.bind_text(2, snapshot.realm);
+    upsert.bind_text(3, snapshot.character);
+    upsert.bind_blob(4, bytes);
+    upsert.step("record store save step failed");
+}
+
+std::vector<RecordSnapshot> MigrationJournal::restore_records() const {
+    if (impl_->db == nullptr) throw std::runtime_error("record store is closed");
+    std::vector<RecordSnapshot> records;
+    RecordStatement query(impl_->db,
+        "SELECT version, realm, character, snapshot FROM record_store ORDER BY realm, character");
+    for (;;) {
+        const int code = sqlite3_step(query.get());
+        if (code == SQLITE_DONE) break;
+        if (code != SQLITE_ROW) sqlite_throw(impl_->db, "record store restore step failed");
+        const int version = sqlite3_column_int(query.get(), 0);
+        const auto* realm = reinterpret_cast<const char*>(sqlite3_column_text(query.get(), 1));
+        const auto* character = reinterpret_cast<const char*>(sqlite3_column_text(query.get(), 2));
+        const int realm_size = sqlite3_column_bytes(query.get(), 1);
+        const int character_size = sqlite3_column_bytes(query.get(), 2);
+        const std::string key_realm(realm ? realm : "", static_cast<std::size_t>(realm_size));
+        const std::string key_character(character ? character : "",
+            static_cast<std::size_t>(character_size));
+        if (version != static_cast<int>(kVersion))
+            throw std::runtime_error("record store version mismatch");
+        if (!record_identifier(key_realm) || !record_identifier(key_character))
+            throw std::runtime_error("record store key corrupted");
+        Reader reader(sqlite3_column_blob(query.get(), 3), sqlite3_column_bytes(query.get(), 3));
+        records.push_back(read_record(key_realm, key_character, reader));
     }
     return records;
 }

@@ -8,6 +8,7 @@
 #include <string>
 #include <string_view>
 #include <utility>
+#include <vector>
 namespace mistlane {
 // MLD1 (cross return protocol): the data role's home-side record endpoint.
 // A peer leg is one framed connection, normally identified by MLS1, that
@@ -18,10 +19,11 @@ namespace mistlane {
 //   MLD1 EMPTY
 //   MLD1 STATE gen <n> seq <m> [<payload>]
 //   MLD1 RECEIVED gen <n> seq <m>
-//   MLD1 ERR INVALID | STALE gen <n> | SEQ seq <n> | FULL
-// RECEIVED is a receipt, never a durability claim: the persistence chain does
-// not exist yet, so nothing here may read as "ACK durable" and a restart
-// loses every record.
+//   MLD1 ACK durable <realm> <character> gen <n> seq <m>
+//   MLD1 ERR INVALID | STALE gen <n> | SEQ seq <n> | FULL | STORAGE
+// Without a durable backend RECEIVED is a receipt, never a durability claim.
+// With one, acceptance is acknowledged with ACK durable only after the home
+// write is durable, so a restart never loses an acknowledged change-set.
 struct RecordRequest {
     enum class Type { Load, Submit };
     Type type = Type::Load;
@@ -97,12 +99,46 @@ inline RecordRequest parse_record(std::string_view payload) {
         throw std::invalid_argument("INVALID");
     return r;
 }
+// One durable MLD1 record row: the canonical home-store snapshot after an
+// accepted submission — fence generation, monotonic sequence and the opaque
+// change-set payload.
+struct RecordSnapshot {
+    std::string realm, character;
+    std::uint64_t generation = 0, sequence = 0;
+    std::string payload;
+};
+// Storage boundary for the data role's persistent record store. The SQLite
+// backend lives beside the coordinator journal and reuses its versioned-BLOB
+// encoding; an in-memory-only store passes no backend here.
+class RecordBackend {
+public:
+    virtual ~RecordBackend() = default;
+    virtual void save_record(const RecordSnapshot&) = 0;
+    virtual std::vector<RecordSnapshot> restore_records() const = 0;
+};
 // Single event-loop thread: no locking. The store keeps the newest accepted
 // change-set per (realm, character); merging change-sets into entity state is the
 // deferred entity-contract work, not this endpoint's.
 class RecordStore {
 public:
     using RecordKey = std::pair<std::string, std::string>;
+    RecordStore() = default;
+    // Wires durable storage and restores every persisted row before the
+    // endpoint accepts traffic; a corrupt or full store fails startup.
+    void attach_backend(RecordBackend* backend) {
+        if (!backend || backend_) return;
+        for (auto snapshot : backend->restore_records()) {
+            if (!record_identifier(snapshot.realm) || !record_identifier(snapshot.character)
+                    || !snapshot.generation || !snapshot.sequence || records_.size() >= limit)
+                throw std::invalid_argument("record store row corrupted");
+            RecordState& record = records_[{std::move(snapshot.realm), std::move(snapshot.character)}];
+            record.generation = snapshot.generation;
+            record.sequence = snapshot.sequence;
+            record.payload = std::move(snapshot.payload);
+        }
+        backend_ = backend;
+    }
+    bool durable() const { return backend_ != nullptr; }
     // Handles one frame and returns the reply; the result word feeds the
     // bounded result label of mistlane_record_results_total.
     std::string handle(std::string_view frame, std::string_view& result) {
@@ -127,8 +163,11 @@ public:
         if (it != records_.end() && request.generation == it->second.generation
                 && request.sequence == it->second.sequence) {
             // At-least-once resends dedup to a second receipt; the stored
-            // payload stays the first one.
+            // payload stays the first one. A durable store echoes the already
+            // committed ACK instead of a fresh volatile receipt.
             result = "duplicate";
+            if (backend_) return encode_durable_ack({request.realm, request.character,
+                it->second.generation, it->second.sequence});
             return "MLD1 RECEIVED gen " + std::to_string(it->second.generation)
                  + " seq " + std::to_string(it->second.sequence);
         }
@@ -143,11 +182,26 @@ public:
             result = "full";
             return "MLD1 ERR FULL";
         }
+        RecordState accepted;
+        accepted.generation = request.generation;
+        accepted.sequence = request.sequence;
+        accepted.payload = request.payload;
+        if (backend_) {
+            try {
+                backend_->save_record({request.realm, request.character, accepted.generation,
+                    accepted.sequence, accepted.payload});
+            } catch (const std::exception&) {
+                // A failed durable write is not an acceptance: the sender stays
+                // in its retry queue and the in-memory view is unchanged.
+                result = "storage";
+                return "MLD1 ERR STORAGE";
+            }
+        }
         auto& record = records_[key];
-        record.generation = request.generation;
-        record.sequence = request.sequence;
-        record.payload = std::move(request.payload);
+        record = std::move(accepted);
         result = "accepted";
+        if (backend_) return encode_durable_ack({request.realm, request.character,
+            record.generation, record.sequence});
         return "MLD1 RECEIVED gen " + std::to_string(record.generation)
              + " seq " + std::to_string(record.sequence);
     }
@@ -157,6 +211,7 @@ private:
     static constexpr std::size_t limit = 1000000;
     struct RecordState { std::uint64_t generation = 0, sequence = 0; std::string payload; };
     std::map<RecordKey, RecordState> records_;
+    RecordBackend* backend_ = nullptr;
 };
 
 // Sender-side ordering boundary. The caller seeds the durable cursor from

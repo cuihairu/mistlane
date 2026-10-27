@@ -2387,6 +2387,10 @@ public:
         admission_(std::max<std::size_t>(1, config_.upstreams.size()), config_.max_room_sessions,
                    config_.max_group_sessions, config_.max_shard_sessions) {
         diagnostics_ = std::make_unique<Diagnostics>(config_);
+        if (config_.role == "data" && !config_.journal.empty()) {
+            record_journal_ = std::make_unique<MigrationJournal>(config_.journal);
+            records_.attach_backend(record_journal_.get());
+        }
         if (config_.probe_enabled) {
             probe_ = std::make_shared<ProbeServer>(io_, config_.probe_listen,
                 [this](std::string_view command) {
@@ -2771,6 +2775,7 @@ private:
     // Only the data role routes frames into this; every other role passes
     // nullptr and keeps MLD1 as plain script traffic.
     RecordStore records_;
+    std::unique_ptr<MigrationJournal> record_journal_;
     // MLA1 external API: native route beside the Lua HTTP callbacks.
     ApiReplayGuard api_replay_;
     ApiMemoryAcceptanceStore api_store_;

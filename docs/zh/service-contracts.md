@@ -37,10 +37,10 @@ data 拥有其归属区服的持久角色存储：唯一的记录写入方、MLD
 | 对端 | 入向：gameServer/crossServer（加载、MLD1 提交、保存）、login（角色列表）；除数据库层外没有任何出向 |
 | 持久权威 | data 仅在自身写入持久之后以 `ACK durable` 应答 MLD1 `SUBMIT`；generation 栅栏与按角色序号去重是 data 侧职责（见回传协议） |
 | 加载路径 | 加载请求返回角色持久状态及其当前承载版本；请求方已持有的版本让归属侧能拒绝过期声明 |
-| 持久链落地之前 | data 侧持久化链（实体契约条目）未实现。在其存在之前，data 无法发出真实的持久确认；过渡实现必须完全不发送 `ACK durable`，让发送方停留在重试/只读状态——这是诚实的降级，不是捷径 |
+| 存储后端 | `--journal FILE` 启用 data 侧 SQLite 记录存储（与 coordinator 迁移 journal 同一边界）。有存储时 data 仅在 payload/序号行持久后才应答已提交的 `ACK durable`；无存储时 data 必须完全不发送 `ACK durable`，让发送方停留在重试/只读状态——这是诚实的降级，不是捷径 |
 | 排除 | 业务 schema、SQL、缓存表语义；存储引擎与脏追踪归实体契约链 |
 
-接线状态：角色外壳已可启动（`--role data` 加 `--script`），`--service-token` 对每条链路强制 `MLS1` 身份，MLD1 端点已在运行（帧式 TCP 上的 `MLD1 LOAD`/`SUBMIT`）：承载版本栅栏、按角色序号纪律与重发去重已在框架内实现，端点以 `MLD1 RECEIVED` 应答——回执而绝非持久性声明，发送方按协议要求继续保留重试队列。仍未实现：持久化链，因此今天任何地方都没有 `ACK durable`，记录仅在进程内（重启后应答 `MLD1 EMPTY`）；持久加载路径同样只从这份内存记录应答，别无更多。
+接线状态：角色外壳已可启动（`--role data` 加 `--script`），`--service-token` 对每条链路强制 `MLS1` 身份，MLD1 端点已在运行（帧式 TCP 上的 `MLD1 LOAD`/`SUBMIT`）：承载版本栅栏、按角色序号纪律、重发去重与存储后端的 `ACK durable` 已在框架内实现。带存储的 data 仅在记录行提交后应答 `ACK durable`，重启后的重发回弹已提交 ACK，写提交失败回 `MLD1 ERR STORAGE`；无 `--journal` 时应答 `MLD1 RECEIVED` 且不声明持久，按协议要求让发送方保留重试队列。仍未实现：crossServer 发送侧重试接线上行、home 最终序号/墓碑权威与 Avatar 运行时（记录存储本身只是 data 持久化链，不是运行时）。
 
 ## apiServer
 

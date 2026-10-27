@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
 #include "mistlane/migration.hpp"
+#include "mistlane/record.hpp"
 #include <memory>
 #include <string>
 #include <vector>
@@ -21,7 +22,7 @@ struct MigrationJournalRecord {
 // the first persistence-chain layer: it makes coordinator intent durable, but
 // it is not the home-data record store. The MLD1/Mld1 durable confirmation and
 // the cross-return queue can reuse this store boundary in later slices.
-class MigrationJournal {
+class MigrationJournal : public RecordBackend {
 public:
     explicit MigrationJournal(std::string path);
     ~MigrationJournal();
@@ -31,6 +32,8 @@ public:
     MigrationJournal& operator=(MigrationJournal&&) = delete;
     void save(const MigrationJournalRecord&);
     std::vector<MigrationJournalRecord> restore() const;
+    void save_record(const RecordSnapshot&) override;
+    std::vector<RecordSnapshot> restore_records() const override;
 private:
     struct Impl;
     std::unique_ptr<Impl> impl_;
