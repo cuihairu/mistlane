@@ -2908,13 +2908,16 @@ void coordinator_routes() {
     Context c;
     write(c.path("echo.lua"), echo);
     const auto registry = port(), metrics = port(), tokened = port(),
-              first = port(), second = port();
+              first = port(), second = port(), third = port();
     auto& coord = c.node("coordinator", registry, {"--metrics-listen", endpoint(metrics)});
     c.node("coordinator", tokened, {"--service-token", "s3cret"});
     auto& gs_a = c.node("gameServer", first, {"--script", c.path("echo.lua").string(),
         "--coordinator", endpoint(registry), "--scope", "alpha", "--service-name", "gs-a"});
     auto& gs_b = c.node("gameServer", second, {"--script", c.path("echo.lua").string(),
         "--coordinator", endpoint(registry), "--scope", "alpha", "--service-name", "gs-b"});
+    auto& gs_ns = c.node("gameServer", third, {"--script", c.path("echo.lua").string(),
+        "--coordinator", endpoint(registry), "--namespace", "ns", "--scope", "alpha",
+        "--service-name", "gs-n"});
     const auto send_frame = [](RawSocket& raw, std::string_view payload) {
         std::string frame(4, '\0');
         auto length = static_cast<std::uint32_t>(payload.size());
@@ -2975,6 +2978,24 @@ void coordinator_routes() {
         std::to_string(second)+" 0 ready 0/42";
     eventually([&] { return ask("MLR1 ROUTE GET NS - mist eve") == eve_moved; },
         5s, "route overwrite did not stick");
+    // Two namespaces may reuse one scope name: members and route records stay
+    // apart, and a character route in each answers its own host.
+    eventually([&] { return ask("MLR1 QUERY - ns alpha").find(
+        "member gameServer gs-n ns alpha 127.0.0.1:"+std::to_string(third)) != std::string::npos; },
+        5s, "a namespaced member never reached the registry");
+    const auto default_listing = ask("MLR1 QUERY - - alpha");
+    require(default_listing.find("MLR1 MEMBERS 2") != std::string::npos &&
+            default_listing.find("gs-a") != std::string::npos &&
+            default_listing.find("gs-b") != std::string::npos &&
+            default_listing.find("gs-n") == std::string::npos,
+            "a same-scope member leaked across namespaces: "+default_listing);
+    equal(ask("MLR1 ROUTE SET NS ns alpha mist eve gameServer gs-n"), "MLR1 ROUTE OK");
+    eventually([&] { return ask("MLR1 ROUTE GET NS ns mist eve") ==
+        "MLR1 ROUTE AT alpha gameServer gs-n 127.0.0.1:"+std::to_string(third)+" 0 ready 0/42"; },
+        5s, "a namespaced route did not answer its own host");
+    equal(ask("MLR1 ROUTE GET NS - mist eve"), eve_moved);
+    equal(ask("MLR1 PLACE gameServer NS ns alpha"),
+        "MLR1 PLACE gs-n 127.0.0.1:"+std::to_string(third)+" 0 ready 0/42");
     // A registered member publishes routes on its own control leg and the leg
     // keeps heartbeating; GET mirrors the heartbeat state it announces.
     {
@@ -2992,13 +3013,13 @@ void coordinator_routes() {
         equal(ask("MLR1 ROUTE GET NS - mist rogue"),
               "MLR1 ROUTE AT alpha gameServer gs-r 127.0.0.1:1 0 ready 1/42");
         live = http("http://"+endpoint(metrics)+"/metrics").body;
-        require(live.find("mistlane_registry_routes{role=\"coordinator\"} 2") != std::string::npos,
+        require(live.find("mistlane_registry_routes{role=\"coordinator\"} 3") != std::string::npos,
                 "route gauge missed the second record");
     } // the host retires here
     eventually([&] { return ask("MLR1 ROUTE GET NS - mist rogue") == "MLR1 ROUTE EMPTY"; },
         5s, "a retired host kept its route");
     live = http("http://"+endpoint(metrics)+"/metrics").body;
-    require(live.find("mistlane_registry_routes{role=\"coordinator\"} 1") != std::string::npos,
+    require(live.find("mistlane_registry_routes{role=\"coordinator\"} 2") != std::string::npos,
             "route gauge did not follow the retirement");
     // Placement beside the route verbs stays member placement.
     eventually([&] { return ask("MLR1 PLACE gameServer - alpha") ==

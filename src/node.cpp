@@ -1385,14 +1385,11 @@ public:
         return namespace_+'\x1'+realm+'\x1'+character;
     }
     std::size_t routes() const { return routes_.size(); }
-    std::vector<const Member*> list(const std::string& role, const std::string& scope) const {
-        return list("", role, scope);
-    }
     std::vector<const Member*> list(const std::string& namespace_, const std::string& role,
                                     const std::string& scope) const {
         std::vector<const Member*> found;
         for (const auto& [key, entry] : members_)
-            if ((namespace_.empty() || entry.first.namespace_ == namespace_)
+            if (entry.first.namespace_ == namespace_
                     && (role.empty() || entry.first.role == role)
                     && (scope.empty() || entry.first.scope == scope))
                 found.push_back(&entry.first);
@@ -1688,9 +1685,9 @@ private:
             return refuse("UNEXPECTED");
         }
         // Tail grammar: "<role> [<namespace>|NS <namespace>] [<scope>]" — role
-        // "-" lists every role, "-" names the default group, and either filter
-        // may be omitted, so a bare "MLR1 QUERY -" lists the whole default
-        // group. The keyword and positional spellings both carry a namespace.
+        // "-" lists every role, and an absent or "-" namespace filter names the
+        // default group, so a bare "MLR1 QUERY -" stays inside its own group.
+        // The keyword and positional spellings both carry a namespace.
         {
             const auto tail = in.tellg();
             std::string ns;
