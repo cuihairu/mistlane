@@ -1340,6 +1340,18 @@ public:
             auto authority = std::make_shared<HomeGenerationAuthority>();
             if (!authority->seed(record.key, issued)) throw std::invalid_argument("migration journal authority invalid");
             auto transaction = std::make_shared<MigrationTransaction>(*authority, std::move(record.snapshot));
+            // Startup replay: a crash leaves live transactions everywhere
+            // between prepare and terminal. Drive each to its deterministic
+            // recovery state before the coordinator accepts traffic, and
+            // persist it so a second restart replays the recovered snapshot
+            // instead of re-scanning the pre-crash one. A fenced transaction
+            // awaiting the destination ACK stays pending here.
+            const auto recovery = transaction->recover();
+            if (recovery != MigrationResult::Applied && recovery != MigrationResult::Pending
+                    && recovery != MigrationResult::Duplicate)
+                throw std::invalid_argument("migration journal recovery failed");
+            if (recovery == MigrationResult::Applied || recovery == MigrationResult::Pending)
+                journal_->save({record.namespace_, record.key, transaction->snapshot()});
             MigrationEntry entry{std::move(record.namespace_), record.key, std::move(authority), std::move(transaction)};
             const auto key = migration_key(entry.namespace_, entry.key);
             if (!migrations_.emplace(key, std::move(entry)).second)

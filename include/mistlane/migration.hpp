@@ -139,6 +139,19 @@ public:
         const auto* current = entry(data_.current);
         return current ? current->state : MigrationState::Idle;
     }
+    // Startup crash recovery: drive a restored live transaction to its
+    // deterministic post-crash state. The process whose in-flight handler
+    // owned the lease is gone with the crash, so that work is force-completed
+    // before the rollback/forward decision. A pre-fence transaction rolls back
+    // and restores the source; a fenced one stays pending until the
+    // destination repeats its ACK (or completes a previously ACKed commit).
+    // Terminal and idle snapshots are already consistent and are a no-op.
+    MigrationResult recover() {
+        const auto* row = entry(data_.current);
+        if (!row || terminal(row->state)) return MigrationResult::Duplicate;
+        data_.lease.drain_requests();
+        return apply(row->token, MigrationEvent::Recover);
+    }
     bool write_allowed(const MigrationOwner& owner, std::uint64_t generation) const {
         return owner == data_.home_owner.owner && data_.lease.write_allowed(generation);
     }

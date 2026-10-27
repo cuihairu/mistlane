@@ -13,6 +13,7 @@
 #include "mistlane/entity_lua.hpp"
 #include "mistlane/entity_sync.hpp"
 #include "mistlane/entity_persist.hpp"
+#include "mistlane/journal.hpp"
 #include "mistlane/record.hpp"
 #include "mistlane/migration.hpp"
 #include "mistlane/http_client.hpp"
@@ -31,6 +32,7 @@
 #include <sys/ioctl.h>
 #include <openssl/evp.h>
 #include <lua.hpp>
+#include <sqlite3.h>
 
 namespace mistlane::test {
 void rpc_lifecycle() {
@@ -3875,8 +3877,11 @@ void coordinator_migration_journal() {
     require(initial.wait() == 0, "journal coordinator did not stop cleanly");
 
     c.node("coordinator", second, {"--journal", journal.string()});
+    // Startup replay has already driven the fenced live transaction to the
+    // deterministic recovery state: pre-fence would have rolled back, this one
+    // stays pending until the destination repeats its ACK.
     equal(ask(second, "MLR1 MIG STATUS NS - home hero"),
-        "MLR1 MIG STATE move-1 PREPARING drained fenced notready 9");
+        "MLR1 MIG STATE move-1 RECOVERING drained fenced notready 9");
     // A prepare replay after restart repeats the original verdict and never
     // consumes another generation, then the fenced transaction resumes forward.
     equal(ask(second, "MLR1 MIG PREPARE NS - home hero move-1 8 "+source+" "+target),
@@ -3885,7 +3890,7 @@ void coordinator_migration_journal() {
         "MLR1 MIG STATE abort-1 ABORTED open unfenced notready 9");
     equal(ask(second, "MLR1 MIG PREPARE NS - home hero-abort abort-2 8 "+source+" "+target),
         "MLR1 MIG PREPARED abort-2 10");
-    equal(ask(second, "MLR1 MIG EVENT NS - home hero move-1 9 READY"), "MLR1 MIG STEP move-1 PREPARING");
+    equal(ask(second, "MLR1 MIG EVENT NS - home hero move-1 9 READY"), "MLR1 MIG STEP move-1 RECOVERING");
     equal(ask(second, "MLR1 MIG COMMIT NS - home hero move-1 9"),
         "MLR1 MIG COMMITTED move-1 "+target+" 9");
     equal(ask(second, "MLR1 MIG STATUS NS - home hero"),
@@ -3897,8 +3902,117 @@ void coordinator_migration_journal() {
         "MLR1 MIG PREPARED move-2 10");
     equal(ask(second, "MLR1 MIG STATUS NS - home hero"),
         "MLR1 MIG STATE move-2 PREPARING open unfenced notready 10");
-    std::cout << "migration.journal: pending SQLite snapshot survives restart, "
-        "replay is idempotent and generations stay consumed [PASS]\n";
+    std::cout << "migration.journal: recoverable SQLite snapshot survives restart, "
+        "startup replay is deterministic, replay is idempotent and generations stay consumed [PASS]\n";
+}
+
+void coordinator_migration_journal_recovery() {
+    // Cut before the persisted row becomes a terminal commit. Startup must
+    // turn every snapshot into the same state a trusted checkpoint test
+    // produces: unfenced rolls back, fenced waits for destination ACK, and
+    // destination ACK + recover completes forward without inventing a commit.
+    for (unsigned cut = 0; cut < 5; ++cut) {
+        Context c;
+        const auto path = c.path("migration-recovery.sqlite");
+        MigrationFixture f;
+        std::optional<MigrationToken> token;
+        {
+            MigrationJournal journal(path.string());
+            auto crashed = f.transaction();
+            require(crashed.begin_request(), "crash fixture lost its source handler");
+            require(crashed.prepare(f.request()) == MigrationResult::Applied, "crash prepare failed");
+            token = crashed.entry("move-1")->token;
+            if (cut >= 1 && cut <= 4) {
+                require(crashed.finish_request(), "crash fixture could not release its handler");
+                migration_step(crashed, *token, MigrationEvent::SourceDrained);
+            }
+            if (cut >= 2 && cut <= 4) migration_step(crashed, *token, MigrationEvent::HomeFence);
+            if (cut == 3) migration_step(crashed, *token, MigrationEvent::DestinationReady);
+            if (cut == 4) {
+                migration_step(crashed, *token, MigrationEvent::DestinationReady);
+                migration_step(crashed, *token, MigrationEvent::Commit);
+            }
+            journal.save({"ns", f.key, crashed.snapshot()});
+        }
+        MigrationJournal restored(path.string());
+        const auto records = restored.restore();
+        require(records.size() == 1 && records.front().namespace_ == "ns"
+                && records.front().snapshot.key == f.key, "SQLite recovery lost the journal row");
+        // Registry seeds its authority from the snapshot's route/journal max,
+        // never from a fresh reservation: the journal already consumed the
+        // generation that the crashed PREPARE allocated.
+        std::uint64_t high = records.front().snapshot.route.generation;
+        for (const auto& [id, row] : records.front().snapshot.journal) {
+            (void)id;
+            high = std::max(high, row.token.generation);
+        }
+        HomeGenerationAuthority authority;
+        require(authority.seed(f.key, high), "recovery authority seed failed");
+        require(authority.issued(f.key) == high, "recovery authority did not retain consumed generation");
+        MigrationTransaction recovered(authority, records.front().snapshot);
+        const auto result = recovered.recover();
+        if (cut < 2) {
+            require(result == MigrationResult::Applied && recovered.state() == MigrationState::Aborted
+                    && recovered.route() == f.request().expected
+                    && recovered.write_allowed(f.source, 8)
+                    && !recovered.entry("move-1")->destination_staged, "unfenced recovery did not roll back");
+            const auto* aborted = recovered.entry("move-1");
+            require(aborted && aborted->state == MigrationState::Aborted && aborted->source_drained == (cut == 1)
+                    && !aborted->home_fenced && !aborted->destination_ready && !aborted->destination_staged,
+                "aborted recovery journal row mismatch");
+            require(recovered.prepare(f.request("move-2")) == MigrationResult::Applied
+                    && recovered.entry("move-2")->token.generation == 10, "aborted recovery reused a generation");
+        } else if (cut == 2) {
+            require(result == MigrationResult::Pending && recovered.state() == MigrationState::Recovering
+                    && !recovered.write_allowed(f.source, 8)
+                    && !recovered.write_allowed(f.target, 9), "fenced recovery invented a grant");
+            const auto* pending = recovered.entry("move-1");
+            require(pending && pending->state == MigrationState::Recovering && pending->source_drained
+                    && pending->home_fenced && !pending->destination_ready && pending->destination_staged,
+                "pending recovery journal row mismatch");
+            require(MigrationTransaction(authority, recovered.snapshot()).recover() == MigrationResult::Pending,
+                "pending recovery replay changed its decision");
+            migration_step(recovered, *token, MigrationEvent::DestinationReady);
+            migration_step(recovered, *token, MigrationEvent::Recover);
+        } else {
+            const bool fresh_commit = cut == 3;
+            require((fresh_commit ? result == MigrationResult::Applied : result == MigrationResult::Duplicate)
+                    && recovered.state() == MigrationState::Committed
+                    && recovered.route() == MigrationRoute{f.target, 9}, "committed recovery replay changed outcome");
+            const auto* committed = recovered.entry("move-1");
+            require(committed && committed->state == MigrationState::Committed && committed->source_drained
+                    && committed->home_fenced && committed->destination_ready && !committed->destination_staged,
+                "committed recovery journal row mismatch");
+            require(recovered.prepare(f.request("move-2")) == MigrationResult::Stale
+                    && recovered.prepare({f.key, "move-2", recovered.route(), f.source}) == MigrationResult::Applied
+                    && recovered.entry("move-2")->token.generation == 10, "committed recovery reused generation");
+        }
+        const bool reserved_next = cut < 2 || cut >= 3;
+        require(authority.issued(f.key) == (reserved_next ? 10 : 9), "recovery lost the consumed generation");
+    }
+
+    // Journal validation stays fail-closed: a schema-version or key mismatch
+    // must refuse startup instead of silently replaying unrelated bytes.
+    {
+        Context c;
+        const auto path = c.path("migration-bad-version.sqlite");
+        {
+            MigrationJournal journal(path.string());
+            MigrationFixture f;
+            auto transaction = f.transaction();
+            require(transaction.prepare(f.request()) == MigrationResult::Applied, "bad fixture prepare failed");
+            journal.save({"ns", f.key, transaction.snapshot()});
+        }
+        sqlite3* raw = nullptr;
+        require(sqlite3_open(path.string().c_str(), &raw) == SQLITE_OK, "cannot open journal for validation");
+        require(sqlite3_exec(raw, "UPDATE migration_journal SET version=0", nullptr, nullptr, nullptr) == SQLITE_OK,
+            "cannot corrupt journal version");
+        sqlite3_close(raw);
+        MigrationJournal corrupt(path.string());
+        must_fail([&] { (void)corrupt.restore(); });
+    }
+    std::cout << "migration.journal.recovery: crash cuts replay deterministically, fenced waits, "
+        "terminal/foreign generations are safe and corrupt versions fail closed [PASS]\n";
 }
 
 void cross_return_queue() {

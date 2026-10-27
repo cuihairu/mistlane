@@ -76,7 +76,7 @@ if(BUILD_TESTING)
       entity.perf
       coordinator.placement coordinator.routes coordinator.migration.commit coordinator.migration.abort
       coordinator.migration.recover coordinator.migration.stale coordinator.migration.order
-      coordinator.migration.retire coordinator.migration.wire coordinator.migration.journal cross.ticket lua.lifecycle lua.http
+      coordinator.migration.retire coordinator.migration.wire coordinator.migration.journal coordinator.migration.journal.recovery cross.ticket lua.lifecycle lua.http
       api.signature api.tamper api.rotation api.replay api.acceptance api.ownership api.wire api.http
       login.ticket
       cross.admission cross.record cross.record.journal cross.return.queue probe.control scaffold.init
