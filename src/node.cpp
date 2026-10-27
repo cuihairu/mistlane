@@ -1326,19 +1326,43 @@ public:
     explicit Registry(std::string journal_path = {}) {
         if (journal_path.empty()) return;
         journal_ = std::make_unique<MigrationJournal>(std::move(journal_path));
+        // The durable authority cursor is loaded before journal rows: it is
+        // the independent fence, not a value recomputed from whichever row
+        // happened to survive a crash. It is keyed by the same composite
+        // (namespace, realm, character) as the migration map so two groups can
+        // never share a home cursor.
+        std::map<std::string, std::uint64_t> authority_cursor;
+        for (auto record : journal_->restore_authorities()) {
+            const auto key = migration_key(record.namespace_, record.key);
+            if (!authority_cursor.emplace(key.first, record.cursor).second)
+                throw std::invalid_argument("migration journal home authority duplicated");
+        }
         for (auto record : journal_->restore()) {
             const auto& snapshot = record.snapshot;
             if (!valid_migration_owner(snapshot.route.owner) || !snapshot.route.generation
                     || snapshot.key != record.key) throw std::invalid_argument("migration journal snapshot invalid");
-            std::uint64_t issued = snapshot.route.generation;
             for (const auto& [id, entry] : snapshot.journal) {
                 (void)id;
                 if (entry.request.key != record.key || entry.token.key != record.key
                         || !entry.token.generation) throw std::invalid_argument("migration journal request invalid");
-                issued = std::max(issued, entry.token.generation);
             }
             auto authority = std::make_shared<HomeGenerationAuthority>();
-            if (!authority->seed(record.key, issued)) throw std::invalid_argument("migration journal authority invalid");
+            const auto entry_key = migration_key(record.namespace_, record.key);
+            const auto cursor = authority_cursor.find(entry_key.first);
+            if (cursor != authority_cursor.end()) {
+                HomeGenerationAuthority::View view;
+                view.cursor.emplace(record.key, cursor->second);
+                authority->restore(view);
+            }
+            // Legacy files can predate the authority table; the snapshot
+            // high-water mark is the only safe fallback and is republished as
+            // the durable cursor below.
+            if (!authority->issued(record.key)) {
+                std::uint64_t issued = snapshot.route.generation;
+                for (const auto& [id, entry] : snapshot.journal)
+                    issued = std::max(issued, entry.token.generation);
+                if (!authority->seed(record.key, issued)) throw std::invalid_argument("migration journal authority invalid");
+            }
             auto transaction = std::make_shared<MigrationTransaction>(*authority, std::move(record.snapshot));
             // Startup replay: a crash leaves live transactions everywhere
             // between prepare and terminal. Drive each to its deterministic
@@ -1351,7 +1375,8 @@ public:
                     && recovery != MigrationResult::Duplicate)
                 throw std::invalid_argument("migration journal recovery failed");
             if (recovery == MigrationResult::Applied || recovery == MigrationResult::Pending)
-                journal_->save({record.namespace_, record.key, transaction->snapshot()});
+                journal_->save({record.namespace_, record.key, transaction->snapshot()},
+                    authority->issued(record.key));
             MigrationEntry entry{std::move(record.namespace_), record.key, std::move(authority), std::move(transaction)};
             const auto key = migration_key(entry.namespace_, entry.key);
             if (!migrations_.emplace(key, std::move(entry)).second)
@@ -1477,7 +1502,10 @@ public:
     void persist_transaction(const std::string& namespace_, const MigrationKey& key,
                              const MigrationTransaction& transaction) {
         if (!journal_) return;
-        journal_->save({namespace_, key, transaction.snapshot()});
+        const auto entry_key = migration_key(namespace_, key);
+        const auto found = migrations_.find(entry_key);
+        if (found == migrations_.end()) return;
+        journal_->save({namespace_, key, transaction.snapshot()}, found->second.authority->issued(key));
     }
     static std::string line(const Member& member) {
         std::ostringstream out;

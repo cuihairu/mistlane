@@ -62,7 +62,7 @@
 
 必须满足的发布顺序是：**源停止/排空 → home data 栅栏旧 generation 并提交最终序号 → 目标加载/起租并 ACK → coordinator CAS 发布路由及提交终态**。允许栅栏到目标起租之间暂不可用。栅栏前中止恢复为原路由值（此前始终未改）；栅栏后恢复必须向前完成。目标无法继续时保持 recovering，退役/换目标须通过 home 显式接管签发更大 generation，不能猜测失败或回滚。该交换中退役与放弃的那一半已在 home 栅栏前实现（见下）；栅栏后的接管仍需持久 home 权威，本片不建模。
 
-运行时持久契约要求：home 的 generation 预留/最终游标/墓碑与对应 home 事务事实原子记录后才暴露确认，coordinator 意图以及路由/终态持久完成后才确认 COMMIT。`MigrationJournal`（见下）现已覆盖 coordinator 半片与 MLD1 记录/ACK 存储——终态 ID、已消费 generation 与每个已确认 MLD1 载荷跨重启保留；home data 的 generation 预留/最终游标/墓碑权威仍无持久存储。跨服务按同一 token 查询/重放 home 权威事实，coordinator 超时或查不到记录不能证明中止。缺失持久证据时须保持不可用直到对账，不能产生第二写者。
+运行时持久契约要求：home 的 generation 预留/最终游标/墓碑与对应 home 事务事实原子记录后才暴露确认，coordinator 意图以及路由/终态持久完成后才确认 COMMIT。`MigrationJournal`（见下）现已覆盖 coordinator 半片、MLD1 记录/ACK 存储与持久 home 最终游标权威——终态 ID、已消费 generation、持久游标与每个已确认 MLD1 载荷跨重启保留。跨服务按同一 token 查询/重放 home 权威事实，coordinator 超时或查不到记录不能证明中止。缺失持久证据时仍须保持不可用直到对账，不能产生第二写者。
 
 五例 `coordinator.migration.commit`、`.abort`、`.recover`、`.stale`、`.order` 分别覆盖正常提交、半途清理与版本不复用、七个崩溃切点重建（含栅栏后等待恢复）、旧版本/旧 COMMIT、提前栅栏/起租/发布及路由 CAS 冲突；均复用现有 `test_cases` 执行器。完整 coordinator/data/Avatar 接线、进程/场景生命周期集成、真实负载均衡和持久 data 侧崩溃/退役验证继续保留。
 
@@ -71,6 +71,8 @@
 `include/mistlane/journal.hpp` 与 `src/journal.cpp`：coordinator 迁移 journal 现在落 SQLite 文件（`--journal FILE`，仅 coordinator 角色），经静态 `sqlite3` vcpkg 端口接入，单二进制/文件部署不引入外部服务。`MigrationJournal::save/restore` 按 `(namespace, realm, character)` 存一个版本化快照——快照即内存模型的 `MigrationTransaction::Snapshot`（路由/home owner、`WriterLease`、journal、当前请求），coordinator 重启后重建同一未决事务，并从最大已消费 generation 恢复 `HomeGenerationAuthority`。`Registry` 在 `MLR1 MIG` 的 `OWNER`/`PREPARE`/`EVENT`/`COMMIT`/`ABORT`/`RETIRE` 每次接受后先落盘再答，SQLite 无法提交时回 `MLR1 ERR STORAGE` 并关连接；启动监听前先恢复全部事务。终态 ID 与中止 generation 均不删除。`coordinator.migration.journal` 对同一文件做两次真实 coordinator 重启：栅栏后未决事务恢复后按原 generation 完成 `READY`/`COMMIT`，下一 PREPARE 分配严格更大 generation；中止/清理终态行跨重启恢复且不重用已消费 generation。
 
 启动现在是确定性回放（持久化第二片，2026-10-28）：`MigrationTransaction::recover()` 强排崩溃源的债在途租约，栅栏前工作立即回滚并恢复源旧代授权，栅栏事务停在 `RECOVERING` 直至目标重发 `READY`（或补完成已 `ACK` 的提交），终态快照是幂等 no-op。`Registry` 在接受流量前执行回放并写回 recovered 快照，恢复过程再崩溃也不会重扫崩溃前状态；版本/键非法仍 fail-closed 拒绝启动。`coordinator.migration.journal.recovery` 覆盖 prepare/drained/fenced/ready/committed 五段 cuts、恢复后二次回放幂等与已消费 generation 纪律；ctest 现为 60/60（MariaDB 仍按仓库惯例排除）。
+
+home 最终游标/墓碑权威随第三片（2026-10-28）持久化：`HomeGenerationAuthority::View` 暴露每 key 一个高水位游标、`restore()` 单调归并、`allocated(key,g)` 声明 g ≤ 游标的 generation 均已消费。`MigrationJournal` 新增 `home_authority` 行，主键 `(namespace, realm, character)`，并与其迁移快照在同一 SQLite 事务提交；游标落后快照即拒绝而非重导。启动先读权威表再逐作用域键独立恢复，旧 journal 无权威行时按高水位一次性回填。`coordinator.migration.authority` 覆盖中止不复用、重启恢复、下一严格更大 generation、旧回填与损坏 fail-closed；ctest 现为 61/61（MariaDB 仍按仓库惯例排除）。
 
 `--journal FILE` 同时也是 data 角色的记录存储（data 持久化切片 2026-10-27）：同一 SQLite 文件携带 `record_store` 表，主键 `(realm, character)`，版本化 BLOB 快照（`generation`、`sequence`、payload）。`RecordStore` 仅在 `MigrationJournal::save_record` 提交后接受 `MLD1 SUBMIT`，对已提交行（含丢 ACK 重放）答 `MLD1 ACK durable`，提交失败回 `MLD1 ERR STORAGE` 且不改内存。data 重启先恢复全部记录再开监听；无 `--journal` 时保持仅易失 `RECEIVED` 路径。`cross.record.journal` 覆盖真实重启，`core.contracts` 覆盖存储/ACK 语义（cross 套件 5/5，ctest 计数升至 58）。
 

@@ -360,6 +360,11 @@ struct MigrationJournal::Impl {
             "CREATE TABLE IF NOT EXISTS record_store ("
             "version INTEGER NOT NULL, realm TEXT NOT NULL, character TEXT NOT NULL,"
             "snapshot BLOB NOT NULL, PRIMARY KEY(realm, character))");
+        sqlite_exec(db,
+            "CREATE TABLE IF NOT EXISTS home_authority ("
+            "version INTEGER NOT NULL, namespace TEXT NOT NULL, realm TEXT NOT NULL,"
+            "character TEXT NOT NULL, cursor INTEGER NOT NULL,"
+            "PRIMARY KEY(namespace, realm, character))");
         // A WAL/schema setting is a process-level hint; this pins the row
         // format so a future incompatible writer refuses old files instead of
         // silently decoding garbage.
@@ -373,20 +378,107 @@ struct MigrationJournal::Impl {
 MigrationJournal::MigrationJournal(std::string path) : impl_(std::make_unique<Impl>(std::move(path))) {}
 MigrationJournal::~MigrationJournal() = default;
 
+namespace {
+std::uint64_t snapshot_high_water(const MigrationTransaction::Snapshot& snapshot) {
+    std::uint64_t high = snapshot.route.generation;
+    for (const auto& [id, entry] : snapshot.journal) {
+        (void)id;
+        high = std::max(high, entry.token.generation);
+    }
+    return high;
+}
+}
+
 void MigrationJournal::save(const MigrationJournalRecord& record) {
+    save(record, snapshot_high_water(record.snapshot));
+}
+
+void MigrationJournal::save(const MigrationJournalRecord& record, std::uint64_t cursor) {
     if (impl_->db == nullptr) throw std::runtime_error("migration journal is closed");
     if (!record_identifier(record.key.first) || !record_identifier(record.key.second))
         throw std::invalid_argument("invalid migration journal key");
+    // The durable authority cursor is the atomic home fence: it records that
+    // every generation at or below it is consumed before the transaction that
+    // reserved them is exposed. It must never trail the snapshot's own rows.
+    if (!cursor || cursor < snapshot_high_water(record.snapshot))
+        throw std::invalid_argument("migration journal authority cursor is behind the snapshot");
     const auto snapshot = encode_snapshot(record.snapshot);
-    Statement upsert(impl_->db, "INSERT INTO migration_journal(version, namespace, realm, character, snapshot) "
+    sqlite_exec(impl_->db, "BEGIN");
+    // The snapshot and the authority must become visible together: a crash
+    // between them would let a re-scan re-derive a consumed generation, which
+    // is precisely the single-writer fence this authority exists to protect.
+    try {
+        Statement upsert(impl_->db, "INSERT INTO migration_journal(version, namespace, realm, character, snapshot) "
+            "VALUES(?, ?, ?, ?, ?) ON CONFLICT(namespace, realm, character) DO UPDATE SET "
+            "version=excluded.version, snapshot=excluded.snapshot");
+        upsert.bind_int(1, static_cast<int>(kVersion));
+        upsert.bind_text(2, record.namespace_);
+        upsert.bind_text(3, record.key.first);
+        upsert.bind_text(4, record.key.second);
+        upsert.bind_blob(5, snapshot);
+        upsert.step();
+        Statement authority(impl_->db,
+            "INSERT INTO home_authority(version, namespace, realm, character, cursor) "
+            "VALUES(?, ?, ?, ?, ?) ON CONFLICT(namespace, realm, character) DO UPDATE SET "
+            "version=excluded.version, cursor=excluded.cursor");
+        authority.bind_int(1, static_cast<int>(kVersion));
+        authority.bind_text(2, record.namespace_);
+        authority.bind_text(3, record.key.first);
+        authority.bind_text(4, record.key.second);
+        authority.bind_u64(5, cursor);
+        authority.step();
+        sqlite_exec(impl_->db, "COMMIT");
+    } catch (...) {
+        sqlite_exec(impl_->db, "ROLLBACK");
+        throw;
+    }
+}
+
+void MigrationJournal::save_authority(const MigrationAuthorityRecord& record) {
+    if (impl_->db == nullptr) throw std::runtime_error("migration journal is closed");
+    if (!record_identifier(record.key.first) || !record_identifier(record.key.second) || !record.cursor)
+        throw std::invalid_argument("invalid home authority key or cursor");
+    Statement authority(impl_->db,
+        "INSERT INTO home_authority(version, namespace, realm, character, cursor) "
         "VALUES(?, ?, ?, ?, ?) ON CONFLICT(namespace, realm, character) DO UPDATE SET "
-        "version=excluded.version, snapshot=excluded.snapshot");
-    upsert.bind_int(1, static_cast<int>(kVersion));
-    upsert.bind_text(2, record.namespace_);
-    upsert.bind_text(3, record.key.first);
-    upsert.bind_text(4, record.key.second);
-    upsert.bind_blob(5, snapshot);
-    upsert.step();
+        "version=excluded.version, cursor=excluded.cursor");
+    authority.bind_int(1, static_cast<int>(kVersion));
+    authority.bind_text(2, record.namespace_);
+    authority.bind_text(3, record.key.first);
+    authority.bind_text(4, record.key.second);
+    authority.bind_u64(5, record.cursor);
+    authority.step();
+}
+
+std::vector<MigrationAuthorityRecord> MigrationJournal::restore_authorities() const {
+    if (impl_->db == nullptr) throw std::runtime_error("migration journal is closed");
+    std::vector<MigrationAuthorityRecord> records;
+    Statement select(impl_->db,
+        "SELECT version, namespace, realm, character, cursor FROM home_authority "
+        "ORDER BY namespace, realm, character");
+    for (;;) {
+        const int code = sqlite3_step(select.get());
+        if (code == SQLITE_DONE) break;
+        if (code != SQLITE_ROW) sqlite_throw(impl_->db, "home authority restore step failed");
+        const int version = sqlite3_column_int(select.get(), 0);
+        const auto* namespace_ = reinterpret_cast<const char*>(sqlite3_column_text(select.get(), 1));
+        const auto* realm = reinterpret_cast<const char*>(sqlite3_column_text(select.get(), 2));
+        const auto* character = reinterpret_cast<const char*>(sqlite3_column_text(select.get(), 3));
+        const int namespace_size = sqlite3_column_bytes(select.get(), 1);
+        const int realm_size = sqlite3_column_bytes(select.get(), 2);
+        const int character_size = sqlite3_column_bytes(select.get(), 3);
+        const sqlite3_int64 cursor = sqlite3_column_int64(select.get(), 4);
+        std::string ns(namespace_ ? namespace_ : "", static_cast<std::size_t>(namespace_size));
+        std::string key_realm(realm ? realm : "", static_cast<std::size_t>(realm_size));
+        std::string key_character(character ? character : "", static_cast<std::size_t>(character_size));
+        if (version != static_cast<int>(kVersion))
+            throw std::runtime_error("home authority version mismatch");
+        if (!record_identifier(key_realm) || !record_identifier(key_character) || cursor <= 0)
+            throw std::runtime_error("home authority key or cursor corrupted");
+        records.push_back({std::move(ns), {std::move(key_realm), std::move(key_character)},
+            static_cast<std::uint64_t>(cursor)});
+    }
+    return records;
 }
 
 std::vector<MigrationJournalRecord> MigrationJournal::restore() const {

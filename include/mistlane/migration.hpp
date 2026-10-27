@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
 #include "mistlane/record.hpp"
+#include <algorithm>
 #include <limits>
 
 namespace mistlane {
@@ -63,10 +64,18 @@ enum class MigrationState { Idle, Preparing, Aborting, Recovering, Committed, Ab
 enum class MigrationResult { Applied, Duplicate, Pending, Invalid, Conflict, Stale, Order };
 
 // Home data's generation allocation boundary, not a coordinator counter.
-// Its checkpoint must eventually be persisted with the transaction journal.
-// This model is volatile; copying it is only a deterministic crash fixture.
+// The transaction journal persists each key's final cursor (the highest
+// generation ever handed out), so the authority is durable and never has to
+// re-derive a consumed generation from a partial or pruned transaction row.
+// An aborted generation is never rolled back or reused: it stays at or below
+// the durable cursor, which is exactly the single-writer "tombstone" promise.
 class HomeGenerationAuthority {
 public:
+    // The durable high-water mark per home key: the authoritative final cursor.
+    // Restoring is monotonic (a replayed or shrunk cursor never lowers a key).
+    struct View {
+        std::map<MigrationKey, std::uint64_t> cursor;
+    };
     bool seed(const MigrationKey& key, std::uint64_t generation) {
         return record_identifier(key.first) && record_identifier(key.second) && generation
             && issued_.emplace(key, generation).second;
@@ -75,6 +84,22 @@ public:
         const auto it = issued_.find(key);
         return it == issued_.end() ? 0 : it->second;
     }
+    // True once generation g (or any earlier) was handed out. A generation at
+    // or below the final cursor is consumed and must never be reissued, even
+    // across a restart, as the single-writer authority's tombstone.
+    bool allocated(const MigrationKey& key, std::uint64_t generation) const {
+        return generation != 0 && issued(key) >= generation;
+    }
+    void restore(const View& view) {
+        for (const auto& [key, generation] : view.cursor) {
+            if (!record_identifier(key.first) || !record_identifier(key.second) || !generation)
+                throw std::invalid_argument("home authority cursor is invalid");
+            const auto found = issued_.find(key);
+            if (found == issued_.end()) issued_.emplace(key, generation);
+            else found->second = std::max(found->second, generation);
+        }
+    }
+    View view() const { return View{issued_}; }
 private:
     friend class MigrationTransaction;
     std::optional<std::uint64_t> reserve(const MigrationKey& key) {

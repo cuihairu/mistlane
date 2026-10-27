@@ -4015,6 +4015,102 @@ void coordinator_migration_journal_recovery() {
         "terminal/foreign generations are safe and corrupt versions fail closed [PASS]\n";
 }
 
+void coordinator_migration_authority() {
+    // Model: the final cursor is a durable high-water mark; a generation at or
+    // below it is consumed (the single-writer tombstone) and never reissued.
+    {
+        MigrationFixture f;
+        require(f.home.issued(f.key) == 8 && f.home.allocated(f.key, 8) && f.home.allocated(f.key, 1)
+                && !f.home.allocated(f.key, 9), "authority cursor did not mark consumed generations");
+        auto tx = f.transaction();
+        require(tx.prepare(f.request()) == MigrationResult::Applied, "authority prepare failed");
+        require(tx.entry("move-1")->token.generation == 9, "prepare did not allocate the next generation");
+        require(tx.apply(tx.entry("move-1")->token, MigrationEvent::Abort) == MigrationResult::Applied,
+            "authority abort failed");
+        require(tx.apply(tx.entry("move-1")->token, MigrationEvent::Cleanup) == MigrationResult::Applied,
+            "authority abort cleanup failed");
+        require(f.home.issued(f.key) == 9 && f.home.allocated(f.key, 9),
+            "an abort rolled back the authority cursor");
+        require(tx.prepare(f.request("move-2")) == MigrationResult::Applied
+                && tx.entry("move-2")->token.generation == 10, "an aborted generation was reused");
+    }
+    // Store: snapshot + authority cursor commit together. A restart sees the
+    // durable cursor even when the consumed generation only lives in a
+    // terminal journal row, and the next prepare uses the strictly next slot.
+    {
+        Context c;
+        const auto path = c.path("authority.sqlite");
+        MigrationFixture f;
+        std::uint64_t reserved = 0;
+        {
+            MigrationJournal journal(path.string());
+            auto tx = f.transaction();
+            require(tx.prepare(f.request()) == MigrationResult::Applied, "store prepare failed");
+            reserved = tx.entry("move-1")->token.generation;
+            require(tx.apply(tx.entry("move-1")->token, MigrationEvent::Abort) == MigrationResult::Applied,
+                "store abort failed");
+            journal.save({"ns", f.key, tx.snapshot()}, reserved);
+        }
+        MigrationJournal restored(path.string());
+        const auto records = restored.restore();
+        require(records.size() == 1, "authority store lost the transaction row");
+        const auto authorities = restored.restore_authorities();
+        require(authorities.size() == 1 && authorities.front().namespace_ == "ns"
+                && authorities.front().key == f.key && authorities.front().cursor == reserved,
+            "authority store lost or understated the durable final cursor");
+        HomeGenerationAuthority authority;
+        HomeGenerationAuthority::View view;
+        view.cursor.emplace(f.key, authorities.front().cursor);
+        authority.restore(view);
+        require(authority.issued(f.key) == reserved, "authority restore did not retain the final cursor");
+        MigrationTransaction recovered(authority, records.front().snapshot);
+        require(recovered.recover() == MigrationResult::Applied && recovered.state() == MigrationState::Aborted
+                && recovered.write_allowed(f.source, 8), "authority recovery did not restore the source");
+        require(recovered.prepare(f.request("move-2")) == MigrationResult::Applied
+                && recovered.entry("move-2")->token.generation == reserved + 1,
+            "authority restore reused a consumed generation");
+    }
+    // A legacy single-row save still publishes the high-water cursor.
+    {
+        Context c;
+        const auto path = c.path("authority-legacy.sqlite");
+        MigrationFixture f;
+        {
+            MigrationJournal journal(path.string());
+            auto tx = f.transaction();
+            require(tx.prepare(f.request()) == MigrationResult::Applied, "legacy prepare failed");
+            journal.save({"ns", f.key, tx.snapshot()});
+        }
+        MigrationJournal restored(path.string());
+        const auto authorities = restored.restore_authorities();
+        require(authorities.size() == 1 && authorities.front().cursor == 9,
+            "legacy single-row save did not publish the high-water cursor");
+    }
+    // Fail-closed: a cursor trailing the snapshot rows, or a corrupted
+    // authority row, must refuse rather than re-derive and reuse.
+    {
+        Context c;
+        const auto path = c.path("authority-corrupt.sqlite");
+        MigrationFixture f;
+        {
+            MigrationJournal journal(path.string());
+            auto tx = f.transaction();
+            require(tx.prepare(f.request()) == MigrationResult::Applied, "corrupt fixture prepare failed");
+            must_fail([&] { journal.save({"ns", f.key, tx.snapshot()}, 8); }); // cursor 8 < reserved 9
+            journal.save({"ns", f.key, tx.snapshot()}, 9);
+        }
+        sqlite3* raw = nullptr;
+        require(sqlite3_open(path.string().c_str(), &raw) == SQLITE_OK, "cannot open journal for validation");
+        require(sqlite3_exec(raw, "UPDATE home_authority SET cursor=0", nullptr, nullptr, nullptr) == SQLITE_OK,
+            "cannot corrupt authority cursor");
+        sqlite3_close(raw);
+        MigrationJournal corrupt(path.string());
+        must_fail([&] { (void)corrupt.restore_authorities(); });
+    }
+    std::cout << "migration.authority: durable home final cursor/tombstone survives restart, "
+        "consumed generations are never reissued and corruption fails closed [PASS]\n";
+}
+
 void cross_return_queue() {
     const DurableAck ack{"realm-a", "same-id", 3, 5};
     const auto wire = encode_durable_ack(ack);
