@@ -108,7 +108,7 @@ std::vector<std::pair<std::string, std::string>> config_flags(const std::filesys
         {"SERVICE_TOKEN","--service-token",0,0,0}, {"UPSTREAM_TOKEN","--upstream-token",0,0,0},
         {"SERVICE_NAME","--service-name",0,0,0}, {"UPSTREAM_MULTIPLEX","--upstream-multiplex",0,0,0},
         {"COORDINATOR","--coordinator",0,0,0}, {"NAMESPACE","--namespace",0,0,0},
-        {"SCOPE","--scope",0,0,0},
+        {"SCOPE","--scope",0,0,0}, {"JOURNAL","--journal",1,0,0},
         {"SCRIPT","--script",1,0,0}, {"UPSTREAMS","--upstream",0,1,0}, {"CERT","--cert",1,0,0},
         {"KEY","--key",1,0,0}, {"LISTENERS","--listener",0,1,0}, {"REDIS","--redis",0,0,0},
         {"METRICS_LISTEN","--metrics-listen",0,0,0}, {"PROBE_LISTEN","--probe-listen",0,0,0},
@@ -263,6 +263,7 @@ int main(int argc, char** argv) {
                              "  coordinator: --service-token TOKEN (require member identity); registry\n"
                              "    members connect with --coordinator IP:PORT [--namespace NAME]\n"
                              "      [--scope NAME] and heartbeat\n"
+                             "    --journal FILE (optional; SQLite migration journal, restored on restart)\n"
                              "    MLR1 REGISTER/QUERY/PLACE/ROUTE over framed TCP; MLR1 MIG\n"
                              "    OWNER/PREPARE/EVENT/COMMIT/ABORT/RETIRE/STATUS carry the migration\n"
                              "    protocol for a (namespace, realm, character), idempotent by request id";
@@ -279,6 +280,7 @@ int main(int argc, char** argv) {
             else if (key == "--coordinator") { config.coordinator = endpoint(value); config.coordinator_enabled = true; }
             else if (key == "--namespace") { config.namespace_ = value; config.namespace_wire = true; namespace_selected = true; }
             else if (key == "--scope") { config.scope = value; scope_selected = true; }
+            else if (key == "--journal") config.journal = value;
             else if (key == "--upstream") config.upstreams.push_back(upstream(value));
             else if (key == "--routing") config.routing = value;
             else if (key == "--transport") { config.transport = value; transport_selected = true; }
@@ -326,6 +328,8 @@ int main(int argc, char** argv) {
             // The registry is state, not a forwarding or scripting plane.
             throw std::invalid_argument("coordinator requires no script and no upstream");
         }
+        if (!config.journal.empty() && config.role != "coordinator")
+            throw std::invalid_argument("--journal applies to coordinator only");
         // Registration is a member duty; gateways route, coordinators collect.
         if (config.coordinator_enabled && config.role != "gameServer" && config.role != "crossServer"
                 && config.role != "login")

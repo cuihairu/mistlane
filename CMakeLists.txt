@@ -13,13 +13,15 @@ find_package(OpenSSL 3.6.5 REQUIRED)
 find_package(Drogon 1.9.14 CONFIG REQUIRED)
 find_package(CURL 8.23 CONFIG REQUIRED)
 find_package(Lua 5.5.1 REQUIRED)
+find_package(unofficial-sqlite3 CONFIG REQUIRED)
 find_package(crashpad CONFIG REQUIRED)
 find_package(prometheus-cpp CONFIG REQUIRED)
-add_library(mistlane_core src/lua_service.cpp src/diagnostics.cpp src/api.cpp src/entity_lua.cpp)
+add_library(mistlane_core src/lua_service.cpp src/diagnostics.cpp src/api.cpp src/entity_lua.cpp src/journal.cpp)
 target_include_directories(mistlane_core PUBLIC include)
 target_include_directories(mistlane_core SYSTEM PUBLIC ${LUA_INCLUDE_DIR})
 target_link_libraries(mistlane_core PUBLIC
-  Boost::asio Boost::redis Threads::Threads OpenSSL::SSL OpenSSL::Crypto ${LUA_LIBRARIES})
+  Boost::asio Boost::redis Threads::Threads OpenSSL::SSL OpenSSL::Crypto ${LUA_LIBRARIES}
+  unofficial::sqlite3::sqlite3)
 target_link_libraries(mistlane_core PUBLIC crashpad::crashpad prometheus-cpp::core prometheus-cpp::pull)
 target_compile_options(mistlane_core PRIVATE -Wall -Wextra -Wpedantic)
 add_library(mistlane_net src/node.cpp src/web.cpp)
@@ -73,7 +75,7 @@ if(BUILD_TESTING)
       entity.perf
       coordinator.placement coordinator.routes coordinator.migration.commit coordinator.migration.abort
       coordinator.migration.recover coordinator.migration.stale coordinator.migration.order
-      coordinator.migration.retire coordinator.migration.wire cross.ticket lua.lifecycle lua.http
+      coordinator.migration.retire coordinator.migration.wire coordinator.migration.journal cross.ticket lua.lifecycle lua.http
       api.signature api.tamper api.rotation api.replay api.acceptance api.ownership api.wire api.http
       login.ticket
       cross.admission cross.record cross.return.queue probe.control scaffold.init config.file cli.bot)

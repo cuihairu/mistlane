@@ -249,6 +249,14 @@ private:
 class WriterLease {
 public:
     enum class State { None, Active, Requested, Relinquished };
+    // Storage boundary view: the journal encoded this lease in the same
+    // snapshot as the transaction, so restore must not invent lease facts.
+    struct View {
+        State state = State::None;
+        std::uint64_t generation = 0, next = 0;
+        std::size_t in_flight = 0;
+        bool timers_running = true;
+    };
     bool start(std::uint64_t generation) { if (state_ != State::None || !generation) return false; generation_ = generation; state_ = State::Active; return true; }
     bool begin_request() { if (!write_allowed(generation_)) return false; ++in_flight_; return true; }
     bool finish_request() { if (state_ != State::Requested || !in_flight_) return false; --in_flight_; return true; }
@@ -264,6 +272,11 @@ public:
     bool write_allowed(std::uint64_t generation) const { return state_ == State::Active && generation == generation_; }
     bool timer_running() const { return timers_running_; }
     State state() const { return state_; }
+    View view() const { return {state_, generation_, next_, in_flight_, timers_running_}; }
+    void restore(const View& view) {
+        state_ = view.state; generation_ = view.generation; next_ = view.next;
+        in_flight_ = view.in_flight; timers_running_ = view.timers_running;
+    }
 private:
     State state_ = State::None; std::uint64_t generation_ = 0, next_ = 0;
     std::size_t in_flight_ = 0; bool timers_running_ = true;

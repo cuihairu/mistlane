@@ -3619,6 +3619,81 @@ void coordinator_migration_wire() {
     std::cout << "migration.wire: OWNER/PREPARE/STEP/COMMIT/ABORT/RETIRE/STATUS over TCP, "
         "MLS1-gated, idempotent by request id, retirement observed from the registry [PASS]\n";
 }
+
+// The SQLite journal slice: every accepted migration mutation lands in one
+// snapshot before the wire answer, so a coordinator restart sees the same
+// unresolved transaction, the same consumed generation, and can finish it.
+void coordinator_migration_journal() {
+    Context c;
+    const auto first = port(), second = port();
+    const auto journal = c.path("coordinator.sqlite");
+    auto& initial = c.node("coordinator", first, {"--journal", journal.string()});
+    const auto send_frame = [](RawSocket& raw, std::string_view payload) {
+        std::string frame(4, '\0');
+        auto length = static_cast<std::uint32_t>(payload.size());
+        for (int i = 3; i >= 0; --i) { frame[i] = static_cast<char>(length & 255); length >>= 8; }
+        raw.send(frame+std::string(payload));
+    };
+    const auto read_frame = [](RawSocket& raw) {
+        const auto header = raw.receive(4);
+        std::size_t length = 0;
+        for (unsigned char ch : header) length = (length << 8) | ch;
+        return raw.receive(length);
+    };
+    const auto ask = [&](unsigned listen, const std::string& line) {
+        RawSocket raw(listen);
+        send_frame(raw, line);
+        return read_frame(raw);
+    };
+    const std::string source = "realm NS - alpha gameServer gs-a town";
+    const std::string target = "cross NS - arena crossServer xs-a room-1";
+    equal(ask(first, "MLR1 MIG OWNER NS - home hero 8 "+source), "MLR1 MIG OWNER OK");
+    equal(ask(first, "MLR1 MIG PREPARE NS - home hero move-1 8 "+source+" "+target),
+        "MLR1 MIG PREPARED move-1 9");
+    equal(ask(first, "MLR1 MIG EVENT NS - home hero move-1 9 DRAINED"), "MLR1 MIG STEP move-1 PREPARING");
+    equal(ask(first, "MLR1 MIG EVENT NS - home hero move-1 9 FENCE"), "MLR1 MIG STEP move-1 PREPARING");
+    equal(ask(first, "MLR1 MIG STATUS NS - home hero"),
+        "MLR1 MIG STATE move-1 PREPARING drained fenced notready 9");
+    // Abort/cleanup is a terminal journal row too: the consumed generation
+    // must survive the restart even though the route never moved.
+    equal(ask(first, "MLR1 MIG OWNER NS - home hero-abort 8 "+source), "MLR1 MIG OWNER OK");
+    equal(ask(first, "MLR1 MIG PREPARE NS - home hero-abort abort-1 8 "+source+" "+target),
+        "MLR1 MIG PREPARED abort-1 9");
+    equal(ask(first, "MLR1 MIG ABORT NS - home hero-abort abort-1 9"), "MLR1 MIG ABORTING abort-1");
+    equal(ask(first, "MLR1 MIG EVENT NS - home hero-abort abort-1 9 CLEANUP"),
+        "MLR1 MIG STEP abort-1 ABORTED");
+    equal(ask(first, "MLR1 MIG STATUS NS - home hero-abort"),
+        "MLR1 MIG STATE abort-1 ABORTED open unfenced notready 9");
+    initial.signal(SIGTERM);
+    require(initial.wait() == 0, "journal coordinator did not stop cleanly");
+
+    c.node("coordinator", second, {"--journal", journal.string()});
+    equal(ask(second, "MLR1 MIG STATUS NS - home hero"),
+        "MLR1 MIG STATE move-1 PREPARING drained fenced notready 9");
+    // A prepare replay after restart repeats the original verdict and never
+    // consumes another generation, then the fenced transaction resumes forward.
+    equal(ask(second, "MLR1 MIG PREPARE NS - home hero move-1 8 "+source+" "+target),
+        "MLR1 MIG PREPARED move-1 9");
+    equal(ask(second, "MLR1 MIG STATUS NS - home hero-abort"),
+        "MLR1 MIG STATE abort-1 ABORTED open unfenced notready 9");
+    equal(ask(second, "MLR1 MIG PREPARE NS - home hero-abort abort-2 8 "+source+" "+target),
+        "MLR1 MIG PREPARED abort-2 10");
+    equal(ask(second, "MLR1 MIG EVENT NS - home hero move-1 9 READY"), "MLR1 MIG STEP move-1 PREPARING");
+    equal(ask(second, "MLR1 MIG COMMIT NS - home hero move-1 9"),
+        "MLR1 MIG COMMITTED move-1 "+target+" 9");
+    equal(ask(second, "MLR1 MIG STATUS NS - home hero"),
+        "MLR1 MIG STATE move-1 COMMITTED drained fenced ready 9");
+    // The restored authority resumes from the consumed generation: the next
+    // request against the committed route allocates 10, never 9.
+    const std::string next_target = "realm NS - beta gameServer gs-c hall";
+    equal(ask(second, "MLR1 MIG PREPARE NS - home hero move-2 9 "+target+" "+next_target),
+        "MLR1 MIG PREPARED move-2 10");
+    equal(ask(second, "MLR1 MIG STATUS NS - home hero"),
+        "MLR1 MIG STATE move-2 PREPARING open unfenced notready 10");
+    std::cout << "migration.journal: pending SQLite snapshot survives restart, "
+        "replay is idempotent and generations stay consumed [PASS]\n";
+}
+
 void cross_return_queue() {
     const DurableAck ack{"realm-a", "same-id", 3, 5};
     const auto wire = encode_durable_ack(ack);

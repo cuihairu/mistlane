@@ -9,6 +9,7 @@
 #include "mistlane/roles.hpp"
 #include "mistlane/record.hpp"
 #include "mistlane/migration.hpp"
+#include "mistlane/journal.hpp"
 #include <utility>
 #include <boost/asio.hpp>
 #include <algorithm>
@@ -1322,6 +1323,29 @@ std::string registry_member_text(const std::string& namespace_) {
 }
 class Registry {
 public:
+    explicit Registry(std::string journal_path = {}) {
+        if (journal_path.empty()) return;
+        journal_ = std::make_unique<MigrationJournal>(std::move(journal_path));
+        for (auto record : journal_->restore()) {
+            const auto& snapshot = record.snapshot;
+            if (!valid_migration_owner(snapshot.route.owner) || !snapshot.route.generation
+                    || snapshot.key != record.key) throw std::invalid_argument("migration journal snapshot invalid");
+            std::uint64_t issued = snapshot.route.generation;
+            for (const auto& [id, entry] : snapshot.journal) {
+                (void)id;
+                if (entry.request.key != record.key || entry.token.key != record.key
+                        || !entry.token.generation) throw std::invalid_argument("migration journal request invalid");
+                issued = std::max(issued, entry.token.generation);
+            }
+            auto authority = std::make_shared<HomeGenerationAuthority>();
+            if (!authority->seed(record.key, issued)) throw std::invalid_argument("migration journal authority invalid");
+            auto transaction = std::make_shared<MigrationTransaction>(*authority, std::move(record.snapshot));
+            MigrationEntry entry{std::move(record.namespace_), record.key, std::move(authority), std::move(transaction)};
+            const auto key = migration_key(entry.namespace_, entry.key);
+            if (!migrations_.emplace(key, std::move(entry)).second)
+                throw std::invalid_argument("migration journal contains a duplicate participant");
+        }
+    }
     struct Member {
         std::string role, instance, scope, namespace_, listen;
         unsigned probe = 0;
@@ -1411,7 +1435,8 @@ public:
     bool owner_transaction(const MigrationKey& key, std::uint64_t generation,
                            const std::string& namespace_, const MigrationOwner& owner) {
         if (!valid_migration_owner(owner) || !generation) return false;
-        const auto found = migrations_.find(migration_key(namespace_, key));
+        const auto storage_key = migration_key(namespace_, key);
+        const auto found = migrations_.find(storage_key);
         if (found != migrations_.end()) {
             // Facts are adopted once: a restatement must match the route the
             // coordinator already holds, and a changed fact is a conflict.
@@ -1420,12 +1445,13 @@ public:
         // The transaction holds the authority by reference, so both must share
         // one lifetime in the map — a local authority would leave the reference
         // dangling as soon as this function returns.
-        MigrationEntry fresh;
-        fresh.authority = std::make_shared<HomeGenerationAuthority>();
+        MigrationEntry fresh{namespace_, key, std::make_shared<HomeGenerationAuthority>(), nullptr};
         if (!fresh.authority->seed(key, generation)) return false; // already seeded, never reseeds
         fresh.transaction = std::make_shared<MigrationTransaction>(
             *fresh.authority, key, MigrationRoute{owner, generation});
-        migrations_.emplace(migration_key(namespace_, key), std::move(fresh));
+        const auto [it, inserted] = migrations_.emplace(storage_key, std::move(fresh));
+        if (!inserted) return false;
+        persist_transaction(it->second);
         return true;
     }
     std::shared_ptr<MigrationTransaction> transaction(const std::string& namespace_,
@@ -1435,6 +1461,11 @@ public:
     }
     static MigrationKey migration_key(const std::string& namespace_, const MigrationKey& key) {
         return {namespace_+'\x1'+key.first+'\x1'+key.second, ""};
+    }
+    void persist_transaction(const std::string& namespace_, const MigrationKey& key,
+                             const MigrationTransaction& transaction) {
+        if (!journal_) return;
+        journal_->save({namespace_, key, transaction.snapshot()});
     }
     static std::string line(const Member& member) {
         std::ostringstream out;
@@ -1479,21 +1510,29 @@ private:
             if (snapshot.current.empty()) continue;
             const auto* row = transaction->entry(snapshot.current);
             if (!row) continue;
+            MigrationResult result = MigrationResult::Invalid;
             if (matches(row->request.expected.owner))
-                transaction->retire_member(row->token, row->request.expected.owner);
+                result = transaction->retire_member(row->token, row->request.expected.owner);
             else if (matches(row->request.destination))
-                transaction->retire_member(row->token, row->request.destination);
+                result = transaction->retire_member(row->token, row->request.destination);
+            if (result == MigrationResult::Applied) persist_transaction(entry);
         }
     }
     // The authority and its transaction share the map entry's lifetime: the
     // transaction keeps the authority by reference.
     struct MigrationEntry {
+        std::string namespace_;
+        MigrationKey key;
         std::shared_ptr<HomeGenerationAuthority> authority;
         std::shared_ptr<MigrationTransaction> transaction;
     };
+    void persist_transaction(const MigrationEntry& entry) {
+        persist_transaction(entry.namespace_, entry.key, *entry.transaction);
+    }
     std::map<std::string, std::pair<Member, void*>> members_;
     std::map<std::string, Route> routes_;
     std::map<MigrationKey, MigrationEntry> migrations_;
+    std::unique_ptr<MigrationJournal> journal_;
 };
 // One coordinator control connection: a member registration with its heartbeat
 // channel, or a one-shot list/place query. The coordinator forwards no gameplay
@@ -1585,7 +1624,14 @@ private:
             if (!registry_.upsert(*member_, this)) return refuse("INVALID");
             return reply("MLR1 OK");
         }
-        if (payload.starts_with("MLR1 MIG")) return answer(migration_line(payload));
+        if (payload.starts_with("MLR1 MIG")) {
+            try {
+                return answer(migration_line(payload));
+            } catch (const std::exception& error) {
+                std::cerr << "registry migration journal failed: " << error.what() << '\n';
+                return refuse("STORAGE");
+            }
+        }
         if (payload.starts_with("MLR1 REGISTER")) return register_member(payload);
         if (member_) return heartbeat(payload);
         return registry_query(payload);
@@ -1937,6 +1983,7 @@ private:
             const auto result = tx->prepare(request);
             if (result != MigrationResult::Applied && result != MigrationResult::Duplicate)
                 return "MLR1 ERR " + migration_reason(result);
+            if (result == MigrationResult::Applied) registry_.persist_transaction(namespace_, key, *tx);
             const auto* row = tx->entry(token.id);
             std::ostringstream out;
             out << "MLR1 MIG PREPARED " << token.id << ' ' << (row ? row->token.generation : 0);
@@ -1955,6 +2002,7 @@ private:
             const auto tx = registry_.transaction(namespace_, key);
             if (!tx) return "MLR1 ERR EMPTY";
             const auto result = tx->apply(token, step);
+            if (result == MigrationResult::Applied) registry_.persist_transaction(namespace_, key, *tx);
             // The step answer names the state the event produced, so read it
             // strictly after apply — argument evaluation order is unspecified.
             const std::string stepped = "MLR1 MIG STEP " + token.id + " " + migration_state(tx->state());
@@ -1967,6 +2015,7 @@ private:
             const auto tx = registry_.transaction(namespace_, key);
             if (!tx) return "MLR1 ERR EMPTY";
             const auto result = tx->apply(token, MigrationEvent::Commit);
+            if (result == MigrationResult::Applied) registry_.persist_transaction(namespace_, key, *tx);
             const auto* row = tx->entry(token.id);
             // The route publishes only on commit, so the answer names the route
             // this request committed, not the transaction's live route.
@@ -1984,6 +2033,7 @@ private:
             // Abort only schedules the rollback; CLEANUP finishes it, so the
             // word tells the caller which of the two just happened.
             const auto result = tx->apply(token, MigrationEvent::Abort);
+            if (result == MigrationResult::Applied) registry_.persist_transaction(namespace_, key, *tx);
             const char* word = tx->state() == MigrationState::Aborted
                 ? "MLR1 MIG ABORTED " : "MLR1 MIG ABORTING ";
             return migration_verdict(token, result, word + token.id);
@@ -1996,8 +2046,9 @@ private:
             token.key = key;
             const auto tx = registry_.transaction(namespace_, key);
             if (!tx) return "MLR1 ERR EMPTY";
-            return migration_verdict(token, tx->retire_member(token, member),
-                "MLR1 MIG ABORTED " + token.id);
+            const auto result = tx->retire_member(token, member);
+            if (result == MigrationResult::Applied) registry_.persist_transaction(namespace_, key, *tx);
+            return migration_verdict(token, result, "MLR1 MIG ABORTED " + token.id);
         }
         if (verb == "STATUS") {
             if ((in >> extra)) return "MLR1 ERR INVALID";
@@ -2381,7 +2432,7 @@ public:
         const auto* role_definition = find_role(config_.role);
         const bool script_role = role_definition && role_definition->script;
         service_context_ = ServiceContext{config_.role, config_.transport, config_.route_epoch, game_sessions, http_service};
-        if (config_.role == "coordinator") registry_ = std::make_unique<Registry>();
+        if (config_.role == "coordinator") registry_ = std::make_unique<Registry>(config_.journal);
         if (config_.coordinator_enabled && config_.role != "login")
             // Members register and heartbeat; login only asks placements.
             member_ = std::make_shared<RegistryMember>(io_, config_,

@@ -36,6 +36,7 @@ void coordinator_migration_stale();
 void coordinator_migration_order();
 void coordinator_migration_retire();
 void coordinator_migration_wire();
+void coordinator_migration_journal();
 void api_signature();
 void api_tamper();
 void api_rotation();
@@ -135,6 +136,7 @@ int run_tests(int argc, char** argv) {
         {"coordinator.migration.order","coordinator",test::coordinator_migration_order},
         {"coordinator.migration.retire","coordinator",test::coordinator_migration_retire},
         {"coordinator.migration.wire","coordinator",test::coordinator_migration_wire},
+        {"coordinator.migration.journal","coordinator",test::coordinator_migration_journal},
         {"api.signature","api",test::api_signature},
         {"api.tamper","api",test::api_tamper},
         {"api.rotation","api",test::api_rotation},
