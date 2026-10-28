@@ -13,11 +13,13 @@ namespace mistlane {
 // Schema-driven sproto wire codec for entity invocations (docs/entity-contract.md,
 // "Invocation envelope and error protocol"): encodes the typed arguments and
 // return payloads against the contract's declared shapes and decodes the wire
-// payload back to typed values, matching the vendored upstream sproto wire form
-// byte-for-byte (the goldens in src/sproto_probe.cpp and the JS/C# SDK golden
-// vectors lock the same bytes). The typed codec enforces STRING UTF-8
-// well-formedness (BYTES never validates) — a typed-binding contract, not wire
-// law, since upstream sproto passes raw bytes.
+// payload back to typed values. Its wire form matches the goldens locked in
+// src/sproto_probe.cpp and the generated JS/C# SDK codecs. Decode intentionally
+// departs from the vendored upstream sproto: INT32/INT64 4-byte elements are
+// sign-extended like the generated JS/C# codecs (upstream sproto does not), and
+// the typed codec enforces STRING UTF-8 well-formedness (BYTES never validates)
+// — a typed-binding contract, not wire law, since upstream sproto passes raw
+// bytes.
 class SprotoCodec : public EntityCodec {
 public:
     explicit SprotoCodec(const EntityContract& contract) : contract_(contract) {}
@@ -87,7 +89,7 @@ private:
                 if ((part & 0xc0) != 0x80) return false;
                 code = (code << 6) | (part & 0x3f);
             }
-            if (code < minimum || (code >= 0xd800 && code <= 0xdfff)) return false;
+            if (code < minimum || code > 0x10ffff || (code >= 0xd800 && code <= 0xdfff)) return false;
             p += expected + 1;
         }
         return true;
@@ -278,9 +280,16 @@ private:
                       EntityValue& out, std::string& reason) const {
         if (shape.kind == Kind::Int) {
             if (len != 4 && len != 8) { reason = "integer width"; return false; }
-            const std::uint64_t wide = len == 4 ? read_le32(b, start)
-                : static_cast<std::uint64_t>(read_le32(b, start)) | (static_cast<std::uint64_t>(read_le32(b, start + 4)) << 32);
-            out = EntityValue(static_cast<std::int64_t>(wide));
+            const std::uint32_t low = read_le32(b, start);
+            std::int64_t value;
+            if (len == 4) {
+                value = static_cast<std::int64_t>(low);
+                if (value & 0x80000000) value -= 0x100000000LL; // sign-extend 32-bit like upstream expand64
+            } else {
+                value = static_cast<std::int64_t>(static_cast<std::uint64_t>(low)
+                    | (static_cast<std::uint64_t>(read_le32(b, start + 4)) << 32));
+            }
+            out = EntityValue(value);
             return true;
         }
         if (shape.kind == Kind::Bool) {
@@ -313,9 +322,16 @@ private:
                 const unsigned intlen = static_cast<unsigned char>(b[start]);
                 if ((intlen != 4 && intlen != 8) || (len - 1) % intlen != 0) { reason = "int array width"; return false; }
                 for (std::size_t p = start + 1; p < start + len; p += intlen) {
-                    const std::uint64_t e = intlen == 4 ? read_le32(b, p)
-                        : static_cast<std::uint64_t>(read_le32(b, p)) | (static_cast<std::uint64_t>(read_le32(b, p + 4)) << 32);
-                    array.emplace_back(static_cast<std::int64_t>(e));
+                    if (intlen == 4) {
+                        const std::uint32_t e = read_le32(b, p);
+                        std::int64_t value = static_cast<std::int64_t>(e);
+                        if (value & 0x80000000) value -= 0x100000000LL; // sign-extend 32-bit like upstream expand64
+                        array.emplace_back(value);
+                    } else {
+                        const std::uint64_t e = static_cast<std::uint64_t>(read_le32(b, p))
+                            | (static_cast<std::uint64_t>(read_le32(b, p + 4)) << 32);
+                        array.emplace_back(static_cast<std::int64_t>(e));
+                    }
                 }
             }
             out = EntityValue(std::move(array));

@@ -189,7 +189,7 @@ int main(int argc, char** argv) {
                     if ((part & 0xc0) != 0x80) return false;
                     code = (code << 6) | (part & 0x3f);
                 }
-                if (code < minimum) return false;
+                if (code < minimum || code > 0x10ffff) return false;
                 if (code >= 0xd800 && code <= 0xdfff) return false;
                 p += expected + 1;
             }
@@ -222,8 +222,11 @@ int main(int argc, char** argv) {
                     Value value;
                     if (desc.kind == Kind::Int) {
                         if (len != 4 && len != 8) return false;
-                        const std::uint64_t wide = len == 4 ? read32(start) : static_cast<std::uint64_t>(read32(start)) | (static_cast<std::uint64_t>(read32(start + 4)) << 32);
-                        value = Value::make_int(static_cast<std::int64_t>(wide));
+                        const std::uint32_t low = read32(start);
+                        std::int64_t v = len == 4
+                            ? (low & 0x80000000u ? static_cast<std::int64_t>(low) - 0x100000000LL : static_cast<std::int64_t>(low))
+                            : static_cast<std::int64_t>(static_cast<std::uint64_t>(low) | (static_cast<std::uint64_t>(read32(start + 4)) << 32));
+                        value = Value::make_int(v);
                     } else if (desc.kind == Kind::Bool) {
                         // Upstream decodes a length-prefixed boolean through the
                         // integer branch; the encoder never produces it, but a
@@ -252,8 +255,12 @@ int main(int argc, char** argv) {
                             const unsigned intlen = bytes[start];
                             if ((intlen != 4 && intlen != 8) || (len - 1) % intlen != 0) return false;
                             for (unsigned p = start + 1; p < start + len; p += intlen) {
-                                const std::uint64_t e = intlen == 4 ? read32(p) : static_cast<std::uint64_t>(read32(p)) | (static_cast<std::uint64_t>(read32(p + 4)) << 32);
-                                ints.push_back(static_cast<std::int64_t>(e));
+                                if (intlen == 4) {
+                                    const std::uint32_t e = read32(p);
+                                    ints.push_back(e & 0x80000000u ? static_cast<std::int64_t>(e) - 0x100000000LL : static_cast<std::int64_t>(e));
+                                } else {
+                                    ints.push_back(static_cast<std::int64_t>(static_cast<std::uint64_t>(read32(p)) | (static_cast<std::uint64_t>(read32(p + 4)) << 32)));
+                                }
                             }
                         }
                         value = Value::make_int_array(std::move(ints));

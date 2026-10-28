@@ -859,6 +859,8 @@ void entity_codec() {
     require(one && hex(*one) == "020001000400", "one: in-band integer word mismatch");
     const auto negative = encode(ContractArgs{field(4, "f4", "INT64")}, EntityValues{{"f4", std::int64_t{-9007199254740993LL}}});
     require(negative && hex(*negative) == "02000700000008000000ffffffffffffdfff", "negative: 8-byte two's-complement mismatch");
+    const auto negative32 = encode(ContractArgs{field(1, "f1", "INT32")}, EntityValues{{"f1", std::int64_t{-1}}});
+    require(negative32 && hex(*negative32) == "02000100000004000000ffffffff", "negative32: 4-byte two's-complement mismatch");
     const auto positive = encode(ContractArgs{field(1, "f1", "INT32"), field(4, "f4", "INT64")},
         EntityValues{{"f1", std::int64_t{65535}}, {"f4", std::int64_t{9007199254740993LL}}});
     require(positive && hex(*positive) == "0400010000000300000004000000ffff0000080000000100000000002000", "positive: length-prefixed ints mismatch");
@@ -875,6 +877,9 @@ void entity_codec() {
         EntityValues{{"f6", EntityArray{std::int64_t{-1}, std::int64_t{2147483648LL}, std::int64_t{4294967296LL}}}});
     require(totals && hex(*totals) == "02000b0000001900000008ffffffffffffffff00000080000000000000000001000000",
             "totals: int array 64-bit mismatch");
+    const auto neg_array = encode(ContractArgs{field(5, "f5", "ARRAY", "INT32")},
+        EntityValues{{"f5", EntityArray{std::int64_t{-1}, std::int64_t{-2147483648LL}}}});
+    require(neg_array && hex(*neg_array) == "0200090000000900000004ffffffff00000080", "neg_array: negative int array 32-bit mismatch");
     const auto empty_tags = encode(ContractArgs{field(5, "f5", "ARRAY", "INT32")}, EntityValues{{"f5", EntityArray{}}});
     require(empty_tags && hex(*empty_tags) == "02000900000000000000", "empty_tags: zero-element int array mismatch");
     const auto empty_items = encode(ContractArgs{field(2, "inv", "Inventory")},
@@ -905,6 +910,8 @@ void entity_codec() {
     require(one_ok && std::get<std::int64_t>(one_v.at("f1").data) == 1, "one did not decode");
     const auto [neg_ok, neg_v] = decode(ContractArgs{field(4, "f4", "INT64")}, *negative);
     require(neg_ok && std::get<std::int64_t>(neg_v.at("f4").data) == -9007199254740993LL, "negative did not decode");
+    const auto [neg32_ok, neg32_v] = decode(ContractArgs{field(1, "f1", "INT32")}, *negative32);
+    require(neg32_ok && std::get<std::int64_t>(neg32_v.at("f1").data) == -1, "negative32 did not sign-extend to -1");
     const auto [pos_ok, pos_v] = decode(ContractArgs{field(1, "f1", "INT32"), field(4, "f4", "INT64")}, *positive);
     require(pos_ok && std::get<std::int64_t>(pos_v.at("f1").data) == 65535
             && std::get<std::int64_t>(pos_v.at("f4").data) == 9007199254740993LL, "positive did not decode");
@@ -928,6 +935,13 @@ void entity_codec() {
         require(array.size() == 3 && std::get<std::int64_t>(array[0].data) == 0
                 && std::get<std::int64_t>(array[1].data) == 1
                 && std::get<std::int64_t>(array[2].data) == 2147483647, "tags int array wrong");
+    }
+    {
+        const auto [ok, values] = decode(ContractArgs{field(5, "f5", "ARRAY", "INT32")}, *neg_array);
+        require(ok, "neg_array did not decode");
+        const auto& array = std::get<EntityArray>(values.at("f5").data);
+        require(array.size() == 2 && std::get<std::int64_t>(array[0].data) == -1
+                && std::get<std::int64_t>(array[1].data) == -2147483648LL, "neg_array elements not sign-extended");
     }
     const auto [totals_ok, totals_v] = decode(ContractArgs{field(6, "f6", "ARRAY", "INT64")}, *totals);
     {
@@ -977,10 +991,12 @@ void entity_codec() {
     };
     roundtrip(ContractArgs{field(1, "f1", "INT32")}, *one);
     roundtrip(ContractArgs{field(4, "f4", "INT64")}, *negative);
+    roundtrip(ContractArgs{field(1, "f1", "INT32")}, *negative32);
     roundtrip(ContractArgs{field(1, "f1", "INT32"), field(4, "f4", "INT64")}, *positive);
     roundtrip(ContractArgs{field(2, "inv", "Inventory")}, *nested);
     roundtrip(ContractArgs{field(1, "f1", "INT32"), field(5, "f5", "ARRAY", "INT32")}, *tags);
     roundtrip(ContractArgs{field(6, "f6", "ARRAY", "INT64")}, *totals);
+    roundtrip(ContractArgs{field(5, "f5", "ARRAY", "INT32")}, *neg_array);
     roundtrip(ContractArgs{field(5, "f5", "ARRAY", "INT32")}, *empty_tags);
     roundtrip(ContractArgs{field(2, "inv", "Inventory")}, *empty_items);
     roundtrip(ContractArgs{field(7, "active", "BOOL"), field(8, "name", "STRING"), field(9, "blob", "BYTES"),
@@ -1001,6 +1017,8 @@ void entity_codec() {
             "in-band string was not rejected");
     require(decode_why(ContractArgs{field(8, "s", "STRING")}, std::string("\x02\x00\x0f\x00\x00\x00\x01\x00\x00\x00\xff", 11)) == "invalid utf-8 string",
             "invalid UTF-8 string was not rejected");
+    require(decode_why(ContractArgs{field(8, "s", "STRING")}, std::string("\x02\x00\x0f\x00\x00\x00\x04\x00\x00\x00\xf5\x80\x80\x80", 14)) == "invalid utf-8 string",
+            "UTF-8 code point above U+10FFFF was not rejected");
     require(decode_why(ContractArgs{field(10, "flags", "ARRAY", "BOOL")}, std::string("\x02\x00\x13\x00\x00\x00\x01\x00\x00\x00\x02", 11)) == "bool array element",
             "bool array element above one was not rejected");
     require(decode_why(ContractArgs{field(1, "f1", "INT32")}, std::string("\x02\x00\x01\x00\x00\x00\x02\x00\x00\x00\x00\x00", 12)) == "integer width",

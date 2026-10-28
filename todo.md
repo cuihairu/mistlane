@@ -182,3 +182,11 @@
 ## K. 项目初始化 CLI 与进程运维模板
 
 - [ ] 按架构比较文档继续补内部 liveness/readiness 探测、Crashpad 转储生成/保留与部署工作流；再依据真实压力测试决定动态 registry、lease/fencing、房间 drain/migration 或容器编排需求。（BLOCKED 2026-10-19：PROBE1 与 Crashpad 已实现——src/main.cpp:248 `--probe-listen`、CMakeLists.txt:16 与 mistlane_crashpad_startup 用例；动态 registry/lease/drain/编排决策被 193/195 的真实压力测试门控。预备半边已备：docs/architecture-comparison.md 及 zh 新增「未决决策」选项对比表，列出演练须量出的四个判别数字）
+
+## 审核发现
+
+- [x] 审核发现：4 字节整数解码未做符号扩展，INT32 负值（如 -1）被解码为 4294967295，与上游 sproto expand64 及 JS/C# golden 的有符号扩展不符，导致负 INT32 往返失败并被 value_valid 判 INVALID（include/mistlane/entity_codec.hpp:281）。已修：decode_field/IntArray 4 字节分支按 expand64 语义符号扩展；test_cases 负 INT32（-1、-2147483648）解码断言通过，mistlane_entity_codec 全绿。
+- [x] 审核发现：黄金/往返向量仅覆盖 8 字节负整数（-9007199254740993），未覆盖以 4 字节编码的负 INT32（-2147483648..-1），使上述符号扩展缺陷漏检（src/test_cases.cpp:860）。已补：negative32（-1）与 neg_array（-1、-2147483648）向量加入 golden 与 roundtrip，mistlane_entity_codec 全绿。
+- [x] 审核发现：valid_utf8 未校验 Unicode 码点上限，接受以 0xF5-0xF7 开头、码点大于 U+10FFFF 的非法 UTF-8（实测 F5 80 80 80 被接受），与 JS fatal TextDecoder/C# StrictUtf8 的拒绝行为不符（include/mistlane/entity_codec.hpp:90）。已修：valid_utf8 增加 code > 0x10ffff 拒绝（含 sproto_probe 同一校验），F5 80 80 80 现判 invalid utf-8 string，mistlane_entity_codec 全绿。
+- [x] 审核发现：畸形输入测试未覆盖码点超过 U+10FFFF 的 UTF-8 序列（如 F5 80 80 80），使上述 UTF-8 缺陷未暴露（src/test_cases.cpp:1002）。已补：decode_why 断言 F5 80 80 80 被拒，mistlane_entity_codec 全绿。
+- [x] 审核发现：文件顶部注释声称与 JS/C# SDK golden 逐字节一致，但 4 字节整数解码未做有符号扩展，与 goldens 实际行为不符（include/mistlane/entity_codec.hpp:16）。已修：注释改为「解码刻意偏离上游：4 字节元素按 JS/C# 生成 codec 符号扩展（上游不扩展）」，与实现一致。
