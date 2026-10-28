@@ -8,6 +8,7 @@
 #include "mistlane/entity_dispatch.hpp"
 #include "mistlane/entity_envelope.hpp"
 #include "mistlane/entity_endpoint.hpp"
+#include "mistlane/entity_codec.hpp"
 #include "mistlane/entity_runtime.hpp"
 #include "mistlane/entity_property.hpp"
 #include "mistlane/entity_lua.hpp"
@@ -818,6 +819,201 @@ void entity_endpoint() {
     require(notify_fail.has_value() && notify_fail->empty() && result == "notify-error",
             "unrouted notify did not surface a label");
     std::cout << "entity.endpoint notify: handled and answered nothing, failure surfaced [PASS]\n";
+}
+
+void entity_codec() {
+    // The schema-driven sproto codec byte-locks against the same vectors the
+    // vendored upstream encoder produces (src/sproto_probe.cpp sdk-vector mode
+    // and the JS/C# SDK goldens): every wire form here is the exact hex locked
+    // there. The contract below declares the Item/Inventory shapes the nested
+    // goldens walk; each vector encodes its own top-level field shape.
+    const EntityContract contract(R"(<Contracts><Types><Item><itemId id="0" type="UINT32"/><count id="1" type="UINT32"/></Item><Inventory><capacity id="0" type="UINT16"/><items id="1" type="ARRAY" of="Item"/></Inventory></Types><Entity name="Avatar" id="1"><ServerMethods><Method name="get" id="1" mode="request" caller="server"><Arg name="account" id="0" type="UINT32"/><Returns><Field name="level" id="1" type="UINT16"/></Returns></Method></ServerMethods></Entity></Contracts>)");
+    const auto field = [](unsigned id, const char* name, const char* type, const char* of = "") {
+        ContractField f; f.id = id; f.name = name; f.type = type; f.of = of; return f;
+    };
+    const auto hex = [](const std::string& bytes) {
+        std::ostringstream out;
+        for (const unsigned char byte : bytes) out << std::hex << std::setw(2) << std::setfill('0') << static_cast<unsigned>(byte);
+        return out.str();
+    };
+    const auto codec = SprotoCodec(contract);
+    const auto encode = [&](const ContractArgs& shape, const EntityValues& values) {
+        return codec.encode_returns(shape, values);
+    };
+    const auto decode = [&](const ContractArgs& shape, const std::string& payload) {
+        EntityValues out; std::string reason;
+        const bool ok = codec.decode_args(shape, payload, out, reason);
+        return std::make_pair(ok, out);
+    };
+    const auto decode_why = [&](const ContractArgs& shape, const std::string& payload) {
+        EntityValues out; std::string reason;
+        const bool ok = codec.decode_args(shape, payload, out, reason);
+        require(!ok, "malformed payload decoded");
+        return reason;
+    };
+    // The Item shape for nested vectors: two in-band ints.
+    const ContractArgs item_shape{field(0, "itemId", "UINT32"), field(1, "count", "UINT32")};
+    // Every locked wire vector, in probe order.
+    const auto one = encode(ContractArgs{field(1, "f1", "INT32")}, EntityValues{{"f1", std::int64_t{1}}});
+    require(one && hex(*one) == "020001000400", "one: in-band integer word mismatch");
+    const auto negative = encode(ContractArgs{field(4, "f4", "INT64")}, EntityValues{{"f4", std::int64_t{-9007199254740993LL}}});
+    require(negative && hex(*negative) == "02000700000008000000ffffffffffffdfff", "negative: 8-byte two's-complement mismatch");
+    const auto positive = encode(ContractArgs{field(1, "f1", "INT32"), field(4, "f4", "INT64")},
+        EntityValues{{"f1", std::int64_t{65535}}, {"f4", std::int64_t{9007199254740993LL}}});
+    require(positive && hex(*positive) == "0400010000000300000004000000ffff0000080000000100000000002000", "positive: length-prefixed ints mismatch");
+    const auto nested = encode(ContractArgs{field(2, "inv", "Inventory")},
+        EntityValues{{"inv", EntityObject{{"capacity", std::int64_t{1}},
+            {"items", EntityArray{EntityObject{{"itemId", std::int64_t{7}}, {"count", std::int64_t{2}}},
+                                   EntityObject{{"itemId", std::int64_t{0}}, {"count", std::int64_t{1}}}}}}}});
+    require(nested && hex(*nested) == "0200030000001e000000020004000000140000000600000002001000060006000000020002000400",
+            "nested: struct and struct-array mismatch");
+    const auto tags = encode(ContractArgs{field(1, "f1", "INT32"), field(5, "f5", "ARRAY", "INT32")},
+        EntityValues{{"f1", std::int64_t{1}}, {"f5", EntityArray{std::int64_t{0}, std::int64_t{1}, std::int64_t{2147483647}}}});
+    require(tags && hex(*tags) == "040001000400050000000d000000040000000001000000ffffff7f", "tags: int array 32-bit mismatch");
+    const auto totals = encode(ContractArgs{field(6, "f6", "ARRAY", "INT64")},
+        EntityValues{{"f6", EntityArray{std::int64_t{-1}, std::int64_t{2147483648LL}, std::int64_t{4294967296LL}}}});
+    require(totals && hex(*totals) == "02000b0000001900000008ffffffffffffffff00000080000000000000000001000000",
+            "totals: int array 64-bit mismatch");
+    const auto empty_tags = encode(ContractArgs{field(5, "f5", "ARRAY", "INT32")}, EntityValues{{"f5", EntityArray{}}});
+    require(empty_tags && hex(*empty_tags) == "02000900000000000000", "empty_tags: zero-element int array mismatch");
+    const auto empty_items = encode(ContractArgs{field(2, "inv", "Inventory")},
+        EntityValues{{"inv", EntityObject{{"capacity", std::int64_t{0}}, {"items", EntityArray{}}}}});
+    require(empty_items && hex(*empty_items) == "0200030000000a00000002000200000000000000", "empty_items: zero-element struct array mismatch");
+    const auto text_set = encode(ContractArgs{field(7, "active", "BOOL"), field(8, "name", "STRING"),
+            field(9, "blob", "BYTES"), field(10, "flags", "ARRAY", "BOOL"),
+            field(11, "aliases", "ARRAY", "STRING"), field(12, "blobs", "ARRAY", "BYTES")},
+        EntityValues{{"active", EntityValue(true)}, {"name", EntityValue(std::string("中文"))},
+            {"blob", EntityValue(std::string("\0\xff", 2))},
+            {"flags", EntityArray{EntityValue(true), EntityValue(false), EntityValue(true)}},
+            {"aliases", EntityArray{EntityValue(std::string("latin")), EntityValue(std::string())}},
+            {"blobs", EntityArray{EntityValue(std::string("\x01\x02", 2)), EntityValue(std::string())}}});
+    require(text_set && hex(*text_set) == "07000d0004000000000000000000000006000000e4b8ade696870200000000ff030000000100010d000000050000006c6174696e000000000a00000002000000010200000000",
+            "text_set: bool/string/bytes/arrays mismatch");
+    const auto false_flag = encode(ContractArgs{field(7, "active", "BOOL")}, EntityValues{{"active", EntityValue(false)}});
+    require(false_flag && hex(*false_flag) == "02000d000200", "false_flag: in-band false mismatch");
+    const auto all_empty = encode(ContractArgs{field(8, "name", "STRING"), field(9, "blob", "BYTES"),
+            field(10, "flags", "ARRAY", "BOOL"), field(11, "aliases", "ARRAY", "STRING"), field(12, "blobs", "ARRAY", "BYTES")},
+        EntityValues{{"name", EntityValue(std::string())}, {"blob", EntityValue(std::string())},
+            {"flags", EntityArray{}}, {"aliases", EntityArray{}}, {"blobs", EntityArray{}}});
+    require(all_empty && hex(*all_empty) == "06000f00000000000000000000000000000000000000000000000000000000000000",
+            "all_empty: empty string/bytes/arrays mismatch");
+    std::cout << "entity.codec encode: eleven wire vectors byte-lock against upstream [PASS]\n";
+
+    // Decode each vector back to typed values, then re-encode to the same bytes.
+    const auto [one_ok, one_v] = decode(ContractArgs{field(1, "f1", "INT32")}, *one);
+    require(one_ok && std::get<std::int64_t>(one_v.at("f1").data) == 1, "one did not decode");
+    const auto [neg_ok, neg_v] = decode(ContractArgs{field(4, "f4", "INT64")}, *negative);
+    require(neg_ok && std::get<std::int64_t>(neg_v.at("f4").data) == -9007199254740993LL, "negative did not decode");
+    const auto [pos_ok, pos_v] = decode(ContractArgs{field(1, "f1", "INT32"), field(4, "f4", "INT64")}, *positive);
+    require(pos_ok && std::get<std::int64_t>(pos_v.at("f1").data) == 65535
+            && std::get<std::int64_t>(pos_v.at("f4").data) == 9007199254740993LL, "positive did not decode");
+    const auto [nested_ok, nested_v] = decode(ContractArgs{field(2, "inv", "Inventory")}, *nested);
+    require(nested_ok, "nested did not decode");
+    {
+        const auto& inv = std::get<EntityObject>(nested_v.at("inv").data);
+        require(std::get<std::int64_t>(inv.at("capacity").data) == 1, "nested capacity wrong");
+        const auto& items = std::get<EntityArray>(inv.at("items").data);
+        require(items.size() == 2
+                && std::get<std::int64_t>(std::get<EntityObject>(items[0].data).at("itemId").data) == 7
+                && std::get<std::int64_t>(std::get<EntityObject>(items[0].data).at("count").data) == 2
+                && std::get<std::int64_t>(std::get<EntityObject>(items[1].data).at("itemId").data) == 0
+                && std::get<std::int64_t>(std::get<EntityObject>(items[1].data).at("count").data) == 1,
+                "nested struct-array elements wrong");
+    }
+    const auto [tags_ok, tags_v] = decode(ContractArgs{field(1, "f1", "INT32"), field(5, "f5", "ARRAY", "INT32")}, *tags);
+    require(tags_ok && std::get<std::int64_t>(tags_v.at("f1").data) == 1, "tags f1 wrong");
+    {
+        const auto& array = std::get<EntityArray>(tags_v.at("f5").data);
+        require(array.size() == 3 && std::get<std::int64_t>(array[0].data) == 0
+                && std::get<std::int64_t>(array[1].data) == 1
+                && std::get<std::int64_t>(array[2].data) == 2147483647, "tags int array wrong");
+    }
+    const auto [totals_ok, totals_v] = decode(ContractArgs{field(6, "f6", "ARRAY", "INT64")}, *totals);
+    {
+        require(totals_ok, "totals did not decode");
+        const auto& array = std::get<EntityArray>(totals_v.at("f6").data);
+        require(array.size() == 3 && std::get<std::int64_t>(array[0].data) == -1
+                && std::get<std::int64_t>(array[1].data) == 2147483648LL
+                && std::get<std::int64_t>(array[2].data) == 4294967296LL, "totals int array wrong");
+    }
+    const auto [empty_ok, empty_v] = decode(ContractArgs{field(5, "f5", "ARRAY", "INT32")}, *empty_tags);
+    require(empty_ok && std::get<EntityArray>(empty_v.at("f5").data).empty(), "empty_tags did not decode empty");
+    const auto [eitems_ok, eitems_v] = decode(ContractArgs{field(2, "inv", "Inventory")}, *empty_items);
+    require(eitems_ok && std::get<EntityObject>(eitems_v.at("inv").data).size() == 2
+            && std::get<EntityArray>(std::get<EntityObject>(eitems_v.at("inv").data).at("items").data).empty(),
+            "empty_items did not decode empty struct array");
+    const auto [text_ok, text_v] = decode(ContractArgs{field(7, "active", "BOOL"), field(8, "name", "STRING"),
+            field(9, "blob", "BYTES"), field(10, "flags", "ARRAY", "BOOL"),
+            field(11, "aliases", "ARRAY", "STRING"), field(12, "blobs", "ARRAY", "BYTES")}, *text_set);
+    require(text_ok, "text_set did not decode");
+    {
+        require(std::get<bool>(text_v.at("active").data) && std::get<std::string>(text_v.at("name").data) == "中文"
+                && std::get<std::string>(text_v.at("blob").data) == std::string("\0\xff", 2), "text_set scalars wrong");
+        const auto& flags = std::get<EntityArray>(text_v.at("flags").data);
+        const auto& aliases = std::get<EntityArray>(text_v.at("aliases").data);
+        const auto& blobs = std::get<EntityArray>(text_v.at("blobs").data);
+        require(flags.size() == 3 && std::get<bool>(flags[0].data) && !std::get<bool>(flags[1].data)
+                && std::get<bool>(flags[2].data), "text_set bool array wrong");
+        require(aliases.size() == 2 && std::get<std::string>(aliases[0].data) == "latin"
+                && std::get<std::string>(aliases[1].data).empty(), "text_set string array wrong");
+        require(blobs.size() == 2 && std::get<std::string>(blobs[0].data) == std::string("\x01\x02", 2)
+                && std::get<std::string>(blobs[1].data).empty(), "text_set bytes array wrong");
+    }
+    const auto [false_ok, false_v] = decode(ContractArgs{field(7, "active", "BOOL")}, *false_flag);
+    require(false_ok && !std::get<bool>(false_v.at("active").data), "false_flag did not decode false");
+    const auto [all_ok, all_v] = decode(ContractArgs{field(8, "name", "STRING"), field(9, "blob", "BYTES"),
+            field(10, "flags", "ARRAY", "BOOL"), field(11, "aliases", "ARRAY", "STRING"), field(12, "blobs", "ARRAY", "BYTES")}, *all_empty);
+    require(all_ok && std::get<std::string>(all_v.at("name").data).empty()
+            && std::get<EntityArray>(all_v.at("flags").data).empty(), "all_empty did not decode empty");
+    std::cout << "entity.codec decode: eleven wire vectors decode to typed values [PASS]\n";
+
+    // Roundtrip: decode then re-encode reproduces the locked bytes.
+    const auto roundtrip = [&](const ContractArgs& shape, const std::string& wire) {
+        const auto [ok, values] = decode(shape, wire);
+        require(ok, "roundtrip source did not decode");
+        const auto re = encode(shape, values);
+        require(re && hex(*re) == hex(wire), "roundtrip re-encode drifted");
+    };
+    roundtrip(ContractArgs{field(1, "f1", "INT32")}, *one);
+    roundtrip(ContractArgs{field(4, "f4", "INT64")}, *negative);
+    roundtrip(ContractArgs{field(1, "f1", "INT32"), field(4, "f4", "INT64")}, *positive);
+    roundtrip(ContractArgs{field(2, "inv", "Inventory")}, *nested);
+    roundtrip(ContractArgs{field(1, "f1", "INT32"), field(5, "f5", "ARRAY", "INT32")}, *tags);
+    roundtrip(ContractArgs{field(6, "f6", "ARRAY", "INT64")}, *totals);
+    roundtrip(ContractArgs{field(5, "f5", "ARRAY", "INT32")}, *empty_tags);
+    roundtrip(ContractArgs{field(2, "inv", "Inventory")}, *empty_items);
+    roundtrip(ContractArgs{field(7, "active", "BOOL"), field(8, "name", "STRING"), field(9, "blob", "BYTES"),
+        field(10, "flags", "ARRAY", "BOOL"), field(11, "aliases", "ARRAY", "STRING"), field(12, "blobs", "ARRAY", "BYTES")}, *text_set);
+    roundtrip(ContractArgs{field(7, "active", "BOOL")}, *false_flag);
+    roundtrip(ContractArgs{field(8, "name", "STRING"), field(9, "blob", "BYTES"), field(10, "flags", "ARRAY", "BOOL"),
+        field(11, "aliases", "ARRAY", "STRING"), field(12, "blobs", "ARRAY", "BYTES")}, *all_empty);
+    std::cout << "entity.codec roundtrip: decode then re-encode reproduces locked bytes [PASS]\n";
+
+    // Malformed inputs fail closed with a reason (INVALID on the wire).
+    require(decode_why(ContractArgs{field(1, "f1", "INT32")}, std::string("\x01", 1)) == "truncated tag count",
+            "truncated count was not rejected");
+    require(decode_why(ContractArgs{field(1, "f1", "INT32")}, std::string("\x04\x00", 2)) == "truncated tags",
+            "truncated tags were not rejected");
+    require(decode_why(ContractArgs{field(1, "f1", "INT32")}, *one + std::string("\x00", 1)) == "trailing bytes after record",
+            "trailing bytes were not rejected");
+    require(decode_why(ContractArgs{field(8, "s", "STRING")}, std::string("\x02\x00\x0f\x00\x04\x00", 6)) == "in-band non-integer field",
+            "in-band string was not rejected");
+    require(decode_why(ContractArgs{field(8, "s", "STRING")}, std::string("\x02\x00\x0f\x00\x00\x00\x01\x00\x00\x00\xff", 11)) == "invalid utf-8 string",
+            "invalid UTF-8 string was not rejected");
+    require(decode_why(ContractArgs{field(10, "flags", "ARRAY", "BOOL")}, std::string("\x02\x00\x13\x00\x00\x00\x01\x00\x00\x00\x02", 11)) == "bool array element",
+            "bool array element above one was not rejected");
+    require(decode_why(ContractArgs{field(1, "f1", "INT32")}, std::string("\x02\x00\x01\x00\x00\x00\x02\x00\x00\x00\x00\x00", 12)) == "integer width",
+            "bad integer width was not rejected");
+    // Unknown tags are skipped, and a length-prefixed unknown still advances the
+    // data cursor so a later known field stays aligned: tag 8 is not declared,
+    // its length-prefixed byte is skipped, and in-band tag 9 still decodes.
+    {
+        const auto [ok, values] = decode(ContractArgs{field(9, "f9", "INT32")},
+            std::string("\x03\x00\x0f\x00\x00\x00\x06\x00\x01\x00\x00\x00\x41", 13));
+        require(ok && std::get<std::int64_t>(values.at("f9").data) == 2,
+                "unknown length-prefixed field misaligned the data cursor");
+    }
+    std::cout << "entity.codec malformed: fail-closed with a reason, unknown tags skipped [PASS]\n";
 }
 // Home-data persistence snapshot model: only persistent descriptor properties
 // leave the store, a confirmed commit — never the send — clears dirty, and a

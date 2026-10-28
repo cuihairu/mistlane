@@ -16,6 +16,7 @@ void entity_tree();
 void entity_sync();
 void entity_rpc();
 void entity_endpoint();
+void entity_codec();
 void entity_persist();
 void entity_perf();
 void role_names();
@@ -120,6 +121,7 @@ int run_tests(int argc, char** argv) {
         {"entity.sync","contract",test::entity_sync},
         {"entity.rpc","contract",test::entity_rpc},
         {"entity.endpoint","contract",test::entity_endpoint},
+        {"entity.codec","contract",test::entity_codec},
         {"entity.persist","contract",test::entity_persist},
         {"entity.perf","contract",test::entity_perf},
         {"core.roles","core",test::role_names},
