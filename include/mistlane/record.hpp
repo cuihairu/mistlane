@@ -324,6 +324,12 @@ public:
     bool cancel_request() { if (state_ != State::Requested) return false; next_ = 0; state_ = State::Active; timers_running_ = true; return true; }
     bool relinquish() { if (state_ != State::Requested || in_flight_) return false; state_ = State::Relinquished; return true; }
     bool accept(std::uint64_t generation) { if (state_ != State::Relinquished || generation != next_) return false; generation_ = generation; state_ = State::Active; timers_running_ = true; return true; }
+    // Continue a relinquished grant onto a strictly newer generation without
+    // reviving the old one: the lease stays relinquished (no writer at all)
+    // and simply re-targets `accept`, so the old generation is never drained or
+    // cancelled after the fence and the new destination activates only when it
+    // ACKs. The tombstone forbids requesting or revoking a burned generation.
+    bool takeover(std::uint64_t generation) { if (state_ != State::Relinquished || generation <= generation_) return false; next_ = generation; return true; }
     bool write_allowed(std::uint64_t generation) const { return state_ == State::Active && generation == generation_; }
     bool timer_running() const { return timers_running_; }
     State state() const { return state_; }

@@ -203,6 +203,43 @@ public:
         return MigrationResult::Applied;
     }
 
+    // Post-fence takeover: the home is a fenced gap (source drained and its
+    // grant relinquished) whose destination member left the registry, so no
+    // owner may be inferred from the dead member. The only way to un-fence the
+    // tombstoned gap is an explicit takeover onto a living destination with a
+    // strictly newer generation from the durable authority. The source is
+    // already drained and fenced, so the new transaction starts where a normal
+    // one stands after HomeFence and merely re-targets the grant for the next
+    // destination ACK.
+    MigrationResult takeover(const MigrationRequest& request) {
+        if (request.key != data_.key || !record_identifier(request.id)
+                || !valid_migration_owner(request.destination) || !valid_migration_owner(request.expected.owner))
+            return MigrationResult::Invalid;
+        if (const auto* old = entry(request.id))
+            return old->request == request ? MigrationResult::Duplicate : MigrationResult::Conflict;
+        const auto* current = entry(data_.current);
+        if (!current || terminal(current->state) || !current->home_fenced || current->destination_ready)
+            return MigrationResult::Conflict; // Only a fenced gap continues.
+        if (request.expected != data_.route || request.expected != data_.home_owner
+                || request.expected != current->request.expected)
+            return MigrationResult::Stale; // Only the fenced source's route continues.
+        if (request.destination == request.expected.owner || request.destination == current->request.destination)
+            return MigrationResult::Invalid; // Same, or the dead destination again.
+        const auto generation = home_.reserve(request.key);
+        if (!generation || *generation <= current->token.generation) return MigrationResult::Conflict;
+        if (!data_.lease.takeover(*generation)) return MigrationResult::Order;
+        // The superseded fenced transaction is terminal with its generation
+        // burned; the single live handoff is now the takeover.
+        data_.journal[data_.current].state = MigrationState::Aborted;
+        data_.journal[data_.current].destination_staged = false;
+        Entry row{request, {request.key, request.id, *generation}};
+        row.source_drained = true;
+        row.home_fenced = true;
+        data_.journal.emplace(request.id, std::move(row));
+        data_.current = request.id;
+        return MigrationResult::Applied;
+    }
+
     MigrationResult apply(const MigrationToken& token, MigrationEvent event) {
         if (token.key != data_.key) return MigrationResult::Invalid;
         auto it = data_.journal.find(token.id);

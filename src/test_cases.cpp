@@ -3617,6 +3617,86 @@ void coordinator_migration_retire() {
                 "fence retirement invented an owner or a destination acknowledgement");
     }
     {
+        // Post-fence takeover: the destination leaves after the home fence,
+        // leaving a tombstoned fenced gap with no owner. The coordinator must
+        // not infer an owner from the dead member or revive the source; the
+        // only way forward is an explicit takeover onto a living destination
+        // with a strictly newer generation (the durable authority never reuses
+        // a burned generation). The source is already drained and fenced, so
+        // the new transaction starts at the destination ACK.
+        MigrationFixture f;
+        auto tx = f.transaction();
+        require(tx.prepare(f.request()) == MigrationResult::Applied, "takeover prepare failed");
+        const auto token = tx.entry("move-1")->token;
+        migration_step(tx, token, MigrationEvent::SourceDrained);
+        migration_step(tx, token, MigrationEvent::HomeFence);
+        require(tx.retire_member(token, f.target) == MigrationResult::Pending
+                && tx.retire_member(token, f.source) == MigrationResult::Pending,
+                "fenced retirement was not acknowledged without mutation");
+        auto gap = tx.lookup_ownership(f.key);
+        require(gap && gap->state == HomeOwnershipState::Fenced && !gap->owner
+                && !tx.write_allowed(f.source, 8) && !tx.write_allowed(f.target, 9),
+                "takeover fixture did not leave a fenced gap with no owner");
+
+        MigrationOwner alive = f.target; alive.instance = "xs-b";
+        MigrationRequest takeover{f.key, "takeover", f.request().expected, alive};
+        require(tx.takeover(takeover) == MigrationResult::Applied
+                && tx.entry("takeover")->token.generation == 10
+                && tx.entry("takeover")->source_drained && tx.entry("takeover")->home_fenced,
+                "takeover did not reserve a newer generation in the fenced gap");
+        require(tx.entry("move-1")->state == MigrationState::Aborted
+                && !tx.entry("move-1")->destination_staged,
+                "the superseded fenced transaction was not burned");
+        auto now = tx.lookup_ownership(f.key);
+        require(now && now->state == HomeOwnershipState::Fenced && !now->owner
+                && f.home.issued(f.key) == 10 && !tx.write_allowed(alive, 10),
+                "takeover prematurely granted an owner or reissued the old generation");
+        const auto next = tx.entry("takeover")->token;
+        require(tx.apply(next, MigrationEvent::DestinationReady) == MigrationResult::Applied
+                && tx.write_allowed(alive, 10) && !tx.write_allowed(f.source, 8)
+                && !tx.write_allowed(f.target, 9),
+                "takeover destination ACK did not activate the strictly newer grant");
+        migration_step(tx, next, MigrationEvent::Commit);
+        require(tx.state() == MigrationState::Committed && tx.route() == MigrationRoute{alive, 10}
+                && tx.apply(token, MigrationEvent::Recover) == MigrationResult::Duplicate,
+                "takeover did not publish the living destination and burn the old transaction");
+        MigrationTransaction checkpoint(f.home, tx.snapshot());
+        require(checkpoint.state() == MigrationState::Committed
+                && checkpoint.route() == MigrationRoute{alive, 10}
+                && f.home.issued(f.key) == 10, "takeover checkpoint did not restore");
+
+        // Refusals: only the live fenced gap is takeable; a replay is
+        // idempotent, a committed transaction is a conflict, a dead or same
+        // destination is invalid, and a never-fenced transaction is a conflict.
+        require(tx.takeover(takeover) == MigrationResult::Duplicate,
+                "a replayed takeover was not idempotent");
+        MigrationRequest late = takeover; late.id = "takeover-2";
+        require(tx.takeover(late) == MigrationResult::Conflict,
+                "a takeover ran against a committed transaction");
+        MigrationFixture pre;
+        auto before = pre.transaction();
+        require(before.prepare(pre.request()) == MigrationResult::Applied, "pre-fence takeover prepare failed");
+        MigrationRequest unfenced = takeover; unfenced.id = "unfenced";
+        require(before.takeover(unfenced) == MigrationResult::Conflict,
+                "a takeover ran against a transaction that never fenced");
+        MigrationFixture pre2;
+        auto gap2 = pre2.transaction();
+        require(gap2.prepare(pre2.request()) == MigrationResult::Applied, "invalid takeover prepare failed");
+        const auto token2 = gap2.entry("move-1")->token;
+        migration_step(gap2, token2, MigrationEvent::SourceDrained);
+        migration_step(gap2, token2, MigrationEvent::HomeFence);
+        MigrationRequest dead = takeover; dead.id = "dead-target"; dead.destination = pre2.target;
+        require(gap2.takeover(dead) == MigrationResult::Invalid,
+                "the dead destination was accepted for takeover");
+        MigrationRequest same = takeover; same.id = "same-target"; same.destination = pre2.source;
+        require(gap2.takeover(same) == MigrationResult::Invalid,
+                "the source itself was accepted as the takeover destination");
+        MigrationRequest stale = takeover; stale.id = "stale-route";
+        stale.expected.owner.scene = "elsewhere";
+        require(gap2.takeover(stale) == MigrationResult::Stale,
+                "a takeover continued a route that was never the fenced one");
+    }
+    {
         MigrationFixture f;
         auto tx = f.transaction();
         require(tx.prepare(f.request()) == MigrationResult::Applied, "refusal prepare failed");
@@ -3638,8 +3718,8 @@ void coordinator_migration_retire() {
         require(tx.retire_member(token, f.source) == MigrationResult::Conflict
                 && tx.state() == MigrationState::Aborted, "retirement changed a terminal transaction");
     }
-    std::cout << "migration.retire: source/destination retirement aborts pre-fence, fenced stays pending, "
-                 "takeover at gen 10 [PASS]\n";
+    std::cout << "migration.retire: pre-fence retirement aborts, fenced retire waits, "
+                 "post-fence takeover resumes at gen 10 [PASS]\n";
 }
 // The migration model on the wire: MLR1 MIG carries the same protocol the
 // coordinator keeps in memory, over real connections, behind MLS1 on a tokened
