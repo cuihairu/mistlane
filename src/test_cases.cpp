@@ -9,6 +9,7 @@
 #include "mistlane/entity_envelope.hpp"
 #include "mistlane/entity_endpoint.hpp"
 #include "mistlane/entity_codec.hpp"
+#include "mistlane/entity_gateway.hpp"
 #include "mistlane/entity_runtime.hpp"
 #include "mistlane/entity_property.hpp"
 #include "mistlane/entity_lua.hpp"
@@ -1014,6 +1015,61 @@ void entity_codec() {
                 "unknown length-prefixed field misaligned the data cursor");
     }
     std::cout << "entity.codec malformed: fail-closed with a reason, unknown tags skipped [PASS]\n";
+}
+
+void entity_gateway() {
+    // The gateway maps each client's outer transport correlation onto a fresh
+    // inner entity correlation and back through a bounded table, so one channel
+    // multiplexes many entity requests (docs/entity-contract.md).
+    GatewayEntityCorrelation map;
+    require(map.pending() == 0, "fresh map is not empty");
+    const auto a = map.allocate(5, 10);
+    require(a != 0 && map.pending() == 1, "first allocate did not create a slot");
+    const auto resolved = map.resolve(a);
+    require(resolved && resolved->first == 5 && resolved->second == 10 && map.pending() == 0,
+            "resolve did not return the origin and consume the slot");
+    std::cout << "entity.gateway allocate/resolve: outer correlation round-trips and consumes [PASS]\n";
+
+    // The same outer correlation on different channels is a different request;
+    // one channel can multiplex several outers.
+    const auto a1 = map.allocate(5, 10), b1 = map.allocate(5, 11), c1 = map.allocate(6, 10);
+    require(a1 != 0 && b1 != 0 && c1 != 0 && a1 != b1 && b1 != c1 && a1 != c1 && map.pending() == 3,
+            "multiplexed allocations collided");
+    const auto ra = map.resolve(a1), rb = map.resolve(b1), rc = map.resolve(c1);
+    require(ra && ra->first == 5 && ra->second == 10 && rb && rb->first == 5 && rb->second == 11
+            && rc && rc->first == 6 && rc->second == 10, "multiplexed origins misresolved");
+    std::cout << "entity.gateway multiplex: one channel fans out, origins stay distinct [PASS]\n";
+
+    // Slots are one-shot: a stale or duplicate reply is rejected.
+    require(!map.resolve(a1), "a consumed slot resolved again");
+    require(!map.resolve(9999), "an unknown inner correlation resolved");
+    std::cout << "entity.gateway one-shot: stale reply and unknown correlation rejected [PASS]\n";
+
+    // A duplicate (connection, outer) pair while pending is refused, not re-mapped.
+    const auto d0 = map.allocate(5, 10), d1 = map.allocate(5, 11);
+    require(d0 != 0 && d1 != 0 && map.pending() == 2, "pre-duplicate allocations failed");
+    const auto dup = map.allocate(5, 10);
+    require(dup == 0 && map.pending() == 2, "duplicate outer on a channel was not refused");
+    map.drop(5);
+    require(map.pending() == 0, "duplicate test did not clean up");
+    std::cout << "entity.gateway duplicate: repeated outer correlation refused while pending [PASS]\n";
+
+    // Disconnecting a client drops only its own pending mappings.
+    const auto d2 = map.allocate(5, 20), e1 = map.allocate(6, 20);
+    map.drop(5);
+    require(!map.resolve(d2) && map.resolve(e1) && map.pending() == 0, "drop did not isolate the connection");
+    std::cout << "entity.gateway drop: disconnect cleans only its own channel [PASS]\n";
+
+    // The table is bounded: full means refuse, not evict; a freed slot reuses.
+    GatewayEntityCorrelation full;
+    for (std::uint64_t i = 1; i <= GatewayEntityCorrelation::kCapacity; ++i)
+        require(full.allocate(1, i) == i, "capacity fill stopped early");
+    require(full.pending() == GatewayEntityCorrelation::kCapacity, "capacity fill miscounted");
+    require(full.allocate(1, GatewayEntityCorrelation::kCapacity + 1000) == 0,
+            "a full table did not refuse an allocation");
+    require(full.resolve(1) && full.allocate(1, GatewayEntityCorrelation::kCapacity + 1000) != 0,
+            "a freed slot was not reused");
+    std::cout << "entity.gateway capacity: bounded, refuses when full, reuses a freed slot [PASS]\n";
 }
 // Home-data persistence snapshot model: only persistent descriptor properties
 // leave the store, a confirmed commit — never the send — clears dirty, and a

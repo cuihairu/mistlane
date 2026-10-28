@@ -73,6 +73,7 @@ if(BUILD_TESTING)
       entity.rpc
       entity.endpoint
       entity.codec
+      entity.gateway
       entity.persist
       entity.perf
       coordinator.placement coordinator.routes coordinator.migration.commit coordinator.migration.abort
