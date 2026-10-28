@@ -330,6 +330,8 @@ int main(int argc, char** argv) {
                                           {{0, Value::make_int(0)}, {1, Value::make_int(1)}}})}})}});
         const auto tags = encode({{1, Value::make_int(1)}, {5, Value::make_int_array({0, 1, 2147483647})}});
         const auto totals = encode({{6, Value::make_int_array({-1, 2147483648LL, 4294967296LL})}});
+        const auto negative32 = encode({{1, Value::make_int(-1)}});
+        const auto neg_array = encode({{5, Value::make_int_array({-1, -2147483648LL})}});
         const auto empty_tags = encode({{5, Value::make_int_array({})}});
         const auto empty_items = encode({{2, Value::make_struct({{0, Value::make_int(0)}, {1, Value::make_struct_array(std::vector<Fields>{})}})}});
         // BOOL/STRING/BYTES vectors, byte-locked against the vendored upstream
@@ -352,6 +354,8 @@ int main(int argc, char** argv) {
             || to_hex(nested) != "0200030000001e000000020004000000140000000600000002001000060006000000020002000400"
             || to_hex(tags) != "040001000400050000000d000000040000000001000000ffffff7f"
             || to_hex(totals) != "02000b0000001900000008ffffffffffffffff00000080000000000000000001000000"
+            || to_hex(negative32) != "02000100000004000000ffffffff"
+            || to_hex(neg_array) != "0200090000000900000004ffffffff00000080"
             || to_hex(empty_tags) != "02000900000000000000"
             || to_hex(empty_items) != "0200030000000a00000002000200000000000000"
             || to_hex(text_set) != "07000d0004000000000000000000000006000000e4b8ade696870200000000ff030000000100010d000000050000006c6174696e000000000a00000002000000010200000000"
@@ -365,6 +369,8 @@ int main(int argc, char** argv) {
         std::cout << "CPP_SPROTO_SDK_GOLDEN nested=" << to_hex(nested) << " [PASS]\n";
         std::cout << "CPP_SPROTO_SDK_GOLDEN int_array32=" << to_hex(tags) << " [PASS]\n";
         std::cout << "CPP_SPROTO_SDK_GOLDEN int_array64=" << to_hex(totals) << " [PASS]\n";
+        std::cout << "CPP_SPROTO_SDK_GOLDEN int32_negative=" << to_hex(negative32) << " [PASS]\n";
+        std::cout << "CPP_SPROTO_SDK_GOLDEN int_array_negative32=" << to_hex(neg_array) << " [PASS]\n";
         std::cout << "CPP_SPROTO_SDK_GOLDEN empty_int_array=" << to_hex(empty_tags) << " [PASS]\n";
         std::cout << "CPP_SPROTO_SDK_GOLDEN empty_struct_array=" << to_hex(empty_items) << " [PASS]\n";
         std::cout << "CPP_SPROTO_SDK_GOLDEN bool_string_bytes=" << to_hex(text_set) << " [PASS]\n";
@@ -388,6 +394,10 @@ int main(int argc, char** argv) {
             && encode({decoded.begin(), decoded.end()}) == tags
             && decode(totals, avatar_schema, decoded) && decoded.at(6).ints == (std::vector<std::int64_t>{-1, 2147483648LL, 4294967296LL})
             && encode({decoded.begin(), decoded.end()}) == totals
+            && decode(negative32, avatar_schema, decoded) && decoded.at(1).i == -1
+            && encode({decoded.begin(), decoded.end()}) == negative32
+            && decode(neg_array, avatar_schema, decoded) && decoded.at(5).ints == (std::vector<std::int64_t>{-1, -2147483648LL})
+            && encode({decoded.begin(), decoded.end()}) == neg_array
             && decode(text_set, avatar_schema, decoded)
             && decoded.at(7).i == 1
             && decoded.at(8).kind == Value::Kind::String && decoded.at(8).text == "中文"

@@ -14,10 +14,10 @@ namespace mistlane {
 // "Invocation envelope and error protocol"): encodes the typed arguments and
 // return payloads against the contract's declared shapes and decodes the wire
 // payload back to typed values. Its wire form matches the goldens locked in
-// src/sproto_probe.cpp and the generated JS/C# SDK codecs. Decode intentionally
-// departs from the vendored upstream sproto: INT32/INT64 4-byte elements are
-// sign-extended like the generated JS/C# codecs (upstream sproto does not), and
-// the typed codec enforces STRING UTF-8 well-formedness (BYTES never validates)
+// src/sproto_probe.cpp and the generated JS/C# SDK codecs. Decode follows the
+// vendored upstream sproto: INT32/INT64 4-byte elements are sign-extended like
+// upstream expand64 and the generated JS/C# codecs, and the typed codec
+// enforces STRING UTF-8 well-formedness (BYTES never validates)
 // — a typed-binding contract, not wire law, since upstream sproto passes raw
 // bytes.
 class SprotoCodec : public EntityCodec {
