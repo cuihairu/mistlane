@@ -76,7 +76,6 @@ tools/crash_symbols.py
 tools/export.py
 vcpkg-configuration.json
 vcpkg.json
-TODO.md
 docs/migration-status.md
 docs/zh/migration-status.md
 include/mistlane/roles.hpp
