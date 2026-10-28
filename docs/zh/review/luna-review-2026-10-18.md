@@ -16,7 +16,7 @@ examples/mysql_probe.cpp
 examples/crash_sample.cpp
 examples/test_echo.lua
 release-files.txt
-TODO.md
+todo.md
 CMakePresets.json
 docs/validation.md
 THIRD_PARTY.md
@@ -103,8 +103,8 @@ ports/trantor/001-disable-werror.patch
 ./README.zh-CN.md
 ./package.json
 ./README.md
-./TODO.md
-[0m→ [0mRead TODO.md 
+./todo.md
+[0m→ [0mRead todo.md 
 [0m→ [0mRead README.md 
 [0m→ [0mRead README.zh-CN.md 
 [0m$ [0mrg --files src include tests tools lua examples docs | sort
@@ -282,7 +282,7 @@ if(EXISTS "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/tools/crashpad_handler
   install(PROGRAMS "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/tools/crashpad_handler"
     DESTINATION ${CMAKE_INSTALL_BINDIR})
 endif()
-仓库里的 `TODO.md` 实际有大量已勾选项，且还留有未勾选项；这与消息中的“完成 0、未完成 0”不一致。我会把仓库文件当作审查对象，不把清单中的自述当作已独立验证的证据。接下来重点核对网络边界、配置/探针、Lua/Redis 与测试覆盖。
+仓库里的 `todo.md` 实际有大量已勾选项，且还留有未勾选项；这与消息中的“完成 0、未完成 0”不一致。我会把仓库文件当作审查对象，不把清单中的自述当作已独立验证的证据。接下来重点核对网络边界、配置/探针、Lua/Redis 与测试覆盖。
 [0m→ [0mRead src/main.cpp 
 [0m→ [0mRead src/node.cpp 
 [0m→ [0mRead src/web.cpp 
@@ -358,7 +358,7 @@ Errors while running CTest
 [0m→ [0mRead tests/integration.py 
 [0m→ [0mRead docs/zh/architecture-comparison.md [90m[offset=25, limit=12][0m
 [0m✱ [0mGrep "probe.control|config.file|PROBE1|overload|ipv6|probe_port|mistlane_mysql_integration" [90min src · 48 matches[0m
-[0m✱ [0mGrep "\[ \]" [90min TODO.md · 8 matches[0m
+[0m✱ [0mGrep "\[ \]" [90min todo.md · 8 matches[0m
 [0m$ [0mgit status --short
 (no output)
 [0m✱ [0mGrep "native config format|core binary does not parse|sustained load generator|mistlane bot|user-service template|ready\(" [90min docs · 5 matches[0m
@@ -395,5 +395,5 @@ fatal: Invalid argument [system:22]
 | Lua 内存配额及更强的 CPU 隔离 | Lua VM 没有内存预算；指令 hook 只拦截常见失控脚本，不构成完整隔离。 | 高；脚本可阻塞或增加进程内存压力。证据：`src/lua_service.cpp:136-140`、`docs/lua.md:118-120` |
 | Crashpad 转储保留上限和自动清理 | 目前初始化本地 Crashpad 数据库并关闭上传，没有配额或保留清理逻辑。 | 中高；持续崩溃可能耗尽磁盘。证据：`src/diagnostics.cpp:66-81`、`docs/guide.md:240-244` |
 | 游戏连接的服务端推送、广播与全双工队列 | 当前按请求—响应串行处理，没有 Lua 主动推送接口；Web 通道每次只允许一个待处理 payload。 | 高（实时玩法）/中（请求响应玩法）。证据：`docs/guide.md:125-129`、`src/web.cpp:39-45`、`src/node.cpp:234-244` |
-| 目标环境下可重复的压力与 profiler 影响记录 | 现有验证明确没有目标环境的容量、采样开销和压力演练数据。 | 高；决定准入值、容量边界和生产部署前提。证据：`docs/cross-server.md:98-108`、`docs/validation.md:53`、`TODO.md:193-195` |
-| 版本、构建和节点身份指标 | 现有指标覆盖会话、流量、延迟和内存，但没有 build/version/node identity 指标。 | 中；多节点排障和版本分布检查更直接。证据：`src/diagnostics.cpp:23-60`、`TODO.md:181` |
+| 目标环境下可重复的压力与 profiler 影响记录 | 现有验证明确没有目标环境的容量、采样开销和压力演练数据。 | 高；决定准入值、容量边界和生产部署前提。证据：`docs/cross-server.md:98-108`、`docs/validation.md:53`、`todo.md:193-195` |
+| 版本、构建和节点身份指标 | 现有指标覆盖会话、流量、延迟和内存，但没有 build/version/node identity 指标。 | 中；多节点排障和版本分布检查更直接。证据：`src/diagnostics.cpp:23-60`、`todo.md:181` |

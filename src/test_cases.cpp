@@ -3870,6 +3870,43 @@ void coordinator_migration_wire() {
     equal(ask("MLR1 MIG ABORT NS - home hero-2 move-7 12"), "MLR1 ERR ORDER");
     equal(ask("MLR1 MIG STATUS NS - home hero-2"),
         "MLR1 MIG STATE move-7 PREPARING drained fenced notready 12");
+    // The fenced gap has no live owner: an explicit TAKEOVER names the fenced
+    // route and a living destination, burns the superseded transaction, and
+    // reserves a strictly newer generation. It never revives the old source or
+    // the dead destination, and only the new destination's ACK authorizes it.
+    const std::string alive = "realm NS - delta gameServer gs-d town";
+    // Refusals against the fenced gap before any takeover: a route other than
+    // the fenced one is STALE, the source or move-7's dead destination is
+    // INVALID, and a shape miss is INVALID.
+    equal(ask("MLR1 MIG TAKEOVER NS - home hero-2 take-2 9 "+doomed_owner+" "+alive),
+        "MLR1 ERR STALE");
+    equal(ask("MLR1 MIG TAKEOVER NS - home hero-2 take-3 8 "+alive+" "+alive),
+        "MLR1 ERR STALE");
+    equal(ask("MLR1 MIG TAKEOVER NS - home hero-2 take-4 8 "+doomed_owner+" "+doomed_owner),
+        "MLR1 ERR INVALID");
+    equal(ask("MLR1 MIG TAKEOVER NS - home hero-2 take-5 8 "+doomed_owner
+        +" realm NS - alpha gameServer gs-a hall"), "MLR1 ERR INVALID");
+    equal(ask("MLR1 MIG TAKEOVER NS - home hero-2 take-6 8 "+doomed_owner),
+        "MLR1 ERR INVALID");
+    // The fenced gap has no live owner: an explicit TAKEOVER names the fenced
+    // route and a living destination, burns the superseded transaction, and
+    // reserves a strictly newer generation. It never revives the old source
+    // and only the new destination's ACK authorizes it.
+    equal(ask("MLR1 MIG TAKEOVER NS - home hero-2 take-1 8 "+doomed_owner+" "+alive),
+        "MLR1 MIG TAKEOVER take-1 13");
+    equal(ask("MLR1 MIG TAKEOVER NS - home hero-2 take-1 8 "+doomed_owner+" "+alive),
+        "MLR1 MIG TAKEOVER take-1 13"); // idempotent by request id
+    equal(ask("MLR1 MIG STATUS NS - home hero-2"),
+        "MLR1 MIG STATE take-1 PREPARING drained fenced notready 13");
+    // The takeover resumes at the destination ACK and commits onto the living
+    // target; the superseded fenced transaction is terminal and cannot win.
+    equal(ask("MLR1 MIG EVENT NS - home hero-2 take-1 13 READY"), "MLR1 MIG STEP take-1 PREPARING");
+    equal(ask("MLR1 MIG COMMIT NS - home hero-2 take-1 13"), "MLR1 MIG COMMITTED take-1 "+alive+" 13");
+    equal(ask("MLR1 MIG STATUS NS - home hero-2"),
+        "MLR1 MIG STATE take-1 COMMITTED drained fenced ready 13");
+    equal(ask("MLR1 MIG COMMIT NS - home hero-2 move-7 12"), "MLR1 ERR CONFLICT");
+    equal(ask("MLR1 MIG TAKEOVER NS - home hero-2 take-7 8 "+doomed_owner+" "+alive),
+        "MLR1 ERR CONFLICT");
     // The tokened coordinator keeps its own registry, so it only sees this
     // key after its own hand identifies and publishes the facts.
     {
@@ -3905,8 +3942,9 @@ void coordinator_migration_wire() {
     equal(ask("MLR1 MIG STATUS NS - "+std::string(260, 'x')+" hero"), "MLR1 ERR INVALID");
     equal(ask("MLR1 MIG PREPARE NS - home hero move-1 8 "+std::string(1000, 'x')), "MLR1 ERR INVALID");
     equal(ask("MLR1 MIG STATUS NS - no.such.key hero"), "MLR1 ERR INVALID");
-    std::cout << "migration.wire: OWNER/PREPARE/STEP/COMMIT/ABORT/RETIRE/STATUS over TCP, "
-        "MLS1-gated, idempotent by request id, retirement observed from the registry [PASS]\n";
+    std::cout << "migration.wire: OWNER/PREPARE/STEP/COMMIT/ABORT/RETIRE/TAKEOVER/STATUS "
+        "over TCP, MLS1-gated, idempotent by request id, retirement observed from "
+        "the registry, post-fence takeover resumes a fenced gap [PASS]\n";
 }
 
 // The SQLite journal slice: every accepted migration mutation lands in one

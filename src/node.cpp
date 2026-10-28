@@ -1876,6 +1876,8 @@ private:
     //   MLR1 MIG COMMIT  [<namespace>] <realm> <character> <id> <generation>
     //   MLR1 MIG ABORT   [<namespace>] <realm> <character> <id> <generation>
     //   MLR1 MIG RETIRE  [<namespace>] <realm> <character> <id> <generation> <member>
+    //   MLR1 MIG TAKEOVER [<namespace>] <realm> <character> <id> <generation>
+    //     <expected> <destination>
     //   MLR1 MIG STATUS  [<namespace>] <realm> <character>
     // where <namespace> is the optional "NS <identifier>" group — "-" or
     // omitted names the default group, and a bare positional namespace is
@@ -2089,6 +2091,28 @@ private:
             const auto result = tx->retire_member(token, member);
             if (result == MigrationResult::Applied) registry_.persist_transaction(namespace_, key, *tx);
             return migration_verdict(token, result, "MLR1 MIG ABORTED " + token.id);
+        }
+        if (verb == "TAKEOVER") {
+            MigrationToken token;
+            MigrationRequest request;
+            if (!migration_token(in, token) || !owner_fields(in, request.expected.owner)
+                    || !owner_fields(in, request.destination) || (in >> extra))
+                return "MLR1 ERR INVALID";
+            token.key = key;
+            request.key = key;
+            request.id = token.id;
+            request.expected.generation = token.generation;
+            const auto tx = registry_.transaction(namespace_, key);
+            if (!tx) return "MLR1 ERR EMPTY";
+            const auto result = tx->takeover(request);
+            if (result != MigrationResult::Applied && result != MigrationResult::Duplicate)
+                return "MLR1 ERR " + migration_reason(result);
+            if (result == MigrationResult::Applied)
+                registry_.persist_transaction(namespace_, key, *tx);
+            const auto* row = tx->entry(token.id);
+            std::ostringstream out;
+            out << "MLR1 MIG TAKEOVER " << token.id << ' ' << (row ? row->token.generation : 0);
+            return out.str();
         }
         if (verb == "STATUS") {
             if ((in >> extra)) return "MLR1 ERR INVALID";

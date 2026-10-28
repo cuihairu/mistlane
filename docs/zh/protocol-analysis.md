@@ -106,13 +106,14 @@ home 最终游标/墓碑权威随第三片（2026-10-28）持久化：`HomeGener
 | `COMMIT` | `... COMMIT [NS <ns>] <realm> <character> <id> <gen>` | `COMMITTED <id> <published-owner> <generation>`（含重放） |
 | `ABORT` | `... ABORT [NS <ns>] <realm> <character> <id> <gen>` | `ABORTING <id>`（回滚已排程）；终态后 `ABORTED <id>` |
 | `RETIRE` | `... RETIRE [NS <ns>] <realm> <character> <id> <gen> <owner>` | `ABORTED <id>` / `PENDING <id>` —— 与 `retire_member` 相同的裁定 |
+| `TAKEOVER` | `... TAKEOVER [NS <ns>] <realm> <character> <id> <gen> <expected> <destination>` | `TAKEOVER <id> <next-gen>` —— 续行栅栏间隙，按请求 ID 幂等；非栅栏路由 `STALE`、以源或死目标为新目标 `INVALID`、非栅栏间隙 `CONFLICT` |
 | `STATUS` | `... STATUS [NS <ns>] <realm> <character>` | `STATE idle <owner> <gen>`、`STATE <id> <STATE> <drained\|open> <fenced\|unfenced> <ready\|notready> <gen>` 或 `MLR1 EMPTY` |
 
 `NS <ns>` 组在每个动词上都是可选的，紧跟在动词之后——省略或写 `-` 即默认组；这里拒绝裸位置参数命名空间，使按两作用域语法写出的帧仍指默认组。`<owner>` 形如 `<realm|cross> NS <ns> <scope> <role> <instance> <scene>`，与注册表动词同一组写法，因此带命名空间的 owner 不会与默认组的同名。标识符沿用注册表的 `[A-Za-z0-9_-]` 上限（64）。行长上限 1024 字节（小型注册表帧为 256），形状拒绝沿用注册表词汇（`ERR INVALID`/`ERR UNEXPECTED`）；成员离开注册表会退役认领了其 `(namespace, scope, role, instance)` 的在途事务——coordinator 从成员资格观察到这一点，无需任何消息。
 
 **命名空间作用域（2026-10-27）。** 每个注册表动词都加入了命名空间：`REGISTER` 与 `QUERY` 取可选组（位置参数 `<namespace>` 或 `NS <namespace>`，`-` 为默认组），`PLACE` 取 `<role> [<ns>|NS <ns>] <scope>`，`ROUTE SET`/`GET` 取**必填**的 `NS <ns>` 组——旧的两参数 `ROUTE GET` 会得 `ERR INVALID`，而不是被当成空命名空间——`MIG` 各动词在动词后取可选组，如上。`QUERY` 与 `PLACE` 上省略组同样意味着默认组，绝不是跨组列表，因此不同组的两个 coordinator 没有任何共享的查询面。路由记录与迁移事实以 `(namespace, realm, character)` 为键；成员资格、路由与退役声明以 `(namespace, scope, role, instance)` 为键，因此成员离开只退役认领了该命名空间身份的在途事务。成员用 `--namespace NAME` 选择组（仅在 gameServer/crossServer/login 有效，与 `--scope` 一并要求 `--coordinator`），`mistlane.place(role, namespace?, scope?, callback)` 可查询具名组——在空组查询得 `EMPTY`，绝不报解析错误。
 
-线协议继承模型的边界，不变：迁移线在 MLS1 之外不做对端认证，journal 与 generation 均易失，coordinator 从不自行发送事件（DRAINED 是源的断言，EVENT 不区分发送方），且没有栅栏后接管的线上动词。`coordinator.migration.wire`（其原始切片 ctest 56/56，现属 61/61 套件）覆盖完整 OWNER→COMMIT 正向路径、重放/过期/冲突/顺序拒绝、经 CLEANUP 完成的中止（generation 已消耗）、被 SIGTERM 成员的注册表驱动退役、两种 RETIRE 拒绝、tokened coordinator 上 MLS1 门禁与其自身事实，以及形状/负载拒绝矩阵。
+线协议继承模型的边界，不变：迁移线在 MLS1 之外不做对端认证，journal 与 generation 均易失，coordinator 从不自行发送事件（DRAINED 是源的断言，EVENT 不区分发送方）。栅栏后间隙只能由显式 `TAKEOVER` 动词在线上续行，调用方须点名栅栏路由与存活目标——coordinator 自身绝不从死成员推断 owner。`coordinator.migration.wire`（其原始切片 ctest 56/56，现属 61/61 套件）覆盖完整 OWNER→COMMIT 正向路径、重放/过期/冲突/顺序拒绝、经 CLEANUP 完成的中止（generation 已消耗）、被 SIGTERM 成员的注册表驱动退役、两种 RETIRE 拒绝、TAKEOVER 拒绝矩阵与续行（un-fence→READY→COMMIT 落到存活目标、取严格更新 generation）、tokened coordinator 上 MLS1 门禁与其自身事实，以及形状/负载拒绝矩阵。
 
 ## 外部 API 面（第一片） {#external-api-surface-first-slice}
 

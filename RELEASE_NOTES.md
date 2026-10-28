@@ -1,6 +1,6 @@
 # Release notes (draft)
 
-Status: **draft only.** This file holds the content required for the first public source candidate (ledger TODO.md items 130/131). The version number and the actual GitHub release are decided and triggered by the maintainer only — nothing in this repository tags, publishes or releases on its own.
+Status: **draft only.** This file holds the content required for the first public source candidate (ledger todo.md items 130/131). The version number and the actual GitHub release are decided and triggered by the maintainer only — nothing in this repository tags, publishes or releases on its own.
 
 ## Purpose
 

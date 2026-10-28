@@ -35,8 +35,8 @@
 | Lua 内存配额与 CPU 隔离 | 价值高、成本中：Lua 5.5 可挂自定义分配器做步进配额，但 OOM 时序、回收边界与误伤需设计 | P2 单独立项；先在样例脚本上验证配额行为再接入节点 | 无（账本未记录，建议新增） |
 | Crashpad 转储保留上限与自动清理 | 价值中高、成本低：目录配额 + 按数量/时间清理即可 | P1，可与下一批诊断工作同批 | 无（账本未记录，建议新增） |
 | 服务端推送、广播与全双工队列 | 实时玩法必需；涉及发送队列上限、慢消费者背压、断连清理 | 已排期，按既有条目推进，不另立项 | todo.md「多协议监听」子项已覆盖 |
-| 目标环境可重复压测与 profiler 影响记录 | 价值高；本沙箱无法采集（perf_event_paranoid=4 且无 CAP_PERFMON、ptrace 受限） | 受环境阻塞，需目标 Linux/容器环境 | TODO.md 目标环境演练与压测条目（blocked） |
-| 版本、构建与节点身份指标 | 价值中、成本低（gauges 带 build/version/node id，低基数） | P1，可与 Crashpad 保留策略同批 | TODO.md metrics 条目已注明待补 |
+| 目标环境可重复压测与 profiler 影响记录 | 价值高；本沙箱无法采集（perf_event_paranoid=4 且无 CAP_PERFMON、ptrace 受限） | 受环境阻塞，需目标 Linux/容器环境 | todo.md 目标环境演练与压测条目（blocked） |
+| 版本、构建与节点身份指标 | 价值中、成本低（gauges 带 build/version/node id，低基数） | P1，可与 Crashpad 保留策略同批 | todo.md metrics 条目已注明待补 |
 
 ## 测试与验证汇总
 
