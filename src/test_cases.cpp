@@ -1119,6 +1119,38 @@ void entity_snapshot() {
             "snapshot trailing bytes were not refused");
     require(!codec.decode_properties(entity, std::string("\x01", 1), malformed, why) && why == "truncated tag count",
             "snapshot truncated record was not refused");
+
+    // The largest sproto field tag (32766, the 16-bit ceiling from
+    // (tag+1)*2 < 0x10000) is representable: the gap from id 1 to id 32766
+    // must round-trip rather than truncating the gap word.
+    const EntityContract sparse(R"(<Contracts><Entity name="Sparse" id="2"><Properties>
+        <first id="1" type="UINT32"/><last id="32766" type="UINT32"/>
+        </Properties></Entity></Contracts>)");
+    const auto& sparse_entity = sparse.entities().at(0);
+    const SprotoCodec sparse_codec(sparse);
+    const EntityValues sparse_values{{"first", std::int64_t{1}}, {"last", std::int64_t{2}}};
+    const auto sparse_wire = sparse_codec.encode_properties(sparse_entity, sparse_values);
+    EntityValues sparse_back; std::string sparse_reason;
+    require(sparse_wire && sparse_codec.decode_properties(sparse_entity, *sparse_wire, sparse_back, sparse_reason),
+            "maximum sproto field-tag gap did not round-trip: "+sparse_reason);
+    require(std::get<std::int64_t>(sparse_back.at("last").data) == 2,
+            "maximum sproto field-tag gap lost its field");
+
+    // A tag beyond the 16-bit ceiling is refused at contract parse time, and
+    // the codec itself fails closed rather than emitting a truncated gap word.
+    bool overflow_refused = false;
+    try {
+        EntityContract(R"(<Contracts><Entity name="Overflow" id="3"><Properties>
+            <first id="1" type="UINT32"/><last id="65535" type="UINT32"/>
+            </Properties></Entity></Contracts>)");
+    } catch (const ContractError&) {
+        overflow_refused = true;
+    }
+    require(overflow_refused, "an unrepresentable sproto property tag was accepted");
+    auto unsafe_entity = sparse_entity;
+    unsafe_entity.properties.back().id = 65535;
+    require(!sparse_codec.encode_properties(unsafe_entity, sparse_values),
+            "the codec truncated an unrepresentable sproto property tag");
     std::cout << "entity.snapshot property-snapshot codec: encode/decode wire lock, roundtrip, fail-closed [PASS]\n";
 }
 

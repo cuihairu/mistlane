@@ -2324,21 +2324,34 @@ private:
         // from a later TypesSource, so type/default checks run only after the
         // whole document (and its sources) have been merged.
         check_recursion();
+        const auto check_field_tags = [&](const ContractArgs& fields, const std::string& where) {
+            for (const auto& field : fields)
+                if (field.id > 32766)
+                    throw ContractError(where+" field id "+std::to_string(field.id)
+                                        +" exceeds the sproto 16-bit tag limit 32766");
+        };
         for (auto& [name, fields] : structs_)
             for (auto& f : fields) {
                 const auto what = "struct "+name+" field "+f.name;
+                check_field_tags(fields, "struct "+name);
                 check_type(f.type, f.of, what);
                 check_default(f, what);
             }
         for (const auto& e : entities_) {
             const auto what = "entity "+e.name;
             for (const auto& p : e.properties) {
-                check_type(p.type, p.of, what+" property "+p.name);
-                check_default(ContractField{p.name, p.type, p.of, p.default_value, p.id}, what+" property "+p.name);
+                const auto pwhat = what+" property "+p.name;
+                if (p.id > 32766)
+                    throw ContractError(pwhat+" id "+std::to_string(p.id)
+                                        +" exceeds the sproto 16-bit tag limit 32766");
+                check_type(p.type, p.of, pwhat);
+                check_default(ContractField{p.name, p.type, p.of, p.default_value, p.id}, pwhat);
             }
             const auto check_methods = [&](const std::vector<ContractMethod>& list, const char* side) {
                 for (const auto& m : list) {
                     const auto mwhat = what+" method "+m.name+" ["+side+"]";
+                    check_field_tags(m.args, mwhat+" args");
+                    check_field_tags(m.returns, mwhat+" returns");
                     for (auto& a : m.args) check_type(a.type, a.of, mwhat+" arg "+a.name);
                     for (auto& r : m.returns) check_type(r.type, r.of, mwhat+" return "+r.name);
                 }

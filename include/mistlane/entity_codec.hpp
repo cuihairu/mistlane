@@ -143,6 +143,7 @@ private:
         std::vector<unsigned char> data;
         int last = -1;
         for (const auto& [id, field] : ordered) {
+            if (id > 32766) return false;
             const unsigned gap = id - static_cast<unsigned>(last) - 1;
             if (gap) tags.push_back((gap - 1) * 2 + 1);
             last = static_cast<int>(id);
