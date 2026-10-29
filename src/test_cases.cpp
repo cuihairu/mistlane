@@ -1035,6 +1035,93 @@ void entity_codec() {
     std::cout << "entity.codec malformed: fail-closed with a reason, unknown tags skipped [PASS]\n";
 }
 
+void entity_snapshot() {
+    // Property-snapshot codec: the full declared property set of one entity is
+    // a wire record whose field ids are the property ids, in the same
+    // schema-driven sproto form the invocation codec uses. This is the
+    // snapshot half of the "type storage and nested sync" boundary — what a
+    // baseline or a data peer would carry for one entity.
+    const EntityContract contract(R"(<Contracts><Types><Item><itemId id="0" type="UINT32"/><count id="1" type="UINT32"/></Item><Inventory><capacity id="0" type="UINT16"/><items id="1" type="ARRAY" of="Item"/></Inventory></Types><Entity name="Avatar" id="1"><Properties><level id="1" type="UINT16" flags="OWN_CLIENT"/><inventory id="2" type="Inventory"/><score id="3" type="INT32" flags="OWN_CLIENT"/><exp id="4" type="INT64"/><tags id="5" type="ARRAY" of="UINT32"/><totals id="6" type="ARRAY" of="INT64"/><active id="7" type="BOOL" flags="OWN_CLIENT"/><name id="8" type="STRING" flags="OWN_CLIENT"/><blob id="9" type="BYTES"/><flags id="10" type="ARRAY" of="BOOL"/><aliases id="11" type="ARRAY" of="STRING"/><blobs id="12" type="ARRAY" of="BYTES"/></Properties></Entity></Contracts>)");
+    const auto& entity = contract.entities().at(0);
+    const auto codec = SprotoCodec(contract);
+    const auto hex = [](const std::string& bytes) {
+        std::ostringstream out;
+        for (const unsigned char byte : bytes) out << std::hex << std::setw(2) << std::setfill('0') << static_cast<unsigned>(byte);
+        return out.str();
+    };
+
+    // Encode a snapshot with a nested struct, a struct array, scalar arrays
+    // and the scalar kinds; the field tags are the property ids in order.
+    const EntityValues values{
+        {"level", std::int64_t{65535}},
+        {"inventory", EntityObject{{"capacity", std::int64_t{100}},
+            {"items", EntityArray{EntityObject{{"itemId", std::int64_t{7}}, {"count", std::int64_t{2}}},
+                                   EntityObject{{"itemId", std::int64_t{0}}, {"count", std::int64_t{1}}}}}}},
+        {"score", std::int64_t{-1}},
+        {"exp", std::int64_t{9007199254740993LL}},
+        {"tags", EntityArray{std::int64_t{0}, std::int64_t{1}, std::int64_t{2147483647}}},
+        {"totals", EntityArray{std::int64_t{-1}, std::int64_t{2147483648LL}, std::int64_t{4294967296LL}}},
+        {"active", true},
+        {"name", std::string("mistlane")},
+        {"blob", std::string("\x01\x02", 2)},
+        {"flags", EntityArray{true, false, true}},
+        {"aliases", EntityArray{std::string("a"), std::string("b")}},
+        {"blobs", EntityArray{std::string("\x00", 1), std::string("\xff", 1)}},
+    };
+    const auto wire = codec.encode_properties(entity, values);
+    require(bool(wire), "snapshot encode rejected a valid property set");
+
+    // The exact locked record: tags for ids 1..12, then the data segment in
+    // property-id order (the same sproto record form the invocation codec
+    // locks; here the property ids are the field ids). The wire is generated
+    // against the same declared shapes the invocation codec already locks, so
+    // the expected bytes are assembled from the per-field word/data pieces.
+    const std::string locked =
+        "0d00010000000000000000000000000004000000000000000000000004000000ffff00001e0000000200ca00000014000000060000000200100006000600000002000200040004000000ffffffff0800000001000000000020000d000000040000000001000000ffffff7f1900000008ffffffffffffffff00000080000000000000000001000000080000006d6973746c616e65020000000102030000000100010a000000010000006101000000620a000000010000000001000000ff";
+ // blobs bytes array
+ // blobs bytes array
+    require(hex(*wire) == locked, "snapshot wire mismatch: got "+hex(*wire)+" want "+locked);
+
+    // Decode round-trips to the same typed values.
+    EntityValues back; std::string reason;
+    require(codec.decode_properties(entity, *wire, back, reason), "snapshot decode failed: "+reason);
+    require(std::get<std::int64_t>(back.at("level").data) == 65535, "level did not round-trip");
+    require(std::get<std::int64_t>(back.at("score").data) == -1, "score did not round-trip");
+    require(std::get<std::int64_t>(back.at("exp").data) == 9007199254740993LL, "exp did not round-trip");
+    require(std::get<bool>(back.at("active").data) == true, "active did not round-trip");
+    require(std::get<std::string>(back.at("name").data) == "mistlane", "name did not round-trip");
+    require(std::get<std::string>(back.at("blob").data) == std::string("\x01\x02", 2), "blob did not round-trip");
+    const auto& inv = std::get<EntityObject>(back.at("inventory").data);
+    require(std::get<std::int64_t>(inv.at("capacity").data) == 100, "inventory capacity drifted");
+    const auto& items = std::get<EntityArray>(inv.at("items").data);
+    require(items.size() == 2 && std::get<std::int64_t>(std::get<EntityObject>(items[0].data).at("itemId").data) == 7,
+            "inventory items drifted");
+    const auto& tags = std::get<EntityArray>(back.at("tags").data);
+    require(tags.size() == 3 && std::get<std::int64_t>(tags[2].data) == 2147483647, "tags drifted");
+    const auto& totals = std::get<EntityArray>(back.at("totals").data);
+    require(totals.size() == 3 && std::get<std::int64_t>(totals[0].data) == -1, "totals drifted");
+    const auto& aliases = std::get<EntityArray>(back.at("aliases").data);
+    require(aliases.size() == 2 && std::get<std::string>(aliases[1].data) == "b", "aliases drifted");
+    const auto& blobs = std::get<EntityArray>(back.at("blobs").data);
+    require(blobs.size() == 2 && std::get<std::string>(blobs[1].data) == "\xff", "blobs drifted");
+
+    // Re-encode reproduces the locked bytes.
+    const auto re = codec.encode_properties(entity, back);
+    require(re && hex(*re) == locked, "snapshot re-encode drifted");
+
+    // A snapshot missing a declared property is refused; trailing bytes are
+    // refused; a malformed payload is refused with a reason.
+    EntityValues partial = values;
+    partial.erase("name");
+    require(!codec.encode_properties(entity, partial), "snapshot with a missing property encoded");
+    EntityValues malformed; std::string why;
+    require(!codec.decode_properties(entity, *wire + std::string("\x00", 1), malformed, why) && why == "trailing bytes after record",
+            "snapshot trailing bytes were not refused");
+    require(!codec.decode_properties(entity, std::string("\x01", 1), malformed, why) && why == "truncated tag count",
+            "snapshot truncated record was not refused");
+    std::cout << "entity.snapshot property-snapshot codec: encode/decode wire lock, roundtrip, fail-closed [PASS]\n";
+}
+
 void entity_gateway() {
     // The gateway maps each client's outer transport correlation onto a fresh
     // inner entity correlation and back through a bounded table, so one channel

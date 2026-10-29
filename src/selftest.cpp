@@ -17,6 +17,7 @@ void entity_sync();
 void entity_rpc();
 void entity_endpoint();
 void entity_codec();
+void entity_snapshot();
 void entity_gateway();
 void entity_persist();
 void entity_perf();
@@ -124,6 +125,7 @@ int run_tests(int argc, char** argv) {
         {"entity.rpc","contract",test::entity_rpc},
         {"entity.endpoint","contract",test::entity_endpoint},
         {"entity.codec","contract",test::entity_codec},
+        {"entity.snapshot","contract",test::entity_snapshot},
         {"entity.gateway","contract",test::entity_gateway},
         {"entity.persist","contract",test::entity_persist},
         {"entity.perf","contract",test::entity_perf},

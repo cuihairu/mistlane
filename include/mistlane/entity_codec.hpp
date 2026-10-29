@@ -34,7 +34,38 @@ public:
         if (!encode_record(returns, values, bytes, 0)) return std::nullopt;
         return std::string(bytes.begin(), bytes.end());
     }
+    // Encode one entity's declared properties as a wire record (snapshot
+    // codec): the property ids are the field ids, in the same schema-driven
+    // sproto form the invocation codec uses. This is the property-snapshot
+    // half of the "type storage and nested sync" boundary — a full snapshot
+    // over the same declared shapes the receiver's PropertySync baseline uses.
+    std::optional<std::string> encode_properties(const ContractEntity& entity, const EntityValues& values) const {
+        std::vector<unsigned char> bytes;
+        if (!encode_record(property_args(entity), values, bytes, 0)) return std::nullopt;
+        return std::string(bytes.begin(), bytes.end());
+    }
+    // Decode a property record back into typed values against the entity's
+    // declared property shapes. false plus a reason on malformed input.
+    bool decode_properties(const ContractEntity& entity, std::string_view payload,
+                           EntityValues& out, std::string& reason) const {
+        std::size_t end = 0;
+        if (!decode_record(payload, 0, property_args(entity), out, end, reason)) return false;
+        if (end != payload.size()) { reason = "trailing bytes after record"; return false; }
+        return true;
+    }
 private:
+    // The declared properties share the field shape of an invocation record.
+    static ContractArgs property_args(const ContractEntity& entity) {
+        ContractArgs args;
+        args.reserve(entity.properties.size());
+        for (const auto& p : entity.properties) {
+            ContractField f;
+            f.id = p.id; f.name = p.name; f.type = p.type; f.of = p.of;
+            args.push_back(std::move(f));
+        }
+        return args;
+    }
+
     enum class Kind { Int, Bool, String, Bytes, Struct,
                       IntArray, StructArray, BoolArray, StringArray, BytesArray };
     // The wire field kind plus, for struct-typed fields, the referenced
