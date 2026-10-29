@@ -16,6 +16,7 @@ void entity_tree();
 void entity_sync();
 void entity_rpc();
 void entity_endpoint();
+void entity_transport();
 void entity_codec();
 void entity_snapshot();
 void entity_gateway();
@@ -124,6 +125,7 @@ int run_tests(int argc, char** argv) {
         {"entity.sync","contract",test::entity_sync},
         {"entity.rpc","contract",test::entity_rpc},
         {"entity.endpoint","contract",test::entity_endpoint},
+        {"entity.transport","contract",test::entity_transport},
         {"entity.codec","contract",test::entity_codec},
         {"entity.snapshot","contract",test::entity_snapshot},
         {"entity.gateway","contract",test::entity_gateway},

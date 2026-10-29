@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "mistlane/lua_service.hpp"
 #include "mistlane/transport.hpp" // max_frame bounds websocket pushes
+#include "mistlane/entity_runtime.hpp"
+#include "mistlane/entity_lua.hpp"
 #include <boost/asio/ssl.hpp>
 #include <openssl/ssl.h>
 #include <openssl/x509_vfy.h>
@@ -130,10 +132,12 @@ void LuaService::check(int status) {
         throw std::runtime_error(text ? text : "Lua error");
     }
 }
- LuaService::LuaService(const std::string& path, ServiceContext context, std::shared_ptr<RedisRuntime> redis,
-                        WebsocketSink* sink, GameSessionSink* sessions, PlacementSink* placement)
+LuaService::LuaService(const std::string& path, ServiceContext context, std::shared_ptr<RedisRuntime> redis,
+                       WebsocketSink* sink, GameSessionSink* sessions, PlacementSink* placement,
+                       EntityRuntime* entity_runtime)
   : state_(luaL_newstate()), context_(std::move(context)), websocket_sink_(sink), session_sink_(sessions),
-    placement_sink_(placement), async_context_(std::make_shared<AsyncContext>()), redis_(std::move(redis)) {
+    placement_sink_(placement), entity_runtime_(entity_runtime),
+    async_context_(std::make_shared<AsyncContext>()), redis_(std::move(redis)) {
     if (!state_) throw std::runtime_error("cannot create Lua state");
     async_context_->state = state_;
     try {
@@ -146,6 +150,7 @@ void LuaService::check(int status) {
         push_websocket_api(state_, this);
         push_session_api(state_, this);
         push_placement_api(state_, this);
+        push_entity_api(state_, entity_runtime_);
         lua_pushcfunction(state_, traceback);
         check(luaL_loadfile(state_, path.c_str()));
         check(protected_call(state_, 0, 1, 1));
@@ -319,6 +324,202 @@ void LuaService::push_placement_api(lua_State* l, LuaService* service) {
     lua_pushlightuserdata(l, service); lua_pushcclosure(l, placement_call, 1);
     lua_setfield(l, -2, "place");
     lua_setglobal(l, "mistlane");
+}
+void LuaService::push_entity_api(lua_State* l, EntityRuntime* runtime) {
+    if (!runtime) return; // no contract bundle on this node
+    lua_getglobal(l, "mistlane");
+    if (!lua_istable(l, -1)) { lua_pop(l, 1); lua_newtable(l); }
+    lua_newtable(l);
+    lua_pushlightuserdata(l, runtime); lua_pushcclosure(l, entity_spawn, 1); lua_setfield(l, -2, "spawn");
+    lua_pushlightuserdata(l, runtime); lua_pushcclosure(l, entity_destroy, 1); lua_setfield(l, -2, "destroy");
+    lua_setfield(l, -2, "entity"); lua_setglobal(l, "mistlane");
+}
+// The fixture runtime addresses by explicit ids; the script supplies them
+// (scenario/tests or a login flow that assigns ids). An entity that already
+// exists at the address refuses, so a repeated spawn is never silent.
+int LuaService::entity_spawn(lua_State* l) {
+    auto* runtime = static_cast<EntityRuntime*>(lua_touserdata(l, lua_upvalueindex(1)));
+    if (!lua_isinteger(l, 1) || !lua_isinteger(l, 2) || !lua_isinteger(l, 3) || !lua_isinteger(l, 4))
+        return luaL_error(l, "entity.spawn expects scope, type, incarnation, entity_id integers");
+    const auto scope = static_cast<std::uint32_t>(lua_tointeger(l, 1));
+    const auto type = static_cast<std::uint32_t>(lua_tointeger(l, 2));
+    const auto incarnation = static_cast<std::uint32_t>(lua_tointeger(l, 3));
+    const auto entity_id = static_cast<std::int64_t>(lua_tointeger(l, 4));
+    std::uint32_t generation = 1;
+    if (!lua_isnoneornil(l, 5)) {
+        if (!lua_isinteger(l, 5)) return luaL_error(l, "entity.spawn generation must be an integer");
+        generation = static_cast<std::uint32_t>(lua_tointeger(l, 5));
+    }
+    lua_pushboolean(l, runtime->spawn({scope, type, incarnation, entity_id}, generation) ? 1 : 0);
+    return 1;
+}
+int LuaService::entity_destroy(lua_State* l) {
+    auto* runtime = static_cast<EntityRuntime*>(lua_touserdata(l, lua_upvalueindex(1)));
+    if (!lua_isinteger(l, 1) || !lua_isinteger(l, 2) || !lua_isinteger(l, 3) || !lua_isinteger(l, 4))
+        return luaL_error(l, "entity.destroy expects scope, type, incarnation, entity_id integers");
+    lua_pushboolean(l, runtime->destroy({static_cast<std::uint32_t>(lua_tointeger(l, 1)),
+        static_cast<std::uint32_t>(lua_tointeger(l, 2)), static_cast<std::uint32_t>(lua_tointeger(l, 3)),
+        static_cast<std::int64_t>(lua_tointeger(l, 4))}) ? 1 : 0);
+    return 1;
+}
+// Entity method implementations are the script's `entities` table:
+// service.entities[type][method] = function(args, ctx) -> returns-table|nil.
+// The dispatcher answers NO_IMPLEMENTATION for any declared method the table
+// never names, so partial implementations run degraded rather than refuse the
+// whole contract. Unknown entity or method names are different: they mean the
+// script disagrees with the contract, which is a load refusal, not a runtime
+// answer.
+bool LuaService::bind_entity_handlers(EntityDispatcher& dispatcher, const EntityContract& contract,
+                                      std::string& error) {
+    if (!state_) { error = "script is not loaded"; return false; }
+    StackGuard guard(state_);
+    lua_rawgeti(state_, LUA_REGISTRYINDEX, module_);
+    lua_getfield(state_, -1, "entities");
+    if (lua_isnil(state_, -1)) { dispatcher.clear_handlers(); return true; }
+    if (!lua_istable(state_, -1)) { error = "service.entities must be a table"; return false; }
+    auto text = [&](int index) {
+        std::size_t size = 0;
+        const auto* data = lua_tolstring(state_, index, &size);
+        return std::string(data, size);
+    };
+    // Validate the whole table before touching the dispatcher: a bad entry must
+    // not leave a partially rebound set, because a reload that fails keeps the
+    // previous service and its handlers would otherwise be half-cleared.
+    struct Binding { std::string type, name; unsigned method_id; ContractArgs returns; };
+    std::vector<Binding> bindings;
+    lua_pushnil(state_);
+    while (lua_next(state_, -2) != 0) {
+        if (lua_type(state_, -2) != LUA_TSTRING) { error = "service.entities keys must be entity names"; return false; }
+        const auto entity_name = text(-2);
+        const auto entity = std::find_if(contract.entities().begin(), contract.entities().end(),
+            [&](const ContractEntity& e) { return e.name == entity_name; });
+        if (entity == contract.entities().end()) {
+            error = "service.entities names unknown entity '"+entity_name+"'";
+            return false;
+        }
+        if (!lua_istable(state_, -1)) { error = "service.entities."+entity_name+" must be a table"; return false; }
+        lua_pushnil(state_);
+        while (lua_next(state_, -2) != 0) {
+            if (lua_type(state_, -2) != LUA_TSTRING) {
+                error = "service.entities."+entity_name+" keys must be method names";
+                return false;
+            }
+            const auto method_name = text(-2);
+            const auto method = std::find_if(entity->server_methods.begin(), entity->server_methods.end(),
+                [&](const ContractMethod& m) { return m.name == method_name; });
+            if (method == entity->server_methods.end()) {
+                const auto client = std::find_if(entity->client_methods.begin(), entity->client_methods.end(),
+                    [&](const ContractMethod& m) { return m.name == method_name; });
+                if (client != entity->client_methods.end())
+                    error = "'"+method_name+"' executes on the client and has no server implementation";
+                else
+                    error = "service.entities."+entity_name+" names unknown method '"+method_name+"'";
+                return false;
+            }
+            if (!lua_isfunction(state_, -1)) {
+                error = "service.entities."+entity_name+"."+method_name+" must be a function";
+                return false;
+            }
+            bindings.push_back({entity_name, method_name, method->id, method->returns});
+            lua_pop(state_, 1);
+        }
+        lua_pop(state_, 1);
+    }
+    // The table is valid: rebind from scratch so a reload never leaves a stale
+    // closure into a closed Lua state, then install the fresh handlers.
+    dispatcher.clear_handlers();
+    for (const auto& b : bindings)
+        dispatcher.bind(b.type, "server", b.method_id, make_entity_handler(b.type, b.name, b.method_id, b.returns, &contract));
+    return true;
+}
+EntityDispatcher::Handler LuaService::make_entity_handler(const std::string& type, const std::string& name,
+                                                          unsigned method_id, const ContractArgs returns,
+                                                          const EntityContract* shapes) const {
+    // The dispatch thread owns the Lua state, so the handler may enter it
+    // directly; a failing call answers the closed INVALID instead of tearing
+    // the session down.
+    return [this, returns, shapes, method_id, type, name](const EntityCaller& caller, const EntityTarget& target,
+                                                    const EntityValues& args) -> EntityValues {
+                    StackGuard guard(state_);
+                    lua_pushcfunction(state_, traceback);
+                    const int base = lua_gettop(state_);
+                    lua_rawgeti(state_, LUA_REGISTRYINDEX, module_);
+                    lua_getfield(state_, -1, "entities");
+                    lua_getfield(state_, -1, type.c_str());
+                    lua_getfield(state_, -1, name.c_str());
+                    if (!lua_isfunction(state_, -1)) return {};
+                    lua_createtable(state_, 0, static_cast<int>(args.size()));
+                    for (const auto& [field, value] : args) {
+                        lua_pushlstring(state_, field.data(), field.size());
+                        push_entity_value(state_, value);
+                        lua_rawset(state_, -3);
+                    }
+                    // The context is readonly by convention: plain values, no
+                    // engine members the script could mutate state through.
+                    lua_createtable(state_, 0, 9);
+                    lua_pushlstring(state_, caller.kind.data(), caller.kind.size());
+                    lua_setfield(state_, -2, "caller_kind");
+                    lua_pushinteger(state_, static_cast<lua_Integer>(caller.id));
+                    lua_setfield(state_, -2, "caller_id");
+                    lua_pushinteger(state_, static_cast<lua_Integer>(target.scope));
+                    lua_setfield(state_, -2, "scope");
+                    lua_pushinteger(state_, static_cast<lua_Integer>(target.type_id));
+                    lua_setfield(state_, -2, "type_id");
+                    lua_pushinteger(state_, static_cast<lua_Integer>(target.entity_id));
+                    lua_setfield(state_, -2, "entity_id");
+                    lua_pushinteger(state_, static_cast<lua_Integer>(target.incarnation));
+                    lua_setfield(state_, -2, "incarnation");
+                    lua_pushinteger(state_, static_cast<lua_Integer>(method_id));
+                    lua_setfield(state_, -2, "method_id");
+                    if (lua_pcall(state_, 2, 1, base) != LUA_OK) {
+                        const auto* message = lua_tostring(state_, -1);
+                        std::cerr << "entity handler "+type+"."+name+" failed: "
+                                  << (message ? message : "unknown Lua error") << '\n';
+                        return {}; // fail closed: dispatch validation answers INVALID
+                    }
+                    if (lua_isnil(state_, -1)) return {};
+                    if (lua_type(state_, -1) != LUA_TTABLE) {
+                        std::cerr << "entity handler "+type+"."+name+" must return a table or nil\n";
+                        return {};
+                    }
+                    EntityValues out;
+                    for (const auto& field : returns) {
+                        lua_getfield(state_, -1, field.name.c_str());
+                        if (lua_isnil(state_, -1)) {
+                            std::cerr << "entity handler "+type+"."+name+" is missing return '"+field.name+"'\n";
+                            return {};
+                        }
+                        EntityValue item(std::int64_t{0});
+                        const auto reason = convert_entity_value(state_, -1, field.type, field.of, *shapes, &item);
+                        lua_pop(state_, 1);
+                        if (!reason.empty()) {
+                            std::cerr << "entity handler "+type+"."+name+" return '"+field.name+"' "+reason+'\n';
+                            return {};
+                        }
+                        out.emplace(field.name, std::move(item));
+                    }
+                    // Refuse keys the contract never declared: a silently
+                    // dropped field would look like success to the sender.
+                    lua_pushnil(state_);
+                    while (lua_next(state_, -2) != 0) {
+                        if (lua_type(state_, -2) != LUA_TSTRING) {
+                            std::cerr << "entity handler "+type+"."+name+" returned a non-string key\n";
+                            lua_pop(state_, 2);
+                            return {};
+                        }
+                        std::size_t size = 0;
+                        const auto* data = lua_tolstring(state_, -2, &size);
+                        const std::string key(data, size);
+                        const bool declared = std::any_of(returns.begin(), returns.end(),
+                            [&](const ContractField& f) { return f.name == key; });
+                        lua_pop(state_, 1);
+                        if (!declared) {
+                            std::cerr << "entity handler "+type+"."+name+" returned undeclared '"+key+"'\n";
+                            return {};
+                        }
+                    }
+                    return out;
+    };
 }
 // A placement lookup cannot answer inside the handler: the callback runs on
 // the same event loop only after the handler returned, so scripts answer

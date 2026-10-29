@@ -72,6 +72,7 @@ if(BUILD_TESTING)
       entity.sync
       entity.rpc
       entity.endpoint
+      entity.transport
       entity.codec
       entity.snapshot
       entity.gateway

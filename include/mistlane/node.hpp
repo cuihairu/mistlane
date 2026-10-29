@@ -40,6 +40,10 @@ struct Config {
     // the data role's durable MLD1 records. An empty value keeps both stores
     // volatile (the historical default).
     std::string journal;
+    // Entity contract document (.def): a node that sets it hosts the entity
+    // runtime and answers MLE1 frames instead of passing them to the script.
+    // Only the entity-hosting roles may load one (gameServer/crossServer).
+    std::string contract;
     std::string script;
     Endpoint redis{"127.0.0.1", 6379};
     Endpoint metrics_listen{"127.0.0.1", 9090};

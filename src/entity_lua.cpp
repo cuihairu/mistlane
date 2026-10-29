@@ -50,23 +50,25 @@ std::string location(const ProxyRef& ref, const TreePath& path) {
     return text;
 }
 
+}  // unnamed
+
 // One EntityValue becomes one Lua value: scalars keep their kind, arrays and
 // structs become plain tables.
-void push_value(lua_State* state, const EntityValue& value) {
+void push_entity_value(lua_State* state, const EntityValue& value) {
     if (const auto* v = std::get_if<bool>(&value.data)) { lua_pushboolean(state, *v ? 1 : 0); return; }
     if (const auto* v = std::get_if<std::int64_t>(&value.data)) { lua_pushinteger(state, *v); return; }
     if (const auto* v = std::get_if<std::string>(&value.data)) { lua_pushlstring(state, v->data(), v->size()); return; }
     if (const auto* v = std::get_if<EntityArray>(&value.data)) {
         lua_createtable(state, static_cast<int>(v->size()), 0);
         int at = 1;
-        for (const auto& item : *v) { push_value(state, item); lua_rawseti(state, -2, at++); }
+        for (const auto& item : *v) { push_entity_value(state, item); lua_rawseti(state, -2, at++); }
         return;
     }
     const auto& object = std::get<EntityObject>(value.data);
     lua_createtable(state, 0, static_cast<int>(object.size()));
     for (const auto& [name, item] : object) {
         lua_pushlstring(state, name.data(), name.size());
-        push_value(state, item);
+        push_entity_value(state, item);
         lua_rawset(state, -3);
     }
 }
@@ -75,8 +77,8 @@ void push_value(lua_State* state, const EntityValue& value) {
 // string means success; any other string is a refusal reason the caller
 // prefixes with the property name. A wrong Lua kind never coerces: a number
 // never becomes a string field, a non-integer never rounds.
-std::string convert(lua_State* state, int index, const std::string& type, const std::string& of,
-                    const EntityContract& contract, EntityValue* out) {
+std::string convert_entity_value(lua_State* state, int index, const std::string& type, const std::string& of,
+                                 const EntityContract& contract, EntityValue* out) {
     if (type == "ARRAY") {
         if (lua_type(state, index) != LUA_TTABLE) return "expects an array table";
         EntityArray items;
@@ -90,7 +92,7 @@ std::string convert(lua_State* state, int index, const std::string& type, const 
                 return "expects a dense array with keys 1.."+std::to_string(seen);
             }
             EntityValue item(std::int64_t{0});
-            const auto reason = convert(state, -1, of, {}, contract, &item);
+            const auto reason = convert_entity_value(state, -1, of, {}, contract, &item);
             if (!reason.empty()) { lua_pop(state, 2); return "element "+std::to_string(seen)+" "+reason; }
             items.push_back(std::move(item));
             lua_pop(state, 1);
@@ -135,7 +137,7 @@ std::string convert(lua_State* state, int index, const std::string& type, const 
                                         [&](const ContractField& f) { return f.name == field; });
         if (shape == spec->second.end()) { lua_pop(state, 2); return "has unexpected field '"+field+"'"; }
         EntityValue member(std::int64_t{0});
-        const auto reason = convert(state, -1, shape->type, shape->of, contract, &member);
+        const auto reason = convert_entity_value(state, -1, shape->type, shape->of, contract, &member);
         if (!reason.empty()) { lua_pop(state, 2); return "field '"+field+"' "+reason; }
         if (!object.emplace(field, std::move(member)).second) { lua_pop(state, 2); return "repeats field '"+field+"'"; }
         lua_pop(state, 1);
@@ -146,6 +148,7 @@ std::string convert(lua_State* state, int index, const std::string& type, const 
     return {};
 }
 
+namespace {
 std::string key_of(lua_State* state) {
     std::size_t size = 0;
     const auto* bytes = lua_tolstring(state, 2, &size);
@@ -188,7 +191,7 @@ int index_root(lua_State* state, ProxyRef& ref) {
     // Containers come back as live proxies, not copied tables.
     if (prop->type == "ARRAY") { push_node(state, ref.store, name, {}, true); return 1; }
     if (!scalar_type(prop->type)) { push_node(state, ref.store, name, {}, false); return 1; }
-    push_value(state, *ref.store->get(name));
+    push_entity_value(state, *ref.store->get(name));
     return 1;
 }
 
@@ -212,7 +215,7 @@ int index_array(lua_State* state, ProxyRef& ref) {
     if (shape.ok && !scalar_type(shape.type))
         push_node(state, ref.store, ref.property, std::move(path), shape.type == "ARRAY");
     else
-        push_value(state, *value);
+        push_entity_value(state, *value);
     return 1;
 }
 
@@ -225,7 +228,7 @@ int index_struct(lua_State* state, ProxyRef& ref) {
     if (!scalar_type(shape.type)) { push_node(state, ref.store, ref.property, std::move(path), false); return 1; }
     const auto* value = ref.store->get_path(ref.property, path);
     if (!value) return luaL_error(state, "%s", ref.store->error().c_str());
-    push_value(state, *value);
+    push_entity_value(state, *value);
     return 1;
 }
 
@@ -250,7 +253,7 @@ int newindex_root(lua_State* state, ProxyRef& ref) {
         return luaL_error(state, "property '%s' is not a declared property on entity %s",
                           name.c_str(), ref.store->entity().name.c_str());
     EntityValue value(std::int64_t{0});
-    const auto reason = convert(state, 3, prop->type, prop->of, ref.store->contract(), &value);
+    const auto reason = convert_entity_value(state, 3, prop->type, prop->of, ref.store->contract(), &value);
     if (!reason.empty())
         return luaL_error(state, "property '%s' %s", name.c_str(), reason.c_str());
     if (!ref.store->set(name, std::move(value)))
@@ -279,7 +282,7 @@ int newindex_proxy(lua_State* state) {
     const auto shape = ref->store->shape_at(ref->property, path);
     if (!shape.ok) return luaL_error(state, "%s", ref->store->error().c_str());
     EntityValue value(std::int64_t{0});
-    const auto reason = convert(state, 3, shape.type, shape.of, ref->store->contract(), &value);
+    const auto reason = convert_entity_value(state, 3, shape.type, shape.of, ref->store->contract(), &value);
     if (!reason.empty())
         return luaL_error(state, "%s %s", location(*ref, path).c_str(), reason.c_str());
     if (!ref->store->set_path(ref->property, std::move(path), std::move(value)))
@@ -293,7 +296,7 @@ int array_grow(lua_State* state, ProxyRef& ref, std::size_t position, int value_
     const auto shape = ref.store->shape_at(ref.property, ref.path);
     if (!shape.ok) return luaL_error(state, "%s", ref.store->error().c_str());
     EntityValue value(std::int64_t{0});
-    const auto reason = convert(state, value_at, shape.of, {}, ref.store->contract(), &value);
+    const auto reason = convert_entity_value(state, value_at, shape.of, {}, ref.store->contract(), &value);
     if (!reason.empty())
         return luaL_error(state, "%s element %s", location(ref, ref.path).c_str(), reason.c_str());
     if (!ref.store->insert_at(ref.property, ref.path, position, std::move(value)))
@@ -346,7 +349,7 @@ int array_remove(lua_State* state) {
     at.push_back(TreeStep{true, "", position});
     const auto* element = ref->store->get_path(ref->property, at);
     if (!element) return luaL_error(state, "%s", ref->store->error().c_str());
-    push_value(state, *element);
+    push_entity_value(state, *element);
     if (!ref->store->remove_at(ref->property, ref->path, position))
         return luaL_error(state, "%s", ref->store->error().c_str());
     return 1;
@@ -386,7 +389,7 @@ int view_method(lua_State* state) {
     lua_createtable(state, 0, static_cast<int>(view.size()));
     for (const auto& [name, value] : view) {
         lua_pushlstring(state, name.data(), name.size());
-        push_value(state, value);
+        push_entity_value(state, value);
         lua_rawset(state, -3);
     }
     return 1;

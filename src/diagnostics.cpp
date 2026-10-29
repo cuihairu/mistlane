@@ -45,6 +45,14 @@ Diagnostics::Diagnostics(const Config& config) {
             .Help("Record endpoint verdicts on the data role.").Labels(labels).Register(*registry_);
         for (const auto* result : {"loaded", "empty", "accepted", "duplicate", "stale", "seq", "invalid", "full"})
             record_results_[result] = &record_family.Add({{"result", result}});
+        // Entity transport verdicts: the endpoint's result words, one per
+        // handled MLE1 frame. Same closed-label discipline as record results.
+        auto& entity_family = prometheus::BuildCounter().Name("mistlane_entity_results_total")
+            .Help("Entity frame verdicts on the hosting node.").Labels(labels).Register(*registry_);
+        for (const auto* result : {"invalid", "unrouted", "stale", "forbidden", "timeout", "cancelled",
+                                   "no-implementation", "not-ready", "capacity", "conflict",
+                                   "ok", "notify", "notify-error", "malformed"})
+            entity_results_[result] = &entity_family.Add({{"result", result}});
         auto& messages = prometheus::BuildCounter().Name("mistlane_messages_total")
             .Help("Messages read from or written to clients.").Labels(labels).Register(*registry_);
         messages_rx_ = &messages.Add({{"direction", "rx"}});
@@ -106,6 +114,10 @@ void Diagnostics::set_registry_routes(std::size_t count) {
 void Diagnostics::reject(std::string_view) { if (rejected_) rejected_->Increment(); }
 void Diagnostics::record_result(std::string_view result) {
     if (auto it = record_results_.find(std::string(result)); it != record_results_.end())
+        it->second->Increment();
+}
+void Diagnostics::entity_result(std::string_view result) {
+    if (auto it = entity_results_.find(std::string(result)); it != entity_results_.end())
         it->second->Increment();
 }
 void Diagnostics::add_message(std::string_view direction) {

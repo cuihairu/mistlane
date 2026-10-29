@@ -32,6 +32,7 @@ public:
     void set_registry_routes(std::size_t count);
     void reject(std::string_view reason);
     void record_result(std::string_view result);
+    void entity_result(std::string_view result);
     void add_message(std::string_view direction);
     void add_payload_bytes(std::string_view direction, std::size_t bytes);
     void observe_lua_callback(std::string_view hook, std::chrono::steady_clock::duration elapsed);
@@ -54,6 +55,7 @@ private:
     prometheus::Gauge* process_rss_ = nullptr;
     prometheus::Counter* rejected_ = nullptr;
     std::map<std::string, prometheus::Counter*> record_results_;
+    std::map<std::string, prometheus::Counter*> entity_results_;
     prometheus::Counter* messages_rx_ = nullptr;
     prometheus::Counter* messages_tx_ = nullptr;
     prometheus::Counter* rx_bytes_ = nullptr;

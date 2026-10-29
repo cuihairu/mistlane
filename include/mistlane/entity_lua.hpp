@@ -19,4 +19,17 @@ namespace mistlane {
 // as silent shadowing. The proxy borrows the store: the owner must outlive
 // the Lua side's use of it.
 bool push_entity_properties(lua_State* state, PropertyStore* store);
+
+// One EntityValue becomes one Lua value (scalars keep their kind; arrays and
+// structs become plain tables, arrays 1-based). Used by the property proxy and
+// by entity method arguments.
+void push_entity_value(lua_State* state, const EntityValue& value);
+
+// One Lua value becomes one EntityValue of the declared shape (type/of against
+// the contract's struct table). The empty string means success; any other
+// string is a refusal reason the caller prefixes. A wrong Lua kind never
+// coerces: a number never becomes a string field, a non-integer never rounds.
+std::string convert_entity_value(lua_State* state, int index, const std::string& type,
+                                 const std::string& of, const EntityContract& contract,
+                                 EntityValue* out);
 }

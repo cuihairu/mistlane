@@ -11,11 +11,16 @@
 #include "mistlane/migration.hpp"
 #include "mistlane/journal.hpp"
 #include "mistlane/api_store.hpp"
+#include "mistlane/entity_contract.hpp"
+#include "mistlane/entity_codec.hpp"
+#include "mistlane/entity_endpoint.hpp"
 #include <utility>
 #include <boost/asio.hpp>
 #include <algorithm>
 #include <array>
 #include <charconv>
+#include <filesystem>
+#include <fstream>
 #include <cctype>
 #include <csignal>
 #include <cstdlib>
@@ -36,6 +41,7 @@
 namespace mistlane {
 namespace {
 namespace asio = boost::asio;
+namespace fs = std::filesystem;
 using tcp = asio::ip::tcp;
 using Error = boost::system::error_code;
 using Completion = Channel::Completion;
@@ -679,11 +685,11 @@ public:
             std::function<void(Session*)> on_close, MuxLinks* mux_links = nullptr,
             std::function<void(std::shared_ptr<Channel>)> mux_upgrade = {},
             bool internal = false, RecordStore* records = nullptr,
-            const TicketVerifier* tickets = nullptr)
+            const TicketVerifier* tickets = nullptr, EntityEndpoint* entities = nullptr)
       : client_(std::move(client)), service_(service),
         timer_(client_->executor()), config_(config), admission_(admission), diagnostics_(diagnostics),
         registry_(registry), on_close_(std::move(on_close)), mux_upgrade_(std::move(mux_upgrade)),
-        internal_(internal), records_(records), ticket_verifier_(tickets) {
+        internal_(internal), records_(records), ticket_verifier_(tickets), entities_(entities) {
         if (upstream) {
             endpoint_ = tcp::endpoint(parse_address(upstream->address), upstream->port);
             // Multiplexing keeps one socket per upstream: the link owns the
@@ -835,11 +841,11 @@ private:
         if (!upstream_) {
             // Correlated requests carry their id in the first payload bytes;
             // the reply echoes it, pushes answer with id 0.
-            if (!correlated_) return serve_local(std::move(payload));
+            if (!correlated_) return serve_local_route(std::move(payload), 0);
             if (payload.size() < 4) return stop(); // malformed correlated frame
             const auto request = frame_id(payload);
             payload.erase(0, 4);
-            return serve_local(std::move(payload), request);
+            return serve_local_route(std::move(payload), request);
         }
         if (awaiting_join_ || awaiting_mls1_) deadline(10); // a verdict is bounded, not the session
         if (upstream_->socket().is_open()) return forward_upstream(std::move(payload));
@@ -850,6 +856,29 @@ private:
             if (error) { self->diagnostics_.upstream_error(); return self->stop(); }
             self->open_upstream(std::move(payload));
           });
+    }
+    // Entity traffic is a framework payload kind, not a script message: a
+    // frame beginning with MLE1 answers through the endpoint (closed typed
+    // errors included) and never reaches the script. The trusted connection is
+    // the only caller identity the transport can assert, so the caller never
+    // comes from the envelope.
+    void serve_local_route(std::string payload, std::uint64_t request) {
+        if (entities_ && payload.starts_with("MLE1")) {
+            std::string result;
+            auto answer = entities_->handle(payload, caller(), result);
+            if (!answer) return serve_local(std::move(payload), request); // not entity traffic
+            diagnostics_.entity_result(result);
+            if (answer->empty()) return pump_client(); // a notify has no reply
+            return reply(std::move(*answer), request);
+        }
+        return serve_local(std::move(payload), request);
+    }
+    EntityCaller caller() const {
+        // An MLS1-identified peer (or a mux logical) is an internal service;
+        // everything else is a client leg. Ownership attribution is a separate
+        // concern from the transport binding, so the caller carries the
+        // trusted session identity, never a self-reported owner field.
+        return {(internal_ || service_ok_) ? "server" : "client", context_.session};
     }
     // Local script path: one Lua call per frame; a handler that returns nil
     // sends nothing and the session keeps reading.
@@ -1092,6 +1121,10 @@ private:
     Diagnostics& diagnostics_;
     GameSessions* registry_;
     RecordStore* records_ = nullptr;
+    // Non-null only on a node that loaded an entity contract: MLE1 frames go to
+    // the endpoint instead of the script, and non-entity frames pass through.
+    // Non-const: handle() dispatches into the Lua state, which mutates it.
+    EntityEndpoint* entities_ = nullptr;
     CrossContext context_;
     std::chrono::steady_clock::time_point request_started_{};
     std::uint16_t probe_port_ = 0;
@@ -2513,9 +2546,33 @@ public:
                 [this] { publish_active(); });
         if (script_role && game_sessions)
             game_sessions_ = std::make_shared<GameSessions>();
+        if (!config_.contract.empty()) {
+            // The contract is a build-time descriptor; the node reparses the
+            // document exactly like `contract check` so a malformed definition
+            // refuses startup rather than booting a half-routed host. Type
+            // sources stay inside the document's directory.
+            const fs::path path(config_.contract);
+            std::ifstream in(path, std::ios::binary);
+            if (!in) throw std::runtime_error("cannot read contract: "+path.string());
+            std::ostringstream text; text << in.rdbuf();
+            const fs::path dir = path.parent_path();
+            const auto type_resolver = [&](const std::string& rel) -> std::string {
+                if (rel.empty() || rel.find("..") != std::string::npos)
+                    throw std::runtime_error("type source path escapes the contract directory: "+rel);
+                std::ifstream src(dir/rel, std::ios::binary);
+                if (!src) throw std::runtime_error("type source not found: "+rel);
+                std::ostringstream buf; buf << src.rdbuf();
+                return buf.str();
+            };
+            entity_contract_ = std::make_unique<EntityContract>(text.str(), type_resolver);
+            entity_codec_ = std::make_unique<SprotoCodec>(*entity_contract_);
+            entity_endpoint_ = std::make_unique<EntityEndpoint>(*entity_contract_, entity_codec_.get());
+            std::cout << "contract " << path.string() << " loaded" << std::endl;
+        }
         if (script_role)
             service_ = std::make_shared<LuaService>(config_.script, service_context_, redis_,
-                websockets_.get(), game_sessions_.get(), this);
+                websockets_.get(), game_sessions_.get(), this,
+                entity_endpoint_ ? &entity_endpoint_->runtime() : nullptr);
         if (http_service) {
             // MLA1 rides the same listener as the Lua routes. Both variables
             // must be injected together; anything else leaves /mla1 as a
@@ -2572,6 +2629,7 @@ public:
         };
         if (!web_mode_) {
             if (service_) service_->start();
+            bind_entities();
             accept();
             diagnostics_->set_ready(true);
             ready_ = true;
@@ -2619,6 +2677,7 @@ public:
                     }, [this, &announce] {
                         try {
                             if (service_) service_->start();
+                            bind_entities();
                             diagnostics_->set_ready(true);
                             ready_ = true;
                             for (const auto& item : config_.listeners)
@@ -2661,7 +2720,8 @@ private:
                 publish_active();
             },
             config_.upstream_multiplex ? &mux_links_ : nullptr, std::move(mux_upgrade),
-            false, config_.role == "data" ? &records_ : nullptr, ticket_verifier_.get());
+            false, config_.role == "data" ? &records_ : nullptr, ticket_verifier_.get(),
+            entity_endpoint_.get());
         sessions_.insert(session);
         publish_active();
         session->start();
@@ -2707,7 +2767,7 @@ private:
                         if (i->get() == ptr) { sessions_.erase(i); break; }
                     publish_active();
                 }, nullptr, nullptr, true, config_.role == "data" ? &records_ : nullptr,
-                ticket_verifier_.get());
+                ticket_verifier_.get(), entity_endpoint_.get());
             sessions_.insert(session);
             publish_active();
             session->start();
@@ -2740,8 +2800,14 @@ private:
                 if (service_) {
                     try {
                         auto replacement = std::make_shared<LuaService>(config_.script, service_context_, redis_,
-                            websockets_.get(), game_sessions_.get());
+                            websockets_.get(), game_sessions_.get(), this,
+                            entity_endpoint_ ? &entity_endpoint_->runtime() : nullptr);
                         replacement->start();
+                        // Rebinding under the new state happens before the swap,
+                        // so a bad implementation table keeps the old service.
+                        std::string error;
+                        if (!bind_entities(*replacement, error))
+                            throw std::runtime_error("entity bindings: "+error);
                         service_.swap(replacement);
                         std::cout << "script reloaded; module state reset" << std::endl;
                     } catch (const std::exception& e) {
@@ -2751,6 +2817,19 @@ private:
                 signal();
             } else stop();
         });
+    }
+    // Binds the script's entity implementation table onto the runtime's
+    // dispatcher. A node without a contract has nothing to bind. The throwing
+    // form serves startup (a refused table must abort the boot); the error form
+    // serves SIGHUP reload (a refused table keeps the previous service).
+    void bind_entities() {
+        if (!entity_endpoint_) return;
+        std::string error;
+        if (!bind_entities(*service_, error)) throw std::runtime_error("entity bindings: "+error);
+    }
+    bool bind_entities(LuaService& service, std::string& error) {
+        if (!entity_endpoint_) return true;
+        return service.bind_entity_handlers(entity_endpoint_->runtime().dispatcher(), *entity_contract_, error);
     }
     void tick() {
         const auto scheduled = std::chrono::steady_clock::now() + std::chrono::milliseconds(100);
@@ -2850,6 +2929,12 @@ private:
     std::unique_ptr<ApiAcceptanceStore> api_store_;
     std::unique_ptr<ApiVerifier> api_verifier_;
     std::unique_ptr<ApiSurface> api_surface_;
+    // Entity runtime (only when --contract is configured). Declaration order
+    // is lifetime order: the contract outlives the codec that borrows it and
+    // the endpoint that owns the runtime/dispatcher.
+    std::unique_ptr<EntityContract> entity_contract_;
+    std::unique_ptr<SprotoCodec> entity_codec_;
+    std::unique_ptr<EntityEndpoint> entity_endpoint_;
     // MLT1 host verification on the crossServer join path. The claims are
     // volatile and per process, like the rest of the verifier's state.
     TicketClaims ticket_claims_;

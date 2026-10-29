@@ -40,6 +40,9 @@ public:
  void bind(std::string entity, std::string side, unsigned method, Handler handler) {
    handlers_[key(entity, side, method)] = std::move(handler);
  }
+ // Drops every binding without touching the contract: a script reload rebinds
+ // from scratch, so a stale closure into a closed Lua state is impossible.
+ void clear_handlers() { handlers_.clear(); }
  EntityDispatchResult dispatch(const EntityInvocation& call) const {
    if (!call.encoded_ok) return fail(EntityError::INVALID);
    const auto entity = std::find_if(contract_.entities().begin(), contract_.entities().end(), [&](const auto& e){return e.id==call.target.type_id;});

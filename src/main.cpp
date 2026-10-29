@@ -109,7 +109,8 @@ std::vector<std::pair<std::string, std::string>> config_flags(const std::filesys
         {"SERVICE_NAME","--service-name",0,0,0}, {"UPSTREAM_MULTIPLEX","--upstream-multiplex",0,0,0},
         {"COORDINATOR","--coordinator",0,0,0}, {"NAMESPACE","--namespace",0,0,0},
         {"SCOPE","--scope",0,0,0}, {"JOURNAL","--journal",1,0,0},
-        {"SCRIPT","--script",1,0,0}, {"UPSTREAMS","--upstream",0,1,0}, {"CERT","--cert",1,0,0},
+        {"SCRIPT","--script",1,0,0}, {"CONTRACT","--contract",1,0,0},
+        {"UPSTREAMS","--upstream",0,1,0}, {"CERT","--cert",1,0,0},
         {"KEY","--key",1,0,0}, {"LISTENERS","--listener",0,1,0}, {"REDIS","--redis",0,0,0},
         {"METRICS_LISTEN","--metrics-listen",0,0,0}, {"PROBE_LISTEN","--probe-listen",0,0,0},
         {"OVERLOAD_RATIO","--overload-ratio",0,0,0}, {"READY_HYSTERESIS","--ready-hysteresis",0,0,0},
@@ -227,6 +228,8 @@ int main(int argc, char** argv) {
                              "    MISTLANE_<KEY> env overrides, flags after --config win, relative\n"
                              "    paths resolve against the file or its ROOT= entry)\n"
                              "  gameServer/crossServer/apiServer/login/data: --script FILE\n"
+                             "  gameServer/crossServer: --contract FILE (entity contract .def; the node\n"
+                             "    then hosts the entity runtime and answers MLE1 frames on game sessions)\n"
                              "  gateway: --upstream IP:PORT (repeat for session round robin)\n"
                              "  --routing session|cross (gateway only; default session)\n"
                              "  service identity (session routing only; cross keeps MLC1):\n"
@@ -290,6 +293,7 @@ int main(int argc, char** argv) {
             else if (key == "--key") config.private_key = value;
             else if (key == "--listener") config.listeners.push_back(listener(value));
             else if (key == "--script") config.script = value;
+            else if (key == "--contract") config.contract = value;
             else if (key == "--redis") { config.redis = endpoint(value); config.redis_enabled = true; }
             else if (key == "--metrics-listen") { config.metrics_listen = endpoint(value); config.metrics_enabled = true; }
             else if (key == "--probe-listen") { config.probe_listen = endpoint(value); config.probe_enabled = true; }
@@ -332,6 +336,8 @@ int main(int argc, char** argv) {
         }
         if (!config.journal.empty() && config.role != "coordinator" && config.role != "data" && config.role != "apiServer")
             throw std::invalid_argument("--journal applies to coordinator, data or apiServer");
+        if (!config.contract.empty() && config.role != "gameServer" && config.role != "crossServer")
+            throw std::invalid_argument("--contract applies to gameServer/crossServer only");
         // Registration is a member duty; gateways route, coordinators collect.
         if (config.coordinator_enabled && config.role != "gameServer" && config.role != "crossServer"
                 && config.role != "login")

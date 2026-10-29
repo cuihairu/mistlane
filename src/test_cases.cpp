@@ -2144,6 +2144,170 @@ void role_names() {
     // Default apiServer transport is HTTP. Missing HTTP callback has a controlled response.
     require(http("http://"+endpoint(api_port)+"/missing").status != 0, "apiServer HTTP default failed");
 }
+
+// Full transport binding: a real gameServer loads a contract (.def) plus a
+// script with an entity implementation table, and MLE1 frames travel the
+// u32-BE framed socket exactly like any other message. The trusted connection
+// is the only caller identity: an MLS1-identified peer is the authorized
+// internal service the contract's caller="server" permits, while a plain
+// client leg is FORBIDDEN a server method — owner attribution is not built
+// yet, so no client can invoke anything, by design not by omission.
+void entity_transport() {
+    const std::string xml =
+        "<Contracts><Entity name=\"Avatar\" id=\"1\"><ServerMethods>"
+        "<Method name=\"get\" id=\"2\" mode=\"request\" caller=\"server\">"
+        "<Arg name=\"account\" id=\"0\" type=\"INT32\"/>"
+        "<Returns><Field name=\"level\" id=\"1\" type=\"UINT16\"/></Returns></Method>"
+        "<Method name=\"touch\" id=\"3\" mode=\"notify\" caller=\"server\">"
+        "<Arg name=\"x\" id=\"0\" type=\"INT32\"/></Method>"
+        "<Method name=\"admin\" id=\"5\" mode=\"request\" caller=\"owner\">"
+        "<Returns><Field name=\"ok\" id=\"0\" type=\"UINT16\"/></Returns></Method>"
+        "<Method name=\"missing\" id=\"6\" mode=\"request\" caller=\"server\">"
+        "<Returns><Field name=\"ok\" id=\"0\" type=\"UINT16\"/></Returns></Method>"
+        "</ServerMethods></Entity></Contracts>";
+    Context c;
+    const auto def = c.path("avatar.def");
+    write(def, xml);
+    const auto script = c.path("avatar.lua");
+    write(script, R"(local service = {}
+function service.message(payload)
+    if payload == "spawn" then
+        return mistlane.entity.spawn(1, 1, 3, 42) and "spawned" or "duplicate"
+    end
+    return "echo:"..payload
+end
+service.entities = {
+    Avatar = {
+        get = function(args, ctx)
+            assert(args.account == 4)
+            assert(ctx.caller_kind == "server")
+            assert(ctx.caller_id > 0)
+            assert(ctx.method_id == 2)
+            return { level = 7 }
+        end,
+        touch = function(args, ctx)
+            assert(args.x == 4)
+            return nil
+        end,
+    },
+}
+return service)");
+    const auto internal = port(), anonymous = port(), metrics = port();
+    c.node("gameServer", internal,
+        {"--script", script.string(), "--contract", def.string(), "--service-token", "s3cret",
+         "--metrics-listen", endpoint(metrics)});
+    c.node("gameServer", anonymous, {"--script", script.string(), "--contract", def.string()});
+
+    EntityContract contract(xml);
+    SprotoCodec codec(contract);
+    const ContractMethod* get = nullptr;
+    for (const auto& e : contract.entities())
+        for (const auto& m : e.server_methods)
+            if (m.name == "get") get = &m;
+    require(get != nullptr, "test contract lost the get method");
+    const auto payload = [&](std::int64_t value) -> std::string {
+        auto encoded = codec.encode_returns(get->args, {{"account", value}});
+        require(encoded.has_value(), "test arg encode failed");
+        return *encoded;
+    };
+    const auto frame = [](std::uint64_t correlation, std::uint32_t method, std::uint32_t type_id,
+                          std::uint32_t incarnation, std::uint32_t generation, const std::string& body) {
+        return "MLE1" + encode_entity_envelope({1, type_id, incarnation, 42, kEntitySideServer,
+            static_cast<std::uint16_t>(method), correlation, generation, 0, body});
+    };
+    const auto reply_of = [](const std::string& body) -> EntityReply {
+        require(body.size() >= 12 && body.starts_with("MLE1"), "expected an MLE1 reply frame");
+        const auto decoded = decode_entity_reply(std::string_view(body).substr(12));
+        require(decoded.has_value(), "reply body did not decode");
+        return *decoded;
+    };
+    const auto correlation_of = [](const std::string& body) {
+        require(body.size() >= 12, "reply frame too short");
+        std::uint64_t value = 0;
+        for (std::size_t i = 4; i < 12; ++i) value = value << 8 | static_cast<unsigned char>(body[i]);
+        return value;
+    };
+
+    // The authorized internal service presents MLS1, seeds the runtime over the
+    // same leg, then drives the entity path.
+    auto peer = tcp(internal);
+    equal(peer->request("MLS1 gameServer inst-1 s3cret"), "MLS1 OK");
+    equal(peer->request("spawn"), "spawned");
+
+    auto ok = peer->request(frame(77, 2, 1, 3, 1, payload(4)));
+    require(correlation_of(ok) == 77 && !reply_of(ok).is_error, "happy request was not answered OK");
+    EntityValues got;
+    std::string reason;
+    require(codec.decode_args(get->returns, reply_of(ok).payload, got, reason) && reason.empty()
+            && std::get<std::int64_t>(got.at("level").data) == 7, "typed return did not round-trip");
+    std::cout << "entity.transport request: MLE1 round-trip, typed return, trusted caller [PASS]\n";
+
+    auto malformed = peer->request("MLE1short");
+    require(correlation_of(malformed) == 0 && reply_of(malformed).is_error
+            && reply_of(malformed).error == EntityError::INVALID
+            && reply_of(malformed).reason == "malformed envelope", "malformed envelope was not typed INVALID");
+    std::cout << "entity.transport malformed: typed INVALID with a reason [PASS]\n";
+
+    auto unrouted = peer->request(frame(78, 2, 7, 3, 1, payload(4)));
+    require(reply_of(unrouted).is_error && reply_of(unrouted).error == EntityError::UNROUTED, "unknown entity was not UNROUTED");
+    auto stale = peer->request(frame(79, 2, 1, 3, 2, payload(4)));
+    require(reply_of(stale).is_error && reply_of(stale).error == EntityError::STALE, "wrong generation was not STALE");
+    std::cout << "entity.transport route: unknown entity UNROUTED, wrong generation STALE [PASS]\n";
+
+    // A declared method with no implementation answers NO_IMPLEMENTATION.
+    auto unbound = peer->request(frame(81, 6, 1, 3, 1, {}));
+    require(reply_of(unbound).is_error && reply_of(unbound).error == EntityError::NO_IMPLEMENTATION, "unimplemented method was not NO_IMPLEMENTATION");
+    std::cout << "entity.transport gate: unimplemented NO_IMPLEMENTATION [PASS]\n";
+
+    // A notify (zero correlation) answers nothing; a follow-up frame is the
+    // only reply the reader sees.
+    {
+        RawSocket raw(internal);
+        const auto send_frame = [&](const std::string& body) {
+            std::string header(4, '\0');
+            const auto length = static_cast<std::uint32_t>(body.size());
+            for (unsigned i = 0; i < 4; ++i) header[i] = static_cast<char>(length >> (24 - i*8));
+            raw.send(header + body);
+        };
+        const auto read_frame = [&]() {
+            std::string header = raw.receive(4);
+            std::uint32_t length = 0;
+            for (unsigned i = 0; i < 4; ++i) length = length << 8 | static_cast<unsigned char>(header[i]);
+            return raw.receive(length);
+        };
+        send_frame("MLS1 gameServer inst-2 s3cret");
+        equal(read_frame(), "MLS1 OK");
+        // The runtime is node-global, so the seeded entity answers a notify
+        // here too; a zero-correlation frame produces no bytes.
+        send_frame(frame(0, 3, 1, 3, 1, payload(4)));
+        send_frame("hi");
+        equal(read_frame(), "echo:hi");
+        std::cout << "entity.transport notify: handled silently, follow-up is the only reply [PASS]\n";
+    }
+
+    // A plain client leg holds no trusted service identity: server methods are
+    // FORBIDDEN and owner methods too (owner attribution is not built), while
+    // ordinary script traffic still flows on the same node.
+    auto outsider = tcp(anonymous);
+    equal(outsider->request("spawn"), "spawned");
+    auto denied = outsider->request(frame(90, 2, 1, 3, 0, payload(4)));
+    require(reply_of(denied).is_error && reply_of(denied).error == EntityError::FORBIDDEN, "a client leg was not FORBIDDEN a server method");
+    auto owner_only = outsider->request(frame(91, 5, 1, 3, 0, {}));
+    require(reply_of(owner_only).is_error && reply_of(owner_only).error == EntityError::FORBIDDEN, "a client leg was not FORBIDDEN an owner method");
+    equal(outsider->request("hi"), "echo:hi");
+    std::cout << "entity.transport gate: client leg FORBIDDEN, script traffic unaffected [PASS]\n";
+
+    // The result label set is bounded and the verdicts were recorded.
+    auto samples = http("http://" + endpoint(metrics) + "/metrics");
+    require(samples.status == 200, "metrics endpoint failed");
+    require(samples.body.find("mistlane_entity_results_total") != std::string::npos, "entity result metric missing");
+    require(samples.body.find("result=\"ok\"") != std::string::npos, "no ok entity verdict recorded");
+    require(samples.body.find("result=\"malformed\"") != std::string::npos, "no malformed entity verdict recorded");
+    require(samples.body.find("result=\"forbidden\"") != std::string::npos, "no forbidden entity verdict recorded");
+    std::cout << "entity.transport metrics: bounded result labels recorded [PASS]\n";
+}
+
+
 void transport_tcp() {
     Context c;
     const auto script = c.path("echo.lua");

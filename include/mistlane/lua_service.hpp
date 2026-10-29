@@ -9,6 +9,7 @@
 #include <string_view>
 #include <lua.hpp>
 #include "mistlane/cross.hpp"
+#include "mistlane/entity_runtime.hpp"
 #include "mistlane/http_service.hpp"
 #include <boost/redis/connection.hpp>
 #include <boost/asio/io_context.hpp>
@@ -69,7 +70,7 @@ public:
     struct AsyncContext { lua_State* state = nullptr; };
     explicit LuaService(const std::string& path, ServiceContext context = {}, std::shared_ptr<RedisRuntime> redis = {},
                         WebsocketSink* websocket_sink = nullptr, GameSessionSink* session_sink = nullptr,
-                        PlacementSink* placement_sink = nullptr);
+                        PlacementSink* placement_sink = nullptr, EntityRuntime* entity_runtime = nullptr);
     ~LuaService();
     LuaService(const LuaService&) = delete;
     LuaService& operator=(const LuaService&) = delete;
@@ -81,6 +82,13 @@ public:
     void websocket_open(std::uint64_t id, const std::string& path);
     void websocket_message(std::uint64_t id, std::string_view payload);
     void websocket_close(std::uint64_t id);
+    // Binds the script's entity implementation table (service.entities[type]
+    // [method] = function(args, ctx)) onto the dispatcher, clearing any prior
+    // bindings first so a script reload can never leave a closure into a closed
+    // state. Unknown entity or method names refuse the whole load (fail-closed);
+    // a missing implementation is not an error here — the dispatcher answers
+    // NO_IMPLEMENTATION for it. Returns false with a reason on refusal.
+    bool bind_entity_handlers(EntityDispatcher& dispatcher, const EntityContract& contract, std::string& error);
     void start();
     void stop();
     void tick();
@@ -104,6 +112,12 @@ private:
     static int leaderboard_get(lua_State*);
     static int leaderboard_top(lua_State*);
     static int leaderboard_remove(lua_State*);
+    static int entity_spawn(lua_State*);
+    static int entity_destroy(lua_State*);
+    static void push_entity_api(lua_State*, EntityRuntime*);
+    EntityDispatcher::Handler make_entity_handler(const std::string& type, const std::string& name,
+                                                  unsigned method_id, ContractArgs returns,
+                                                  const EntityContract* shapes) const;
     void callback(const char* name);
     void check(int status);
     lua_State* state_ = nullptr;
@@ -112,6 +126,7 @@ private:
     WebsocketSink* websocket_sink_ = nullptr;
     GameSessionSink* session_sink_ = nullptr;
     PlacementSink* placement_sink_ = nullptr;
+    EntityRuntime* entity_runtime_ = nullptr;
     bool started_ = false, stopped_ = false, shutdown_ = false;
     std::shared_ptr<AsyncContext> async_context_;
     std::shared_ptr<RedisRuntime> redis_;
