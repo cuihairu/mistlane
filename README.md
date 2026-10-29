@@ -5,10 +5,7 @@
 <h1 align="center">Mistlane</h1>
 
 <p align="center">
-<a href="https://github.com/cuihairu/mistlane/releases"><img alt="Status" src="https://img.shields.io/badge/status-in%20development-orange"></a>
-</p>
-
-<p align="center">
+  <a href="https://github.com/cuihairu/mistlane/releases"><img alt="Status" src="https://img.shields.io/badge/status-in%20development-orange"></a>
   <a href="https://github.com/cuihairu/mistlane/actions/workflows/ci.yml"><img src="https://github.com/cuihairu/mistlane/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-blue" alt="Apache-2.0"></a>
   <a href="CMakeLists.txt"><img src="https://img.shields.io/badge/C%2B%2B-20-00599C" alt="C++20"></a>
