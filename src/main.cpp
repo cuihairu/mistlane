@@ -264,7 +264,8 @@ int main(int argc, char** argv) {
                              "    members connect with --coordinator IP:PORT [--namespace NAME]\n"
                              "      [--scope NAME] and heartbeat\n"
                              "    --journal FILE (optional; SQLite migration journal for coordinator,\n"
-                             "      durable MLD1 records for data; both are restored on restart)\n"
+                             "      durable MLD1 records for data and durable MLA1 acceptances\n"
+                             "      for apiServer; all are restored on restart)\n"
                              "    MLR1 REGISTER/QUERY/PLACE/ROUTE over framed TCP; MLR1 MIG\n"
                              "    OWNER/PREPARE/EVENT/COMMIT/ABORT/RETIRE/STATUS carry the migration\n"
                              "    protocol for a (namespace, realm, character), idempotent by request id";
@@ -329,8 +330,8 @@ int main(int argc, char** argv) {
             // The registry is state, not a forwarding or scripting plane.
             throw std::invalid_argument("coordinator requires no script and no upstream");
         }
-        if (!config.journal.empty() && config.role != "coordinator" && config.role != "data")
-            throw std::invalid_argument("--journal applies to coordinator or data only");
+        if (!config.journal.empty() && config.role != "coordinator" && config.role != "data" && config.role != "apiServer")
+            throw std::invalid_argument("--journal applies to coordinator, data or apiServer");
         // Registration is a member duty; gateways route, coordinators collect.
         if (config.coordinator_enabled && config.role != "gameServer" && config.role != "crossServer"
                 && config.role != "login")

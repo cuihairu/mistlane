@@ -10,6 +10,7 @@
 #include "mistlane/record.hpp"
 #include "mistlane/migration.hpp"
 #include "mistlane/journal.hpp"
+#include "mistlane/api_store.hpp"
 #include <utility>
 #include <boost/asio.hpp>
 #include <algorithm>
@@ -2526,10 +2527,14 @@ public:
                 throw std::invalid_argument(
                     "MISTLANE_MLA1_AUDIENCE and MISTLANE_MLA1_CREDENTIAL must be set together");
             if (enabled) {
+                if (!config_.journal.empty())
+                    api_store_ = std::make_unique<ApiSqliteAcceptanceStore>(config_.journal);
+                else
+                    api_store_ = std::make_unique<ApiMemoryAcceptanceStore>();
                 api_verifier_ = std::make_unique<ApiVerifier>(audience, api_credentials(credential), api_replay_);
                 // Ownership needs the home transaction aggregate; until that
                 // source is wired the endpoint answers NotFound, never invents.
-                api_surface_ = std::make_unique<ApiSurface>(*api_verifier_, api_store_,
+                api_surface_ = std::make_unique<ApiSurface>(*api_verifier_, *api_store_,
                     [](const MigrationKey&) { return std::nullopt; });
             }
         }
@@ -2842,7 +2847,7 @@ private:
     std::unique_ptr<MigrationJournal> record_journal_;
     // MLA1 external API: native route beside the Lua HTTP callbacks.
     ApiReplayGuard api_replay_;
-    ApiMemoryAcceptanceStore api_store_;
+    std::unique_ptr<ApiAcceptanceStore> api_store_;
     std::unique_ptr<ApiVerifier> api_verifier_;
     std::unique_ptr<ApiSurface> api_surface_;
     // MLT1 host verification on the crossServer join path. The claims are

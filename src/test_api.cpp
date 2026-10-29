@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "test_support.hpp"
 #include "mistlane/api.hpp"
+#include "mistlane/api_store.hpp"
 #include "mistlane/entry_ticket.hpp"
 #include "mistlane/migration.hpp"
 
@@ -189,6 +190,70 @@ void api_acceptance() {
     require(surface_store.size() == 1, "a retry created a second pending command");
     std::cout << "api.acceptance store: Inserted/Existing/Conflict exactly once [PASS]\n";
     std::cout << "api.acceptance surface: retry dedup to the same receipt [PASS]\n";
+}
+
+void api_sqlite_acceptance() {
+    // The durable backend mirrors the memory store's create-or-read semantics
+    // but commits each row to SQLite before reporting it, so a restart sees
+    // the same pending command (lost-reply replay) and a changed body stays
+    // Conflict. Storage failures must propagate, never be read as Conflict.
+    Temp temp;
+    const auto path = temp.path / "api-acceptance.sqlite";
+    {
+        ApiSqliteAcceptanceStore store(path.string());
+        const ApiAcceptanceKey key{"platform", "ops-callback", {"realm1", "char42"}, "grant-7"};
+        const ApiCommand command{key, "grant"};
+        const auto first = store.create(command);
+        require(first.result == ApiCreate::Inserted && first.durability == ApiDurability::Durable
+                && first.receipt && first.receipt->command == command,
+                "a durable acceptance was not Inserted with a Durable receipt");
+        const auto second = store.create(command);
+        require(second.result == ApiCreate::Existing && second.durability == ApiDurability::Durable
+                && second.receipt && second.receipt->command == command
+                && *second.receipt == *first.receipt && store.size() == 1,
+                "a durable retry did not deduplicate to the original receipt");
+        const auto conflict = store.create(ApiCommand{key, "grant-v2"});
+        require(conflict.result == ApiCreate::Conflict && conflict.durability == ApiDurability::Durable
+                && !conflict.receipt && store.size() == 1,
+                "a durable key with a changed body was not refused");
+        const auto fresh = store.create(ApiCommand{
+            {"platform", "ops-callback", {"realm1", "char42"}, "grant-8"}, "grant"});
+        require(fresh.result == ApiCreate::Inserted && store.size() == 2,
+                "a new durable idempotency key did not insert");
+        // Invalid identifiers and oversize payloads are refused before storage.
+        require(store.create(ApiCommand{{"bad key", "ops-callback", {"realm1", "char42"}, "k"}, "p"}).result
+                == ApiCreate::Invalid, "an invalid audience was not refused");
+        require(store.create(ApiCommand{{"platform", "ops-callback", {"realm1", "char42"}, "k"},
+                std::string(1024*1024+1, 'x')}).result == ApiCreate::Invalid,
+                "an oversize payload was not refused");
+    }
+    // A fresh store on the same file restores the rows: a lost reply after a
+    // restart deduplicates instead of inserting a second pending command.
+    {
+        ApiSqliteAcceptanceStore store(path.string());
+        require(store.size() == 2, "restart lost a durable acceptance row");
+        const ApiCommand command{{"platform", "ops-callback", {"realm1", "char42"}, "grant-7"}, "grant"};
+        const auto again = store.create(command);
+        require(again.result == ApiCreate::Existing && again.durability == ApiDurability::Durable
+                && again.receipt && again.receipt->command == command,
+                "a lost-reply replay after restart was not deduplicated");
+        const auto conflict = store.create(ApiCommand{command.key, "grant-v2"});
+        require(conflict.result == ApiCreate::Conflict && store.size() == 2,
+                "a changed body after restart was not refused");
+    }
+    // A bounded store refuses a fresh key once full, without growing.
+    {
+        ApiSqliteAcceptanceStore store((temp.path / "api-acceptance-full.sqlite").string(), 1);
+        require(store.create(ApiCommand{{"platform", "ops-callback", {"realm1", "char42"}, "k1"}, "p"}).result
+                == ApiCreate::Inserted, "the first bounded row did not insert");
+        require(store.create(ApiCommand{{"platform", "ops-callback", {"realm1", "char42"}, "k2"}, "p"}).result
+                == ApiCreate::Full, "a full bounded store did not refuse a fresh key");
+        // A duplicate of the stored key still answers Existing, not Full.
+        require(store.create(ApiCommand{{"platform", "ops-callback", {"realm1", "char42"}, "k1"}, "p"}).result
+                == ApiCreate::Existing, "a full store refused its own stored key");
+    }
+    std::cout << "api.acceptance.sqlite durable: Inserted/Existing/Conflict exactly once, "
+        "restart dedup and Full bound [PASS]\n";
 }
 
 void api_wire() {

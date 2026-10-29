@@ -16,7 +16,7 @@ find_package(Lua 5.5.1 REQUIRED)
 find_package(unofficial-sqlite3 CONFIG REQUIRED)
 find_package(crashpad CONFIG REQUIRED)
 find_package(prometheus-cpp CONFIG REQUIRED)
-add_library(mistlane_core src/lua_service.cpp src/diagnostics.cpp src/api.cpp src/entity_lua.cpp src/journal.cpp)
+add_library(mistlane_core src/lua_service.cpp src/diagnostics.cpp src/api.cpp src/api_store.cpp src/entity_lua.cpp src/journal.cpp)
 target_include_directories(mistlane_core PUBLIC include)
 target_include_directories(mistlane_core SYSTEM PUBLIC ${LUA_INCLUDE_DIR})
 target_link_libraries(mistlane_core PUBLIC
@@ -80,7 +80,7 @@ if(BUILD_TESTING)
       coordinator.migration.recover coordinator.migration.stale coordinator.migration.order
       coordinator.migration.retire coordinator.migration.wire coordinator.migration.journal coordinator.migration.journal.recovery cross.ticket lua.lifecycle lua.http
       coordinator.migration.authority
-      api.signature api.tamper api.rotation api.replay api.acceptance api.ownership api.wire api.http
+      api.signature api.tamper api.rotation api.replay api.acceptance api.acceptance.sqlite api.ownership api.wire api.http
       login.ticket
       cross.admission cross.record cross.record.journal cross.return.queue probe.control scaffold.init
       config.file cli.bot)

@@ -47,6 +47,7 @@ void api_tamper();
 void api_rotation();
 void api_replay();
 void api_acceptance();
+void api_sqlite_acceptance();
 void api_ownership();
 void api_wire();
 void login_ticket();
@@ -153,6 +154,7 @@ int run_tests(int argc, char** argv) {
         {"api.rotation","api",test::api_rotation},
         {"api.replay","api",test::api_replay},
         {"api.acceptance","api",test::api_acceptance},
+        {"api.acceptance.sqlite","api",test::api_sqlite_acceptance},
         {"api.ownership","api",test::api_ownership},
         {"api.wire","api",test::api_wire},
         {"login.ticket","api",test::login_ticket},

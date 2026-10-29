@@ -2286,6 +2286,34 @@ void api_http() {
         require(refused.wait() != 0 && refused.output().find("rotation bound") != std::string::npos,
                 "a malformed rotation bound booted");
     }
+    // --journal FILE makes the apiServer acceptance backend durable: the same
+    // MLA1 reply gains DURABLE only after the SQLite row commits, and a
+    // restarted server answers the lost-reply replay as EXISTING DURABLE.
+    {
+        ScopedEnv audience("MISTLANE_MLA1_AUDIENCE", "platform");
+        ScopedEnv credentials("MISTLANE_MLA1_CREDENTIAL", "ops-callback:key-2026:"+hex+":realm1");
+        const auto journal = c.path("api-acceptance.sqlite");
+        const auto listen = port();
+        auto& durable = c.node("apiServer", listen,
+            {"--script", c.path("api.lua").string(), "--journal", journal.string()});
+        const auto base = "http://"+endpoint(listen);
+        auto sent = http(base+"/mla1", "POST", accept_body("grant-durable"));
+        require(sent.status == 200, "a durable acceptance was not 200");
+        equal(sent.body, reply_body({"OK", "INSERTED", "DURABLE", "grant", ""}));
+        sent = http(base+"/mla1", "POST", accept_body("grant-durable"));
+        equal(sent.body, reply_body({"OK", "EXISTING", "DURABLE", "grant", ""}));
+        sent = http(base+"/mla1", "POST", accept_body("grant-durable", "grant-v2"));
+        require(sent.status == 409, "a durable key with a changed body was not 409");
+        equal(sent.body, reply_body({"OK", "CONFLICT", "DURABLE", "", ""}));
+        durable.signal(SIGTERM);
+        require(durable.wait() == 0, "a durable apiServer did not stop cleanly");
+        auto& restored = c.node("apiServer", listen,
+            {"--script", c.path("api.lua").string(), "--journal", journal.string()});
+        (void)restored;
+        sent = http(base+"/mla1", "POST", accept_body("grant-durable"));
+        require(sent.status == 200, "a restored durable acceptance was not 200");
+        equal(sent.body, reply_body({"OK", "EXISTING", "DURABLE", "grant", ""}));
+    }
     std::cout << "api.http surface: signed POST /mla1 inserts, dedupes, refuses [PASS]\n";
     std::cout << "api.http config: env-only enablement, malformed credentials refuse startup [PASS]\n";
 }
