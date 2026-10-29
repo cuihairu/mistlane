@@ -2308,6 +2308,163 @@ return service)");
 }
 
 
+// The gateway fronts the contract host's trusted leg: a plain client reaches
+// caller="server" methods through the relay, and the relay swaps the client's
+// outer transport correlation for a fresh inner entity id, so two channels can
+// reuse one outer id without colliding on the host's duplicate fence. Replies
+// map back by inner id, a notify stays silent end to end, and a full table
+// answers CAPACITY without forwarding.
+void entity_transport_gateway() {
+    const std::string xml =
+        "<Contracts><Entity name=\"Avatar\" id=\"1\"><ServerMethods>"
+        "<Method name=\"get\" id=\"2\" mode=\"request\" caller=\"server\">"
+        "<Arg name=\"account\" id=\"0\" type=\"INT32\"/>"
+        "<Returns><Field name=\"level\" id=\"1\" type=\"UINT16\"/></Returns></Method>"
+        "<Method name=\"touch\" id=\"3\" mode=\"notify\" caller=\"server\">"
+        "<Arg name=\"x\" id=\"0\" type=\"INT32\"/></Method>"
+        "</ServerMethods></Entity></Contracts>";
+    Context c;
+    const auto def = c.path("avatar.def");
+    write(def, xml);
+    const auto script = c.path("avatar.lua");
+    write(script, R"(local service = {}
+function service.message(payload)
+    if payload == "spawn" then
+        return mistlane.entity.spawn(1, 1, 3, 42) and "spawned" or "duplicate"
+    end
+    return "echo:"..payload
+end
+service.entities = {
+    Avatar = {
+        get = function(args, ctx)
+            assert(args.account == 4)
+            assert(ctx.caller_kind == "server")
+            assert(ctx.caller_id > 0)
+            assert(ctx.method_id == 2)
+            return { level = 7 }
+        end,
+        touch = function(args, ctx)
+            assert(args.x == 4)
+            return nil
+        end,
+    },
+}
+return service)");
+    const auto host = port(), relay = port();
+    c.node("gameServer", host,
+        {"--script", script.string(), "--contract", def.string(), "--service-token", "s3cret"});
+    c.node("gateway", relay, {"--upstream", endpoint(host), "--upstream-token", "s3cret",
+        "--service-name", "gw-1"});
+
+    EntityContract contract(xml);
+    SprotoCodec codec(contract);
+    const ContractMethod* get = nullptr;
+    for (const auto& e : contract.entities())
+        for (const auto& m : e.server_methods)
+            if (m.name == "get") get = &m;
+    require(get != nullptr, "test contract lost the get method");
+    const auto payload = [&](std::int64_t value) -> std::string {
+        auto encoded = codec.encode_returns(get->args, {{"account", value}});
+        require(encoded.has_value(), "test arg encode failed");
+        return *encoded;
+    };
+    const auto frame = [](std::uint64_t correlation, std::uint32_t method, std::uint32_t type_id,
+                          std::uint32_t incarnation, std::uint32_t generation, const std::string& body) {
+        return "MLE1" + encode_entity_envelope({1, type_id, incarnation, 42, kEntitySideServer,
+            static_cast<std::uint16_t>(method), correlation, generation, 0, body});
+    };
+    const auto reply_of = [](const std::string& body) -> EntityReply {
+        require(body.size() >= 12 && body.starts_with("MLE1"), "expected an MLE1 reply frame");
+        const auto decoded = decode_entity_reply(std::string_view(body).substr(12));
+        require(decoded.has_value(), "reply body did not decode");
+        return *decoded;
+    };
+    const auto correlation_of = [](const std::string& body) {
+        require(body.size() >= 12, "reply frame too short");
+        std::uint64_t value = 0;
+        for (std::size_t i = 4; i < 12; ++i) value = value << 8 | static_cast<unsigned char>(body[i]);
+        return value;
+    };
+
+    // Entity traffic through the relay: the client's outer correlation is its
+    // own id, the host's leg carries the gateway's trusted identity, and the
+    // typed return round-trips with the outer correlation echoed back.
+    auto first = tcp(relay);
+    equal(first->request("spawn"), "spawned");
+    auto ok = first->request(frame(42, 2, 1, 3, 1, payload(4)));
+    require(correlation_of(ok) == 42 && !reply_of(ok).is_error, "gateway request was not answered OK");
+    EntityValues got;
+    std::string reason;
+    require(codec.decode_args(get->returns, reply_of(ok).payload, got, reason) && reason.empty()
+            && std::get<std::int64_t>(got.at("level").data) == 7, "typed return did not round-trip");
+    std::cout << "entity.transport.gateway request: relayed MLE1, outer correlation echoed [PASS]\n";
+
+    // Two client channels reusing one outer correlation must both succeed: the
+    // table hands each a distinct inner id, so the host's duplicate fence never
+    // fires. Without the rewrite the second call would answer CONFLICT.
+    auto second = tcp(relay);
+    auto same = second->request(frame(42, 2, 1, 3, 1, payload(4)));
+    require(correlation_of(same) == 42 && !reply_of(same).is_error,
+        "a second channel reusing the outer correlation was not OK");
+    std::cout << "entity.transport.gateway multiplex: same outer id on two channels, no host conflict [PASS]\n";
+
+    // A notify forwards unchanged (zero correlation has no reply) and the
+    // follow-up frame is the only bytes the reader sees.
+    {
+        RawSocket raw(relay);
+        const auto send_frame = [&](const std::string& body) {
+            std::string header(4, '\0');
+            const auto length = static_cast<std::uint32_t>(body.size());
+            for (unsigned i = 0; i < 4; ++i) header[i] = static_cast<char>(length >> (24 - i*8));
+            raw.send(header + body);
+        };
+        const auto read_frame = [&]() {
+            std::string header = raw.receive(4);
+            std::uint32_t length = 0;
+            for (unsigned i = 0; i < 4; ++i) length = length << 8 | static_cast<unsigned char>(header[i]);
+            return raw.receive(length);
+        };
+        send_frame(frame(0, 3, 1, 3, 1, payload(4)));
+        send_frame("hi");
+        equal(read_frame(), "echo:hi");
+        std::cout << "entity.transport.gateway notify: silent, follow-up is the only reply [PASS]\n";
+    }
+
+    // Refusal wiring: a duplicate outer correlation on one channel is already
+    // pending, so allocate refuses and the gateway answers CAPACITY to the
+    // client with the outer id instead of forwarding a second request the host
+    // would fence as CONFLICT. A silent upstream (a contractless script that
+    // answers nothing) keeps the first slot unresolved. The full-table bound is
+    // unit-tested in entity.gateway; this proves the refusal reaches the wire.
+    const auto quiet = port(), bounded = port();
+    write(c.path("quiet.lua"), "local service = {}\nfunction service.message(payload) end\nreturn service");
+    c.node("gameServer", quiet, {"--script", c.path("quiet.lua").string()});
+    c.node("gateway", bounded, {"--upstream", endpoint(quiet)});
+    {
+        RawSocket hold(bounded);
+        const auto send_frame = [&](const std::string& body) {
+            std::string header(4, '\0');
+            const auto length = static_cast<std::uint32_t>(body.size());
+            for (unsigned i = 0; i < 4; ++i) header[i] = static_cast<char>(length >> (24 - i*8));
+            hold.send(header + body);
+        };
+        const auto read_frame = [&]() {
+            std::string header = hold.receive(4);
+            std::uint32_t length = 0;
+            for (unsigned i = 0; i < 4; ++i) length = length << 8 | static_cast<unsigned char>(header[i]);
+            return hold.receive(length);
+        };
+        send_frame(frame(77, 2, 1, 3, 1, payload(4)));
+        send_frame(frame(77, 2, 1, 3, 1, payload(4)));
+        const auto refusal = read_frame();
+        require(correlation_of(refusal) == 77 && reply_of(refusal).is_error
+                && reply_of(refusal).error == EntityError::CAPACITY,
+            "a duplicate outer correlation did not answer CAPACITY with the outer id");
+        std::cout << "entity.transport.gateway capacity: duplicate refuses without forwarding [PASS]\n";
+    }
+}
+
+
 void transport_tcp() {
     Context c;
     const auto script = c.path("echo.lua");

@@ -14,6 +14,7 @@
 #include "mistlane/entity_contract.hpp"
 #include "mistlane/entity_codec.hpp"
 #include "mistlane/entity_endpoint.hpp"
+#include "mistlane/entity_gateway.hpp"
 #include <utility>
 #include <boost/asio.hpp>
 #include <algorithm>
@@ -189,6 +190,29 @@ std::uint32_t frame_id(const std::string& payload) {
     std::uint32_t id = 0;
     for (int i = 0; i < 4; ++i) id = (id << 8) | static_cast<unsigned char>(payload[i]);
     return id;
+}
+// Entity frames are directional: a request carries its correlation inside the
+// envelope at frame bytes [27,35) (the MLE1 marker plus scope, type, entity,
+// incarnation, side and method), while a reply carries it directly after the
+// marker at [4,12). The gateway rewrites the matching slice per direction, so
+// request and reply stay opaque to the relay.
+constexpr std::size_t kEntityRequestCorrelationAt = 4 + 23;
+constexpr std::size_t kEntityReplyCorrelationAt = 4;
+// The marker plus the correlation slice being rewritten is all a frame needs;
+// a malformed request (too short to be a valid envelope) still carries its
+// correlation bytes and passes through like any other frame.
+bool is_entity_frame(std::string_view frame, std::size_t correlation_at) {
+    return frame.size() >= correlation_at + 8 && frame.starts_with("MLE1");
+}
+std::uint64_t entity_correlation(std::string_view frame, std::size_t at) {
+    std::uint64_t value = 0;
+    for (std::size_t i = 0; i < 8; ++i)
+        value = (value << 8) | static_cast<unsigned char>(frame[at + i]);
+    return value;
+}
+void set_entity_correlation(std::string& frame, std::size_t at, std::uint64_t value) {
+    for (std::size_t i = 0; i < 8; ++i)
+        frame[at + i] = static_cast<char>(value >> (8 * (7 - i)));
 }
 class TcpChannel : public Channel, public std::enable_shared_from_this<TcpChannel> {
 public:
@@ -685,11 +709,13 @@ public:
             std::function<void(Session*)> on_close, MuxLinks* mux_links = nullptr,
             std::function<void(std::shared_ptr<Channel>)> mux_upgrade = {},
             bool internal = false, RecordStore* records = nullptr,
-            const TicketVerifier* tickets = nullptr, EntityEndpoint* entities = nullptr)
+            const TicketVerifier* tickets = nullptr, EntityEndpoint* entities = nullptr,
+            GatewayEntityCorrelation* gateway = nullptr, std::uint64_t connection = 0)
       : client_(std::move(client)), service_(service),
         timer_(client_->executor()), config_(config), admission_(admission), diagnostics_(diagnostics),
         registry_(registry), on_close_(std::move(on_close)), mux_upgrade_(std::move(mux_upgrade)),
-        internal_(internal), records_(records), ticket_verifier_(tickets), entities_(entities) {
+        internal_(internal), records_(records), ticket_verifier_(tickets), entities_(entities),
+        gateway_(gateway), connection_(connection) {
         if (upstream) {
             endpoint_ = tcp::endpoint(parse_address(upstream->address), upstream->port);
             // Multiplexing keeps one socket per upstream: the link owns the
@@ -723,6 +749,7 @@ public:
         client_->close();
         if (upstream_) upstream_->close();
         if (link_) link_->detach(mux_id_);
+        if (gateway_) gateway_->drop(connection_); // no reply can match a gone client
         if (registry_ && context_.session) registry_->detach(context_.session);
         on_close_(this);
     }
@@ -1058,6 +1085,7 @@ private:
     void become_mux() {
         closed_ = true;
         timer_.cancel();
+        if (gateway_) gateway_->drop(connection_); // the hub owns new ids, not these
         if (registry_ && context_.session) {
             registry_->detach(context_.session);
             context_.session = 0;
@@ -1066,6 +1094,16 @@ private:
         mux_upgrade_(client_);
     }
     void forward_to_client(std::string frame) {
+        // A reply carries the inner entity correlation the upstream saw; map it
+        // back to the outer id this client used, or drop it when nobody is
+        // waiting (stray, duplicate or a client that went away mid-flight).
+        if (gateway_ && is_entity_frame(frame, kEntityReplyCorrelationAt)) {
+            if (const auto inner = entity_correlation(frame, kEntityReplyCorrelationAt)) {
+                const auto mapped = gateway_->resolve(inner);
+                if (!mapped || mapped->first != connection_) return;
+                set_entity_correlation(frame, kEntityReplyCorrelationAt, mapped->second);
+            }
+        }
         diagnostics_.add_message("tx");
         diagnostics_.add_payload_bytes("tx", frame.size());
         client_->write(std::move(frame), [self=shared_from_this()](Error ec) {
@@ -1088,6 +1126,26 @@ private:
         });
     }
     void forward_upstream(std::string payload) {
+        // The gateway's entity path swaps the client's outer correlation for a
+        // fresh inner id before forwarding: replies cannot collide across
+        // client channels sharing one upstream, and a stalled upstream cannot
+        // leak one client's correlation to another. A notify (correlation 0)
+        // has no reply and forwards unchanged. Refusal answers CAPACITY to the
+        // client without forwarding — the table never evicts a live request.
+        if (gateway_ && is_entity_frame(payload, kEntityRequestCorrelationAt)) {
+            if (const auto outer = entity_correlation(payload, kEntityRequestCorrelationAt)) {
+                const auto inner = gateway_->allocate(connection_, outer);
+                if (!inner) {
+                    diagnostics_.entity_result("capacity");
+                    std::string frame = "MLE1";
+                    envelope_push_be(frame, outer, 8);
+                    frame += '\x01';
+                    frame += static_cast<char>(EntityError::CAPACITY);
+                    return reply(std::move(frame));
+                }
+                set_entity_correlation(payload, kEntityRequestCorrelationAt, inner);
+            }
+        }
         upstream_->write(std::move(payload), [self=shared_from_this()](Error ec) {
             if (self->closed_) return;
             if (ec) { self->diagnostics_.upstream_error(); return self->stop(); }
@@ -1125,6 +1183,12 @@ private:
     // the endpoint instead of the script, and non-entity frames pass through.
     // Non-const: handle() dispatches into the Lua state, which mutates it.
     EntityEndpoint* entities_ = nullptr;
+    // Non-null only on a plain gateway session that owns a dedicated upstream
+    // socket: the outer-to-inner correlation table. Sessions that ride a shared
+    // link (upstream_multiplex) keep entity ids untouched and pass null here,
+    // since a link reply is keyed by the logical session, not the table.
+    GatewayEntityCorrelation* gateway_ = nullptr;
+    std::uint64_t connection_ = 0;
     CrossContext context_;
     std::chrono::steady_clock::time_point request_started_{};
     std::uint16_t probe_port_ = 0;
@@ -2569,6 +2633,11 @@ public:
             entity_endpoint_ = std::make_unique<EntityEndpoint>(*entity_contract_, entity_codec_.get());
             std::cout << "contract " << path.string() << " loaded" << std::endl;
         }
+        // The plain gateway is the entity relay: it maps outer transport
+        // correlations onto the inner entity ids for every session it fronts.
+        // The cross gateway speaks its own join protocol and is out of scope.
+        if (config_.role == "gateway" && !config_.is_cross_gateway())
+            gateway_correlation_ = std::make_unique<GatewayEntityCorrelation>();
         if (script_role)
             service_ = std::make_shared<LuaService>(config_.script, service_context_, redis_,
                 websockets_.get(), game_sessions_.get(), this,
@@ -2721,7 +2790,10 @@ private:
             },
             config_.upstream_multiplex ? &mux_links_ : nullptr, std::move(mux_upgrade),
             false, config_.role == "data" ? &records_ : nullptr, ticket_verifier_.get(),
-            entity_endpoint_.get());
+            entity_endpoint_.get(),
+            // The correlation table belongs to the dedicated-socket upstream
+            // path only; link sessions are keyed by their logical id instead.
+            config_.upstream_multiplex ? nullptr : gateway_correlation_.get(), next_connection_++);
         sessions_.insert(session);
         publish_active();
         session->start();
@@ -2767,7 +2839,7 @@ private:
                         if (i->get() == ptr) { sessions_.erase(i); break; }
                     publish_active();
                 }, nullptr, nullptr, true, config_.role == "data" ? &records_ : nullptr,
-                ticket_verifier_.get(), entity_endpoint_.get());
+                ticket_verifier_.get(), entity_endpoint_.get(), nullptr, 0);
             sessions_.insert(session);
             publish_active();
             session->start();
@@ -2935,6 +3007,10 @@ private:
     std::unique_ptr<EntityContract> entity_contract_;
     std::unique_ptr<SprotoCodec> entity_codec_;
     std::unique_ptr<EntityEndpoint> entity_endpoint_;
+    // Outer-to-inner entity correlation table, present only on a plain gateway.
+    // Sessions borrow it; the node hands out per-session connection ids.
+    std::unique_ptr<GatewayEntityCorrelation> gateway_correlation_;
+    std::uint64_t next_connection_ = 1;
     // MLT1 host verification on the crossServer join path. The claims are
     // volatile and per process, like the rest of the verifier's state.
     TicketClaims ticket_claims_;

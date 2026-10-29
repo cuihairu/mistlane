@@ -73,6 +73,7 @@ if(BUILD_TESTING)
       entity.rpc
       entity.endpoint
       entity.transport
+      entity.transport.gateway
       entity.codec
       entity.snapshot
       entity.gateway
