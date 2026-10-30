@@ -48,19 +48,22 @@ sequenceDiagram
 ```text
 MLD1 LOAD <realm> <character>
 MLD1 SUBMIT <realm> <character> gen <n> seq <m> [<payload>]
+MLD1 FENCE <realm> <character> gen <n>
 
 MLD1 EMPTY
 MLD1 STATE gen <n> seq <m> [<payload>]
 MLD1 RECEIVED gen <n> seq <m>
+MLD1 FENCED gen <n> seq <m>
 MLD1 ACK durable <realm> <character> gen <n> seq <m>
 MLD1 ERR INVALID | MLD1 ERR STALE gen <n> | MLD1 ERR SEQ seq <n> | MLD1 ERR FULL
+  | MLD1 ERR NOFENCE | MLD1 ERR STORAGE
 ```
 
 `ACK durable` 回显精确 `(realm, character)`、generation 与已接受序号。归属 data 仅在同一事务持久提交 payload 和序号后才能发送。发送端匹配当前租约 generation 与下一个持久游标后才删除队列项；`RECEIVED` 只释放传输槽，不清重试队列。畸形字段为 `ERR INVALID`；旧 generation、序号缺口、容量耗尽分别为 `ERR STALE`、`ERR SEQ`、`ERR FULL`。编解码已实现，但持久存储落地前端点不会虚报持久确认。
 
 **键迁移与兼容：**MLD1 已携带 `realm`，当前端点记录只在内存中、重启即清空，因此将内存查找键改为 `(realm, character)` 不需要在线数据迁移。未来若持久表仍只按 `character` 建键，恢复写入前必须回填 realm，并拒绝或显式处理冲突。现有帧语法不变。
 
-端点以 `(realm, character)` 为栅栏和序号键，执行 generation 栅栏和严格连续序号。发送队列每键最多一个在途提交；`RECEIVED` 释放传输槽，但条目保留到 generation 匹配的 durable ACK。当前记录只在 data 进程内，重启后答 `EMPTY`；队列尚未接入 crossServer，持久化、队列满转只读和回服完成仍未实现。
+端点以 `(realm, character)` 为栅栏和序号键，执行 generation 栅栏和严格连续序号。`MLD1 FENCE` 冻结该键的最终有序游标并把旧 generation 墓碑化——同一 generation 幂等、不同 generation 已栅栏为 `ERR STALE`、无已提交游标为 `ERR NOFENCE`、存储失败回 `ERR STORAGE`；栅栏后旧 generation 只能重发冻结游标绝不推进，仅严格更新 generation 从冻结游标续写。发送队列每键最多一个在途提交；`RECEIVED` 释放传输槽，但条目保留到 generation 匹配的 durable ACK。带 `--journal` 时栅栏 pin 持久化且跨重启保留；无 journal 的记录进程内、重启后答 `EMPTY`；队列尚未接入 crossServer，队列满转只读和回服完成仍未实现。
 
 ## 写入租约交接
 

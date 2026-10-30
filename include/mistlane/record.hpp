@@ -15,17 +15,19 @@ namespace mistlane {
 // loads and submits character records many times over:
 //   MLD1 LOAD <realm> <character>
 //   MLD1 SUBMIT <realm> <character> gen <n> seq <m> [<payload>]
+//   MLD1 FENCE <realm> <character> gen <n>
 // Replies:
 //   MLD1 EMPTY
 //   MLD1 STATE gen <n> seq <m> [<payload>]
 //   MLD1 RECEIVED gen <n> seq <m>
+//   MLD1 FENCED gen <n> seq <m>
 //   MLD1 ACK durable <realm> <character> gen <n> seq <m>
-//   MLD1 ERR INVALID | STALE gen <n> | SEQ seq <n> | FULL | STORAGE
+//   MLD1 ERR INVALID | STALE gen <n> | SEQ seq <n> | FULL | NOFENCE | STORAGE
 // Without a durable backend RECEIVED is a receipt, never a durability claim.
 // With one, acceptance is acknowledged with ACK durable only after the home
 // write is durable, so a restart never loses an acknowledged change-set.
 struct RecordRequest {
-    enum class Type { Load, Submit };
+    enum class Type { Load, Submit, Fence };
     Type type = Type::Load;
     std::string realm, character;
     std::uint64_t generation = 0, sequence = 0;
@@ -94,6 +96,12 @@ inline RecordRequest parse_record(std::string_view payload) {
             if (offset < payload.size() && payload[offset] == ' ') ++offset;
             r.payload.assign(payload.data()+offset, payload.size()-offset);
         }
+    } else if (command == "FENCE") {
+        std::string gen_tag, gen;
+        if (!(in >> r.realm >> r.character >> gen_tag >> gen) || gen_tag != "gen"
+                || !record_decimal(gen, r.generation))
+            throw std::invalid_argument("INVALID");
+        r.type = RecordRequest::Type::Fence;
     } else throw std::invalid_argument("INVALID");
     if (!record_identifier(r.realm) || !record_identifier(r.character))
         throw std::invalid_argument("INVALID");
@@ -228,6 +236,27 @@ public:
             return "MLD1 STATE gen " + std::to_string(it->second.generation)
                  + " seq " + std::to_string(it->second.sequence)
                  + (it->second.payload.empty() ? "" : " " + it->second.payload);
+        }
+        // A migration fence freezes the final cursor for the requested
+        // generation. It is idempotent for the same pin; a different
+        // generation already fenced is stale, a key with no committed cursor
+        // cannot be fenced, and a store failure changes nothing.
+        if (request.type == RecordRequest::Type::Fence) {
+            if (const auto existing = sequence_authority_.pin(key)) {
+                if (existing->generation == request.generation) {
+                    result = "fenced";
+                    return "MLD1 FENCED gen " + std::to_string(existing->generation)
+                         + " seq " + std::to_string(existing->sequence);
+                }
+                result = "stale";
+                return "MLD1 ERR STALE gen " + std::to_string(existing->generation);
+            }
+            if (it == records_.end()) { result = "nofence"; return "MLD1 ERR NOFENCE"; }
+            const auto pin = fence(key, request.generation);
+            if (!pin) { result = "storage"; return "MLD1 ERR STORAGE"; }
+            result = "fenced";
+            return "MLD1 FENCED gen " + std::to_string(pin->generation)
+                 + " seq " + std::to_string(pin->sequence);
         }
         if (it != records_.end() && request.generation < it->second.generation) {
             // The generation fence: a late writer cannot overwrite a newer

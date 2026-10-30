@@ -4177,6 +4177,76 @@ void cross_home_sequence_journal() {
     std::cout << "record.home.sequence.journal: the durable pin fences the old "
         "generation after restart and the newer generation resumes [PASS]\n";
 }
+void cross_home_fence() {
+    // MLD1 FENCE is the data endpoint's explicit migration fence: it pins the
+    // final cursor for a generation and, once pinned, makes that generation a
+    // tombstone (old-generation advances are stale, newer ones resume).
+    RecordStore store;
+    std::string_view result;
+    equal(store.handle("MLD1 SUBMIT home hero gen 1 seq 1 v=1", result), "MLD1 RECEIVED gen 1 seq 1");
+    equal(store.handle("MLD1 SUBMIT home hero gen 1 seq 2 v=2", result), "MLD1 RECEIVED gen 1 seq 2");
+    // The wire verb pins the final cursor at the committed sequence.
+    equal(store.handle("MLD1 FENCE home hero gen 1", result), "MLD1 FENCED gen 1 seq 2");
+    require(result == "fenced", "MLD1 FENCE result label was not fenced");
+    // Re-fencing the same generation is idempotent; a different one is stale.
+    equal(store.handle("MLD1 FENCE home hero gen 1", result), "MLD1 FENCED gen 1 seq 2");
+    equal(store.handle("MLD1 FENCE home hero gen 2", result), "MLD1 ERR STALE gen 1");
+    // The old generation is a tombstone: only the frozen cursor resends.
+    equal(store.handle("MLD1 SUBMIT home hero gen 1 seq 2 v=2", result), "MLD1 RECEIVED gen 1 seq 2");
+    equal(store.handle("MLD1 SUBMIT home hero gen 1 seq 3 late", result), "MLD1 ERR STALE gen 1");
+    // A strictly newer generation resumes from the frozen cursor.
+    equal(store.handle("MLD1 SUBMIT home hero gen 2 seq 3 v=3", result), "MLD1 RECEIVED gen 2 seq 3");
+    // A key with no committed cursor cannot be fenced.
+    equal(store.handle("MLD1 FENCE away hero gen 1", result), "MLD1 ERR NOFENCE");
+    require(result == "nofence", "MLD1 FENCE without a record was not NOFENCE");
+    // Malformed fence frames are invalid.
+    equal(store.handle("MLD1 FENCE home hero", result), "MLD1 ERR INVALID");
+    equal(store.handle("MLD1 FENCE home hero gen", result), "MLD1 ERR INVALID");
+    std::cout << "record.home.fence: MLD1 FENCE pins the final cursor, is idempotent, "
+        "tombstones the old generation and refuses keys without a cursor [PASS]\n";
+}
+void cross_home_fence_journal() {
+    // A fence issued through the MLD1 wire on a store-backed data node is
+    // durable: it survives a restart and keeps the old generation tombstoned.
+    Context c;
+    write(c.path("echo.lua"), echo);
+    const auto first = port(), second = port();
+    const auto journal = c.path("home-fence.sqlite");
+    auto& initial = c.node("data", first, {"--script", c.path("echo.lua").string(),
+        "--journal", journal.string()});
+    const auto send_frame = [](RawSocket& raw, std::string_view payload) {
+        std::string frame(4, '\0');
+        auto length = static_cast<std::uint32_t>(payload.size());
+        for (int i = 3; i >= 0; --i) { frame[i] = static_cast<char>(length & 255); length >>= 8; }
+        raw.send(frame + std::string(payload));
+    };
+    const auto read_frame = [](RawSocket& raw) {
+        std::size_t length = 0;
+        for (unsigned char ch : raw.receive(4)) length = (length << 8) | ch;
+        return raw.receive(length);
+    };
+    const auto ask = [&](unsigned listen, const std::string& line) {
+        RawSocket raw(listen);
+        send_frame(raw, line);
+        return read_frame(raw);
+    };
+    equal(ask(first, "MLD1 SUBMIT home hero gen 1 seq 1 v=1"),
+        "MLD1 ACK durable home hero gen 1 seq 1");
+    equal(ask(first, "MLD1 FENCE home hero gen 1"), "MLD1 FENCED gen 1 seq 1");
+    initial.signal(SIGTERM);
+    require(initial.wait() == 0, "home fence node did not stop cleanly");
+    // A restart restores the durable pin; the old generation stays tombstoned
+    // and the newer generation resumes from the frozen cursor.
+    c.node("data", second, {"--script", c.path("echo.lua").string(),
+        "--journal", journal.string()});
+    equal(ask(second, "MLD1 LOAD home hero"), "MLD1 STATE gen 1 seq 1 v=1");
+    equal(ask(second, "MLD1 FENCE home hero gen 1"), "MLD1 FENCED gen 1 seq 1");
+    equal(ask(second, "MLD1 SUBMIT home hero gen 1 seq 2 late"), "MLD1 ERR STALE gen 1");
+    equal(ask(second, "MLD1 SUBMIT home hero gen 2 seq 2 v=2"),
+        "MLD1 ACK durable home hero gen 2 seq 2");
+    std::cout << "record.home.fence.journal: a wire fence is durable, survives restart "
+        "and tombstones the old generation [PASS]\n";
+}
 namespace {
 struct MigrationFixture {
     MigrationKey key{"home", "hero"};

@@ -48,19 +48,24 @@ The wire format uses the shared u32 BE length frame with no per-message prefix. 
 ```text
 MLD1 LOAD <realm> <character>
 MLD1 SUBMIT <realm> <character> gen <n> seq <m> [<payload>]
+MLD1 FENCE <realm> <character> gen <n>
 
 MLD1 EMPTY
 MLD1 STATE gen <n> seq <m> [<payload>]
 MLD1 RECEIVED gen <n> seq <m>
+MLD1 FENCED gen <n> seq <m>
 MLD1 ACK durable <realm> <character> gen <n> seq <m>
 MLD1 ERR INVALID | MLD1 ERR STALE gen <n> | MLD1 ERR SEQ seq <n> | MLD1 ERR FULL
+  | MLD1 ERR NOFENCE | MLD1 ERR STORAGE
 ```
 
 `ACK durable` echoes the exact `(realm, character)` key, hosting generation and accepted sequence. It is emitted only after home data atomically commits both payload and sequence durably. The sender validates the key, generation and next durable cursor before deleting a queued change; a mismatched generation is rejected. `RECEIVED` remains a volatile process-memory receipt that only frees the per-key transport slot; it never drains the retry queue. Malformed ACK fields use `MLD1 ERR INVALID`; stale submissions retain `ERR STALE`, sequence gaps `ERR SEQ`, capacity exhaustion `ERR FULL`, and a failed store commit answers `ERR STORAGE` without changing the in-memory view.
 
+`MLD1 FENCE` is the home-side migration fence on the wire: it freezes the final ordered cursor for a `(realm, character)` at the requested generation and answers `MLD1 FENCED gen <n> seq <m>` with the pinned cursor. Re-fencing the same generation is idempotent; a different generation already fenced is `ERR STALE`; a key with no committed cursor (no accepted submission) answers `ERR NOFENCE`; a failed store write answers `ERR STORAGE` without mutating the in-memory pin. Once fenced the old generation is a tombstone: a later source submission can only resend the frozen cursor (dedup to a receipt or committed ACK) and never advances it, while only a strictly newer generation may resume from the frozen cursor.
+
 **Key migration and compatibility:** MLD1 already carries `realm`; switching the persistent key from a process-local map to `(realm, character)` needs no live data migration. Any future persisted table using only `character` must backfill realm before writes resume and reject or explicitly resolve ambiguous collisions. Existing frame syntax remains unchanged.
 
-The endpoint keys both fence and sequence state by `(realm, character)`. It enforces the fence (`STALE` when the submitted generation is lower than the stored one) and strict sequence discipline (the next sequence must be exactly one past the stored one; resends of the stored sequence dedup to a second `RECEIVED` without changing the stored change-set; a fresh key starts at one). With `--journal FILE` the same store backs every accepted row, a restart restores the fence, sequence and payload, and a lost-ACK replay returns the committed `ACK durable`; without it records stay process-local and a restart answers `EMPTY` again. Merging change-sets into entity state stays deferred entity-contract work, and the queue is not wired into a crossServer runtime, so queue-full read-only transition and return completion remain unimplemented.
+The endpoint keys both fence and sequence state by `(realm, character)`. It enforces the fence (`STALE` when the submitted generation is lower than the stored one) and strict sequence discipline (the next sequence must be exactly one past the stored one; resends of the stored sequence dedup to a second `RECEIVED` without changing the stored change-set; a fresh key starts at one). A migration fence (`MLD1 FENCE`) freezes the final cursor and tombstones the old generation; only a strictly newer generation may resume from it. With `--journal FILE` the same store backs every accepted row, a restart restores the fence, sequence, payload and final-cursor pin, and a lost-ACK replay returns the committed `ACK durable`; without it records stay process-local and a restart answers `EMPTY` again. Merging change-sets into entity state stays deferred entity-contract work, and the queue is not wired into a crossServer runtime, so queue-full read-only transition and return completion remain unimplemented.
 
 ## Writer lease handoff
 

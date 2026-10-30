@@ -63,6 +63,8 @@ void cross_record();
 void cross_record_journal();
 void cross_home_sequence();
 void cross_home_sequence_journal();
+void cross_home_fence();
+void cross_home_fence_journal();
 void cross_return_queue();
 void probe_control();
 void scaffold_init();
@@ -175,6 +177,8 @@ int run_tests(int argc, char** argv) {
         {"cross.record.journal","cross",test::cross_record_journal},
         {"record.home.sequence","cross",test::cross_home_sequence},
         {"record.home.sequence.journal","cross",test::cross_home_sequence_journal},
+        {"record.home.fence","cross",test::cross_home_fence},
+        {"record.home.fence.journal","cross",test::cross_home_fence_journal},
         {"cross.return.queue","cross",test::cross_return_queue},
         {"probe.control","probe",test::probe_control},
         {"scaffold.init","scaffold",test::scaffold_init},
