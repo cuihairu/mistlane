@@ -200,9 +200,16 @@ constexpr std::size_t kEntityRequestCorrelationAt = 4 + 23;
 constexpr std::size_t kEntityReplyCorrelationAt = 4;
 // The marker plus the correlation slice being rewritten is all a frame needs;
 // a malformed request (too short to be a valid envelope) still carries its
-// correlation bytes and passes through like any other frame.
-bool is_entity_frame(std::string_view frame, std::size_t correlation_at) {
-    return frame.size() >= correlation_at + 8 && frame.starts_with("MLE1");
+// correlation bytes and passes through like any other frame. A correlated
+// (MLC2) frame carries a 4-byte transport id before the payload, so entity
+// traffic through such a session has its MLE1 marker at offset 4. Return the
+// marker offset (0 or 4) for entity traffic, else npos.
+constexpr std::size_t kEntityMlc2Prefix = 4;
+std::size_t entity_frame_offset(std::string_view frame) {
+    if (frame.starts_with("MLE1")) return 0;
+    if (frame.size() >= kEntityMlc2Prefix
+            && frame.substr(kEntityMlc2Prefix).starts_with("MLE1")) return kEntityMlc2Prefix;
+    return std::string_view::npos;
 }
 std::uint64_t entity_correlation(std::string_view frame, std::size_t at) {
     std::uint64_t value = 0;
@@ -1097,11 +1104,14 @@ private:
         // A reply carries the inner entity correlation the upstream saw; map it
         // back to the outer id this client used, or drop it when nobody is
         // waiting (stray, duplicate or a client that went away mid-flight).
-        if (gateway_ && is_entity_frame(frame, kEntityReplyCorrelationAt)) {
-            if (const auto inner = entity_correlation(frame, kEntityReplyCorrelationAt)) {
+        if (gateway_) {
+            const auto offset = entity_frame_offset(frame);
+            const auto at = offset == std::string_view::npos ? 0 : offset + kEntityReplyCorrelationAt;
+            const auto inner = offset == std::string_view::npos ? 0 : entity_correlation(frame, at);
+            if (offset != std::string_view::npos && frame.size() >= at + 8 && inner) {
                 const auto mapped = gateway_->resolve(inner);
                 if (!mapped || mapped->first != connection_) return;
-                set_entity_correlation(frame, kEntityReplyCorrelationAt, mapped->second);
+                set_entity_correlation(frame, at, mapped->second);
             }
         }
         diagnostics_.add_message("tx");
@@ -1132,8 +1142,11 @@ private:
         // leak one client's correlation to another. A notify (correlation 0)
         // has no reply and forwards unchanged. Refusal answers CAPACITY to the
         // client without forwarding — the table never evicts a live request.
-        if (gateway_ && is_entity_frame(payload, kEntityRequestCorrelationAt)) {
-            if (const auto outer = entity_correlation(payload, kEntityRequestCorrelationAt)) {
+        if (gateway_) {
+            const auto offset = entity_frame_offset(payload);
+            const auto at = offset == std::string_view::npos ? 0 : offset + kEntityRequestCorrelationAt;
+            const auto outer = offset == std::string_view::npos ? 0 : entity_correlation(payload, at);
+            if (offset != std::string_view::npos && payload.size() >= at + 8 && outer) {
                 const auto inner = gateway_->allocate(connection_, outer);
                 if (!inner) {
                     diagnostics_.entity_result("capacity");
@@ -1143,7 +1156,7 @@ private:
                     frame += static_cast<char>(EntityError::CAPACITY);
                     return reply(std::move(frame));
                 }
-                set_entity_correlation(payload, kEntityRequestCorrelationAt, inner);
+                set_entity_correlation(payload, at, inner);
             }
         }
         upstream_->write(std::move(payload), [self=shared_from_this()](Error ec) {
@@ -1519,6 +1532,11 @@ public:
     struct Route {
         std::string scope, role, instance;
     };
+    struct RouteAnswer {
+        const Member* member = nullptr;
+        std::string scene = "-";
+        std::uint64_t generation = 0;
+    };
     bool set_route(const std::string& scope, const std::string& realm,
                    const std::string& character, const std::string& role,
                    const std::string& instance, const std::string& namespace_) {
@@ -1526,14 +1544,33 @@ public:
         routes_[route_key(namespace_, realm, character)] = Route{scope, role, instance};
         return true;
     }
-    const Member* route(const std::string& namespace_, const std::string& realm,
-                        const std::string& character) const {
+    // A committed migration moves the character route to the new owner; the
+    // route keeps pointing at the live member so readiness stays authoritative.
+    bool set_route(const MigrationOwner& owner, const std::string& realm,
+                   const std::string& character, const std::string& namespace_) {
+        const bool realm_scope = owner.scope.kind == MigrationScope::Kind::Realm;
+        return set_route(realm_scope ? owner.scope.realm : owner.scope.cross_group,
+            realm, character, owner.role, owner.instance, namespace_);
+    }
+    std::optional<RouteAnswer> route(const std::string& namespace_, const std::string& realm,
+                                     const std::string& character) const {
+        const MigrationKey key{realm, character};
         const auto found = routes_.find(route_key(namespace_, realm, character));
-        if (found == routes_.end()) return nullptr;
+        if (found == routes_.end()) return std::nullopt;
         const auto& hosted = found->second;
         const auto member =
             members_.find(member_key(namespace_, hosted.scope, hosted.role, hosted.instance));
-        return member == members_.end() ? nullptr : &member->second.first;
+        if (member == members_.end()) return std::nullopt;
+        // The committed route names the live member; scene/generation come
+        // from the transaction the commit published, if one is still open.
+        std::string scene = "-";
+        std::uint64_t generation = 0;
+        if (const auto transaction = this->transaction(namespace_, key)) {
+            const auto route = transaction->route();
+            scene = route.owner.scene;
+            generation = route.generation;
+        }
+        return RouteAnswer{&member->second.first, scene, generation};
     }
     static std::string member_key(const std::string& namespace_, const std::string& scope,
                                   const std::string& role, const std::string& instance) {
@@ -1590,7 +1627,7 @@ public:
         return true;
     }
     std::shared_ptr<MigrationTransaction> transaction(const std::string& namespace_,
-                                                      const MigrationKey& key) {
+                                                      const MigrationKey& key) const {
         const auto found = migrations_.find(migration_key(namespace_, key));
         return found == migrations_.end() ? nullptr : found->second.transaction;
     }
@@ -1950,13 +1987,15 @@ private:
             std::string realm, character;
             if (!(in >> realm >> character) || (in >> spare)) return refuse("INVALID");
             if (!record_identifier(realm) || !record_identifier(character)) return refuse("INVALID");
-            const auto* member = registry_.route(namespace_, realm, character);
-            if (!member) return answer("MLR1 ROUTE EMPTY");
+            const auto route = registry_.route(namespace_, realm, character);
+            if (!route || !route->member) return answer("MLR1 ROUTE EMPTY");
+            const auto* member = route->member;
             std::ostringstream out;
             out << "MLR1 ROUTE AT " << member->scope << ' ' << member->role << ' '
                 << member->instance << ' ' << member->listen << ' ' << member->probe
                 << ' ' << (member->ready ? "ready" : "notready") << ' '
-                << member->active << '/' << member->capacity;
+                << member->active << '/' << member->capacity
+                << ' ' << route->scene << ' ' << route->generation;
             return answer(out.str());
         }
         return refuse("UNEXPECTED");
@@ -2155,7 +2194,11 @@ private:
             const auto tx = registry_.transaction(namespace_, key);
             if (!tx) return "MLR1 ERR EMPTY";
             const auto result = tx->apply(token, MigrationEvent::Commit);
-            if (result == MigrationResult::Applied) registry_.persist_transaction(namespace_, key, *tx);
+            if (result == MigrationResult::Applied) {
+                const auto route = tx->route();
+                registry_.persist_transaction(namespace_, key, *tx);
+                registry_.set_route(route.owner, key.first, key.second, namespace_);
+            }
             const auto* row = tx->entry(token.id);
             // The route publishes only on commit, so the answer names the route
             // this request committed, not the transaction's live route.

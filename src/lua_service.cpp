@@ -337,28 +337,37 @@ void LuaService::push_entity_api(lua_State* l, EntityRuntime* runtime) {
 // The fixture runtime addresses by explicit ids; the script supplies them
 // (scenario/tests or a login flow that assigns ids). An entity that already
 // exists at the address refuses, so a repeated spawn is never silent.
+// The id fields are unsigned on the wire; a negative or overflowing Lua
+// integer would silently wrap to an address the script never meant.
+bool lua_u32(lua_State* l, int index, std::uint32_t& out) {
+    if (!lua_isinteger(l, index)) return false;
+    const auto value = lua_tointeger(l, index);
+    if (value < 0 || static_cast<std::uint64_t>(value) > std::numeric_limits<std::uint32_t>::max())
+        return false;
+    out = static_cast<std::uint32_t>(value);
+    return true;
+}
 int LuaService::entity_spawn(lua_State* l) {
     auto* runtime = static_cast<EntityRuntime*>(lua_touserdata(l, lua_upvalueindex(1)));
-    if (!lua_isinteger(l, 1) || !lua_isinteger(l, 2) || !lua_isinteger(l, 3) || !lua_isinteger(l, 4))
+    std::uint32_t scope, type, incarnation;
+    if (!lua_u32(l, 1, scope) || !lua_u32(l, 2, type) || !lua_u32(l, 3, incarnation)
+            || !lua_isinteger(l, 4))
         return luaL_error(l, "entity.spawn expects scope, type, incarnation, entity_id integers");
-    const auto scope = static_cast<std::uint32_t>(lua_tointeger(l, 1));
-    const auto type = static_cast<std::uint32_t>(lua_tointeger(l, 2));
-    const auto incarnation = static_cast<std::uint32_t>(lua_tointeger(l, 3));
     const auto entity_id = static_cast<std::int64_t>(lua_tointeger(l, 4));
     std::uint32_t generation = 1;
     if (!lua_isnoneornil(l, 5)) {
-        if (!lua_isinteger(l, 5)) return luaL_error(l, "entity.spawn generation must be an integer");
-        generation = static_cast<std::uint32_t>(lua_tointeger(l, 5));
+        if (!lua_u32(l, 5, generation)) return luaL_error(l, "entity.spawn generation must be a non-negative 32-bit integer");
     }
     lua_pushboolean(l, runtime->spawn({scope, type, incarnation, entity_id}, generation) ? 1 : 0);
     return 1;
 }
 int LuaService::entity_destroy(lua_State* l) {
     auto* runtime = static_cast<EntityRuntime*>(lua_touserdata(l, lua_upvalueindex(1)));
-    if (!lua_isinteger(l, 1) || !lua_isinteger(l, 2) || !lua_isinteger(l, 3) || !lua_isinteger(l, 4))
+    std::uint32_t scope, type, incarnation;
+    if (!lua_u32(l, 1, scope) || !lua_u32(l, 2, type) || !lua_u32(l, 3, incarnation)
+            || !lua_isinteger(l, 4))
         return luaL_error(l, "entity.destroy expects scope, type, incarnation, entity_id integers");
-    lua_pushboolean(l, runtime->destroy({static_cast<std::uint32_t>(lua_tointeger(l, 1)),
-        static_cast<std::uint32_t>(lua_tointeger(l, 2)), static_cast<std::uint32_t>(lua_tointeger(l, 3)),
+    lua_pushboolean(l, runtime->destroy({scope, type, incarnation,
         static_cast<std::int64_t>(lua_tointeger(l, 4))}) ? 1 : 0);
     return 1;
 }

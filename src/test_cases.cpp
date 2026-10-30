@@ -2174,6 +2174,14 @@ function service.message(payload)
     if payload == "spawn" then
         return mistlane.entity.spawn(1, 1, 3, 42) and "spawned" or "duplicate"
     end
+    if payload == "badspawn" then
+        -- Negative and overflowing ids must be refused, not wrapped to a
+        -- different address; the runtime then reports a duplicate spawn.
+        local ok = pcall(function() return mistlane.entity.spawn(-1, 1, 3, 42) end)
+        local over = pcall(function() return mistlane.entity.spawn(1, 1, 3, 42, 4294967296) end)
+        if ok or over then return "accepted" end
+        return "refused"
+    end
     return "echo:"..payload
 end
 service.entities = {
@@ -2233,6 +2241,13 @@ return service)");
     auto peer = tcp(internal);
     equal(peer->request("MLS1 gameServer inst-1 s3cret"), "MLS1 OK");
     equal(peer->request("spawn"), "spawned");
+    equal(peer->request("badspawn"), "refused");
+    // The refused spawn did not wrap to a valid address: the seeded entity
+    // still answers a request at its real address, not the wrapped one.
+    auto wrapped = peer->request(frame(80, 2, 1, 3, 1, payload(4)));
+    require(correlation_of(wrapped) == 80 && !reply_of(wrapped).is_error,
+        "a refused negative spawn leaked a wrapped address");
+    std::cout << "entity.transport spawn range: negative/overflow ids refused, no wrap [PASS]\n";
 
     auto ok = peer->request(frame(77, 2, 1, 3, 1, payload(4)));
     require(correlation_of(ok) == 77 && !reply_of(ok).is_error, "happy request was not answered OK");
@@ -2407,6 +2422,69 @@ return service)");
     require(correlation_of(same) == 42 && !reply_of(same).is_error,
         "a second channel reusing the outer correlation was not OK");
     std::cout << "entity.transport.gateway multiplex: same outer id on two channels, no host conflict [PASS]\n";
+
+    // Entity traffic on a correlated (MLC2) session carries a 4-byte transport
+    // id before the MLE1 frame. The gateway must still rewrite the entity
+    // correlation, so two MLC2 channels sharing one outer entity correlation
+    // do not collide on the host's duplicate fence.
+    const auto correlated = [&](const std::string& body) {
+        std::string out(4, '\0');
+        auto id = static_cast<std::uint32_t>(0x0A0B0C0D);
+        for (int i = 3; i >= 0; --i) { out[i] = static_cast<char>(id & 255); id >>= 8; }
+        return out + body;
+    };
+    const auto uncorrelate = [](const std::string& body) -> std::string {
+        require(body.size() >= 4, "correlated reply frame too short");
+        return body.substr(4);
+    };
+    {
+        RawSocket c1(relay);
+        const auto send_frame = [&](const std::string& body) {
+            std::string header(4, '\0');
+            const auto length = static_cast<std::uint32_t>(body.size());
+            for (unsigned i = 0; i < 4; ++i) header[i] = static_cast<char>(length >> (24 - i*8));
+            c1.send(header + body);
+        };
+        const auto read_frame = [&]() {
+            std::string header = c1.receive(4);
+            std::uint32_t length = 0;
+            for (unsigned i = 0; i < 4; ++i) length = length << 8 | static_cast<unsigned char>(header[i]);
+            return c1.receive(length);
+        };
+        send_frame("MLC2");
+        equal(read_frame(), "MLC2 OK");
+        send_frame(correlated(frame(42, 2, 1, 3, 1, payload(4))));
+        auto answer = read_frame();
+        require(answer.size() >= 4, "MLC2 entity reply too short");
+        std::uint32_t tid = 0;
+        for (unsigned i = 0; i < 4; ++i) tid = tid << 8 | static_cast<unsigned char>(answer[i]);
+        require(tid == 0x0A0B0C0D, "MLC2 entity reply lost the transport id");
+        require(correlation_of(uncorrelate(answer)) == 42 && !reply_of(uncorrelate(answer)).is_error,
+            "MLC2 entity reply lost the outer correlation");
+    }
+    {
+        RawSocket c2(relay);
+        const auto send_frame = [&](const std::string& body) {
+            std::string header(4, '\0');
+            const auto length = static_cast<std::uint32_t>(body.size());
+            for (unsigned i = 0; i < 4; ++i) header[i] = static_cast<char>(length >> (24 - i*8));
+            c2.send(header + body);
+        };
+        const auto read_frame = [&]() {
+            std::string header = c2.receive(4);
+            std::uint32_t length = 0;
+            for (unsigned i = 0; i < 4; ++i) length = length << 8 | static_cast<unsigned char>(header[i]);
+            return c2.receive(length);
+        };
+        send_frame("MLC2");
+        equal(read_frame(), "MLC2 OK");
+        send_frame(correlated(frame(42, 2, 1, 3, 1, payload(4))));
+        auto answer = read_frame();
+        require(answer.size() >= 4, "MLC2 second entity reply too short");
+        require(correlation_of(uncorrelate(answer)) == 42 && !reply_of(uncorrelate(answer)).is_error,
+            "a second MLC2 channel reusing the outer correlation was not OK");
+    }
+    std::cout << "entity.transport.gateway correlated: MLC2 prefix survives, rewrite still applies [PASS]\n";
 
     // A notify forwards unchanged (zero correlation has no reply) and the
     // follow-up frame is the only bytes the reader sees.
@@ -3855,13 +3933,13 @@ void coordinator_routes() {
     require(live.find("mistlane_registry_routes{role=\"coordinator\"} 1") != std::string::npos,
             "route gauge did not follow the record count");
     const auto eve_at = "MLR1 ROUTE AT alpha gameServer gs-a 127.0.0.1:"+
-        std::to_string(first)+" 0 ready 0/42";
+        std::to_string(first)+" 0 ready 0/42 - 0";
     eventually([&] { return ask("MLR1 ROUTE GET NS - mist eve") == eve_at; },
         5s, "route did not follow the live member state");
     // A second SET for the same character overwrites; the count stays at one.
     equal(ask("MLR1 ROUTE SET NS - alpha mist eve gameServer gs-b"), "MLR1 ROUTE OK");
     const auto eve_moved = "MLR1 ROUTE AT alpha gameServer gs-b 127.0.0.1:"+
-        std::to_string(second)+" 0 ready 0/42";
+        std::to_string(second)+" 0 ready 0/42 - 0";
     eventually([&] { return ask("MLR1 ROUTE GET NS - mist eve") == eve_moved; },
         5s, "route overwrite did not stick");
     // Two namespaces may reuse one scope name: members and route records stay
@@ -3877,7 +3955,7 @@ void coordinator_routes() {
             "a same-scope member leaked across namespaces: "+default_listing);
     equal(ask("MLR1 ROUTE SET NS ns alpha mist eve gameServer gs-n"), "MLR1 ROUTE OK");
     eventually([&] { return ask("MLR1 ROUTE GET NS ns mist eve") ==
-        "MLR1 ROUTE AT alpha gameServer gs-n 127.0.0.1:"+std::to_string(third)+" 0 ready 0/42"; },
+        "MLR1 ROUTE AT alpha gameServer gs-n 127.0.0.1:"+std::to_string(third)+" 0 ready 0/42 - 0"; },
         5s, "a namespaced route did not answer its own host");
     equal(ask("MLR1 ROUTE GET NS - mist eve"), eve_moved);
     equal(ask("MLR1 PLACE gameServer NS ns alpha"),
@@ -3893,11 +3971,11 @@ void coordinator_routes() {
         send_frame(host, "MLR1 notready 0 42");
         equal(read_frame(host), "MLR1 OK");
         equal(ask("MLR1 ROUTE GET NS - mist rogue"),
-              "MLR1 ROUTE AT alpha gameServer gs-r 127.0.0.1:1 0 notready 0/42");
+              "MLR1 ROUTE AT alpha gameServer gs-r 127.0.0.1:1 0 notready 0/42 - 0");
         send_frame(host, "MLR1 ready 1 42");
         equal(read_frame(host), "MLR1 OK");
         equal(ask("MLR1 ROUTE GET NS - mist rogue"),
-              "MLR1 ROUTE AT alpha gameServer gs-r 127.0.0.1:1 0 ready 1/42");
+              "MLR1 ROUTE AT alpha gameServer gs-r 127.0.0.1:1 0 ready 1/42 - 0");
         live = http("http://"+endpoint(metrics)+"/metrics").body;
         require(live.find("mistlane_registry_routes{role=\"coordinator\"} 3") != std::string::npos,
                 "route gauge missed the second record");
@@ -4191,6 +4269,15 @@ void cross_home_fence() {
     // Re-fencing the same generation is idempotent; a different one is stale.
     equal(store.handle("MLD1 FENCE home hero gen 1", result), "MLD1 FENCED gen 1 seq 2");
     equal(store.handle("MLD1 FENCE home hero gen 2", result), "MLD1 ERR STALE gen 1");
+    // Fencing a generation the store does not hold is refused before it can
+    // pin the wrong cursor; the current generation stays fencable.
+    RecordStore fresh;
+    equal(fresh.handle("MLD1 SUBMIT home hero gen 1 seq 1 v=1", result), "MLD1 RECEIVED gen 1 seq 1");
+    equal(fresh.handle("MLD1 SUBMIT home hero gen 1 seq 2 v=2", result), "MLD1 RECEIVED gen 1 seq 2");
+    equal(fresh.handle("MLD1 FENCE home hero gen 2", result), "MLD1 ERR STALE gen 1");
+    require(result == "stale", "fence on the wrong generation was not stale");
+    equal(fresh.handle("MLD1 FENCE home hero gen 1", result), "MLD1 FENCED gen 1 seq 2");
+    equal(fresh.handle("MLD1 SUBMIT home hero gen 2 seq 3 v=3", result), "MLD1 RECEIVED gen 2 seq 3");
     // The old generation is a tombstone: only the frozen cursor resends.
     equal(store.handle("MLD1 SUBMIT home hero gen 1 seq 2 v=2", result), "MLD1 RECEIVED gen 1 seq 2");
     equal(store.handle("MLD1 SUBMIT home hero gen 1 seq 3 late", result), "MLD1 ERR STALE gen 1");
@@ -4613,7 +4700,7 @@ void coordinator_migration_wire() {
     Context c;
     write(c.path("echo.lua"), echo);
     const auto registry = port(), metrics = port(), tokened = port(),
-              first = port(), second = port(), third = port();
+              first = port(), second = port(), third = port(), cross = port();
     c.node("coordinator", registry, {"--metrics-listen", endpoint(metrics)});
     c.node("coordinator", tokened, {"--service-token", "s3cret"});
     c.node("gameServer", first, {"--script", c.path("echo.lua").string(),
@@ -4622,6 +4709,8 @@ void coordinator_migration_wire() {
         "--coordinator", endpoint(registry), "--scope", "beta", "--service-name", "gs-b"});
     c.node("gameServer", third, {"--script", c.path("echo.lua").string(),
         "--coordinator", endpoint(registry), "--scope", "gamma", "--service-name", "gs-c"});
+    auto& cross_member = c.node("crossServer", cross, {"--script", c.path("echo.lua").string(),
+        "--coordinator", endpoint(registry), "--scope", "arena", "--service-name", "xs-a"});
     const auto send_frame = [](RawSocket& raw, std::string_view payload) {
         std::string frame(4, '\0');
         auto length = static_cast<std::uint32_t>(payload.size());
@@ -4658,7 +4747,7 @@ void coordinator_migration_wire() {
             throw std::runtime_error("L"+std::to_string(loc.line())+" "+line+": "+error.what());
         }
     };
-    eventually([&] { return ask("MLR1 QUERY -").find("MLR1 MEMBERS 3") != std::string::npos; },
+    eventually([&] { return ask("MLR1 QUERY -").find("MLR1 MEMBERS 4") != std::string::npos; },
         5s, "members never reached the registry");
     const std::string source = "realm NS - alpha gameServer gs-a town";
     const std::string target = "cross NS - arena crossServer xs-a room-1";
@@ -4696,6 +4785,11 @@ void coordinator_migration_wire() {
     equal(ask("MLR1 MIG COMMIT NS - home hero move-1 9"), "MLR1 MIG COMMITTED move-1 "+target+" 9");
     equal(ask("MLR1 MIG COMMIT NS - home hero move-1 9"), "MLR1 MIG COMMITTED move-1 "+target+" 9");
     equal(ask("MLR1 MIG STATUS NS - home hero"), "MLR1 MIG STATE move-1 COMMITTED drained fenced ready 9");
+    // The committed route points at the live member, whose ready state is
+    // reported by its own heartbeat; wait for it to settle before asserting.
+    eventually([&] { return ask("MLR1 ROUTE GET NS - home hero") ==
+        "MLR1 ROUTE AT arena crossServer xs-a 127.0.0.1:"+std::to_string(cross)
+        +" 0 ready 0/42 room-1 9"; }, 5s, "committed route never reached ready");
     // A terminal replay of the same request re-answers the recorded verdict
     // instead of reserving a newer generation.
     equal(ask("MLR1 MIG PREPARE NS - home hero move-1 8 "+source+" "+target), "MLR1 MIG PREPARED move-1 9");
@@ -4710,6 +4804,9 @@ void coordinator_migration_wire() {
     equal(ask("MLR1 MIG EVENT NS - home hero move-2 10 CLEANUP"), "MLR1 MIG STEP move-2 ABORTED");
     equal(ask("MLR1 MIG ABORT NS - home hero move-2 10"), "MLR1 MIG ABORTED move-2");
     equal(ask("MLR1 MIG STATUS NS - home hero"), "MLR1 MIG STATE move-2 ABORTED open unfenced notready 10");
+    eventually([&] { return ask("MLR1 ROUTE GET NS - home hero") ==
+        "MLR1 ROUTE AT arena crossServer xs-a 127.0.0.1:"+std::to_string(cross)
+        +" 0 ready 0/42 room-1 9"; }, 5s, "aborted route never settled ready");
     // Aborted generations are burned: the next PREPARE gets 11, not 10.
     equal(ask("MLR1 MIG PREPARE NS - home hero move-3 9 "+target+" realm NS - alpha gameServer gs-a hall"),
         "MLR1 MIG PREPARED move-3 11");
@@ -4829,7 +4926,8 @@ void coordinator_migration_wire() {
     equal(ask("MLR1 MIG STATUS NS - no.such.key hero"), "MLR1 ERR INVALID");
     std::cout << "migration.wire: OWNER/PREPARE/STEP/COMMIT/ABORT/RETIRE/TAKEOVER/STATUS "
         "over TCP, MLS1-gated, idempotent by request id, retirement observed from "
-        "the registry, post-fence takeover resumes a fenced gap [PASS]\n";
+        "the registry, committed ownership is answerable with scene/generation, "
+        "and a retired owner stops being routed [PASS]\n";
 }
 
 // The SQLite journal slice: every accepted migration mutation lands in one

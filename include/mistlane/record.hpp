@@ -252,6 +252,13 @@ public:
                 return "MLD1 ERR STALE gen " + std::to_string(existing->generation);
             }
             if (it == records_.end()) { result = "nofence"; return "MLD1 ERR NOFENCE"; }
+            // A fence may only freeze the generation the store currently
+            // holds. Fencing a different generation would pin the wrong
+            // cursor and strand both the current and requested generation.
+            if (request.generation != it->second.generation) {
+                result = "stale";
+                return "MLD1 ERR STALE gen " + std::to_string(it->second.generation);
+            }
             const auto pin = fence(key, request.generation);
             if (!pin) { result = "storage"; return "MLD1 ERR STORAGE"; }
             result = "fenced";
