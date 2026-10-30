@@ -365,6 +365,11 @@ struct MigrationJournal::Impl {
             "version INTEGER NOT NULL, namespace TEXT NOT NULL, realm TEXT NOT NULL,"
             "character TEXT NOT NULL, cursor INTEGER NOT NULL,"
             "PRIMARY KEY(namespace, realm, character))");
+        sqlite_record_exec(db,
+            "CREATE TABLE IF NOT EXISTS record_fence ("
+            "version INTEGER NOT NULL, realm TEXT NOT NULL, character TEXT NOT NULL,"
+            "generation INTEGER NOT NULL, sequence INTEGER NOT NULL,"
+            "PRIMARY KEY(realm, character))");
         // A WAL/schema setting is a process-level hint; this pins the row
         // format so a future incompatible writer refuses old files instead of
         // silently decoding garbage.
@@ -529,6 +534,50 @@ void MigrationJournal::save_record(const RecordSnapshot& snapshot) {
     upsert.bind_text(3, snapshot.character);
     upsert.bind_blob(4, bytes);
     upsert.step("record store save step failed");
+}
+
+void MigrationJournal::save_fence(const HomeSequenceAuthority::Pin& pin) {
+    if (impl_->db == nullptr) throw std::runtime_error("record store is closed");
+    if (!record_identifier(pin.key.first) || !record_identifier(pin.key.second)
+            || !pin.generation || !pin.sequence)
+        throw std::invalid_argument("invalid record fence key or pin");
+    RecordStatement upsert(impl_->db, "INSERT INTO record_fence(version, realm, character, generation, sequence) "
+        "VALUES(?, ?, ?, ?, ?) ON CONFLICT(realm, character) DO UPDATE SET "
+        "version=excluded.version, generation=excluded.generation, sequence=excluded.sequence");
+    upsert.bind_int(1, static_cast<int>(kVersion));
+    upsert.bind_text(2, pin.key.first);
+    upsert.bind_text(3, pin.key.second);
+    upsert.bind_u64(4, pin.generation);
+    upsert.bind_u64(5, pin.sequence);
+    upsert.step("record fence save step failed");
+}
+
+std::vector<HomeSequenceAuthority::Pin> MigrationJournal::restore_fences() const {
+    if (impl_->db == nullptr) throw std::runtime_error("record store is closed");
+    std::vector<HomeSequenceAuthority::Pin> pins;
+    RecordStatement query(impl_->db,
+        "SELECT version, realm, character, generation, sequence FROM record_fence "
+        "ORDER BY realm, character");
+    for (;;) {
+        const int code = sqlite3_step(query.get());
+        if (code == SQLITE_DONE) break;
+        if (code != SQLITE_ROW) sqlite_throw(impl_->db, "record fence restore step failed");
+        const int version = sqlite3_column_int(query.get(), 0);
+        const auto* realm = reinterpret_cast<const char*>(sqlite3_column_text(query.get(), 1));
+        const auto* character = reinterpret_cast<const char*>(sqlite3_column_text(query.get(), 2));
+        const int realm_size = sqlite3_column_bytes(query.get(), 1);
+        const int character_size = sqlite3_column_bytes(query.get(), 2);
+        const sqlite3_int64 generation = sqlite3_column_int64(query.get(), 3);
+        const sqlite3_int64 sequence = sqlite3_column_int64(query.get(), 4);
+        std::string key_realm(realm ? realm : "", static_cast<std::size_t>(realm_size));
+        std::string key_character(character ? character : "", static_cast<std::size_t>(character_size));
+        if (version != static_cast<int>(kVersion) || !record_identifier(key_realm)
+                || !record_identifier(key_character) || generation <= 0 || sequence <= 0)
+            throw std::runtime_error("record fence row corrupted");
+        pins.push_back({{std::move(key_realm), std::move(key_character)},
+            static_cast<std::uint64_t>(generation), static_cast<std::uint64_t>(sequence)});
+    }
+    return pins;
 }
 
 std::vector<RecordSnapshot> MigrationJournal::restore_records() const {

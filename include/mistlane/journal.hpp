@@ -48,6 +48,8 @@ public:
     std::vector<MigrationJournalRecord> restore() const;
     void save_record(const RecordSnapshot&) override;
     std::vector<RecordSnapshot> restore_records() const override;
+    void save_fence(const HomeSequenceAuthority::Pin& pin) override;
+    std::vector<HomeSequenceAuthority::Pin> restore_fences() const override;
 private:
     struct Impl;
     std::unique_ptr<Impl> impl_;

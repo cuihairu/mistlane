@@ -107,6 +107,49 @@ struct RecordSnapshot {
     std::uint64_t generation = 0, sequence = 0;
     std::string payload;
 };
+// The home data side's final ordered cursor for one participant. A migration
+// fence freezes the cursor exactly once per fenced generation; after that the
+// old generation is a tombstone — a later source submission can never advance
+// the cursor, and only a strictly newer generation (the next owner) may resume
+// from the frozen cursor. This is the home-side counterpart of the coordinator
+// generation authority: it is what makes the final sequence authoritative and
+// durable across a data restart.
+class HomeSequenceAuthority {
+public:
+    using Key = std::pair<std::string, std::string>;
+    struct Pin {
+        Key key;
+        std::uint64_t generation = 0, sequence = 0;
+        bool operator==(const Pin&) const = default;
+    };
+    // Restore a persisted pin. A pin is immutable once fenced, so re-seeding
+    // the same key at the same generation is idempotent and a changed pin is
+    // refused fail-closed rather than silently rewritten.
+    bool restore(const Pin& pin) {
+        if (!record_identifier(pin.key.first) || !record_identifier(pin.key.second)
+                || !pin.generation || !pin.sequence) return false;
+        const auto [it, inserted] = pins_.try_emplace(pin.key, pin);
+        return inserted || it->second == pin;
+    }
+    std::optional<Pin> pin(const Key& key) const {
+        const auto found = pins_.find(key);
+        return found == pins_.end() ? std::nullopt : std::optional(found->second);
+    }
+    bool fenced(const Key& key) const {
+        const auto found = pin(key);
+        return found && found->generation;
+    }
+    // Freeze the final cursor for a fenced generation. Idempotent for the same
+    // pin; a different generation or a double fence with a changed cursor is a
+    // conflict and changes nothing.
+    bool fence(const Key& key, std::uint64_t generation, std::uint64_t sequence) {
+        if (!generation || !sequence) return false;
+        const auto [it, inserted] = pins_.try_emplace(key, Pin{key, generation, sequence});
+        return inserted ? true : it->second == Pin{key, generation, sequence};
+    }
+private:
+    std::map<Key, Pin> pins_;
+};
 // Storage boundary for the data role's persistent record store. The SQLite
 // backend lives beside the coordinator journal and reuses its versioned-BLOB
 // encoding; an in-memory-only store passes no backend here.
@@ -115,6 +158,11 @@ public:
     virtual ~RecordBackend() = default;
     virtual void save_record(const RecordSnapshot&) = 0;
     virtual std::vector<RecordSnapshot> restore_records() const = 0;
+    // A durable final-sequence pin is part of the same store boundary. The
+    // default no-ops keep in-memory test backends and non-fencing callers
+    // working; a SQLite-backed store overrides them.
+    virtual void save_fence(const HomeSequenceAuthority::Pin&) {}
+    virtual std::vector<HomeSequenceAuthority::Pin> restore_fences() const { return {}; }
 };
 // Single event-loop thread: no locking. The store keeps the newest accepted
 // change-set per (realm, character); merging change-sets into entity state is the
@@ -136,9 +184,36 @@ public:
             record.sequence = snapshot.sequence;
             record.payload = std::move(snapshot.payload);
         }
+        for (auto pin : backend->restore_fences()) {
+            if (!sequence_authority_.restore(pin))
+                throw std::invalid_argument("record store fence row corrupted");
+        }
         backend_ = backend;
     }
     bool durable() const { return backend_ != nullptr; }
+    // The authoritative final cursor for a key, if it has been fenced.
+    std::optional<HomeSequenceAuthority::Pin> final_sequence(const RecordKey& key) const {
+        return sequence_authority_.pin(key);
+    }
+    // Freeze the final ordered cursor for a fenced generation. Returns the pin,
+    // or nullopt when there is no committed cursor yet, the store cannot make
+    // the fence durable, or a different generation is already fenced. The
+    // durable write precedes the in-memory pin so a failed commit never leaves
+    // a fence the store did not record.
+    std::optional<HomeSequenceAuthority::Pin> fence(const RecordKey& key, std::uint64_t generation) {
+        const auto it = records_.find(key);
+        if (it == records_.end() || !generation) return std::nullopt;
+        const HomeSequenceAuthority::Pin pin{key, generation, it->second.sequence};
+        if (const auto existing = sequence_authority_.pin(key)) {
+            return *existing == pin ? existing : std::nullopt;
+        }
+        if (backend_) {
+            try { backend_->save_fence(pin); }
+            catch (const std::exception&) { return std::nullopt; }
+        }
+        if (!sequence_authority_.fence(key, generation, it->second.sequence)) return std::nullopt;
+        return pin;
+    }
     // Handles one frame and returns the reply; the result word feeds the
     // bounded result label of mistlane_record_results_total.
     std::string handle(std::string_view frame, std::string_view& result) {
@@ -170,6 +245,14 @@ public:
                 it->second.generation, it->second.sequence});
             return "MLD1 RECEIVED gen " + std::to_string(it->second.generation)
                  + " seq " + std::to_string(it->second.sequence);
+        }
+        // A fenced generation is a tombstone: the source may only resend the
+        // committed cursor (handled above) and can never advance it. Only a
+        // strictly newer generation may resume from the frozen cursor.
+        if (const auto pin = sequence_authority_.pin(key);
+                pin && request.generation <= pin->generation) {
+            result = "stale";
+            return "MLD1 ERR STALE gen " + std::to_string(pin->generation);
         }
         // Sequence discipline per (realm, character), monotonic across
         // generations, with no gaps the home side can fill. A fresh key starts at one.
@@ -211,6 +294,7 @@ private:
     static constexpr std::size_t limit = 1000000;
     struct RecordState { std::uint64_t generation = 0, sequence = 0; std::string payload; };
     std::map<RecordKey, RecordState> records_;
+    HomeSequenceAuthority sequence_authority_;
     RecordBackend* backend_ = nullptr;
 };
 

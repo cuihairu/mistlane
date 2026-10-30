@@ -4100,6 +4100,83 @@ void cross_record_journal() {
     std::cout << "record.journal: durable MLD1 write survives restart, ACK durable is the "
         "only commitment and replay is idempotent [PASS]\n";
 }
+void cross_home_sequence() {
+    // The home final-sequence authority is the data-side tombstone: once a
+    // migration fences a generation at its current cursor, that generation
+    // cannot advance the cursor. A resend of the frozen cursor is answered as a
+    // duplicate, and only a strictly newer generation may resume from it.
+    RecordStore store;
+    std::string_view result;
+    equal(store.handle("MLD1 SUBMIT home hero gen 1 seq 1 v=1", result), "MLD1 RECEIVED gen 1 seq 1");
+    equal(store.handle("MLD1 SUBMIT home hero gen 1 seq 2 v=2", result), "MLD1 RECEIVED gen 1 seq 2");
+    // Freezing at generation 1 pins the final cursor at sequence 2.
+    const auto pin = store.fence({"home", "hero"}, 1);
+    require(pin && pin->generation == 1 && pin->sequence == 2, "home fence did not pin the final cursor");
+    require(store.final_sequence({"home", "hero"}) == pin, "final sequence query lost the pin");
+    // The same fence is idempotent; a different generation is refused.
+    require(store.fence({"home", "hero"}, 1) == pin, "home fence was not idempotent");
+    require(!store.fence({"home", "hero"}, 2), "a changed-generation fence was accepted");
+    // The old generation can only resend the frozen cursor, never advance.
+    equal(store.handle("MLD1 SUBMIT home hero gen 1 seq 2 v=2", result), "MLD1 RECEIVED gen 1 seq 2");
+    equal(store.handle("MLD1 SUBMIT home hero gen 1 seq 3 late", result), "MLD1 ERR STALE gen 1");
+    // A newer generation resumes from the frozen cursor, not from one.
+    equal(store.handle("MLD1 SUBMIT home hero gen 2 seq 3 v=3", result), "MLD1 RECEIVED gen 2 seq 3");
+    equal(store.handle("MLD1 SUBMIT home hero gen 2 seq 4 v=4", result), "MLD1 RECEIVED gen 2 seq 4");
+    // An unrelated key is independent and unfenced.
+    require(!store.final_sequence({"home", "other"}), "an unfenced key reported a final sequence");
+    equal(store.handle("MLD1 SUBMIT home other gen 1 seq 1 v=1", result), "MLD1 RECEIVED gen 1 seq 1");
+    // A fenced store refuses a fence for a key that has no committed cursor.
+    require(!store.fence({"away", "hero"}, 1), "a fence without a record was accepted");
+    std::cout << "record.home.sequence: final cursor pins at the fence, old generation "
+        "cannot advance, newer generation resumes and keys are independent [PASS]\n";
+}
+void cross_home_sequence_journal() {
+    // The durable final-sequence pin survives a store restart and keeps the
+    // old generation tombstoned; the newer generation resumes from the pin.
+    Context c;
+    write(c.path("echo.lua"), echo);
+    const auto first = port(), second = port();
+    const auto journal = c.path("home-sequence.sqlite");
+    auto& initial = c.node("data", first, {"--script", c.path("echo.lua").string(),
+        "--journal", journal.string()});
+    const auto send_frame = [](RawSocket& raw, std::string_view payload) {
+        std::string frame(4, '\0');
+        auto length = static_cast<std::uint32_t>(payload.size());
+        for (int i = 3; i >= 0; --i) { frame[i] = static_cast<char>(length & 255); length >>= 8; }
+        raw.send(frame + std::string(payload));
+    };
+    const auto read_frame = [](RawSocket& raw) {
+        std::size_t length = 0;
+        for (unsigned char ch : raw.receive(4)) length = (length << 8) | ch;
+        return raw.receive(length);
+    };
+    const auto ask = [&](unsigned listen, const std::string& line) {
+        RawSocket raw(listen);
+        send_frame(raw, line);
+        return read_frame(raw);
+    };
+    // A fenced generation is not writable through MLD1 in this slice; the
+    // endpoint pins only when the store is asked to fence. This uses the
+    // journal boundary directly to prove the pin persists.
+    {
+        MigrationJournal store(journal.string());
+        store.save_record({"home", "hero", 1, 2, "v=2"});
+        store.save_fence({{"home", "hero"}, 1, 2});
+    }
+    initial.signal(SIGTERM);
+    require(initial.wait() == 0, "home sequence node did not stop cleanly");
+    c.node("data", second, {"--script", c.path("echo.lua").string(),
+        "--journal", journal.string()});
+    equal(ask(second, "MLD1 LOAD home hero"), "MLD1 STATE gen 1 seq 2 v=2");
+    // A durable resend of the frozen cursor dedups; an advance is stale.
+    equal(ask(second, "MLD1 SUBMIT home hero gen 1 seq 2 v=2"),
+        "MLD1 ACK durable home hero gen 1 seq 2");
+    equal(ask(second, "MLD1 SUBMIT home hero gen 1 seq 3 late"), "MLD1 ERR STALE gen 1");
+    equal(ask(second, "MLD1 SUBMIT home hero gen 2 seq 3 v=3"),
+        "MLD1 ACK durable home hero gen 2 seq 3");
+    std::cout << "record.home.sequence.journal: the durable pin fences the old "
+        "generation after restart and the newer generation resumes [PASS]\n";
+}
 namespace {
 struct MigrationFixture {
     MigrationKey key{"home", "hero"};
