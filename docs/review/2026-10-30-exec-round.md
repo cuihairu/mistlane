@@ -233,6 +233,36 @@ D17 风险 3：文档同时出现 `avatar_save` 与拟议 `writeToDB`，若各�
 - 名称与签名按上表，在最小运行时落地时一次固定；保留引擎专用命名空间，不把引擎方法混入业务对象（D27 风险 3）。
 - 不把 message handler 当完整生命周期；协议前置未齐（D14/D15）不开放新 Avatar 业务接口（D27「不做/延后」）。
 
+## D01 目标进程职责迁移：五列验收表
+
+来源：todo.md:42；显式 BLOCKED。D01 推荐保持现有职责与单二进制，按真实调用链逐段收口。
+
+### 现有角色（单二进制，`--role` 选择）
+
+`src/node.cpp`/`src/test_cases.cpp`/`src/selftest.cpp` 实测角色：`login`、`data`、`coordinator`、`gateway`、`gameServer`、`apiServer`、`probe`、`crossServer`。单二进制复用角色、CLI 与模板（D01 成本 1）。
+
+### 五列验收表（入口—调用方—被调用方—持久结果—失败行为）
+
+按真实调用链（D01 推荐：按调用链逐段收口，不再做名字迁移）：
+
+| 入口 | 调用方 | 被调用方 | 持久结果 | 失败行为 |
+|---|---|---|---|---|
+| 登录请求 | 客户端 → gateway | login 签发短期 HMAC 凭据（D04） | 凭据绑定 data 已确认授权（D04） | 验签失败拒绝；不创建会话 |
+| 路由查询 | login/gateway | coordinator `MLR1 ROUTE GET` | 实例放置记录（D06） | 无路由 → 拒绝，不隐式创建 |
+| 角色加载 | coordinator | data `MLD1 GET` + gameServer `avatar_load`（D27） | 完整持久快照（D11） | 加载失败：不发布 Avatar，拒绝进入（D27） |
+| 修改 | gameServer | `PersistentStore::save`（D17） | 版本化快照 + `committed_revision_`（D11） | STALE/CONFLICT/in-flight 拒绝（D17） |
+| 跨宿主移交 | coordinator | MIG TAKEOVER（D02） | 源冻结、目标确认、`generation` 递增（D02） | 移交失败源回 `active`；旧写者不复活（D13） |
+| 保存确认 | data | `PersistentStore::confirm`（D11） | durable ACK 后才清脏（D11） | confirm 失败保持 dirty，重试（D26） |
+
+### 最小链路与解除条件
+
+「用现有角色启动最小链路，缺哪段补哪段」：最小链路 = 登录分配 → coordinator 定位 → data 加载快照 → gameServer 承载 → 修改 → 保存确认 → 换宿主继续且旧宿主不能再写（决策文件「先理解怎么选」）。**解除条件是正常登录、保存和跨宿主移交真实通过**——需运行时环境，实施轮执行；本节记录验收表与缺口。
+
+### 缺口核对
+
+- 现有单二进制已按角色启动（`test_cases.cpp:2127` login/data 成对、`:2142` apiServer）；跨宿主移交的运行时闭环未验证（D02/D30）。
+- 不新增 router/Base/Cell 进程（D01「不做/延后」）；不凭帮助文本一致就勾选总项；真实负载均衡延后。
+
 ## D02 coordinator 注册、归属与迁移（四步时序）
 
 来源：todo.md:48，及 :51/:58 保留阻塞说明。D02 推荐 coordinator 管放置与交接编排、home data 管写入资格；查询到路由不能直接获得写权。复用既有 journal、generation 与 TAKEOVER。
