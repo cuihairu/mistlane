@@ -4929,20 +4929,27 @@ void coordinator_migration_wire() {
     // and the pending verdict leaves the fenced gap explicit.
     const std::string dead_target = "cross NS - arena crossServer xs-z room-1";
     equal(ask("MLR1 MIG OWNER NS - home hero-3 8 "+source), "MLR1 MIG OWNER OK");
+    equal(ask("MLR1 MIG PREPARE NS - home hero-3 move-7 8 "+source+" "+dead_target),
+        "MLR1 MIG PREPARED move-7 9");
+    equal(ask("MLR1 MIG ABORT NS - home hero-3 move-7 9"), "MLR1 MIG ABORTING move-7");
+    equal(ask("MLR1 MIG EVENT NS - home hero-3 move-7 9 CLEANUP"),
+        "MLR1 MIG STEP move-7 ABORTED");
     equal(ask("MLR1 MIG PREPARE NS - home hero-3 move-8 8 "+source+" "+dead_target),
-        "MLR1 MIG PREPARED move-8 9");
-    equal(ask("MLR1 MIG EVENT NS - home hero-3 move-8 9 DRAINED"),
+        "MLR1 MIG PREPARED move-8 10");
+    equal(ask("MLR1 MIG EVENT NS - home hero-3 move-8 10 DRAINED"),
         "MLR1 MIG STEP move-8 PREPARING");
-    equal(ask("MLR1 MIG EVENT NS - home hero-3 move-8 9 FENCE"),
+    equal(ask("MLR1 MIG EVENT NS - home hero-3 move-8 10 FENCE"),
         "MLR1 MIG STEP move-8 PREPARING");
-    equal(ask("MLR1 MIG EVENT NS - home hero-3 move-8 9 READY"),
+    equal(ask("MLR1 MIG EVENT NS - home hero-3 move-8 10 READY"),
         "MLR1 MIG STEP move-8 PREPARING");
     doomed_cross.signal(SIGTERM);
     eventually([&] { return ask("MLR1 QUERY crossServer - arena").find("xs-z") == std::string::npos; },
         5s, "retired destination stayed in the registry");
-    equal(ask("MLR1 MIG COMMIT NS - home hero-3 move-8 9"), "MLR1 ERR PENDING");
+    equal(ask("MLR1 MIG COMMIT NS - home hero-3 move-8 9"), "MLR1 ERR STALE");
+    equal(ask("MLR1 MIG COMMIT NS - home hero-3 move-7 9"), "MLR1 ERR CONFLICT");
+    equal(ask("MLR1 MIG COMMIT NS - home hero-3 move-8 10"), "MLR1 ERR PENDING");
     equal(ask("MLR1 MIG STATUS NS - home hero-3"),
-        "MLR1 MIG STATE move-8 PREPARING drained fenced ready 9");
+        "MLR1 MIG STATE move-8 PREPARING drained fenced ready 10");
     equal(ask("MLR1 ROUTE GET NS - home hero-3"), "MLR1 ROUTE EMPTY");
     // The tokened coordinator keeps its own registry, so it only sees this
     // key after its own hand identifies and publishes the facts.

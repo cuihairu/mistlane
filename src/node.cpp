@@ -2211,10 +2211,16 @@ private:
             token.key = key;
             const auto tx = registry_.transaction(namespace_, key);
             if (!tx) return "MLR1 ERR EMPTY";
-            // A replayed terminal commit answers its recorded verdict; only the
-            // first commit needs a live destination to publish against.
+            // Validate the commit exactly as apply does before turning a dead
+            // destination into PENDING; otherwise stale or historical tokens
+            // look retryable rather than receiving their terminal verdict.
             if (const auto* existing = tx->entry(token.id);
-                existing && existing->state != MigrationState::Committed
+                existing && token.generation == existing->token.generation
+                    && existing->state != MigrationState::Committed
+                    && existing->state != MigrationState::Aborted
+                    && token.id == tx->snapshot().current
+                    && existing->home_fenced && existing->destination_ready
+                    && tx->route() == existing->request.expected
                     && !registry_.route_publishable(existing->request.destination, namespace_))
                 return "MLR1 ERR PENDING";
             const auto result = tx->apply(token, MigrationEvent::Commit);
