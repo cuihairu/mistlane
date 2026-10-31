@@ -685,3 +685,4 @@
 
 - **D06 实例级放置记录设计** ✅ commit `469bb99`（`docs/review/2026-10-30-exec-round.md`）：五元组键（namespace/scope/type_id/entity_id/incarnation）→ 值（host/generation/status）；与 MIG/MLD1 线动词对应；修改权限与比较旧值；三类验收例；缺口（放置记录表持久化待定）。实现仍在实施轮按 D02 栅栏顺序接线。
 - **D09 绑定来源与期限/取消设计** ✅ commit `2c13e85`（同上）：Session→已认证角色→授权实体绑定链（MLS1/MLC2 握手，login HMAC 凭据，D06 放置记录）；client/owner/server 三类准入；EntityRuntime PENDING/TIMED_OUT/DISCONNECTED/CONFLICT 语义；普通 gateway/复用连接/cross gateway/MLC2+MLE1 支持矩阵。实现待 D04 幂等键与 D06 归属查询接线。
+- **D11 快照持久化与提交确认设计** ✅ commit `568077d`（同上）：payload 为版本化完整持久快照（非变更集）；`PersistentStore::save/confirm/restore`（`include/mistlane/entity_persist.hpp:88/102/120`）与契约摘要/持久 revision/回传序号三元组对应；四类验证（重启还原/失败不清脏/在途再写/旧代拒绝）；缺口（SQLite 适配层与快照序列化待接线）。
