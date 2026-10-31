@@ -2229,17 +2229,10 @@ private:
             token.key = key;
             const auto tx = registry_.transaction(namespace_, key);
             if (!tx) return "MLR1 ERR EMPTY";
-            // Validate the commit exactly as apply does before turning a dead
-            // destination into PENDING; otherwise stale or historical tokens
-            // look retryable rather than receiving their terminal verdict.
-            if (const auto* existing = tx->entry(token.id);
-                existing && token.generation == existing->token.generation
-                    && existing->state != MigrationState::Committed
-                    && existing->state != MigrationState::Aborted
-                    && token.id == tx->snapshot().current
-                    && existing->home_fenced && existing->destination_ready
-                    && tx->route() == existing->request.expected
-                    && !registry_.route_publishable(existing->request.destination, namespace_))
+            // Reuse the transaction's COMMIT admission source so only a valid,
+            // ready commit is downgraded to PENDING for a dead destination.
+            if (tx->commit_eligible(token)
+                && !registry_.route_publishable(tx->entry(token.id)->request.destination, namespace_))
                 return "MLR1 ERR PENDING";
             const auto result = tx->apply(token, MigrationEvent::Commit);
             if (result == MigrationResult::Applied) {

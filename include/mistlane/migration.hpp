@@ -164,6 +164,17 @@ public:
         const auto* current = entry(data_.current);
         return current ? current->state : MigrationState::Idle;
     }
+    // Single source of truth for COMMIT admission. The coordinator uses this
+    // predicate to distinguish a blocked-but-valid commit from stale or
+    // historical tokens before apply() returns their precise verdict.
+    bool commit_eligible(const MigrationToken& token) const {
+        const Entry* row = entry(token.id);
+        if (!row || token.key != data_.key || token.generation != row->token.generation)
+            return false;
+        if (terminal(row->state) || token.id != data_.current || !commit_ready(*row))
+            return false;
+        return true;
+    }
     // Startup crash recovery: drive a restored live transaction to its
     // deterministic post-crash state. The process whose in-flight handler
     // owned the lease is gone with the crash, so that work is force-completed
@@ -336,14 +347,16 @@ private:
         return MigrationResult::Applied; // Source timers/admission restored.
     }
     MigrationResult commit(Entry& row) {
-        if (!row.home_fenced || !row.destination_ready || data_.route != row.request.expected)
-            return MigrationResult::Order;
+        if (!commit_ready(row)) return MigrationResult::Order;
         // Publication is last: source drain -> home fence -> target ACK ->
         // CAS route + committed outcome. The route itself grants no writes.
         data_.route = {row.request.destination, row.token.generation};
         row.destination_staged = false;
         row.state = MigrationState::Committed;
         return MigrationResult::Applied;
+    }
+    bool commit_ready(const Entry& row) const {
+        return row.home_fenced && row.destination_ready && data_.route == row.request.expected;
     }
     HomeGenerationAuthority& home_;
     Snapshot data_;
