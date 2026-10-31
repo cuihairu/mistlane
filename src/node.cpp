@@ -1442,6 +1442,17 @@ bool endpoint_text(std::string_view text, std::string& address, unsigned& port) 
 std::string registry_member_text(const std::string& namespace_) {
     return namespace_.empty() ? "-" : namespace_;
 }
+// Shared strict decimal generation parser. Zero is not a valid generation.
+bool parse_generation(const std::string& text, std::uint64_t& generation) {
+    if (text.empty() || text.size() > 19) return false;
+    generation = 0;
+    for (unsigned char ch : text) {
+        if (ch < '0' || ch > '9') return false;
+        if (generation > (std::numeric_limits<std::uint64_t>::max() - (ch-'0'))/10) return false;
+        generation = generation*10 + (ch-'0');
+    }
+    return generation != 0;
+}
 class Registry {
 public:
     explicit Registry(std::string journal_path = {}) {
@@ -1510,7 +1521,8 @@ public:
         // route record itself survives in the journal across the restart.
         for (const auto& record : journal_->restore_placements()) {
             const auto key = route_key(record.namespace_, record.realm, record.character);
-            if (!routes_.emplace(key, Route{record.scope, record.role, record.instance}).second)
+            if (!routes_.emplace(key,
+                    Route{record.scope, record.role, record.instance, record.generation}).second)
                 throw std::invalid_argument("placement journal contains a duplicate route");
         }
     }
@@ -1551,6 +1563,7 @@ public:
     // routed to.
     struct Route {
         std::string scope, role, instance;
+        std::uint64_t generation = 0; // the generation the coordinator last published
     };
     struct RouteAnswer {
         const Member* member = nullptr;
@@ -1559,19 +1572,21 @@ public:
     };
     bool set_route(const std::string& scope, const std::string& realm,
                    const std::string& character, const std::string& role,
-                   const std::string& instance, const std::string& namespace_) {
+                   const std::string& instance, const std::string& namespace_,
+                   std::uint64_t generation = 0) {
         if (!members_.count(member_key(namespace_, scope, role, instance))) return false;
-        routes_[route_key(namespace_, realm, character)] = Route{scope, role, instance};
-        persist_placement(namespace_, scope, realm, character, role, instance);
+        routes_[route_key(namespace_, realm, character)] = Route{scope, role, instance, generation};
+        persist_placement(namespace_, scope, realm, character, role, instance, generation);
         return true;
     }
     // A committed migration moves the character route to the new owner; the
     // route keeps pointing at the live member so readiness stays authoritative.
     bool set_route(const MigrationOwner& owner, const std::string& realm,
-                   const std::string& character, const std::string& namespace_) {
+                   const std::string& character, const std::string& namespace_,
+                   std::uint64_t generation) {
         const bool realm_scope = owner.scope.kind == MigrationScope::Kind::Realm;
         return set_route(realm_scope ? owner.scope.realm : owner.scope.cross_group,
-            realm, character, owner.role, owner.instance, namespace_);
+            realm, character, owner.role, owner.instance, namespace_, generation);
     }
     // A destination that left the registry cannot receive the committed route;
     // the commit must stay pending so the fenced gap remains takeover-eligible
@@ -1598,6 +1613,10 @@ public:
             const auto route = transaction->route();
             scene = route.owner.scene;
             generation = route.generation;
+        } else {
+            // A committed route whose transaction was pruned or never opened:
+            // answer the durable comparison baseline published at commit.
+            generation = hosted.generation;
         }
         return RouteAnswer{&member->second.first, scene, generation};
     }
@@ -1736,9 +1755,10 @@ private:
     }
     void persist_placement(const std::string& namespace_, const std::string& scope,
                            const std::string& realm, const std::string& character,
-                           const std::string& role, const std::string& instance) {
+                           const std::string& role, const std::string& instance,
+                           std::uint64_t generation) {
         if (!journal_) return;
-        journal_->save_placement({namespace_, scope, realm, character, role, instance});
+        journal_->save_placement({namespace_, scope, realm, character, role, instance, generation});
     }
     std::map<std::string, std::pair<Member, void*>> members_;
     std::map<std::string, Route> routes_;
@@ -2007,14 +2027,18 @@ private:
         if (!(in >> marker) || marker != "NS" || !namespace_fields(in, namespace_))
             return refuse("INVALID");
         if (sub == "SET") {
-            std::string scope, realm, character, role, instance;
-            if (!(in >> scope >> realm >> character >> role >> instance) || (in >> spare))
-                return refuse("INVALID");
+            std::string scope, realm, character, role, instance, generation_text;
+            std::uint64_t generation = 0;
+            if (!(in >> scope >> realm >> character >> role >> instance)) return refuse("INVALID");
+            if (in >> generation_text) {
+                if (!parse_generation(generation_text, generation)) return refuse("INVALID");
+                if (in >> spare) return refuse("INVALID");
+            }
             if (!record_identifier(scope) || !record_identifier(realm) ||
                     !record_identifier(character) || !record_identifier(instance) ||
                     (role != "gameServer" && role != "crossServer"))
                 return refuse("INVALID");
-            if (!registry_.set_route(scope, realm, character, role, instance, namespace_))
+            if (!registry_.set_route(scope, realm, character, role, instance, namespace_, generation))
                 return refuse("UNKNOWN");
             diagnostics_.set_registry_routes(registry_.routes());
             return answer("MLR1 ROUTE OK");
@@ -2093,14 +2117,7 @@ private:
         return true;
     }
     static bool migration_generation(const std::string& text, std::uint64_t& generation) {
-        if (text.empty() || text.size() > 19) return false;
-        generation = 0;
-        for (unsigned char ch : text) {
-            if (ch < '0' || ch > '9') return false;
-            if (generation > (std::numeric_limits<std::uint64_t>::max() - (ch-'0'))/10) return false;
-            generation = generation*10 + (ch-'0');
-        }
-        return generation != 0;
+        return parse_generation(text, generation);
     }
     static bool namespace_fields(std::istream& in, std::string& namespace_) {
         std::string token;
@@ -2238,7 +2255,7 @@ private:
             if (result == MigrationResult::Applied) {
                 const auto route = tx->route();
                 registry_.persist_transaction(namespace_, key, *tx);
-                registry_.set_route(route.owner, key.first, key.second, namespace_);
+                registry_.set_route(route.owner, key.first, key.second, namespace_, route.generation);
             }
             const auto* row = tx->entry(token.id);
             // The route publishes only on commit, so the answer names the route

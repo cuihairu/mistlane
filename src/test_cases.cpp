@@ -6251,9 +6251,10 @@ void coordinator_placement_journal() {
     eventually([&] {
         return ask(first, "MLR1 QUERY gameServer - alpha").find("gs-a") != std::string::npos;
     }, 5s, "member never registered");
-    equal(ask(first, "MLR1 ROUTE SET NS - alpha mist eve gameServer gs-a"), "MLR1 ROUTE OK");
+    equal(ask(first, "MLR1 ROUTE SET NS - alpha mist eve gameServer gs-a 7"), "MLR1 ROUTE OK");
     const auto live = ask(first, "MLR1 ROUTE GET NS - mist eve");
     require(live.starts_with("MLR1 ROUTE AT alpha gameServer gs-a "), "live route wrong shape: "+live);
+    require(live.ends_with(" - 7"), "live route lost the published generation: "+live);
     // Crash, not graceful stop: a coordinator restart must recover the
     // placement from the durable journal even though the member control leg
     // died with the process (no clean retirement ran).
@@ -6272,6 +6273,7 @@ void coordinator_placement_journal() {
     }, 5s, "restored placement never answered for the re-registered host");
     const auto restored = ask(second, "MLR1 ROUTE GET NS - mist eve");
     require(restored != "MLR1 ROUTE EMPTY", "restored placement lost the host");
+    require(restored.ends_with(" - 7"), "restored placement lost the generation baseline: "+restored);
     std::cout << "placement.journal: coordinator restart retains character placement, "
         "dormant until the host re-registers, then answers the live member again [PASS]\n";
 }

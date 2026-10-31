@@ -374,7 +374,8 @@ struct MigrationJournal::Impl {
             "CREATE TABLE IF NOT EXISTS placement ("
             "version INTEGER NOT NULL, namespace TEXT NOT NULL, scope TEXT NOT NULL,"
             "realm TEXT NOT NULL, character TEXT NOT NULL, role TEXT NOT NULL,"
-            "instance TEXT NOT NULL, PRIMARY KEY(namespace, realm, character))");
+            "instance TEXT NOT NULL, generation INTEGER NOT NULL, "
+            "PRIMARY KEY(namespace, realm, character))");
         // A WAL/schema setting is a process-level hint; this pins the row
         // format so a future incompatible writer refuses old files instead of
         // silently decoding garbage.
@@ -619,9 +620,10 @@ void MigrationJournal::save_placement(const PlacementRecord& record) {
         throw std::invalid_argument("invalid placement record");
     if (!record.namespace_.empty() && !record_identifier(record.namespace_))
         throw std::invalid_argument("invalid placement namespace");
-    Statement upsert(impl_->db, "INSERT INTO placement(version, namespace, scope, realm, character, role, instance) "
-        "VALUES(?, ?, ?, ?, ?, ?, ?) ON CONFLICT(namespace, realm, character) DO UPDATE SET "
-        "version=excluded.version, scope=excluded.scope, role=excluded.role, instance=excluded.instance");
+    Statement upsert(impl_->db, "INSERT INTO placement(version, namespace, scope, realm, character, role, instance, generation) "
+        "VALUES(?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(namespace, realm, character) DO UPDATE SET "
+        "version=excluded.version, scope=excluded.scope, role=excluded.role, instance=excluded.instance, "
+        "generation=excluded.generation");
     upsert.bind_int(1, static_cast<int>(kVersion));
     upsert.bind_text(2, record.namespace_);
     upsert.bind_text(3, record.scope);
@@ -629,6 +631,7 @@ void MigrationJournal::save_placement(const PlacementRecord& record) {
     upsert.bind_text(5, record.character);
     upsert.bind_text(6, record.role);
     upsert.bind_text(7, record.instance);
+    upsert.bind_u64(8, record.generation);
     upsert.step();
 }
 
@@ -647,7 +650,7 @@ std::vector<PlacementRecord> MigrationJournal::restore_placements() const {
     if (impl_->db == nullptr) throw std::runtime_error("migration journal is closed");
     std::vector<PlacementRecord> records;
     Statement select(impl_->db,
-        "SELECT version, namespace, scope, realm, character, role, instance FROM placement "
+        "SELECT version, namespace, scope, realm, character, role, instance, generation FROM placement "
         "ORDER BY namespace, realm, character");
     for (;;) {
         const int code = sqlite3_step(select.get());
@@ -660,6 +663,7 @@ std::vector<PlacementRecord> MigrationJournal::restore_placements() const {
         const auto* character = reinterpret_cast<const char*>(sqlite3_column_text(select.get(), 4));
         const auto* role = reinterpret_cast<const char*>(sqlite3_column_text(select.get(), 5));
         const auto* instance = reinterpret_cast<const char*>(sqlite3_column_text(select.get(), 6));
+        const auto generation = static_cast<std::uint64_t>(sqlite3_column_int64(select.get(), 7));
         const int namespace_size = sqlite3_column_bytes(select.get(), 1);
         const int scope_size = sqlite3_column_bytes(select.get(), 2);
         const int realm_size = sqlite3_column_bytes(select.get(), 3);
@@ -677,8 +681,10 @@ std::vector<PlacementRecord> MigrationJournal::restore_placements() const {
                 || !record_identifier(record.realm) || !record_identifier(record.character)
                 || !record_identifier(record.instance)
                 || (record.role != "gameServer" && record.role != "crossServer")
+                || !generation
                 || (!record.namespace_.empty() && !record_identifier(record.namespace_)))
             throw std::runtime_error("placement row corrupted");
+        record.generation = generation;
         records.push_back(std::move(record));
     }
     return records;
