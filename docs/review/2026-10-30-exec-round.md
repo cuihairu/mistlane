@@ -232,3 +232,26 @@ D17 风险 3：文档同时出现 `avatar_save` 与拟议 `writeToDB`，若各�
 
 - 名称与签名按上表，在最小运行时落地时一次固定；保留引擎专用命名空间，不把引擎方法混入业务对象（D27 风险 3）。
 - 不把 message handler 当完整生命周期；协议前置未齐（D14/D15）不开放新 Avatar 业务接口（D27「不做/延后」）。
+
+## D02 coordinator 注册、归属与迁移（四步时序）
+
+来源：todo.md:48，及 :51/:58 保留阻塞说明。D02 推荐 coordinator 管放置与交接编排、home data 管写入资格；查询到路由不能直接获得写权。复用既有 journal、generation 与 TAKEOVER。
+
+### 四步时序
+
+| 步 | 动作 | 凭证 | 重复请求 | 崩溃后查询 |
+|---|---|---|---|---|
+| 1 源停止处理 | 源宿主停止接受该实体的新处理器；完成在途；`avatar_transfer_out` 取状态快照（D27） | 源持有当前 `generation` 写权（`HomeSequenceAuthority`） | 重复 STOP → 幂等返回当前状态 | 源崩溃：coordinator 按路由记录发现源不可达，走 TAKEOVER |
+| 2 data 确认冻结 | data 冻结该实体的写入资格；源的最后写入经 `record_fence` 拒绝（`journal.cpp:369/544`） | data 收到源确认的 `generation` | 重复 FREEZE → 幂等确认 | data 崩溃：重放 journal 恢复 `record_fence` 状态（:559） |
+| 3 目标加载并确认 | 目标宿主 `avatar_load`（D27）→ 用冻结快照恢复 → `MLR1 MIG TAKEOVER`（`node.cpp:2193`）确认加载 | 目标从冻结的 `record_fence` 继承 `generation` | 重复 LOAD → 目标拒绝/幂等 | 目标崩溃：coordinator 重试或回退源 |
+| 4 coordinator 比较旧值后发布新路由 | coordinator 用记忆中的旧 `generation` 与源最后确认值比较；一致才 `MLR1 MIG COMMIT` 递增 `generation` 并发布 | coordinator 是唯一权威（D06 放置记录修改权） | 重复 COMMIT → 幂等；不一致 → 拒绝并令重取 | coordinator 崩溃：从 journal 恢复放置记录与 `generation` |
+
+### 核对现有原语与线动词（只补缺口）
+
+已有：`HomeSequenceAuthority`（`record.hpp:125`）、`fence`（:153）、`final_sequence`（:203）；`record_fence` 持久化与恢复（`journal.cpp:369/544/559`）；`MLR1 MIG` 全部动词（`node.cpp:2026-2041` 含 TAKEOVER :2193）；`PersistentStore::save/confirm/restore`（D11）。
+
+**缺口（实施轮补，不重造）：** 放置记录表持久化（D06 缺口）；coordinator 的「比较旧值」目前是内存协调面，需持久化比较基准才能跨崩溃正确。不重复实现 SQLite journal 或 TAKEOVER；不以注册表成员消失当成安全接管（D02「不做/延后」）。
+
+### 写权与路由的区别
+
+查询到路由（`MLR1 ROUTE GET`）只能给出「实体在哪」，**不能**直接获得写权；写权由 `generation` + `record_fence` 判定（D02 推荐）。交接期间允许短暂不可用，优先避免状态分叉（D02 取舍）——旧写者无法通过过期路由继续写。
