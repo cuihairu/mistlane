@@ -60,3 +60,54 @@
 - 现有 MIG 动词已含 OWNER/PREPARE/EVENT/COMMIT/ABORT/RETIRE/TAKEOVER/STATUS（`:2026-2041`），无独立「放置记录表」持久化；`record_fence` 持久化已落地（`src/journal.cpp:559`），放置记录本身若需跨重启查询，须另立记录持久化（当前为内存协调面）。
 - 「从 envelope 自报身份授予 owner 权限」在代码中未实现，保持不做（D09 定义真实绑定来源）。
 - 实例级放置记录当前未实现；本节为设计，不机械接线（D06「不做/延后」）。
+
+## D09 JS/C# 直接调用：可信绑定、准入、超时与取消
+
+来源：todo.md:128；生成绑定已落地，真实身份与传输闭环仍受阻。D09 推荐保留现有 SDK，先定义客户端到自身角色的可信绑定，再补期限/取消的传输语义。
+
+### 绑定来源（Session → 已认证角色 → 授权实体）
+
+不采用「客户端自报角色 ID 授权」——gateway 服务身份不能自动代表任何玩家的 owner 身份（D09 风险 3）。绑定链为：
+
+| 环节 | 来源 | 约束 |
+|---|---|---|
+| Session 身份 | 传输握手：`MLS1` 识别内部对端、`MLC2` 打开关联会话（`src/node.cpp:803-833`）；跨 gateway 复用上游 hub 身份 | 身份由握手协商，不来自 payload 自报 |
+| 已认证角色 | login 签发的短期 HMAC 凭据（D04），凭据绑定 data 已确认的授权 | 验签通过 ≠ 取得写权；写权由 D06 放置记录给出 |
+| 授权实体 | coordinator 确认的放置记录（D06）中 `entity_id` 属于该角色 | 客户端只能操作自己有权限的实体（D09 收益） |
+
+「gateway 的服务身份不能自动代表任何玩家的 owner 身份」：gateway 是传输中继（`src/node.cpp:830` 网关拥有共享腿、不代答 MLC2），其身份只用于中继层，不授予实体写权。
+
+### client/owner/server 三类准入案例
+
+| 案例 | 调用方身份 | 目标 | 准入 |
+|---|---|---|---|
+| client | 已认证玩家 | 自己的角色实体 | 允许（owner 权限） |
+| owner | 已认证玩家 | 他人实体 | 默认拒绝；仅当角色显式授权（D16 权限表）才允许 |
+| server | 内部服务腿（`MLS1`） | 任意受控实体 | 允许（服务身份，非玩家） |
+
+### 期限、断线、取消与已提交结果的可查询方式
+
+EntityRuntime RPC 状态（`include/mistlane/entity_runtime.hpp:64`）：`PENDING`/`COMPLETED`/`TIMED_OUT`/`DISCONNECTED`。
+
+| 事件 | 语义 | 可查询结果 |
+|---|---|---|
+| deadline 到 | `PENDING → TIMED_OUT`（`:72`）；非幂等请求显示「结果未知」，不静默再执行 | 客户端可查 `TIMED_OUT`，凭结果状态决定是否重发（幂等键，D04） |
+| 断线 | `PENDING → DISCONNECTED`（`:85`）；取消只承诺停止尚未开始的工作 | 已提交的修改不因取消自动撤销（D09 取舍） |
+| 迟到应答 | 未知/迟到响应被丢弃（`:77`），返回 `STALE` | 不重复结算，不误报成功 |
+| 已完成重复响应 | `COMPLETED` 后再次收到 → `CONFLICT`（`:82`） | 明确冲突，不覆盖已提交结果 |
+
+### 支持矩阵
+
+| 传输组合 | 支持 | 说明 |
+|---|---|---|
+| 普通 gateway | 是 | `entity_endpoint.hpp:51` 识别 `MLE1` 前缀（偏移 0） |
+| 复用连接 | 是 | `node.cpp:204-211` 检测 MLC2 前缀（偏移 4）再识别 MLE1 |
+| cross gateway | 是 | `node.cpp:808` 网关把 MLC2 向上游中继 |
+| MLC2 + MLE1 组合 | 是 | `node.cpp:204` MLC2 帧带 4 字节 transport id，MLE1 marker 在偏移 4 |
+
+「普通 gateway 测试覆盖全部传输组合」不作数：普通 gateway 验证的是 MLE1 直连路径，cross gateway/MLC2 组合需各自场景验收（D05 多监听场景）。
+
+### 缺口核对
+
+- deadline/断线状态机已实现（`entity_runtime.hpp:72-85`）；「deadline 到后非幂等请求显示结果未知」依赖 D04 幂等键与 D06 归属查询来源，运行时接线待实施。
+- 绑定来源当前未实现为独立授权表；本节为设计，不凭「客户端自报角色 ID」授权（D09「不做/延后」）。
