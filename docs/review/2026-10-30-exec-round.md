@@ -111,3 +111,37 @@ EntityRuntime RPC 状态（`include/mistlane/entity_runtime.hpp:64`）：`PENDIN
 
 - deadline/断线状态机已实现（`entity_runtime.hpp:72-85`）；「deadline 到后非幂等请求显示结果未知」依赖 D04 幂等键与 D06 归属查询来源，运行时接线待实施。
 - 绑定来源当前未实现为独立授权表；本节为设计，不凭「客户端自报角色 ID」授权（D09「不做/延后」）。
+
+## D11 data 加载、快照与提交确认
+
+来源：todo.md:138/139；数据库提交与保存接线开放。D11 推荐第一阶段沿用现有 SQLite 后端、经适配层把实体持久快照接到 data；保存只在提交确认后清除相应版本的脏标记。
+
+### payload 是版本化快照还是变更集
+
+**首阶段采用受帧大小约束的完整持久快照（版本化快照）**，不用变更集。理由（D11 取舍/风险）：端点仅保留最新 payload，若它是零散差量且无合并逻辑，重启后可能还原不全。现有 `MLD1` opaque payload（`src/node.cpp:798`）不自动等于完整实体状态——需适配层明确「快照」语义。
+
+### 契约摘要、持久 revision 与回传序号的对应关系
+
+`include/mistlane/entity_persist.hpp` 已实现核心原语：
+
+| 原语 | 含义 |
+|---|---|
+| `PersistentStore::save(generation, expected_revision)`（:88） | 单一强制保存入口；`expected_revision != revision_` → `CONFLICT`（另一写者先落，:93） |
+| `SaveOutcome{snapshot, receipt, error, reason}`（:13-22） | `reason` ∈ `generation`/`revision`/`in-flight`/`""`；`receipt` 含 `generation_`/`revision_`/`save_counter_`（:95） |
+| `confirm()`（:102-110） | 提交确认后 `committed_revision_` 前移到快照的 revision；落在保存后的写保持 dirty |
+| `restore(generation, committed_revision, snapshot)`（:120-142） | 加载路径带版本转换；持久键缺失补默认值；`revision_ = committed_revision` |
+| 脏标记 | 发送不清 dirty；仅 `confirm()` 清，且只清到快照实际捕获的 revision（:37-39） |
+
+对应关系：契约摘要 = 生成器/`entities` 表绑定产物摘要（D28）；持久 revision = `committed_revision_`；回传序号 = `save_counter_`（在途保存的序号，确认时对齐）。三者共同定位「哪份快照、哪个版本、哪次保存」——崩溃后查询按此三元组重取。
+
+### 验证（设计阶段列验收，实施轮运行时执行）
+
+1. **data 重启还原**：`restore()` 从 SQLite 快照重建 `revision_`/`committed_revision_`，重启后写入资格与提交状态一致。
+2. **提交失败不清脏**：`confirm()` 未到 → 快照 revision 之前的新写仍 dirty，不误清。
+3. **在途保存期间再写**：保存后、`confirm()` 前的新写保持 dirty，`confirm()` 只清到快照 revision（:110）。
+4. **旧代提交拒绝**：旧 `generation` 的 `save()` → `STALE`（:39 外来代）；不回退 `committed_revision_`。
+
+### 缺口核对
+
+- 适配层（SQLite ↔ `PersistentStore`）与「帧大小约束下的完整快照」序列化尚未接线；`MLD1` 现为 plain script traffic（`node.cpp:3063`）。按 D11「不重造已有 record_fence；不让业务多开强制保存入口」——接线须走 `PersistentStore::save` 单一入口。
+- 查询索引与批量数据迁移待实际需求（D11「不做/延后」）；不默认 SQLite 文件存储具备多机高可用。
