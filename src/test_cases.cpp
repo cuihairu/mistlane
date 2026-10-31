@@ -6334,4 +6334,91 @@ void coordinator_placement_journal() {
     std::cout << "placement.journal: coordinator restart retains character placement, "
         "with scene/generation, dormant until the host re-registers, then answers the live member again [PASS]\n";
 }
+
+// The complete four-step migration handoff across real processes: the source
+// host stops accepting the entity, home data freezes the writer grant
+// (MLD1 FENCE), the destination loads the frozen snapshot and confirms, then
+// the coordinator compares the old value and publishes the new route. The
+// old generation stays tombstoned at data so a late source write is refused,
+// while the strictly newer generation resumes from the frozen cursor.
+void coordinator_migration_fourstep() {
+    Context c;
+    write(c.path("echo.lua"), echo);
+    const auto registry = port(), data_port = port(), gs_port = port(), xs_port = port();
+    const auto journal = c.path("fourstep.sqlite");
+    c.node("coordinator", registry, {"--journal", journal.string()});
+    c.node("gameServer", gs_port, {"--script", c.path("echo.lua").string(),
+        "--coordinator", endpoint(registry), "--scope", "alpha", "--service-name", "gs-a"});
+    c.node("crossServer", xs_port, {"--script", c.path("echo.lua").string(),
+        "--coordinator", endpoint(registry), "--scope", "arena", "--service-name", "xs-a"});
+    c.node("data", data_port, {"--script", c.path("echo.lua").string(),
+        "--journal", (c.path("records.sqlite")).string()});
+    const auto send_frame = [](RawSocket& raw, std::string_view payload) {
+        std::string frame(4, '\0');
+        auto length = static_cast<std::uint32_t>(payload.size());
+        for (int i = 3; i >= 0; --i) { frame[i] = static_cast<char>(length & 255); length >>= 8; }
+        raw.send(frame+std::string(payload));
+    };
+    const auto read_frame = [](RawSocket& raw) {
+        const auto header = raw.receive(4);
+        std::size_t length = 0;
+        for (unsigned char ch : header) length = (length << 8) | ch;
+        return raw.receive(length);
+    };
+    const auto ask = [&](unsigned listen, const std::string& line) {
+        RawSocket raw(listen);
+        send_frame(raw, line);
+        return read_frame(raw);
+    };
+    const auto ask_data = [&](const std::string& line) { return ask(data_port, line); };
+    // Step 0: the source host (gameServer gs-a, gen 8) is the live writer; it
+    // records two committed changes at home data.
+    equal(ask_data("MLD1 SUBMIT home hero gen 8 seq 1 hp=10 mp=5"),
+        "MLD1 ACK durable home hero gen 8 seq 1");
+    equal(ask_data("MLD1 SUBMIT home hero gen 8 seq 2 hp=12"),
+        "MLD1 ACK durable home hero gen 8 seq 2");
+    equal(ask_data("MLD1 LOAD home hero"), "MLD1 STATE gen 8 seq 2 hp=12");
+    // The source and destination register as live members.
+    eventually([&] {
+        return ask(registry, "MLR1 QUERY gameServer - alpha").find("gs-a") != std::string::npos
+            && ask(registry, "MLR1 QUERY crossServer - arena").find("xs-a") != std::string::npos;
+    }, 5s, "migration members never registered");
+    const std::string source = "realm NS - alpha gameServer gs-a town";
+    const std::string target = "cross NS - arena crossServer xs-a room-1";
+    // Step 1 (source stop) + step 2 (data freeze): the coordinator learns the
+    // source is stopping, and home data freezes the writer grant at gen 8.
+    equal(ask(registry, "MLR1 MIG OWNER NS - home hero 8 "+source), "MLR1 MIG OWNER OK");
+    equal(ask(registry, "MLR1 MIG PREPARE NS - home hero move-1 8 "+source+" "+target),
+        "MLR1 MIG PREPARED move-1 9");
+    equal(ask(registry, "MLR1 MIG EVENT NS - home hero move-1 9 DRAINED"),
+        "MLR1 MIG STEP move-1 PREPARING");
+    equal(ask_data("MLD1 FENCE home hero gen 8"), "MLD1 FENCED gen 8 seq 2");
+    equal(ask(registry, "MLR1 MIG EVENT NS - home hero move-1 9 FENCE"),
+        "MLR1 MIG STEP move-1 PREPARING");
+    // Step 3 (destination load + confirm): the target loads the frozen
+    // snapshot from home data, then acknowledges it is ready.
+    equal(ask_data("MLD1 LOAD home hero"), "MLD1 STATE gen 8 seq 2 hp=12");
+    equal(ask(registry, "MLR1 MIG EVENT NS - home hero move-1 9 READY"),
+        "MLR1 MIG STEP move-1 PREPARING");
+    // Step 4 (coordinator compares old value, publishes the new route): the
+    // committed route now names the destination with generation 9.
+    equal(ask(registry, "MLR1 MIG COMMIT NS - home hero move-1 9"),
+        "MLR1 MIG COMMITTED move-1 "+target+" 9");
+    eventually([&] {
+        const auto route = ask(registry, "MLR1 ROUTE GET NS - home hero");
+        return route.starts_with("MLR1 ROUTE AT arena crossServer xs-a ");
+    }, 5s, "committed route never published to the destination");
+    const auto published = ask(registry, "MLR1 ROUTE GET NS - home hero");
+    require(published.ends_with(" room-1 9"), "published route lost scene/generation: "+published);
+    // The old writer stays tombstoned: a late gen-8 advance is refused, and
+    // the frozen cursor resend still dedups. Only gen 9 resumes from seq 2.
+    equal(ask_data("MLD1 SUBMIT home hero gen 8 seq 3 late"), "MLD1 ERR STALE gen 8");
+    equal(ask_data("MLD1 SUBMIT home hero gen 9 seq 3 hp=20"),
+        "MLD1 ACK durable home hero gen 9 seq 3");
+    equal(ask_data("MLD1 LOAD home hero"), "MLD1 STATE gen 9 seq 3 hp=20");
+    std::cout << "migration.fourstep: source stop -> data freeze -> destination load "
+        "and confirm -> coordinator compare-old publish; old writer tombstoned, "
+        "newer generation resumes from the frozen cursor [PASS]\n";
+}
+
 }
