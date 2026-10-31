@@ -191,3 +191,44 @@ D17 风险 3：文档同时出现 `avatar_save` 与拟议 `writeToDB`，若各�
 
 - 属性同步与持久保存分开：属性推送走 MLE1 通知（`entity_endpoint.hpp`），持久保存走 `PersistentStore::save`——二者当前未统一接线，实施轮按 D11 适配层完成。
 - 未获实施范围授权（D07）前不增加公开 API（D17「不做/延后」）；名称可在实现评审时一次定清，不仅为改名引入 API（D27）。
+
+## D27 Avatar 钩子确切名字与签名
+
+来源：todo.md:149；实现时定，关联 :146 的保存入口冲突。D27 推荐沿用文档九类生命周期职责，名称与签名在最小运行时落地时一次固定，保留引擎专用命名空间。
+
+### 九类钩子：输入、返回、失败、允许状态、是否产生保存
+
+依据 `docs/zh/avatar-runtime.md:68-76` 表格与状态机（:36-46），补齐允许状态与保存能力两列。**名称与签名在最小运行时落地时一次固定**——本表为推荐，实施轮按真实用例验证后冻结脚本接口。
+
+| 钩子 | 输入 | 返回 | 失败处理 | 允许状态 | 产生保存？ |
+|---|---|---|---|---|---|
+| `avatar_load` | `(context, state)` | avatar 表 | 不发布 Avatar，带原因拒绝进入 | `loading`（→`active`/`closed`） | 否（加载不写） |
+| `avatar_enter` | `(context)` | 无 | 带显式原因拒绝进入 | `active` | 否 |
+| `avatar_leave` | `(context)` | 无 | 记日志；绝不阻塞解除绑定 | `active`/`suspended` | 否 |
+| `avatar_tick` | `(context)` | 无 | 记日志；Avatar 保留 | `active` 唯一 | 否（tick 不触发保存） |
+| `avatar_save` | `(context)` | state 表 | 上报运维；重试属发送队列 | `active`（含 `suspended` 期间未完成保存义务） | **是——唯一强制保存入口** |
+| `avatar_transfer_out` | `(context)` | 状态快照 | 移交中止；Avatar 回 `active` | `active`（→`transferring`） | 是（移交前强制保存） |
+| `avatar_transfer_in` | `(context, state)` | 无 | 到达 Avatar 在本宿主关闭；来源保留其 Avatar | `loading`（→`active`） | 否（接管不另写） |
+| `avatar_detach` | `(context)` | 无 | 记日志；无论如何进 `suspended` | `active`（→`suspended`） | 否 |
+| `avatar_fail` | `(context, reason)` | 无 | 尽力而为：VM 替换期间可能不运行 | 任一失败态 | 否（失败钩子不触发保存） |
+
+### 统一强制保存路径（与 D17）
+
+`avatar_save` 是唯一强制保存入口（`avatar-runtime.md:80`）：钩子做的任何事——发消息、推送、进场景——都不清脏、不通过副作用触发保存；清脏仅由 `PersistentStore::confirm()`（D11/D17）。`avatar_save` 如保留则作为 `PersistentStore::save` 路径调用的生命周期钩子，不直连落库。
+
+### 重入证明（加载失败与迁移期间请求）
+
+- **加载失败**：`avatar_load` 失败 → 不发布 Avatar、拒绝进入（:58）；`loading` 状态「任何处理器不得瞄准该角色，请求以显式失败拒绝，绝不隐形排队」（:51）。
+- **迁移期间请求**：`transferring`/`loading`/`suspended` 期间到达的处理器以显式失败拒绝；已在执行的处理器在移交开始前结束（:92）。VM 串行（:54）保证同一时刻只有一个处理器在跑，不重入。
+- **断线**：`avatar_detach` → `suspended`；`suspended` 不运行处理器，只完成未完成的保存义务（:53/104）。
+
+### 冻结前的验证（实施轮运行时）
+
+1. 加载失败 → 不产生可见 Avatar，重试可进 `loading`。
+2. 迁移期间请求 → 显式失败，不隐形排队；移交失败来源 Avatar 回 `active`。
+3. 断线重入 → 宽限期内直接回 `active`，不重新加载（:53）；宽限期到进 `closing`（:41）。
+
+### 缺口核对
+
+- 名称与签名按上表，在最小运行时落地时一次固定；保留引擎专用命名空间，不把引擎方法混入业务对象（D27 风险 3）。
+- 不把 message handler 当完整生命周期；协议前置未齐（D14/D15）不开放新 Avatar 业务接口（D27「不做/延后」）。
