@@ -325,6 +325,37 @@ D17 风险 3：文档同时出现 `avatar_save` 与拟议 `writeToDB`，若各�
 
 「历史部分测试通过，不能证明后续新增的整链路行为」——总项保持未完成（D05 推荐）；不把本轮只读核对写成新测试通过。
 
+## D08 通用 Entity 身份与生命周期（状态表）
+
+来源：todo.md:127；真实业务生命周期仍未收口。D08 推荐以通用 Entity 承接身份和生命周期，Avatar、Monster 复用机制；先服务一个最小测试实体。
+
+### 状态表：loading/active/transferring/closing 能否接请求、跑计时器、保存
+
+依据 `docs/zh/avatar-runtime.md:36-55` 状态机与 EntityRuntime（`entity_runtime.hpp`），把已有原语纳入状态表（D08 立即动作）：
+
+| 状态 | 能否接请求 | 能否跑计时器 | 能否保存 | 说明 |
+|---|---|---|---|---|
+| `loading` | 否（显式失败拒绝，绝不隐形排队，:51） | 否 | 否 | 已向归属侧请求数据；任何处理器不得瞄准该角色 |
+| `active` | 是（唯一运行 `message` 处理器与 `avatar_tick` 的状态，:52） | 是 | 是（唯一允许持久写，:52） | 承载版本为当前值时允许 |
+| `transferring` | 否（无处理器、无 tick，:54） | 否 | 是（移交前强制 `avatar_save`，D27） | 移交进行中；在途工作在移交开始前完成（VM 串行） |
+| `suspended` | 否（不运行处理器，:53） | 否 | 是（未完成保存义务仍会执行，:53） | 会话已断开；完成义务而非承载游玩 |
+| `closing`/`closed` | 否 | 否 | 否 | 顺序清理完成；该角色在本宿主不存在 |
+
+### 生命周期转移
+
+`loading → active`（加载成功，进入被接受）/ `loading → closed`（加载失败，:37-38）；`active → suspended`（会话解除绑定，:39）/ `active → transferring`（移交进行中，:42）；`suspended → active`（宽限期内重新接入，:40）/ `suspended → closing`（宽限期到或显式关闭，:41）；`transferring → closed`（目标已接受，:43）/ `transferring → active`（移交失败或超时，:44）；`closing → closed`（清理完成，:45）；`closed → [*]`（:46）。
+
+### 验证（设计阶段列，实施轮运行时执行）
+
+1. **加载失败**：`avatar_load` 失败 → 不发布 Avatar、拒绝进入；状态 `loading → closed`（:38/58），重试可回 `loading`。
+2. **重复创建**：同一 `incarnation` 二次创建 → coordinator 拒绝（D06 修改权）；已有 `active` 时不覆盖。
+3. **销毁后迟到应答**：`closed` 后的迟到消息按 `incarnation` 拒绝（D06 验收 3），EntityRuntime 丢弃未知/迟到响应（`entity_runtime.hpp:77`）。
+
+### 缺口核对
+
+- 只有 spawn/destroy 原语尚不足以覆盖加载失败、断线和迁移边界（D08 风险 3）——`loading/transferring/suspended` 的运行时接线待实施；本节为状态表设计。
+- 不新增 Base/Cell；不实现旧玩法；未满足旧协议门控前不新增面向业务的 Avatar API（D08「不做/延后」）。
+
 ## D02 coordinator 注册、归属与迁移（四步时序）
 
 来源：todo.md:48，及 :51/:58 保留阻塞说明。D02 推荐 coordinator 管放置与交接编排、home data 管写入资格；查询到路由不能直接获得写权。复用既有 journal、generation 与 TAKEOVER。
