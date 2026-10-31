@@ -693,3 +693,4 @@
 - **D04 login 时序与 API 状态设计** ✅ commit `071e8f5`（同上）：login 分配→data 授权→HMAC 签发→宿主确认四步（`MLS1` 身份帧、`TicketVerifier`）；apiServer 受理→投递→确认→失败/重试状态机（`ApiSqliteAcceptanceStore`）；幂等键按稳定角色标识+请求 id；归属查询来源为 D06 放置记录。不另选 JWT、不固化宿主 IP、不把受理当到账。
 - **D05 可重复场景清单与过时文案核对** ✅ commit `8ad173b`（同上）：登录/切场景/迁移/回调/多监听五类各列步骤+成功/失败预期；`docs/` 无残留过时断言、唯 RELEASE_NOTES:24-25 归 D18 修订；模型验证/端点测试/真实多进程验证三分类；总项保持未完成。
 - **D08 通用 Entity 生命周期状态表** ✅ commit `7c90dcb`（同上）：loading/active/transferring/suspended/closing/closed 五态各列能否接请求/跑计时器/保存（依据 `avatar-runtime.md:36-55`）；生命周期转移；加载失败/重复创建/销毁后迟到应答三验证例。缺口（loading/transferring/suspended 运行时接线待实施）。
+- **D10 基线/增量/重连消息顺序** ✅ commit `281e127`（同上）：加入先基线后增量/离开停增量/重连重取基线/owner 变化重新基线/摘要不兼容拒绝协商；缺号整批拒绝、重取基线、私有属性不泄漏三验收。不做断点续传、不以进程内字节代替网络测量。
