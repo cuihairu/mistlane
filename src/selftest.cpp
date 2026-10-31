@@ -59,6 +59,7 @@ void lua_lifecycle();
 void lua_http();
 void cross_admission();
 void cross_ticket();
+void login_ticket_wire();
 void cross_record();
 void cross_record_journal();
 void cross_home_sequence();
@@ -173,6 +174,7 @@ int run_tests(int argc, char** argv) {
         {"lua.http","lua",test::lua_http},
         {"cross.admission","cross",test::cross_admission},
         {"cross.ticket","cross",test::cross_ticket},
+        {"login.ticket.wire","api",test::login_ticket_wire},
         {"cross.record","cross",test::cross_record},
         {"cross.record.journal","cross",test::cross_record_journal},
         {"record.home.sequence","cross",test::cross_home_sequence},

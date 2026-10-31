@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
 #include "mistlane/api.hpp"
+#include <openssl/rand.h>
 #include <algorithm>
 #include <limits>
 #include <map>
@@ -183,4 +184,47 @@ inline TicketVerdict TicketVerifier::verify(const EntryTicket& ticket, const Rec
     if (ticket.generation != generation) return TicketVerdict::WrongGeneration;
     return claims_.claim(ticket, now);
 }
+
+// Login-side issuer for the decided MLT1 ticket. It owns no claim table: the
+// receiving host verifies and claims each nonce, so this class only needs the
+// per-realm signing secrets. The nonce comes from the operating system CSPRNG
+// (OpenSSL RAND_bytes), so a minted ticket is never predictable.
+class TicketIssuer {
+public:
+    explicit TicketIssuer(std::map<std::string, ApiSecret> secrets) : secrets_(std::move(secrets)) {
+        if (secrets_.empty()
+                || !std::all_of(secrets_.begin(), secrets_.end(), [](const auto& realm) {
+                    return record_identifier(realm.first); }))
+            throw std::invalid_argument("invalid ticket issuer");
+    }
+    // Mints a signed ticket for (realm, character) valid through `expires`
+    // (inclusive, absolute unix seconds), binding the target host instance and
+    // the hosting generation the caller learned from home data. A null
+    // optional means an argument failed validation; the caller reports it.
+    std::optional<std::string> issue(const RecordStore::RecordKey& character, std::string instance,
+                                     std::uint64_t generation, std::uint64_t expires) const {
+        EntryTicket ticket;
+        ticket.character = character;
+        ticket.instance = std::move(instance);
+        ticket.generation = generation;
+        ticket.expires = expires;
+        // The nonce is part of the valid shape, so fill it before validating;
+        // the CSPRNG failure is a null optional like any other refused mint.
+        unsigned char nonce[16]{};
+        if (RAND_bytes(nonce, sizeof(nonce)) != 1) return std::nullopt;
+        static const char digits[] = "0123456789abcdef";
+        ticket.nonce.resize(32);
+        for (std::size_t i = 0; i < sizeof(nonce); ++i) {
+            ticket.nonce[2*i] = digits[nonce[i]/16];
+            ticket.nonce[2*i+1] = digits[nonce[i]%16];
+        }
+        if (!valid_entry_ticket(ticket)) return std::nullopt;
+        const auto secret = secrets_.find(character.first);
+        if (secret == secrets_.end()) return std::nullopt;
+        ticket.signature = entry_ticket_sign(ticket, secret->second);
+        return entry_ticket_hex(ticket);
+    }
+private:
+    std::map<std::string, ApiSecret> secrets_;
+};
 }

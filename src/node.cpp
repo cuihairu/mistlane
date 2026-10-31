@@ -2711,10 +2711,30 @@ public:
         // The cross gateway speaks its own join protocol and is out of scope.
         if (config_.role == "gateway" && !config_.is_cross_gateway())
             gateway_correlation_ = std::make_unique<GatewayEntityCorrelation>();
+        if (const char* secrets = std::getenv("MISTLANE_TICKET_SECRETS")) {
+            // A host never loads a character on a bare claim: with secrets
+            // configured the crossServer verifies the join's ticket before
+            // admitting it, while the login role signs the ticket for that
+            // same home realm. Anything else would silently run a node that
+            // looks verified but answers no.
+            if (config_.role != "crossServer" && config_.role != "login")
+                throw std::invalid_argument(
+                    "MISTLANE_TICKET_SECRETS only applies to the crossServer and login roles");
+            if (!*secrets) throw std::invalid_argument("MISTLANE_TICKET_SECRETS is empty");
+            if (config_.role == "crossServer") {
+                if (!record_identifier(config_.service_name))
+                    throw std::invalid_argument("MISTLANE_TICKET_SECRETS requires --service-name");
+                ticket_verifier_ = std::make_unique<TicketVerifier>(
+                    ticket_secrets(secrets), config_.service_name, ticket_claims_);
+            } else {
+                ticket_issuer_ = std::make_unique<TicketIssuer>(ticket_secrets(secrets));
+            }
+        }
         if (script_role)
             service_ = std::make_shared<LuaService>(config_.script, service_context_, redis_,
                 websockets_.get(), game_sessions_.get(), this,
-                entity_endpoint_ ? &entity_endpoint_->runtime() : nullptr);
+                entity_endpoint_ ? &entity_endpoint_->runtime() : nullptr,
+                ticket_issuer_.get());
         if (http_service) {
             // MLA1 rides the same listener as the Lua routes. Both variables
             // must be injected together; anything else leaves /mla1 as a
@@ -2736,19 +2756,6 @@ public:
                 api_surface_ = std::make_unique<ApiSurface>(*api_verifier_, *api_store_,
                     [](const MigrationKey&) { return std::nullopt; });
             }
-        }
-        if (const char* secrets = std::getenv("MISTLANE_TICKET_SECRETS")) {
-            // A host never loads a character on a bare claim: with secrets
-            // configured the crossServer verifies the join's ticket before
-            // admitting it. Anything else would silently run a host that
-            // looks verified but answers no.
-            if (config_.role != "crossServer")
-                throw std::invalid_argument("MISTLANE_TICKET_SECRETS only applies to the crossServer role");
-            if (!*secrets) throw std::invalid_argument("MISTLANE_TICKET_SECRETS is empty");
-            if (!record_identifier(config_.service_name))
-                throw std::invalid_argument("MISTLANE_TICKET_SECRETS requires --service-name");
-            ticket_verifier_ = std::make_unique<TicketVerifier>(
-                ticket_secrets(secrets), config_.service_name, ticket_claims_);
         }
         for (const auto& e : config_.upstreams) (void)parse_address(e.address);
         for (const auto& item : config_.listeners) {
@@ -3088,6 +3095,7 @@ private:
     // volatile and per process, like the rest of the verifier's state.
     TicketClaims ticket_claims_;
     std::unique_ptr<TicketVerifier> ticket_verifier_;
+    std::unique_ptr<TicketIssuer> ticket_issuer_;
     std::unique_ptr<Diagnostics> diagnostics_;
     std::shared_ptr<ProbeServer> probe_;
     std::exception_ptr startup_error_;

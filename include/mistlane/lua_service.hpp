@@ -70,7 +70,8 @@ public:
     struct AsyncContext { lua_State* state = nullptr; };
     explicit LuaService(const std::string& path, ServiceContext context = {}, std::shared_ptr<RedisRuntime> redis = {},
                         WebsocketSink* websocket_sink = nullptr, GameSessionSink* session_sink = nullptr,
-                        PlacementSink* placement_sink = nullptr, EntityRuntime* entity_runtime = nullptr);
+                        PlacementSink* placement_sink = nullptr, EntityRuntime* entity_runtime = nullptr,
+                        const TicketIssuer* ticket_issuer = nullptr);
     ~LuaService();
     LuaService(const LuaService&) = delete;
     LuaService& operator=(const LuaService&) = delete;
@@ -115,6 +116,8 @@ private:
     static int entity_spawn(lua_State*);
     static int entity_destroy(lua_State*);
     static void push_entity_api(lua_State*, EntityRuntime*);
+    static int ticket_issue(lua_State*);
+    static void push_ticket_api(lua_State*, LuaService*);
     EntityDispatcher::Handler make_entity_handler(const std::string& type, const std::string& name,
                                                   unsigned method_id, ContractArgs returns,
                                                   const EntityContract* shapes) const;
@@ -127,6 +130,7 @@ private:
     GameSessionSink* session_sink_ = nullptr;
     PlacementSink* placement_sink_ = nullptr;
     EntityRuntime* entity_runtime_ = nullptr;
+    const TicketIssuer* ticket_issuer_ = nullptr;
     bool started_ = false, stopped_ = false, shutdown_ = false;
     std::shared_ptr<AsyncContext> async_context_;
     std::shared_ptr<RedisRuntime> redis_;

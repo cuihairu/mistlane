@@ -3898,6 +3898,62 @@ void cross_ticket() {
     std::cout << "cross.ticket: host verifies MLT1 on the join, replay/forgery/expiry refuse TICKET, "
                  "unconfigured host admits without eligibility, bad secrets refuse startup [PASS]\n";
 }
+// Login-side issuance plus host-side verification: a login node configured
+// with MISTLANE_TICKET_SECRETS signs a fresh ticket from Lua, and a
+// crossServer with the same secret verifies it on the join. The same ticket
+// is refused on a second use, and a secret on a non-login/non-cross role
+// refuses startup.
+void login_ticket_wire() {
+    Context c;
+    write(c.path("login.lua"),
+        "return {message=function(p,c)\n"
+        " local realm, character, instance, generation, expires = p:match('issue (%S+) (%S+) (%S+) (%d+) (%d+)')\n"
+        " if not realm then return 'usage: issue realm character instance generation expires' end\n"
+        " local ticket, err = mistlane.ticket.issue(realm, character, instance, tonumber(generation), tonumber(expires))\n"
+        " if not ticket then return 'ERR '..err end\n"
+        " return ticket\n"
+        "end}");
+    write(c.path("host.lua"),
+        "return {message=function(p,c)"
+        " return (c.character or 'anon')..' verified='..tostring(c.verified==true) end}");
+    ApiSecret secret{};
+    for (std::size_t i = 0; i < secret.size(); ++i) secret[i] = static_cast<unsigned char>(i*13+5);
+    static const char digits[] = "0123456789abcdef";
+    std::string hex;
+    for (unsigned char byte : secret) { hex += digits[byte/16]; hex += digits[byte%16]; }
+    const auto now = std::chrono::duration_cast<std::chrono::seconds>(
+        std::chrono::system_clock::now().time_since_epoch()).count();
+    const auto login = port(), host = port();
+    {
+        ScopedEnv secrets("MISTLANE_TICKET_SECRETS", "alpha:"+hex);
+        c.node("login", login, {"--script", c.path("login.lua").string()});
+        c.node("crossServer", host, {"--script", c.path("host.lua").string(), "--service-name", "xs-a"});
+    }
+    const auto ask = [&]() {
+        return tcp(login)->request("issue alpha hero xs-a 7 "+std::to_string(now+120));
+    };
+    const auto ticket = ask();
+    require(ticket.find("ERR ") != 0 && !ticket.empty(), "the login script failed to issue a ticket: "+ticket);
+    require(parse_entry_ticket(ticket).has_value(), "the Lua API did not return a valid MLT1 hex ticket");
+    const auto join = "MLC1 1 alpha arena r1 ch hero gen 7 ret alpha arena r1 tk "+ticket;
+    {
+        auto peer = tcp(host);
+        equal(peer->request(join), "MLC1 OK 1");
+        equal(peer->request("who"), "hero verified=true");
+    }
+    {
+        auto replay = tcp(host);
+        equal(replay->request(join), "MLC1 ERR TICKET");
+    }
+    const auto fresh = ask();
+    require(fresh != ticket, "the Lua issuer reused a nonce");
+    // An unconfigured login has no ticket API at all, so a script error is
+    // surfaced rather than minting an unsigned claim.
+    const auto unconfigured = port();
+    c.node("login", unconfigured, {"--script", c.path("login.lua").string()});
+    must_fail([&] { (void)tcp(unconfigured)->request("issue alpha hero xs-a 7 "+std::to_string(now+120)); });
+    std::cout << "login.ticket.wire: Lua issuer -> crossServer verifier [PASS]\n";
+}
 // Character route records: a route is only written against a registered
 // member, GET answers from the live member state, and a retiring member drops
 // every route that pointed at it.

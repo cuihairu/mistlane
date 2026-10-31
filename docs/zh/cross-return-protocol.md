@@ -14,7 +14,7 @@
 | 返回路由 | 角色如何返回（区服/组/房间或场景引用） | 入场时必填；持久记录不得固化进程地址 |
 | 入场凭据 | 进入该跨服作用域的授权 | 已定：login 以区服密钥签发短时效 HMAC-SHA256 凭据；十六进制形式随 `MLC1` 的 `tk` 尾缀上行、C++ 签发/验证原语已就绪，配置 `MISTLANE_TICKET_SECRETS` 的 crossServer 在握手上验证凭据（2026-10-21；失败结论答 `MLC1 ERR TICKET`）。声明表按进程，验证通过只标记准入资格，不等于持久写 |
 
-`MLC1` 选择扩宽而非追加后续帧：路由字段之后可携带可选尾缀 `ch <角色标识> gen <承载版本> ret <区服> <组> <房间>`，承载参与者上下文，三部分齐备或全部缺省，最后一组 `tk <hex>` 携带入场凭据（线格式见[跨服设计](./cross-server.md)）。Lua 随会话收到参与者字段（`character`、`generation` 与嵌套 `route`）；匿名五字段握手保持可用且仍为匿名。签发方已定为 login。凭据线形为十六进制（`MLT1` 规范字节加原始 32 字节签名）；握手解码失败、或凭据声明的 character/承载版本与尾缀不符时，整次握手按 INVALID 拒绝——绝不从声称持有凭据的参与者身上剥离凭据。配置 `MISTLANE_TICKET_SECRETS` 的 crossServer 在握手上运行验证器（2026-10-21，见[服务契约](./service-contracts.md#login)），并把结论以 `context.verified` 交给脚本；未配置时没有任何会话拥有验证通过的凭据。**没有通过验证的参与者上下文的会话不能提交持久角色变更**；应用仍可为匿名会话运行玩法。填写 `ch`/`gen`/`ret` 或仅通过 MLS1 都不会授予写租约。
+`MLC1` 选择扩宽而非追加后续帧：路由字段之后可携带可选尾缀 `ch <角色标识> gen <承载版本> ret <区服> <组> <房间>`，承载参与者上下文，三部分齐备或全部缺省，最后一组 `tk <hex>` 携带入场凭据（线格式见[跨服设计](./cross-server.md)）。Lua 随会话收到参与者字段（`character`、`generation` 与嵌套 `route`）；匿名五字段握手保持可用且仍为匿名。签发方为 login，`MISTLANE_TICKET_SECRETS` 下的 login 节点经 `mistlane.ticket.issue` 从 Lua 签发。凭据线形为十六进制（`MLT1` 规范字节加原始 32 字节签名）；握手解码失败、或凭据声明的 character/承载版本与尾缀不符时，整次握手按 INVALID 拒绝——绝不从声称持有凭据的参与者身上剥离凭据。配置 `MISTLANE_TICKET_SECRETS` 的 crossServer 在握手上运行验证器（2026-10-21，见[服务契约](./service-contracts.md#login)），并把结论以 `context.verified` 交给脚本；未配置时没有任何会话拥有验证通过的凭据。**没有通过验证的参与者上下文的会话不能提交持久角色变更**；应用仍可为匿名会话运行玩法。填写 `ch`/`gen`/`ret` 或仅通过 MLS1 都不会授予写租约。
 
 ## 唯一写入权
 
@@ -89,6 +89,6 @@ MLD1 ERR INVALID | MLD1 ERR STALE gen <n> | MLD1 ERR SEQ seq <n> | MLD1 ERR FULL
 - MLD1 的线格式与分帧：随端点实现一并定稿——语法与应答词表见上节；分帧沿用共享的 u32 BE 长度帧。
 - 结算、奖励与排行业务规则、跨服场景模板、实际的 Avatar/场景运行时：归后续 crossServer 切片与实体契约链。Avatar/会话运行时契约已在 [Avatar 运行时契约](./avatar-runtime.md) 页定稿；实体属性运行时仍归实体契约链。
 - 租约时长、队列界与重试预算：实现时以测量依据给出默认值的配置项，不由本页拍数字。
-- 入场凭据签名与签发方已在 login 契约决定：HMAC-SHA256、login、区服密钥。C++ 签发/验证原语、规范凭据编码与传输仍待实现；初始 generation 及推进生命周期见[服务契约](./service-contracts.md#login)。
+- 入场凭据签名与签发方已在 login 契约决定：HMAC-SHA256、login、区服密钥。C++ 签发/验证原语、规范凭据编码与传输已实现（`mistlane.ticket.issue` 在 `MISTLANE_TICKET_SECRETS` 下的 login 节点签发、crossServer 在握手上验证）；初始 generation 及推进生命周期见[服务契约](./service-contracts.md#login)。
 
 参与者上下文、端点键、有序队列、ACK 编解码/门控和租约状态模型均已有测试。持久存储链及 crossServer/coordinator/Avatar 运行时接线仍未完成。

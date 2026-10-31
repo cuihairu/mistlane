@@ -53,6 +53,8 @@ stateDiagram-v2
 帧式游戏会话在监听组合含 tcp/ws/wss 时暴露 `mistlane.session.send(id, payload)` 与 `mistlane.session.broadcast(payload)`。`send` 成功返回 true，失败返回 false 与原因（`unknown session id`、`payload exceeds 1 MiB`、会话输出约 2 MiB 上限打满时的 `session backlogged`）；`broadcast` 向所有存活帧式会话投递并返回被接受的会话数。`id` 即 message context 中的会话身份。不回复的 handler（返回 nil）与推送可自由组合：写请求按通道排队，推送先于响应到达，顺序保持。关联模式（`MLC2`）下推送帧携带请求 ID 0，响应回显 `context.request`。
 以 `--coordinator IP:PORT` 启动的节点上的脚本另可使用 `mistlane.place(role, namespace?, scope?, callback)`：向注册表查询一次分配，回调在 handler 返回之后才触发，参数为（`nil`, 监听地址）或（`reason`, `nil`），因此应答须在回调里用 `mistlane.session.send` 推送。可选的 `namespace` 命名与 scope 独立的部署组，在空组查询得 `EMPTY` 而不是解析错误。没有 `--coordinator` 时该调用报 `placement is disabled; start with --coordinator IP:PORT`。
 
+以 `MISTLANE_TICKET_SECRETS` 启动的 login 节点另暴露 `mistlane.ticket.issue(realm, character, instance, generation, expires)`：按该区服密钥签发绑定目标宿主实例与承载版本的短时效 `MLT1` 入场凭据（十六进制），有效期到绝对 Unix 秒 `expires`（含边界）；login 自身不需要实例名，目标由参数传入。成功返回凭据十六进制串，失败返回 `nil` 与原因（无该区服密钥或参数非法）。没有该环境时 API 不存在，脚本不会把缺签发者误当成可用。以相同密钥启动的 crossServer 在握手上验证凭据并把结论写入 `context.verified`。
+
 除监听组合要求的 message/http 外均可选；nil 表示缺省。字段存在但不是函数会在调用时失败。没有 on_connect/on_disconnect 玩家登录钩子；连接生命周期不等同于业务登录。原游戏全局 Timer、SQLService、C_* 和协议没有直接迁入。
 
 正常 SIGTERM/SIGINT：关闭监听，调用 stop，取消活动会话，调用 shutdown，排空取消回调。当前是取消，不是业务请求排空或事务刷盘。stop 抛错仍尝试 shutdown；标记在调用前设置，避免重复调用。已完成 init 的失败候选也尽力执行 stop/shutdown；顶层或 init 本身失败只销毁 VM，不承诺对部分初始化调用清理钩子。崩溃、SIGKILL、断电不保证任何清理。

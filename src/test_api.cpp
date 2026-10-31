@@ -598,6 +598,42 @@ void login_ticket() {
     second.nonce = "fedcba9876544321fedcba9876544321";
     second.signature = entry_ticket_sign(second, test_secret(3));
     require(tight.verify(second, hero, 9, 999) == TicketVerdict::Full, "a full claim table admitted another nonce");
+
+    // The login-side issuer mints a ticket with a fresh CSPRNG nonce and the
+    // same instance it was constructed for; the host verifier admits exactly
+    // that arrival. A bad shape or an unknown realm refuses to mint, and the
+    // issuer itself rejects an empty secret map or a non-identifier instance.
+    const TicketIssuer issuer(std::map<std::string, ApiSecret>{{"home", test_secret(3)},
+        {"foreign", test_secret(4)}});
+    const auto minted = issuer.issue(hero, "gs-a", 9, 1'000);
+    require(minted && minted->size() > 0, "a valid ticket was not minted");
+    const auto parsed = parse_entry_ticket(*minted);
+    require(parsed && parsed->character == hero && parsed->instance == "gs-a"
+            && parsed->generation == 9 && parsed->expires == 1'000
+            && parsed->nonce.size() == 32, "the minted ticket did not round-trip");
+    TicketClaims issued_claims;
+    const TicketVerifier issued_host(std::map<std::string, ApiSecret>{{"home", test_secret(3)},
+        {"foreign", test_secret(4)}}, "gs-a", issued_claims);
+    require(issued_host.verify(*parsed, hero, 9, 999) == TicketVerdict::Ok,
+            "the issuer's ticket was refused by the host");
+    const auto minted_again = issuer.issue(hero, "gs-a", 9, 1'000);
+    require(minted_again && *minted_again != *minted, "two mints reused a nonce");
+    require(!issuer.issue({"elsewhere", "ghost"}, "gs-a", 9, 1'000), "an unknown realm minted a ticket");
+    require(!issuer.issue({"home", "x y"}, "gs-a", 9, 1'000), "a non-identifier character minted a ticket");
+    require(!issuer.issue(hero, "gs a!", 9, 1'000), "a non-identifier instance minted a ticket");
+    require(!issuer.issue(hero, "gs-a", 0, 1'000), "a zero generation minted a ticket");
+    require(!issuer.issue(hero, "gs-a", 9, 0), "a zero expiry minted a ticket");
+    const auto bad_issuer = [](std::map<std::string, ApiSecret> secrets) {
+        try {
+            TicketIssuer draft(std::move(secrets));
+            return false;
+        } catch (const std::exception&) {
+            return true;
+        }
+    };
+    require(bad_issuer({}), "an issuer without secrets was accepted");
+
+    std::cout << "login.ticket issuer: mint, round-trip, fresh nonce, bad shapes [PASS]\n";
     std::cout << "login.ticket roundtrip: issue then verify admits the arrival [PASS]\n";
     std::cout << "login.ticket ladder: tamper/identity/expiry/replay/capacity all refused [PASS]\n";
 }

@@ -84,7 +84,7 @@ if(BUILD_TESTING)
       coordinator.migration.retire coordinator.migration.wire coordinator.migration.journal coordinator.migration.journal.recovery cross.ticket lua.lifecycle lua.http
       coordinator.migration.authority
       api.signature api.tamper api.rotation api.replay api.acceptance api.acceptance.sqlite api.ownership api.wire api.http
-      login.ticket
+      login.ticket login.ticket.wire
       cross.admission cross.record cross.record.journal cross.return.queue probe.control scaffold.init
       config.file cli.bot)
     string(REPLACE "." "_" test_name "${test_case}")

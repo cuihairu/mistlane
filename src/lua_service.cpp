@@ -3,6 +3,7 @@
 #include "mistlane/transport.hpp" // max_frame bounds websocket pushes
 #include "mistlane/entity_runtime.hpp"
 #include "mistlane/entity_lua.hpp"
+#include "mistlane/entry_ticket.hpp"
 #include <boost/asio/ssl.hpp>
 #include <openssl/ssl.h>
 #include <openssl/x509_vfy.h>
@@ -134,9 +135,9 @@ void LuaService::check(int status) {
 }
 LuaService::LuaService(const std::string& path, ServiceContext context, std::shared_ptr<RedisRuntime> redis,
                        WebsocketSink* sink, GameSessionSink* sessions, PlacementSink* placement,
-                       EntityRuntime* entity_runtime)
+                       EntityRuntime* entity_runtime, const TicketIssuer* ticket_issuer)
   : state_(luaL_newstate()), context_(std::move(context)), websocket_sink_(sink), session_sink_(sessions),
-    placement_sink_(placement), entity_runtime_(entity_runtime),
+    placement_sink_(placement), entity_runtime_(entity_runtime), ticket_issuer_(ticket_issuer),
     async_context_(std::make_shared<AsyncContext>()), redis_(std::move(redis)) {
     if (!state_) throw std::runtime_error("cannot create Lua state");
     async_context_->state = state_;
@@ -151,6 +152,7 @@ LuaService::LuaService(const std::string& path, ServiceContext context, std::sha
         push_session_api(state_, this);
         push_placement_api(state_, this);
         push_entity_api(state_, entity_runtime_);
+        push_ticket_api(state_, this);
         lua_pushcfunction(state_, traceback);
         check(luaL_loadfile(state_, path.c_str()));
         check(protected_call(state_, 0, 1, 1));
@@ -333,6 +335,60 @@ void LuaService::push_entity_api(lua_State* l, EntityRuntime* runtime) {
     lua_pushlightuserdata(l, runtime); lua_pushcclosure(l, entity_spawn, 1); lua_setfield(l, -2, "spawn");
     lua_pushlightuserdata(l, runtime); lua_pushcclosure(l, entity_destroy, 1); lua_setfield(l, -2, "destroy");
     lua_setfield(l, -2, "entity"); lua_setglobal(l, "mistlane");
+}
+void LuaService::push_ticket_api(lua_State* l, LuaService* service) {
+    // The issuer is only constructed on a login node configured with the same
+    // MISTLANE_TICKET_SECRETS the hosts verify with; everywhere else the API
+    // is absent so a script cannot mistake a missing issuer for a working one.
+    if (!service->ticket_issuer_) return;
+    lua_getglobal(l, "mistlane");
+    if (!lua_istable(l, -1)) { lua_pop(l, 1); lua_newtable(l); }
+    lua_newtable(l);
+    lua_pushlightuserdata(l, service); lua_pushcclosure(l, ticket_issue, 1); lua_setfield(l, -2, "issue");
+    lua_setfield(l, -2, "ticket"); lua_setglobal(l, "mistlane");
+}
+// Mints a signed MLT1 entry ticket: mistlane.ticket.issue(realm, character,
+// instance, generation, expires) -> hex or nil, reason. Synchronous: the
+// issuer only signs, it never waits on a peer. The realm must be one the
+// issuer holds a secret for, the instance must identify the target host, and
+// the expiry is an absolute unix second the ticket stays valid through
+// (inclusive). A login script hands the hex back to its client or the entry
+// response; the receiving crossServer verifies it on the join.
+int LuaService::ticket_issue(lua_State* l) {
+    auto* service = static_cast<LuaService*>(lua_touserdata(l, lua_upvalueindex(1)));
+    if (!service->ticket_issuer_) {
+        lua_pushnil(l);
+        lua_pushliteral(l, "ticket issuer is not configured on this role");
+        return 2;
+    }
+    auto word = [&](int index, const char* label) {
+        if (!lua_isstring(l, index)) throw std::runtime_error(std::string(label)+" must be an identifier");
+        std::size_t size = 0;
+        const char* data = lua_tolstring(l, index, &size);
+        if (!size || size > 64) throw std::runtime_error(std::string(label)+" length is invalid");
+        for (std::size_t i = 0; i < size; ++i) {
+            const unsigned char ch = data[i];
+            if (!((ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z')
+                    || (ch >= '0' && ch <= '9') || ch == '_' || ch == '-'))
+                throw std::runtime_error(std::string(label)+" must be an identifier");
+        }
+        return std::string(data, size);
+    };
+    const auto realm = word(1, "realm");
+    const auto character = word(2, "character");
+    const auto instance = word(3, "instance");
+    if (!lua_isinteger(l, 4) || !lua_isinteger(l, 5)) throw std::runtime_error("generation and expires must be integers");
+    const auto generation = static_cast<std::uint64_t>(lua_tointeger(l, 4));
+    const auto expires = static_cast<std::uint64_t>(lua_tointeger(l, 5));
+    if (!generation || !expires) throw std::runtime_error("generation and expires must be positive");
+    const auto issued = service->ticket_issuer_->issue({realm, character}, instance, generation, expires);
+    if (!issued) {
+        lua_pushnil(l);
+        lua_pushliteral(l, "no ticket secret for this realm or invalid arguments");
+        return 2;
+    }
+    lua_pushlstring(l, issued->data(), issued->size());
+    return 1;
 }
 // The fixture runtime addresses by explicit ids; the script supplies them
 // (scenario/tests or a login flow that assigns ids). An entity that already
