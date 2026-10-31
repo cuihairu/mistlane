@@ -1107,11 +1107,16 @@ private:
         if (gateway_) {
             const auto offset = entity_frame_offset(frame);
             const auto at = offset == std::string_view::npos ? 0 : offset + kEntityReplyCorrelationAt;
-            const auto inner = offset == std::string_view::npos ? 0 : entity_correlation(frame, at);
-            if (offset != std::string_view::npos && frame.size() >= at + 8 && inner) {
-                const auto mapped = gateway_->resolve(inner);
-                if (!mapped || mapped->first != connection_) return;
-                set_entity_correlation(frame, at, mapped->second);
+            // A marker alone is not a reply: read the correlation only after
+            // the frame is long enough to contain it. A zero/unknown id keeps
+            // the prior behaviour (forward as-is / drop the stray reply).
+            if (offset != std::string_view::npos && frame.size() >= at + 8) {
+                const auto inner = entity_correlation(frame, at);
+                if (inner) {
+                    const auto mapped = gateway_->resolve(inner);
+                    if (!mapped || mapped->first != connection_) return;
+                    set_entity_correlation(frame, at, mapped->second);
+                }
             }
         }
         diagnostics_.add_message("tx");
@@ -1145,18 +1150,23 @@ private:
         if (gateway_) {
             const auto offset = entity_frame_offset(payload);
             const auto at = offset == std::string_view::npos ? 0 : offset + kEntityRequestCorrelationAt;
-            const auto outer = offset == std::string_view::npos ? 0 : entity_correlation(payload, at);
-            if (offset != std::string_view::npos && payload.size() >= at + 8 && outer) {
-                const auto inner = gateway_->allocate(connection_, outer);
-                if (!inner) {
-                    diagnostics_.entity_result("capacity");
-                    std::string frame = "MLE1";
-                    envelope_push_be(frame, outer, 8);
-                    frame += '\x01';
-                    frame += static_cast<char>(EntityError::CAPACITY);
-                    return reply(std::move(frame));
+            // A marker alone is not an entity request: forward malformed or
+            // zero-correlation frames unchanged only after the length check,
+            // never reading the correlation slice out of bounds.
+            if (offset != std::string_view::npos && payload.size() >= at + 8) {
+                const auto outer = entity_correlation(payload, at);
+                if (outer) {
+                    const auto inner = gateway_->allocate(connection_, outer);
+                    if (!inner) {
+                        diagnostics_.entity_result("capacity");
+                        std::string frame = "MLE1";
+                        envelope_push_be(frame, outer, 8);
+                        frame += '\x01';
+                        frame += static_cast<char>(EntityError::CAPACITY);
+                        return reply(std::move(frame));
+                    }
+                    set_entity_correlation(payload, at, inner);
                 }
-                set_entity_correlation(payload, at, inner);
             }
         }
         upstream_->write(std::move(payload), [self=shared_from_this()](Error ec) {
@@ -1551,6 +1561,14 @@ public:
         const bool realm_scope = owner.scope.kind == MigrationScope::Kind::Realm;
         return set_route(realm_scope ? owner.scope.realm : owner.scope.cross_group,
             realm, character, owner.role, owner.instance, namespace_);
+    }
+    // A destination that left the registry cannot receive the committed route;
+    // the commit must stay pending so the fenced gap remains takeover-eligible
+    // instead of answering COMMITTED with a route the registry cannot serve.
+    bool route_publishable(const MigrationOwner& owner, const std::string& namespace_) const {
+        const bool realm_scope = owner.scope.kind == MigrationScope::Kind::Realm;
+        return members_.count(member_key(namespace_, realm_scope ? owner.scope.realm : owner.scope.cross_group,
+            owner.role, owner.instance)) != 0;
     }
     std::optional<RouteAnswer> route(const std::string& namespace_, const std::string& realm,
                                      const std::string& character) const {
@@ -2193,6 +2211,12 @@ private:
             token.key = key;
             const auto tx = registry_.transaction(namespace_, key);
             if (!tx) return "MLR1 ERR EMPTY";
+            // A replayed terminal commit answers its recorded verdict; only the
+            // first commit needs a live destination to publish against.
+            if (const auto* existing = tx->entry(token.id);
+                existing && existing->state != MigrationState::Committed
+                    && !registry_.route_publishable(existing->request.destination, namespace_))
+                return "MLR1 ERR PENDING";
             const auto result = tx->apply(token, MigrationEvent::Commit);
             if (result == MigrationResult::Applied) {
                 const auto route = tx->route();

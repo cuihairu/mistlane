@@ -2486,6 +2486,39 @@ return service)");
     }
     std::cout << "entity.transport.gateway correlated: MLC2 prefix survives, rewrite still applies [PASS]\n";
 
+    // A marker alone is not an entity frame. The relay must not read the
+    // correlation slice before checking the frame length, and the endpoint
+    // answers the same typed malformed-envelope error as a direct request.
+    {
+        RawSocket raw(relay);
+        const auto send_frame = [&](const std::string& body) {
+            std::string header(4, '\0');
+            const auto length = static_cast<std::uint32_t>(body.size());
+            for (unsigned i = 0; i < 4; ++i) header[i] = static_cast<char>(length >> (24 - i*8));
+            raw.send(header + body);
+        };
+        const auto read_frame = [&]() {
+            const auto header = raw.receive(4);
+            std::uint32_t length = 0;
+            for (unsigned i = 0; i < 4; ++i) length = length << 8 | static_cast<unsigned char>(header[i]);
+            return raw.receive(length);
+        };
+        send_frame("MLE1");
+        auto direct_short = read_frame();
+        require(direct_short.size() >= 12 && direct_short.starts_with("MLE1"),
+            "short MLE1 request did not answer a typed malformed envelope");
+        require(correlation_of(direct_short) == 0 && reply_of(direct_short).is_error
+                && reply_of(direct_short).error == EntityError::INVALID
+                && reply_of(direct_short).reason == "malformed envelope",
+            "short MLE1 request did not answer malformed envelope");
+        send_frame(correlated("MLE1"));
+        auto prefixed_short = read_frame();
+        const std::string expected_short = "echo:" + std::string("\x0a\x0b\x0c\x0d", 4) + "MLE1";
+        require(prefixed_short == expected_short,
+            "short correlated MLE1 request passed through without corruption");
+    }
+    std::cout << "entity.transport.gateway malformed: short marker frames answered without rewrite [PASS]\n";
+
     // A notify forwards unchanged (zero correlation has no reply) and the
     // follow-up frame is the only bytes the reader sees.
     {
@@ -4711,6 +4744,8 @@ void coordinator_migration_wire() {
         "--coordinator", endpoint(registry), "--scope", "gamma", "--service-name", "gs-c"});
     auto& cross_member = c.node("crossServer", cross, {"--script", c.path("echo.lua").string(),
         "--coordinator", endpoint(registry), "--scope", "arena", "--service-name", "xs-a"});
+    auto& doomed_cross = c.node("crossServer", port(), {"--script", c.path("echo.lua").string(),
+        "--coordinator", endpoint(registry), "--scope", "arena", "--service-name", "xs-z"});
     const auto send_frame = [](RawSocket& raw, std::string_view payload) {
         std::string frame(4, '\0');
         auto length = static_cast<std::uint32_t>(payload.size());
@@ -4747,7 +4782,7 @@ void coordinator_migration_wire() {
             throw std::runtime_error("L"+std::to_string(loc.line())+" "+line+": "+error.what());
         }
     };
-    eventually([&] { return ask("MLR1 QUERY -").find("MLR1 MEMBERS 4") != std::string::npos; },
+    eventually([&] { return ask("MLR1 QUERY -").find("MLR1 MEMBERS 5") != std::string::npos; },
         5s, "members never reached the registry");
     const std::string source = "realm NS - alpha gameServer gs-a town";
     const std::string target = "cross NS - arena crossServer xs-a room-1";
@@ -4856,7 +4891,7 @@ void coordinator_migration_wire() {
     // route and a living destination, burns the superseded transaction, and
     // reserves a strictly newer generation. It never revives the old source or
     // the dead destination, and only the new destination's ACK authorizes it.
-    const std::string alive = "realm NS - delta gameServer gs-d town";
+    const std::string alive = "realm NS - gamma gameServer gs-c town";
     // Refusals against the fenced gap before any takeover: a route other than
     // the fenced one is STALE, the source or move-7's dead destination is
     // INVALID, and a shape miss is INVALID.
@@ -4889,6 +4924,26 @@ void coordinator_migration_wire() {
     equal(ask("MLR1 MIG COMMIT NS - home hero-2 move-7 12"), "MLR1 ERR CONFLICT");
     equal(ask("MLR1 MIG TAKEOVER NS - home hero-2 take-7 8 "+doomed_owner+" "+alive),
         "MLR1 ERR CONFLICT");
+    // The destination member is live membership, not just a request field: if
+    // it leaves between PREPARE and COMMIT the commit cannot publish its route,
+    // and the pending verdict leaves the fenced gap explicit.
+    const std::string dead_target = "cross NS - arena crossServer xs-z room-1";
+    equal(ask("MLR1 MIG OWNER NS - home hero-3 8 "+source), "MLR1 MIG OWNER OK");
+    equal(ask("MLR1 MIG PREPARE NS - home hero-3 move-8 8 "+source+" "+dead_target),
+        "MLR1 MIG PREPARED move-8 9");
+    equal(ask("MLR1 MIG EVENT NS - home hero-3 move-8 9 DRAINED"),
+        "MLR1 MIG STEP move-8 PREPARING");
+    equal(ask("MLR1 MIG EVENT NS - home hero-3 move-8 9 FENCE"),
+        "MLR1 MIG STEP move-8 PREPARING");
+    equal(ask("MLR1 MIG EVENT NS - home hero-3 move-8 9 READY"),
+        "MLR1 MIG STEP move-8 PREPARING");
+    doomed_cross.signal(SIGTERM);
+    eventually([&] { return ask("MLR1 QUERY crossServer - arena").find("xs-z") == std::string::npos; },
+        5s, "retired destination stayed in the registry");
+    equal(ask("MLR1 MIG COMMIT NS - home hero-3 move-8 9"), "MLR1 ERR PENDING");
+    equal(ask("MLR1 MIG STATUS NS - home hero-3"),
+        "MLR1 MIG STATE move-8 PREPARING drained fenced ready 9");
+    equal(ask("MLR1 ROUTE GET NS - home hero-3"), "MLR1 ROUTE EMPTY");
     // The tokened coordinator keeps its own registry, so it only sees this
     // key after its own hand identifies and publishes the facts.
     {
@@ -4935,6 +4990,7 @@ void coordinator_migration_wire() {
 // unresolved transaction, the same consumed generation, and can finish it.
 void coordinator_migration_journal() {
     Context c;
+    write(c.path("echo.lua"), echo);
     const auto first = port(), second = port();
     const auto journal = c.path("coordinator.sqlite");
     auto& initial = c.node("coordinator", first, {"--journal", journal.string()});
@@ -4978,6 +5034,8 @@ void coordinator_migration_journal() {
     require(initial.wait() == 0, "journal coordinator did not stop cleanly");
 
     c.node("coordinator", second, {"--journal", journal.string()});
+    c.node("crossServer", port(), {"--script", c.path("echo.lua").string(),
+        "--coordinator", endpoint(second), "--scope", "arena", "--service-name", "xs-a"});
     // Startup replay has already driven the fenced live transaction to the
     // deterministic recovery state: pre-fence would have rolled back, this one
     // stays pending until the destination repeats its ACK.
@@ -4992,6 +5050,9 @@ void coordinator_migration_journal() {
     equal(ask(second, "MLR1 MIG PREPARE NS - home hero-abort abort-2 8 "+source+" "+target),
         "MLR1 MIG PREPARED abort-2 10");
     equal(ask(second, "MLR1 MIG EVENT NS - home hero move-1 9 READY"), "MLR1 MIG STEP move-1 RECOVERING");
+    eventually([&] {
+        return ask(second, "MLR1 QUERY crossServer - arena").find("xs-a") != std::string::npos;
+    }, 5s, "restored destination never registered");
     equal(ask(second, "MLR1 MIG COMMIT NS - home hero move-1 9"),
         "MLR1 MIG COMMITTED move-1 "+target+" 9");
     equal(ask(second, "MLR1 MIG STATUS NS - home hero"),
