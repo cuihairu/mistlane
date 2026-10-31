@@ -145,3 +145,49 @@ EntityRuntime RPC 状态（`include/mistlane/entity_runtime.hpp:64`）：`PENDIN
 
 - 适配层（SQLite ↔ `PersistentStore`）与「帧大小约束下的完整快照」序列化尚未接线；`MLD1` 现为 plain script traffic（`node.cpp:3063`）。按 D11「不重造已有 record_fence；不让业务多开强制保存入口」——接线须走 `PersistentStore::save` 单一入口。
 - 查询索引与批量数据迁移待实际需求（D11「不做/延后」）；不默认 SQLite 文件存储具备多机高可用。
+
+## D17 属性声明与唯一强制保存入口
+
+来源：todo.md:146；尚未实现，依赖协议与实体契约链。D17 推荐统一成一条引擎保存路径，Lua 业务只提供状态或发起保存；属性同步与持久保存分开。
+
+### 引擎命名空间中的显式保存入口
+
+**保留只读引擎命名空间中的显式保存入口**，`avatar_save` 如保留则作为该路径调用的生命周期钩子。现有唯一入口：
+
+- `PersistentStore::save(generation, expected_revision)`（`include/mistlane/entity_persist.hpp:88`）——单一强制保存入口；`expected_revision != revision_` → `CONFLICT`，外来 `generation` → `STALE`。`SaveOutcome` 携带 `snapshot`/`receipt`（`generation_`/`revision_`/`save_counter_`）/`error`/`reason`。
+- `PersistentStore::confirm()`（:102）——提交确认，`committed_revision_` 前移到快照 revision；只在确认后清脏。
+- `PersistentStore::restore()`（:120）——加载路径，带版本转换。
+
+### avatar_save 与 writeToDB 的职责区分
+
+D17 风险 3：文档同时出现 `avatar_save` 与拟议 `writeToDB`，若各自直接落库就破坏唯一入口。职责划分：
+
+| 入口 | 职责 | 是否直连落库 |
+|---|---|---|
+| `avatar_save`（如保留） | 生命周期钩子，通知引擎「该保存了」 | 否——仅调用 `PersistentStore::save` |
+| 拟议 `writeToDB` | 不新增 | 否——统一走 `PersistentStore::save` |
+| `PersistentStore::save` | 引擎唯一强制保存路径 | 是（经适配层到 SQLite） |
+
+「不恢复含混的 `self:sync()`」；「不把通知发出作为清脏依据」——清脏只由 `confirm()` 完成（D11）。
+
+### 周期、迁移、退出保存都汇入同一队列和提交确认
+
+- **周期保存**：引擎定时触发 → `PersistentStore::save`。
+- **迁移保存**：MIG TAKEOVER 前源宿主强制 `save` + `confirm` 成功后才移交写权（D02/D06 栅栏顺序）。
+- **退出保存**：进程退出前 `save` + 等待 `confirm`（durable ACK）才允许退出。
+
+三者共用 `save_counter_` 序号与 `confirm()` 队列——崩溃后按 D11 三元组（契约摘要/持久 revision/回传序号）查询。
+
+### 失败、重试与确认版本（对照 D11）
+
+| 失败 | 行为 |
+|---|---|
+| `STALE`（外来 generation） | 拒绝；不回退已提交 revision；旧写者不复活（D13 栅栏后只向前） |
+| `CONFLICT`（revision 前移） | 拒绝；另一写者先落；调用方重取基线（D10）后重试 |
+| `in-flight` | 拒绝重复强制保存；等待在途 `confirm` |
+| `confirm` 失败/超时 | 保持 dirty；不误清；重试或告警（D26 重试策略） |
+
+### 缺口核对
+
+- 属性同步与持久保存分开：属性推送走 MLE1 通知（`entity_endpoint.hpp`），持久保存走 `PersistentStore::save`——二者当前未统一接线，实施轮按 D11 适配层完成。
+- 未获实施范围授权（D07）前不增加公开 API（D17「不做/延后」）；名称可在实现评审时一次定清，不仅为改名引入 API（D27）。
