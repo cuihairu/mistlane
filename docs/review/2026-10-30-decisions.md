@@ -690,3 +690,4 @@
 - **D27 Avatar 钩子九类表** ✅ commit `4c76c8a`（同上）：九钩子各列输入/返回/失败/允许状态/是否产生保存（依据 `docs/zh/avatar-runtime.md:68-76`）；`avatar_save` 唯一强制保存入口；加载失败与迁移期间请求的拒绝重入证明；三验证例。名称签名在最小运行时落地时一次固定。
 - **D02 迁移四步时序与缺口核对** ✅ commit `cfdb726`（同上）：源停止处理→data 冻结→目标加载确认→coordinator 比较旧值发布新路由，各步凭证/重复请求/崩溃后查询；核对 `HomeSequenceAuthority`/`record_fence`/`MLR1 MIG` 原语后缺口仅放置记录表持久化与 coordinator 比较基准。查询路由≠写权（generation+fence 判定）。
 - **D01 角色五列验收表与最小链路** ✅ commit `6e4f1ab`（同上）：单二进制八角色（login/data/coordinator/gateway/gameServer/apiServer/probe/crossServer）；登录/路由/加载/修改/移交/保存确认六段各列入口—调用方—被调用方—持久结果—失败行为；最小链路=登录分配→coordinator 定位→data 加载→承载→修改→保存确认→换宿主且旧不能再写。解除条件需运行时，实施轮执行。
+- **D04 login 时序与 API 状态设计** ✅ commit `071e8f5`（同上）：login 分配→data 授权→HMAC 签发→宿主确认四步（`MLS1` 身份帧、`TicketVerifier`）；apiServer 受理→投递→确认→失败/重试状态机（`ApiSqliteAcceptanceStore`）；幂等键按稳定角色标识+请求 id；归属查询来源为 D06 放置记录。不另选 JWT、不固化宿主 IP、不把受理当到账。
