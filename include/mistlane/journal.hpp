@@ -27,6 +27,7 @@ struct PlacementRecord {
     std::string character;
     std::string role;       // gameServer or crossServer
     std::string instance;
+    std::string scene;      // the scene the owner reports for this character
     std::uint64_t generation = 0; // the write-eligibility generation the coordinator published
     bool operator==(const PlacementRecord&) const = default;
 };

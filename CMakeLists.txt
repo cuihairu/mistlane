@@ -79,7 +79,7 @@ if(BUILD_TESTING)
       entity.gateway
       entity.persist
       entity.perf
-      coordinator.placement coordinator.routes coordinator.placement.journal coordinator.migration.commit coordinator.migration.abort
+      coordinator.placement coordinator.routes coordinator.placement.schema coordinator.placement.journal coordinator.migration.commit coordinator.migration.abort
       coordinator.migration.recover coordinator.migration.stale coordinator.migration.order
       coordinator.migration.retire coordinator.migration.wire coordinator.migration.journal coordinator.migration.journal.recovery cross.ticket lua.lifecycle lua.http
       coordinator.migration.authority

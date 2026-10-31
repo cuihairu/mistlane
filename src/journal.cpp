@@ -374,12 +374,21 @@ struct MigrationJournal::Impl {
             "CREATE TABLE IF NOT EXISTS placement ("
             "version INTEGER NOT NULL, namespace TEXT NOT NULL, scope TEXT NOT NULL,"
             "realm TEXT NOT NULL, character TEXT NOT NULL, role TEXT NOT NULL,"
-            "instance TEXT NOT NULL, generation INTEGER NOT NULL, "
+            "instance TEXT NOT NULL, generation INTEGER NOT NULL, scene TEXT NOT NULL DEFAULT '-',"
             "PRIMARY KEY(namespace, realm, character))");
-        // A WAL/schema setting is a process-level hint; this pins the row
-        // format so a future incompatible writer refuses old files instead of
-        // silently decoding garbage.
-        sqlite_exec(db, "PRAGMA user_version=1");
+        // Version 1 files predate the scene column; migrate them in place and
+        // remember the new row format. A future incompatible writer refuses
+        // anything it does not recognize instead of silently decoding garbage.
+        Statement version(db, "PRAGMA user_version");
+        version.step();
+        const auto file_version = sqlite3_column_int(version.get(), 0);
+        if (file_version == 0) sqlite_exec(db, "PRAGMA user_version=2");
+        else if (file_version == 1) {
+            const int scene_exists = sqlite3_table_column_metadata(db, nullptr, "placement", "scene",
+                nullptr, nullptr, nullptr, nullptr, nullptr) == SQLITE_OK;
+            if (!scene_exists) sqlite_exec(db, "ALTER TABLE placement ADD COLUMN scene TEXT NOT NULL DEFAULT '-'");
+            sqlite_exec(db, "PRAGMA user_version=2");
+        } else if (file_version != 2) throw std::runtime_error("placement schema version unsupported");
     }
     ~Impl() { if (db) sqlite3_close(db); }
     std::string path;
@@ -616,14 +625,15 @@ void MigrationJournal::save_placement(const PlacementRecord& record) {
     if (impl_->db == nullptr) throw std::runtime_error("migration journal is closed");
     if (!record_identifier(record.scope) || !record_identifier(record.realm)
             || !record_identifier(record.character) || !record_identifier(record.instance)
+            || !record_identifier(record.scene)
             || (record.role != "gameServer" && record.role != "crossServer"))
         throw std::invalid_argument("invalid placement record");
     if (!record.namespace_.empty() && !record_identifier(record.namespace_))
         throw std::invalid_argument("invalid placement namespace");
-    Statement upsert(impl_->db, "INSERT INTO placement(version, namespace, scope, realm, character, role, instance, generation) "
-        "VALUES(?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(namespace, realm, character) DO UPDATE SET "
+    Statement upsert(impl_->db, "INSERT INTO placement(version, namespace, scope, realm, character, role, instance, generation, scene) "
+        "VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(namespace, realm, character) DO UPDATE SET "
         "version=excluded.version, scope=excluded.scope, role=excluded.role, instance=excluded.instance, "
-        "generation=excluded.generation");
+        "generation=excluded.generation, scene=excluded.scene");
     upsert.bind_int(1, static_cast<int>(kVersion));
     upsert.bind_text(2, record.namespace_);
     upsert.bind_text(3, record.scope);
@@ -632,6 +642,7 @@ void MigrationJournal::save_placement(const PlacementRecord& record) {
     upsert.bind_text(6, record.role);
     upsert.bind_text(7, record.instance);
     upsert.bind_u64(8, record.generation);
+    upsert.bind_text(9, record.scene.empty() ? std::string("-") : record.scene);
     upsert.step();
 }
 
@@ -650,7 +661,7 @@ std::vector<PlacementRecord> MigrationJournal::restore_placements() const {
     if (impl_->db == nullptr) throw std::runtime_error("migration journal is closed");
     std::vector<PlacementRecord> records;
     Statement select(impl_->db,
-        "SELECT version, namespace, scope, realm, character, role, instance, generation FROM placement "
+        "SELECT version, namespace, scope, realm, character, role, instance, generation, scene FROM placement "
         "ORDER BY namespace, realm, character");
     for (;;) {
         const int code = sqlite3_step(select.get());
@@ -664,6 +675,7 @@ std::vector<PlacementRecord> MigrationJournal::restore_placements() const {
         const auto* role = reinterpret_cast<const char*>(sqlite3_column_text(select.get(), 5));
         const auto* instance = reinterpret_cast<const char*>(sqlite3_column_text(select.get(), 6));
         const auto generation = static_cast<std::uint64_t>(sqlite3_column_int64(select.get(), 7));
+        const auto* scene = reinterpret_cast<const char*>(sqlite3_column_text(select.get(), 8));
         const int namespace_size = sqlite3_column_bytes(select.get(), 1);
         const int scope_size = sqlite3_column_bytes(select.get(), 2);
         const int realm_size = sqlite3_column_bytes(select.get(), 3);
@@ -677,9 +689,11 @@ std::vector<PlacementRecord> MigrationJournal::restore_placements() const {
         record.character = std::string(character ? character : "", static_cast<std::size_t>(character_size));
         record.role = std::string(role ? role : "", static_cast<std::size_t>(role_size));
         record.instance = std::string(instance ? instance : "", static_cast<std::size_t>(instance_size));
+        record.scene = std::string(scene ? scene : "", sqlite3_column_bytes(select.get(), 8));
+        if (record.scene.empty()) record.scene = "-";
         if (version != static_cast<int>(kVersion) || !record_identifier(record.scope)
                 || !record_identifier(record.realm) || !record_identifier(record.character)
-                || !record_identifier(record.instance)
+                || !record_identifier(record.instance) || !record_identifier(record.scene)
                 || (record.role != "gameServer" && record.role != "crossServer")
                 || !generation
                 || (!record.namespace_.empty() && !record_identifier(record.namespace_)))

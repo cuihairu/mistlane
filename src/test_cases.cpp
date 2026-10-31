@@ -4026,9 +4026,9 @@ void coordinator_routes() {
     eventually([&] { return ask("MLR1 ROUTE GET NS - mist eve") == eve_at; },
         5s, "route did not follow the live member state");
     // A second SET for the same character overwrites; the count stays at one.
-    equal(ask("MLR1 ROUTE SET NS - alpha mist eve gameServer gs-b"), "MLR1 ROUTE OK");
+    equal(ask("MLR1 ROUTE SET NS - alpha mist eve gameServer gs-b - town-square"), "MLR1 ROUTE OK");
     const auto eve_moved = "MLR1 ROUTE AT alpha gameServer gs-b 127.0.0.1:"+
-        std::to_string(second)+" 0 ready 0/42 - 0";
+        std::to_string(second)+" 0 ready 0/42 town-square 0";
     eventually([&] { return ask("MLR1 ROUTE GET NS - mist eve") == eve_moved; },
         5s, "route overwrite did not stick");
     // Two namespaces may reuse one scope name: members and route records stay
@@ -5097,7 +5097,8 @@ void coordinator_migration_journal() {
     require(initial.wait() == 0, "journal coordinator did not stop cleanly");
 
     c.node("coordinator", second, {"--journal", journal.string()});
-    c.node("crossServer", port(), {"--script", c.path("echo.lua").string(),
+    const auto cross_listen = port();
+    c.node("crossServer", cross_listen, {"--script", c.path("echo.lua").string(),
         "--coordinator", endpoint(second), "--scope", "arena", "--service-name", "xs-a"});
     // Startup replay has already driven the fenced live transaction to the
     // deterministic recovery state: pre-fence would have rolled back, this one
@@ -5120,6 +5121,13 @@ void coordinator_migration_journal() {
         "MLR1 MIG COMMITTED move-1 "+target+" 9");
     equal(ask(second, "MLR1 MIG STATUS NS - home hero"),
         "MLR1 MIG STATE move-1 COMMITTED drained fenced ready 9");
+    // The committed ownership keeps its scene across the restart: even while
+    // the transaction is still open the route answers the published scene.
+    eventually([&] {
+        return ask(second, "MLR1 ROUTE GET NS - home hero") ==
+            "MLR1 ROUTE AT arena crossServer xs-a 127.0.0.1:"+std::to_string(cross_listen)+
+            " 0 ready 0/42 room-1 9";
+    }, 5s, "restored committed route lost its scene");
     // The restored authority resumes from the consumed generation: the next
     // request against the committed route allocates 10, never 9.
     const std::string next_target = "realm NS - beta gameServer gs-c hall";
@@ -6217,6 +6225,55 @@ void crashpad_minidump(const fs::path& handler) {
     if (group>0) ::kill(-group,SIGKILL);
 }
 
+void coordinator_placement_schema() {
+    Context c;
+    const auto journal = c.path("placement-v1.sqlite");
+    {
+        sqlite3* raw = nullptr;
+        require(sqlite3_open(journal.string().c_str(), &raw) == SQLITE_OK,
+                "cannot create placement v1 journal");
+        require(sqlite3_exec(raw,
+                "CREATE TABLE placement ("
+                "version INTEGER NOT NULL, namespace TEXT NOT NULL, scope TEXT NOT NULL,"
+                "realm TEXT NOT NULL, character TEXT NOT NULL, role TEXT NOT NULL,"
+                "instance TEXT NOT NULL, generation INTEGER NOT NULL,"
+                "PRIMARY KEY(namespace, realm, character));"
+                "INSERT INTO placement VALUES (1, '', 'alpha', 'mist', 'eve',"
+                " 'gameServer', 'gs-a', 7);"
+                "PRAGMA user_version=1", nullptr, nullptr, nullptr) == SQLITE_OK,
+                "cannot seed placement v1 journal");
+        sqlite3_close(raw);
+    }
+    {
+        MigrationJournal migrated(journal.string());
+        const auto records = migrated.restore_placements();
+        require(records.size() == 1, "placement migration lost the v1 row");
+        require(records.front().scene == "-", "v1 placement did not default its scene");
+        auto record = records.front();
+        record.scene = "town";
+        migrated.save_placement(record);
+    }
+    {
+        sqlite3* raw = nullptr;
+        require(sqlite3_open(journal.string().c_str(), &raw) == SQLITE_OK,
+                "cannot reopen placement migration journal");
+        sqlite3_stmt* statement = nullptr;
+        require(sqlite3_prepare_v2(raw, "PRAGMA user_version", -1, &statement, nullptr) == SQLITE_OK,
+                "cannot read placement schema version");
+        require(sqlite3_step(statement) == SQLITE_ROW, "placement schema version row missing");
+        require(sqlite3_column_int(statement, 0) == 2, "placement schema was not upgraded");
+        sqlite3_finalize(statement);
+        require(sqlite3_prepare_v2(raw, "SELECT scene FROM placement", -1, &statement, nullptr) == SQLITE_OK,
+                "cannot read placement scene column");
+        require(sqlite3_step(statement) == SQLITE_ROW && std::string(
+                    reinterpret_cast<const char*>(sqlite3_column_text(statement, 0))) == "town",
+                "placement scene did not survive the migration");
+        sqlite3_finalize(statement);
+        sqlite3_close(raw);
+    }
+    std::cout << "placement.schema: v1 journal migrates in place and preserves scene [PASS]\n";
+}
+
 // Durable placement: a coordinator restart keeps the character placement
 // record, so a login re-query does not start the chain from scratch. The
 // restored route answers EMPTY until the hosting member re-registers its
@@ -6251,10 +6308,10 @@ void coordinator_placement_journal() {
     eventually([&] {
         return ask(first, "MLR1 QUERY gameServer - alpha").find("gs-a") != std::string::npos;
     }, 5s, "member never registered");
-    equal(ask(first, "MLR1 ROUTE SET NS - alpha mist eve gameServer gs-a 7"), "MLR1 ROUTE OK");
+    equal(ask(first, "MLR1 ROUTE SET NS - alpha mist eve gameServer gs-a 7 town"), "MLR1 ROUTE OK");
     const auto live = ask(first, "MLR1 ROUTE GET NS - mist eve");
     require(live.starts_with("MLR1 ROUTE AT alpha gameServer gs-a "), "live route wrong shape: "+live);
-    require(live.ends_with(" - 7"), "live route lost the published generation: "+live);
+    require(live.ends_with(" town 7"), "live route lost the published scene/generation: "+live);
     // Crash, not graceful stop: a coordinator restart must recover the
     // placement from the durable journal even though the member control leg
     // died with the process (no clean retirement ran).
@@ -6273,8 +6330,8 @@ void coordinator_placement_journal() {
     }, 5s, "restored placement never answered for the re-registered host");
     const auto restored = ask(second, "MLR1 ROUTE GET NS - mist eve");
     require(restored != "MLR1 ROUTE EMPTY", "restored placement lost the host");
-    require(restored.ends_with(" - 7"), "restored placement lost the generation baseline: "+restored);
+    require(restored.ends_with(" town 7"), "restored placement lost the scene/generation baseline: "+restored);
     std::cout << "placement.journal: coordinator restart retains character placement, "
-        "dormant until the host re-registers, then answers the live member again [PASS]\n";
+        "with scene/generation, dormant until the host re-registers, then answers the live member again [PASS]\n";
 }
 }

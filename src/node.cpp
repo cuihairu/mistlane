@@ -1522,7 +1522,8 @@ public:
         for (const auto& record : journal_->restore_placements()) {
             const auto key = route_key(record.namespace_, record.realm, record.character);
             if (!routes_.emplace(key,
-                    Route{record.scope, record.role, record.instance, record.generation}).second)
+                    Route{record.scope, record.role, record.instance, record.scene,
+                          record.generation}).second)
                 throw std::invalid_argument("placement journal contains a duplicate route");
         }
     }
@@ -1563,6 +1564,7 @@ public:
     // routed to.
     struct Route {
         std::string scope, role, instance;
+        std::string scene;                  // the scene the owner reported
         std::uint64_t generation = 0; // the generation the coordinator last published
     };
     struct RouteAnswer {
@@ -1573,10 +1575,11 @@ public:
     bool set_route(const std::string& scope, const std::string& realm,
                    const std::string& character, const std::string& role,
                    const std::string& instance, const std::string& namespace_,
-                   std::uint64_t generation = 0) {
+                   std::uint64_t generation = 0, const std::string& scene = "-") {
         if (!members_.count(member_key(namespace_, scope, role, instance))) return false;
-        routes_[route_key(namespace_, realm, character)] = Route{scope, role, instance, generation};
-        persist_placement(namespace_, scope, realm, character, role, instance, generation);
+        routes_[route_key(namespace_, realm, character)] =
+            Route{scope, role, instance, scene, generation};
+        persist_placement(namespace_, scope, realm, character, role, instance, scene, generation);
         return true;
     }
     // A committed migration moves the character route to the new owner; the
@@ -1586,7 +1589,7 @@ public:
                    std::uint64_t generation) {
         const bool realm_scope = owner.scope.kind == MigrationScope::Kind::Realm;
         return set_route(realm_scope ? owner.scope.realm : owner.scope.cross_group,
-            realm, character, owner.role, owner.instance, namespace_, generation);
+            realm, character, owner.role, owner.instance, namespace_, generation, owner.scene);
     }
     // A destination that left the registry cannot receive the committed route;
     // the commit must stay pending so the fenced gap remains takeover-eligible
@@ -1616,6 +1619,7 @@ public:
         } else {
             // A committed route whose transaction was pruned or never opened:
             // answer the durable comparison baseline published at commit.
+            scene = hosted.scene;
             generation = hosted.generation;
         }
         return RouteAnswer{&member->second.first, scene, generation};
@@ -1756,9 +1760,9 @@ private:
     void persist_placement(const std::string& namespace_, const std::string& scope,
                            const std::string& realm, const std::string& character,
                            const std::string& role, const std::string& instance,
-                           std::uint64_t generation) {
+                           const std::string& scene, std::uint64_t generation) {
         if (!journal_) return;
-        journal_->save_placement({namespace_, scope, realm, character, role, instance, generation});
+        journal_->save_placement({namespace_, scope, realm, character, role, instance, scene, generation});
     }
     std::map<std::string, std::pair<Member, void*>> members_;
     std::map<std::string, Route> routes_;
@@ -2027,18 +2031,27 @@ private:
         if (!(in >> marker) || marker != "NS" || !namespace_fields(in, namespace_))
             return refuse("INVALID");
         if (sub == "SET") {
-            std::string scope, realm, character, role, instance, generation_text;
+            std::string scope, realm, character, role, instance, generation_text, scene = "-";
             std::uint64_t generation = 0;
             if (!(in >> scope >> realm >> character >> role >> instance)) return refuse("INVALID");
             if (in >> generation_text) {
-                if (!parse_generation(generation_text, generation)) return refuse("INVALID");
-                if (in >> spare) return refuse("INVALID");
+                // The comparison baseline is optional and, when a scene is also
+                // given, precedes it. A "-" generation keeps the baseline unset
+                // while still carrying the scene on the same frame.
+                if (generation_text != "-") {
+                    if (!parse_generation(generation_text, generation)) return refuse("INVALID");
+                }
+                if (in >> scene) {
+                    if (in >> spare) return refuse("INVALID");
+                }
             }
             if (!record_identifier(scope) || !record_identifier(realm) ||
                     !record_identifier(character) || !record_identifier(instance) ||
-                    (role != "gameServer" && role != "crossServer"))
+                    (role != "gameServer" && role != "crossServer")
+                    || !record_identifier(scene))
                 return refuse("INVALID");
-            if (!registry_.set_route(scope, realm, character, role, instance, namespace_, generation))
+            if (!registry_.set_route(scope, realm, character, role, instance, namespace_,
+                    generation, scene))
                 return refuse("UNKNOWN");
             diagnostics_.set_registry_routes(registry_.routes());
             return answer("MLR1 ROUTE OK");
