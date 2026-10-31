@@ -476,6 +476,33 @@ D17 风险 3：文档同时出现 `avatar_save` 与拟议 `writeToDB`，若各�
 - 二进制 schema 可恢复部分结构，却无法自证生成选项、业务权限和来源版本（D15 风险 3）——正式兼容承诺等待证据。
 - 允许继续离线整理可恢复事实；「无法证明旧兼容」保留为结论，不靠反编译补成正式来源。
 
+## D16 完整消息目录、权限、错误与兼容规则（证据目录）
+
+来源：todo.md:145；显式 BLOCKED，依赖协议来源。D16 推荐先建「已确认/由产物恢复/待验证」的证据目录；权限未知的调用默认拒绝。
+
+### 证据目录（每列标来源；优先登录、角色加载、回传保存）
+
+来源标记：**确认** = 代码/线动词已实现；**设计** = 已决定未接线；**待验证** = 需材料或运行时。
+
+| 消息 | 字段/方向 | 处理器 | 调用身份 | 错误 | 版本规则 | 来源 |
+|---|---|---|---|---|---|---|
+| `MLT1` entry ticket | realm/character/target instance/generation/expiry/nonce；issue→verify | `TicketVerifier::verify`（`node.cpp`） | 客户端 join（`MLC1 tk`） | Malformed/UnknownRealm/BadSignature/Expired/WrongCharacter/WrongInstance/WrongGeneration/Replay | 绑定生成与身份；短期 HMAC | 确认（`entry_ticket.hpp`） |
+| `MLC1` join | participant context 尾部 `tk <hex>`；join | crossServer join 路径 | 客户端；匿名 join 只读 | `MLC1 ERR TICKET`；tail 不匹配 → INVALID | 全有或全无 tail；ticket 名不同角色/生成 → 拒 | 确认（`cross.hpp`） |
+| `MLR1` ROUTE SET/GET | `NS <ns>` 必填；scope/role/instance | coordinator registry | 服务腿（MLS1 门控） | `ERR INVALID`（缺 NS）/`EMPTY` | 路由随成员存亡；GET 答实时状态 | 确认（`node.cpp:1948`） |
+| `MLR1 MIG` OWNER/PREPARE/EVENT/COMMIT/ABORT/RETIRE/TAKEOVER/STATUS | `[NS] realm character id gen ...` | `migration_line`/`Registry` | 服务腿（MLS1 门控） | ERR EMPTY/STALE/CONFLICT/ORDER/INVALID；`ERR STORAGE` | 按请求 id 幂等；generation 递增；burned 不复用 | 确认（`node.cpp:2026-2041`） |
+| `MLD1` LOAD/SUBMIT/FENCE | realm/character/gen/seq/payload | data 记录端点 | 服务腿 | `MLD1 ACK durable`/`ERR SEQ`/`ERR STORAGE`/`EMPTY` | 按 `(realm, character)` 连续序号；`FENCE` 钉最终游标+墓碑 | 确认（`record.hpp`/`journal.cpp`） |
+| `MLE1` entity envelope | scope/type/entity/incarnation + payload | `EntityEndpoint`（`entity_endpoint.hpp`） | 客户端/观察者 | `EntityError` 封闭词汇 | 承载 generation 校验；incarnation 拒旧 | 确认（`entity_endpoint.hpp`） |
+| `MLA1` API callback | 十字段 + HMAC-SHA256 | `ApiSurface`（`api.cpp`） | 平台（principal/key_id 凭据） | Invalid/UnknownCredential/Forbidden/BadSignature/Window/Replay/Clock/Full | ±300s 窗口；`(audience, principal, nonce)` 防重放 | 确认（`api.cpp`）；归属 `OWNER` 待接 home facts |
+| `PROBE1` liveness/readiness | nonce + command | 探针监听 | 运维/探针 | `err version/auth/command/malformed` | 非ce 往返 | 确认（`node.cpp:290`） |
+
+### 权限未知默认拒绝
+
+「权限未知的调用默认拒绝」（D16 推荐）：未在目录中列出的方法/组合不默认放行；`OWNER` 查找未接 home facts 时确定性答 `NOT_FOUND`，不发明 owner（`protocol-analysis.md:155`）；匿名 join 只读、携 token 本身非授权（`protocol-analysis.md:177`）。
+
+### 材料到位后的闭环验收
+
+材料（D15）到位后，用一组真实请求/响应闭环验收：登录（MLT1 签发→verify）→ 角色加载（MLR1 ROUTE→MLD1 LOAD→MLE1）→ 回传保存（MLD1 SUBMIT→ACK durable）。不给未知方法默认放行；不把逆向得到的编号等同于完整业务契约；不擅自重编号（D16「不做/延后」）。
+
 ## D02 coordinator 注册、归属与迁移（四步时序）
 
 来源：todo.md:48，及 :51/:58 保留阻塞说明。D02 推荐 coordinator 管放置与交接编排、home data 管写入资格；查询到路由不能直接获得写权。复用既有 journal、generation 与 TAKEOVER。
