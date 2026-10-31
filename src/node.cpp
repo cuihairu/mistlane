@@ -1503,6 +1503,16 @@ public:
             if (!migrations_.emplace(key, std::move(entry)).second)
                 throw std::invalid_argument("migration journal contains a duplicate participant");
         }
+        // Durable placements: a coordinator restart must not forget which live
+        // member was last assigned a character. The member control leg died
+        // with the crash, so a restored placement answers EMPTY until that
+        // member re-registers (route() requires a live member), and the
+        // route record itself survives in the journal across the restart.
+        for (const auto& record : journal_->restore_placements()) {
+            const auto key = route_key(record.namespace_, record.realm, record.character);
+            if (!routes_.emplace(key, Route{record.scope, record.role, record.instance}).second)
+                throw std::invalid_argument("placement journal contains a duplicate route");
+        }
     }
     struct Member {
         std::string role, instance, scope, namespace_, listen;
@@ -1552,6 +1562,7 @@ public:
                    const std::string& instance, const std::string& namespace_) {
         if (!members_.count(member_key(namespace_, scope, role, instance))) return false;
         routes_[route_key(namespace_, realm, character)] = Route{scope, role, instance};
+        persist_placement(namespace_, scope, realm, character, role, instance);
         return true;
     }
     // A committed migration moves the character route to the new owner; the
@@ -1685,6 +1696,7 @@ private:
                 it = routes_.erase(it);
             else ++it;
         }
+        if (journal_) journal_->drop_placement(namespace_, scope, role, instance);
     }
     // A member's leave is a retirement claim for every live transaction that
     // depends on that process. The registry knows a process, not a scene, so
@@ -1721,6 +1733,12 @@ private:
     };
     void persist_transaction(const MigrationEntry& entry) {
         persist_transaction(entry.namespace_, entry.key, *entry.transaction);
+    }
+    void persist_placement(const std::string& namespace_, const std::string& scope,
+                           const std::string& realm, const std::string& character,
+                           const std::string& role, const std::string& instance) {
+        if (!journal_) return;
+        journal_->save_placement({namespace_, scope, realm, character, role, instance});
     }
     std::map<std::string, std::pair<Member, void*>> members_;
     std::map<std::string, Route> routes_;

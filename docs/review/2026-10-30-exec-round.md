@@ -59,7 +59,7 @@
 
 - 现有 MIG 动词已含 OWNER/PREPARE/EVENT/COMMIT/ABORT/RETIRE/TAKEOVER/STATUS（`:2026-2041`），无独立「放置记录表」持久化；`record_fence` 持久化已落地（`src/journal.cpp:559`），放置记录本身若需跨重启查询，须另立记录持久化（当前为内存协调面）。
 - 「从 envelope 自报身份授予 owner 权限」在代码中未实现，保持不做（D09 定义真实绑定来源）。
-- 实例级放置记录当前未实现；本节为设计，不机械接线（D06「不做/延后」）。
+- 实例级放置记录的持久化半片已落地（2026-10-31，`MigrationJournal::save_placement` 等，见 D02 已执行节）：coordinator 崩溃后仍能恢复最后放置，休眠期间答 `EMPTY` 绝不路由死宿主。仍缺：修改权限表（创建/迁移 prepare/commit/abort/销毁的旧值比较基准）与完整实例状态机接线（D06 推荐为设计，实施轮按 D02 四步时序接线）。
 
 ## D09 JS/C# 直接调用：可信绑定、准入、超时与取消
 
@@ -521,6 +521,8 @@ D17 风险 3：文档同时出现 `avatar_save` 与拟议 `writeToDB`，若各�
 已有：`HomeSequenceAuthority`（`record.hpp:125`）、`fence`（:153）、`final_sequence`（:203）；`record_fence` 持久化与恢复（`journal.cpp:369/544/559`）；`MLR1 MIG` 全部动词（`node.cpp:2026-2041` 含 TAKEOVER :2193）；`PersistentStore::save/confirm/restore`（D11）。
 
 **缺口（实施轮补，不重造）：** 放置记录表持久化（D06 缺口）；coordinator 的「比较旧值」目前是内存协调面，需持久化比较基准才能跨崩溃正确。不重复实现 SQLite journal 或 TAKEOVER；不以注册表成员消失当成安全接管（D02「不做/延后」）。
+
+**已执行（2026-10-31，放置记录持久化半片）：** 放置记录表已持久化到同一 SQLite journal——`MigrationJournal::save_placement/drop_placement/restore_placements`（`include/mistlane/journal.hpp`、`src/journal.cpp`），`Registry` 在 `set_route` 时落盘、成员退役时 `drop_placement` 清除、构造时恢复休眠路由（`src/node.cpp`）。coordinator 崩溃后重查仍能按最后放置记录答活成员（休眠期间答 `EMPTY`，绝不路由死宿主），`coordinator.placement.journal` 覆盖 设置→崩溃→恢复→重注册→活答。仍缺：coordinator「比较旧值」的持久比较基准（目前仍为内存协调面），以及完整四步时序的运行时闭环。
 
 ### 写权与路由的区别
 

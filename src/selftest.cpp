@@ -35,6 +35,7 @@ void transport_multiplex();
 void coordinator_registry();
 void coordinator_placement();
 void coordinator_routes();
+void coordinator_placement_journal();
 void coordinator_migration_commit();
 void coordinator_migration_abort();
 void coordinator_migration_recover();
@@ -150,6 +151,7 @@ int run_tests(int argc, char** argv) {
         {"coordinator.registry","coordinator",test::coordinator_registry},
         {"coordinator.placement","coordinator",test::coordinator_placement},
         {"coordinator.routes","coordinator",test::coordinator_routes},
+        {"coordinator.placement.journal","coordinator",test::coordinator_placement_journal},
         {"coordinator.migration.commit","coordinator",test::coordinator_migration_commit},
         {"coordinator.migration.abort","coordinator",test::coordinator_migration_abort},
         {"coordinator.migration.recover","coordinator",test::coordinator_migration_recover},

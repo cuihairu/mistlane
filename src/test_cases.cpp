@@ -6216,4 +6216,63 @@ void crashpad_minidump(const fs::path& handler) {
     // The handler outlives the sample on purpose; do not leak it.
     if (group>0) ::kill(-group,SIGKILL);
 }
+
+// Durable placement: a coordinator restart keeps the character placement
+// record, so a login re-query does not start the chain from scratch. The
+// restored route answers EMPTY until the hosting member re-registers its
+// control leg (routes never point at a dead host), then answers the live
+// member again with the same placement.
+void coordinator_placement_journal() {
+    Context c;
+    write(c.path("echo.lua"), echo);
+    const auto first = port(), second = port(), metrics = port();
+    const auto journal = c.path("coordinator.sqlite");
+    auto& initial = c.node("coordinator", first, {"--journal", journal.string(),
+        "--metrics-listen", endpoint(metrics)});
+    c.node("gameServer", port(), {"--script", c.path("echo.lua").string(),
+        "--coordinator", endpoint(first), "--scope", "alpha", "--service-name", "gs-a"});
+    const auto send_frame = [](RawSocket& raw, std::string_view payload) {
+        std::string frame(4, '\0');
+        auto length = static_cast<std::uint32_t>(payload.size());
+        for (int i = 3; i >= 0; --i) { frame[i] = static_cast<char>(length & 255); length >>= 8; }
+        raw.send(frame+std::string(payload));
+    };
+    const auto read_frame = [](RawSocket& raw) {
+        const auto header = raw.receive(4);
+        std::size_t length = 0;
+        for (unsigned char ch : header) length = (length << 8) | ch;
+        return raw.receive(length);
+    };
+    const auto ask = [&](unsigned listen, const std::string& line) {
+        RawSocket raw(listen);
+        send_frame(raw, line);
+        return read_frame(raw);
+    };
+    eventually([&] {
+        return ask(first, "MLR1 QUERY gameServer - alpha").find("gs-a") != std::string::npos;
+    }, 5s, "member never registered");
+    equal(ask(first, "MLR1 ROUTE SET NS - alpha mist eve gameServer gs-a"), "MLR1 ROUTE OK");
+    const auto live = ask(first, "MLR1 ROUTE GET NS - mist eve");
+    require(live.starts_with("MLR1 ROUTE AT alpha gameServer gs-a "), "live route wrong shape: "+live);
+    // Crash, not graceful stop: a coordinator restart must recover the
+    // placement from the durable journal even though the member control leg
+    // died with the process (no clean retirement ran).
+    initial.signal(SIGKILL);
+    require(initial.wait() != 0, "placement journal coordinator should not stop cleanly on a crash");
+
+    c.node("coordinator", second, {"--journal", journal.string()});
+    // Before the member re-registers, the restored placement is dormant: it
+    // must not invent a live host, so GET honestly answers EMPTY.
+    equal(ask(second, "MLR1 ROUTE GET NS - mist eve"), "MLR1 ROUTE EMPTY");
+    c.node("gameServer", port(), {"--script", c.path("echo.lua").string(),
+        "--coordinator", endpoint(second), "--scope", "alpha", "--service-name", "gs-a"});
+    eventually([&] {
+        return ask(second, "MLR1 ROUTE GET NS - mist eve").starts_with(
+            "MLR1 ROUTE AT alpha gameServer gs-a ");
+    }, 5s, "restored placement never answered for the re-registered host");
+    const auto restored = ask(second, "MLR1 ROUTE GET NS - mist eve");
+    require(restored != "MLR1 ROUTE EMPTY", "restored placement lost the host");
+    std::cout << "placement.journal: coordinator restart retains character placement, "
+        "dormant until the host re-registers, then answers the live member again [PASS]\n";
+}
 }
