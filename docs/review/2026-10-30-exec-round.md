@@ -263,6 +263,42 @@ D17 风险 3：文档同时出现 `avatar_save` 与拟议 `writeToDB`，若各�
 - 现有单二进制已按角色启动（`test_cases.cpp:2127` login/data 成对、`:2142` apiServer）；跨宿主移交的运行时闭环未验证（D02/D30）。
 - 不新增 router/Base/Cell 进程（D01「不做/延后」）；不凭帮助文本一致就勾选总项；真实负载均衡延后。
 
+## D04 login、data、可选 apiServer 契约与接线
+
+来源：todo.md:65；部分完成但缺归属事实、授权与签发路径。D04 推荐沿用 login 签发短期 HMAC 凭据的既定方案，凭据必须绑定 data 已确认的授权；apiServer 继续可选，先保证持久受理，再单独完成实际执行。
+
+### login 时序（分配 → data 授权 → 签发 → 宿主确认）
+
+| 步 | 动作 | 事实 |
+|---|---|---|
+| 1 分配 | login 确定角色身份 | login 角色定义（`include/mistlane/roles.hpp:13`）；`MLS1` 服务身份帧（`node.cpp:169`）含 role/instance/token |
+| 2 data 授权 | data 确认该角色归属 | `TicketVerifier`（`node.cpp:719`）；凭据绑定 data 已确认授权，不凭自报 |
+| 3 签发 | login 签发短期 HMAC 凭据 | `ticket_secrets`（`node.cpp:122`）、`ticket_verdict_name`（:153）；短期，非 JWT（D04 成本 1） |
+| 4 宿主确认 | 凭据送当前宿主 | 宿主经 `MLD1`/`MLR1` 校验；宿主 IP 不固化在订单（D04「不做/延后」） |
+
+「验签通过 ≠ 取得写权」：凭据只证明身份，写权由 D06 放置记录 + D02 generation/fence 判定。
+
+### API 受理记录到投递结果的状态设计
+
+`ApiSqliteAcceptanceStore`/`ApiMemoryAcceptanceStore`（`node.cpp:2724/2726`）——apiServer 可选。受理→投递状态：
+
+| 状态 | 含义 | 投递结果 |
+|---|---|---|
+| 已受理 | API 平台回调记录入 store | 不视为奖励已到账（D04 风险 3） |
+| 已投递 | 请求送当前宿主 | 稳定角色标识定位宿主（D06 放置记录） |
+| 已确认 | 宿主回 durable ACK | 才视为投递成功 |
+| 失败/重试 | 投递失败或宿主不可达 | 按 D26 重试预算；耗尽进入只读/待恢复 |
+
+### 重复投递幂等键与归属查询来源
+
+- **幂等键**：API 订单按稳定角色标识 + 请求 id 幂等（`node.cpp:2131`「Applied 和 Duplicate 回答同一行：按请求 id 幂等」）；非幂等请求超时显示「结果未知」，不静默再执行（D09）。
+- **归属查询来源**：coordinator 放置记录（D06），不固化宿主 IP 于订单。
+- **持久/共享重放声明**：跨重启/多实例部署的前置任务；单实例也不能宣称重启后仍有防重放保证（D04 立即动作）。`ApiSqliteAcceptanceStore` 用 journal 持久化受理，属可共享重放的前置，多实例共享声明待部署验证。
+
+### 缺口核对
+
+- 不另选 JWT 服务或每客户端证书方案（D04「不做/延后」）；不把宿主 IP 固化在订单里；不把持久受理包装成完整支付到账。
+
 ## D02 coordinator 注册、归属与迁移（四步时序）
 
 来源：todo.md:48，及 :51/:58 保留阻塞说明。D02 推荐 coordinator 管放置与交接编排、home data 管写入资格；查询到路由不能直接获得写权。复用既有 journal、generation 与 TAKEOVER。
