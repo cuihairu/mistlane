@@ -356,39 +356,47 @@ void LuaService::push_ticket_api(lua_State* l, LuaService* service) {
 // response; the receiving crossServer verifies it on the join.
 int LuaService::ticket_issue(lua_State* l) {
     auto* service = static_cast<LuaService*>(lua_touserdata(l, lua_upvalueindex(1)));
-    if (!service->ticket_issuer_) {
-        lua_pushnil(l);
-        lua_pushliteral(l, "ticket issuer is not configured on this role");
-        return 2;
-    }
-    auto word = [&](int index, const char* label) {
-        if (!lua_isstring(l, index)) throw std::runtime_error(std::string(label)+" must be an identifier");
-        std::size_t size = 0;
-        const char* data = lua_tolstring(l, index, &size);
-        if (!size || size > 64) throw std::runtime_error(std::string(label)+" length is invalid");
-        for (std::size_t i = 0; i < size; ++i) {
-            const unsigned char ch = data[i];
-            if (!((ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z')
-                    || (ch >= '0' && ch <= '9') || ch == '_' || ch == '-'))
-                throw std::runtime_error(std::string(label)+" must be an identifier");
+    try {
+        if (!service->ticket_issuer_) {
+            lua_pushnil(l);
+            lua_pushliteral(l, "ticket issuer is not configured on this role");
+            return 2;
         }
-        return std::string(data, size);
-    };
-    const auto realm = word(1, "realm");
-    const auto character = word(2, "character");
-    const auto instance = word(3, "instance");
-    if (!lua_isinteger(l, 4) || !lua_isinteger(l, 5)) throw std::runtime_error("generation and expires must be integers");
-    const auto generation = static_cast<std::uint64_t>(lua_tointeger(l, 4));
-    const auto expires = static_cast<std::uint64_t>(lua_tointeger(l, 5));
-    if (!generation || !expires) throw std::runtime_error("generation and expires must be positive");
-    const auto issued = service->ticket_issuer_->issue({realm, character}, instance, generation, expires);
-    if (!issued) {
-        lua_pushnil(l);
-        lua_pushliteral(l, "no ticket secret for this realm or invalid arguments");
-        return 2;
-    }
-    lua_pushlstring(l, issued->data(), issued->size());
-    return 1;
+        auto word = [&](int index, const char* label) {
+            if (!lua_isstring(l, index)) throw std::runtime_error(std::string(label)+" must be an identifier");
+            std::size_t size = 0;
+            const char* data = lua_tolstring(l, index, &size);
+            if (!size || size > 64) throw std::runtime_error(std::string(label)+" length is invalid");
+            for (std::size_t i = 0; i < size; ++i) {
+                const unsigned char ch = data[i];
+                if (!((ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z')
+                        || (ch >= '0' && ch <= '9') || ch == '_' || ch == '-'))
+                    throw std::runtime_error(std::string(label)+" must be an identifier");
+            }
+            return std::string(data, size);
+        };
+        const auto realm = word(1, "realm");
+        const auto character = word(2, "character");
+        const auto instance = word(3, "instance");
+        if (!lua_isinteger(l, 4) || !lua_isinteger(l, 5)) throw std::runtime_error("generation and expires must be integers");
+        // lua_isinteger accepts negative numbers; casting -1 to uint64_t wraps to
+        // UINT64_MAX and would mint an effectively-never-expiring ticket or a
+        // host-guaranteed WrongGeneration claim. Reject non-positive values so the
+        // "must be positive" rule is about magnitude, not just nonzero.
+        const auto generation_raw = lua_tointeger(l, 4);
+        const auto expires_raw = lua_tointeger(l, 5);
+        if (generation_raw <= 0 || expires_raw <= 0) throw std::runtime_error("generation and expires must be positive");
+        const auto generation = static_cast<std::uint64_t>(generation_raw);
+        const auto expires = static_cast<std::uint64_t>(expires_raw);
+        const auto issued = service->ticket_issuer_->issue({realm, character}, instance, generation, expires);
+        if (!issued) {
+            lua_pushnil(l);
+            lua_pushliteral(l, "no ticket secret for this realm or invalid arguments");
+            return 2;
+        }
+        lua_pushlstring(l, issued->data(), issued->size());
+        return 1;
+    } catch (const std::exception& e) { return luaL_error(l, "%s", e.what()); }
 }
 // The fixture runtime addresses by explicit ids; the script supplies them
 // (scenario/tests or a login flow that assigns ids). An entity that already

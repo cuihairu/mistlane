@@ -691,11 +691,14 @@ std::vector<PlacementRecord> MigrationJournal::restore_placements() const {
         record.instance = std::string(instance ? instance : "", static_cast<std::size_t>(instance_size));
         record.scene = std::string(scene ? scene : "", sqlite3_column_bytes(select.get(), 8));
         if (record.scene.empty()) record.scene = "-";
+        // generation is the comparison baseline the coordinator last published.
+        // An old-style ROUTE SET without a generation writes the 0 sentinel
+        // ("no baseline"), which save_placement accepts; restore must accept the
+        // same value instead of treating a legitimately-written 0 as corruption.
         if (version != static_cast<int>(kVersion) || !record_identifier(record.scope)
                 || !record_identifier(record.realm) || !record_identifier(record.character)
                 || !record_identifier(record.instance) || !record_identifier(record.scene)
                 || (record.role != "gameServer" && record.role != "crossServer")
-                || !generation
                 || (!record.namespace_.empty() && !record_identifier(record.namespace_)))
             throw std::runtime_error("placement row corrupted");
         record.generation = generation;

@@ -3907,7 +3907,7 @@ void login_ticket_wire() {
     Context c;
     write(c.path("login.lua"),
         "return {message=function(p,c)\n"
-        " local realm, character, instance, generation, expires = p:match('issue (%S+) (%S+) (%S+) (%d+) (%d+)')\n"
+        " local realm, character, instance, generation, expires = p:match('issue (%S+) (%S+) (%S+) (%S+) (%S+)')\n"
         " if not realm then return 'usage: issue realm character instance generation expires' end\n"
         " local ticket, err = mistlane.ticket.issue(realm, character, instance, tonumber(generation), tonumber(expires))\n"
         " if not ticket then return 'ERR '..err end\n"
@@ -3952,6 +3952,13 @@ void login_ticket_wire() {
     const auto unconfigured = port();
     c.node("login", unconfigured, {"--script", c.path("login.lua").string()});
     must_fail([&] { (void)tcp(unconfigured)->request("issue alpha hero xs-a 7 "+std::to_string(now+120)); });
+    // Bad ticket arguments must be Lua errors from lua_pcall, not C++
+    // exceptions crossing the boundary. The same login remains usable for the
+    // next well-formed request, and neither negative value can wrap to UINT64_MAX.
+    must_fail([&] { (void)tcp(login)->request("issue al!pha hero xs-a 7 99"); });
+    must_fail([&] { (void)tcp(login)->request("issue alpha hero xs-a -1 99"); });
+    must_fail([&] { (void)tcp(login)->request("issue alpha hero xs-a 7 -1"); });
+    require(!ask().empty(), "login did not keep serving after a rejected ticket argument");
     std::cout << "login.ticket.wire: Lua issuer -> crossServer verifier [PASS]\n";
 }
 // Character route records: a route is only written against a registered
@@ -6308,10 +6315,13 @@ void coordinator_placement_journal() {
     eventually([&] {
         return ask(first, "MLR1 QUERY gameServer - alpha").find("gs-a") != std::string::npos;
     }, 5s, "member never registered");
-    equal(ask(first, "MLR1 ROUTE SET NS - alpha mist eve gameServer gs-a 7 town"), "MLR1 ROUTE OK");
+    equal(ask(first, "MLR1 ROUTE SET NS - alpha mist eve gameServer gs-a"), "MLR1 ROUTE OK");
     const auto live = ask(first, "MLR1 ROUTE GET NS - mist eve");
     require(live.starts_with("MLR1 ROUTE AT alpha gameServer gs-a "), "live route wrong shape: "+live);
-    require(live.ends_with(" town 7"), "live route lost the published scene/generation: "+live);
+    require(live.ends_with(" - 0"), "live route lost the absent generation sentinel: "+live);
+    equal(ask(first, "MLR1 ROUTE SET NS - alpha mist mal gameServer gs-a 7 town"), "MLR1 ROUTE OK");
+    require(ask(first, "MLR1 ROUTE GET NS - mist mal").ends_with(" town 7"),
+            "explicit generation route was not recorded");
     // Crash, not graceful stop: a coordinator restart must recover the
     // placement from the durable journal even though the member control leg
     // died with the process (no clean retirement ran).
@@ -6322,6 +6332,7 @@ void coordinator_placement_journal() {
     // Before the member re-registers, the restored placement is dormant: it
     // must not invent a live host, so GET honestly answers EMPTY.
     equal(ask(second, "MLR1 ROUTE GET NS - mist eve"), "MLR1 ROUTE EMPTY");
+    equal(ask(second, "MLR1 ROUTE GET NS - mist mal"), "MLR1 ROUTE EMPTY");
     c.node("gameServer", port(), {"--script", c.path("echo.lua").string(),
         "--coordinator", endpoint(second), "--scope", "alpha", "--service-name", "gs-a"});
     eventually([&] {
@@ -6330,9 +6341,12 @@ void coordinator_placement_journal() {
     }, 5s, "restored placement never answered for the re-registered host");
     const auto restored = ask(second, "MLR1 ROUTE GET NS - mist eve");
     require(restored != "MLR1 ROUTE EMPTY", "restored placement lost the host");
-    require(restored.ends_with(" town 7"), "restored placement lost the scene/generation baseline: "+restored);
+    require(restored.ends_with(" - 0"), "restored placement lost the absent generation sentinel: "+restored);
+    require(ask(second, "MLR1 ROUTE GET NS - mist mal").ends_with(" town 7"),
+            "restored placement lost the explicit scene/generation baseline");
     std::cout << "placement.journal: coordinator restart retains character placement, "
-        "with scene/generation, dormant until the host re-registers, then answers the live member again [PASS]\n";
+        "including the no-generation sentinel, dormant until the host re-registers, "
+        "then answers the live member again [PASS]\n";
 }
 
 // The complete four-step migration handoff across real processes: the source
