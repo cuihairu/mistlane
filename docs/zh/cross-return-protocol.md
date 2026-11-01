@@ -1,6 +1,6 @@
 # 跨服回传与唯一写入权协议
 
-状态：MLD1 语法、发送端 ACK 处理和确定性租约状态机已实现（2026-10-19）；持久存储与运行时租约权威尚未实现。参与者上下文及其可选凭据尾缀、端点和有序队列边界已实现，端点仍只回易失性回执。目标职责见[进程职责](./process-roles.md)；旧路径的观察与缺口在[模型页](./player-scene-model.md)。
+状态：MLD1 语法、发送端 ACK 处理、确定性租约状态机、存储后端 MLD1 记录/ACK 路径及 crossServer 发送侧队列接线已实现（2026-10-19 语法、2026-10-27 存储、2026-11-01 发送侧队列）；运行时租约权威与 Avatar 场景运行时尚未实现。参与者上下文及其可选凭据尾缀、端点和有序队列边界、框架持有的回传发送器已实现；带 `--journal` 的 data 只在 SQLite 提交后答 `ACK durable`，无则仅回易失性回执。目标职责见[进程职责](./process-roles.md)；旧路径的观察与缺口在[模型页](./player-scene-model.md)。
 
 ## 参与者与返回上下文
 
@@ -63,7 +63,7 @@ MLD1 ERR INVALID | MLD1 ERR STALE gen <n> | MLD1 ERR SEQ seq <n> | MLD1 ERR FULL
 
 **键迁移与兼容：**MLD1 已携带 `realm`，当前端点记录只在内存中、重启即清空，因此将内存查找键改为 `(realm, character)` 不需要在线数据迁移。未来若持久表仍只按 `character` 建键，恢复写入前必须回填 realm，并拒绝或显式处理冲突。现有帧语法不变。
 
-端点以 `(realm, character)` 为栅栏和序号键，执行 generation 栅栏和严格连续序号。`MLD1 FENCE` 冻结该键的最终有序游标并把旧 generation 墓碑化——同一 generation 幂等、不同 generation 已栅栏为 `ERR STALE`、无已提交游标为 `ERR NOFENCE`、存储失败回 `ERR STORAGE`；栅栏后旧 generation 只能重发冻结游标绝不推进，仅严格更新 generation 从冻结游标续写。发送队列每键最多一个在途提交；`RECEIVED` 释放传输槽，但条目保留到 generation 匹配的 durable ACK。带 `--journal` 时栅栏 pin 持久化且跨重启保留；无 journal 的记录进程内、重启后答 `EMPTY`；队列尚未接入 crossServer，队列满转只读和回服完成仍未实现。
+端点以 `(realm, character)` 为栅栏和序号键，执行 generation 栅栏和严格连续序号。`MLD1 FENCE` 冻结该键的最终有序游标并把旧 generation 墓碑化——同一 generation 幂等、不同 generation 已栅栏为 `ERR STALE`、无已提交游标为 `ERR NOFENCE`、存储失败回 `ERR STORAGE`；栅栏后旧 generation 只能重发冻结游标绝不推进，仅严格更新 generation 从冻结游标续写。发送队列每键最多一个在途提交；`RECEIVED` 释放传输槽，但条目保留到 generation 匹配的 durable ACK。带 `--journal` 时栅栏 pin 持久化且跨重启保留；无 journal 的记录进程内、重启后答 `EMPTY`。crossServer 发送器（`--data IP:PORT`、`mistlane.returning.seed/enqueue`）持有有序重试队列：先 `MLD1 LOAD` 种入持久游标、按序提交、仅 `ACK durable` 后摘除；连接丢失把在途提交送回有界队列再重连。队列满转只读、回服完成与运行时租约权威仍未实现。
 
 ## 写入租约交接
 
@@ -76,7 +76,7 @@ MLD1 ERR INVALID | MLD1 ERR STALE gen <n> | MLD1 ERR SEQ seq <n> | MLD1 ERR FULL
 | 故障 | 规则 |
 |---|---|
 | 归属侧不可达 | 在有界队列内重试；参与者对跨服本地状态仍可写，但无法完成返回。任何超时都不得把未确认变更变成已确认。 |
-| 发送方提交后、确认前崩溃 | 当前内存发送队列丢失，无自动重放或恢复保证。仅当应用可重建原提交、同一 data 进程仍持有该 generation 与最新序号时，重放才得到重复 `RECEIVED`；data 重启不保留此能力。持久恢复须原子持久化 payload、去重游标及 generation/墓碑，并有可恢复的发送端重放来源；当前两者均无。 |
+| 发送方提交后、确认前崩溃 | 当前内存发送队列丢失，无自动重放或恢复保证。仅当应用可重建原提交、同一 data 进程仍持有该 generation 与最新序号时，重放才得到重复 `RECEIVED`；data 重启不保留此能力。持久恢复须原子持久化 payload、去重游标及 generation/墓碑，并有可恢复的发送端重放来源；当前两者均无（队列进程内、发送器在内存重试直到 ACK durable）。 |
 | 应答丢失（已送达、应答丢失） | 当前重放相同 generation 和最新已存序号只返回易失性 `RECEIVED`，重试条目保留；更旧序号返回 `ERR SEQ`。未来丢失持久 ACK 后须以原幂等键重放并返回已提交的 ACK，通过跨 data 重启测试后才能承诺恢复。 |
 | data 进程重启 | 当前 payload、序号与 generation 全丢失，LOAD 返回 `EMPTY`；不承诺去重或写栅栏恢复。 |
 | 提交时承载版本不匹配 | 归属侧拒绝并应答当前版本；旧写者停止，结果向运营/应用暴露。不覆盖。 |
@@ -91,4 +91,4 @@ MLD1 ERR INVALID | MLD1 ERR STALE gen <n> | MLD1 ERR SEQ seq <n> | MLD1 ERR FULL
 - 租约时长、队列界与重试预算：实现时以测量依据给出默认值的配置项，不由本页拍数字。
 - 入场凭据签名与签发方已在 login 契约决定：HMAC-SHA256、login、区服密钥。C++ 签发/验证原语、规范凭据编码与传输已实现（`mistlane.ticket.issue` 在 `MISTLANE_TICKET_SECRETS` 下的 login 节点签发、crossServer 在握手上验证）；初始 generation 及推进生命周期见[服务契约](./service-contracts.md#login)。
 
-参与者上下文、端点键、有序队列、ACK 编解码/门控和租约状态模型均已有测试。持久存储链及 crossServer/coordinator/Avatar 运行时接线仍未完成。
+参与者上下文、端点键、有序队列、ACK 编解码/门控、租约状态模型、存储后端记录/ACK 路径及 crossServer 发送侧重试接线均已有测试（validation 记录：cross routing、record endpoint、record journal、return queue、return sender）。coordinator/Avatar 运行时接线仍未完成。

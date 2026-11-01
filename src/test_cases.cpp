@@ -4351,6 +4351,71 @@ void cross_home_sequence_journal() {
     std::cout << "record.home.sequence.journal: the durable pin fences the old "
         "generation after restart and the newer generation resumes [PASS]\n";
 }
+// The sender-side slice of the return protocol: the crossServer owns an
+// ordered retry queue against a real framed data endpoint. The script only
+// seeds and enqueues; the sender performs LOAD, submits in sequence and
+// removes a change only when home data answers ACK durable.
+void cross_return_sender() {
+    Context c;
+    write(c.path("return.lua"),
+        "local M = {}\n"
+        "function M.message(payload, context)\n"
+        "  if payload == 'seed' then\n"
+        "    local ok, reason = mistlane.returning.seed('home', 'hero')\n"
+        "    if not ok then return 'SEED '..tostring(reason) end\n"
+        "    return 'SEEDED'\n"
+        "  end\n"
+        "  if payload == 'send' then\n"
+        "    local ok, reason = mistlane.returning.enqueue('home','hero',5,1,'hp=10')\n"
+        "    if not ok then return 'ENQ '..tostring(reason) end\n"
+        "    return 'ENQUEUED'\n"
+        "  end\n"
+        "  return 'noop'\n"
+        "end\n"
+        "return M");
+    write(c.path("echo.lua"), echo);
+    const auto data_port=port(), cross=port();
+    const auto journal=c.path("return-records.sqlite");
+    c.node("data", data_port, {"--script", c.path("echo.lua").string(),
+        "--journal", journal.string()});
+    c.node("crossServer", cross, {"--script", c.path("return.lua").string(),
+        "--data", endpoint(data_port)});
+    const auto send_frame=[](RawSocket& raw, std::string_view payload) {
+        std::string frame(4, '\0');
+        auto length=static_cast<std::uint32_t>(payload.size());
+        for (int i=3; i>=0; --i) { frame[i]=static_cast<char>(length & 255); length >>= 8; }
+        raw.send(frame+std::string(payload));
+    };
+    const auto read_frame=[](RawSocket& raw) {
+        const auto header=raw.receive(4);
+        std::size_t length=0;
+        for (unsigned char ch : header) length=(length << 8) | ch;
+        return raw.receive(length);
+    };
+    const auto ask=[&](unsigned listen, const std::string& line) {
+        RawSocket raw(listen);
+        send_frame(raw, line);
+        return read_frame(raw);
+    };
+    const auto ask_data=[&](const std::string& line) { return ask(data_port, line); };
+    // The crossServer leg joins, then drives the return sender from Lua.
+    {
+        RawSocket raw(cross);
+        send_frame(raw, "MLC1 1 home g r1 ch hero gen 5 ret home g r1");
+        equal(read_frame(raw), "MLC1 OK 1");
+        send_frame(raw, "seed");
+        equal(read_frame(raw), "SEEDED");
+        send_frame(raw, "send");
+        equal(read_frame(raw), "ENQUEUED");
+    }
+    // The sender performs LOAD, submits in sequence and home data ACKs durably.
+    eventually([&] {
+        return ask_data("MLD1 LOAD home hero") == "MLD1 STATE gen 5 seq 1 hp=10";
+    }, 5s, "the return sender never drained the durable change");
+    equal(ask_data("MLD1 LOAD home hero"), "MLD1 STATE gen 5 seq 1 hp=10");
+    std::cout << "cross.return.sender: crossServer ordered queue drains only on "
+        "ACK durable against a real data endpoint [PASS]\n";
+}
 void cross_home_fence() {
     // MLD1 FENCE is the data endpoint's explicit migration fence: it pins the
     // final cursor for a generation and, once pinned, makes that generation a

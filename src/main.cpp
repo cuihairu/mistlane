@@ -262,6 +262,8 @@ int main(int argc, char** argv) {
                              "  --crashpad-handler FILE --crashpad-database DIR (optional; local dumps only)\n"
                              "  cross routing/crossServer: --route-epoch N --max-room-sessions N\n"
                              "    --max-group-sessions N --max-shard-sessions N\n"
+                             "  crossServer return sender: --data IP:PORT (home data MLD1 endpoint;\n"
+                             "    enqueued changes retry in a bounded queue until ACK durable)\n"
                              "SIGHUP: transactional script reload (state is reset)\n"
                              "  coordinator: --service-token TOKEN (require member identity); registry\n"
                              "    members connect with --coordinator IP:PORT [--namespace NAME]\n"
@@ -283,6 +285,7 @@ int main(int argc, char** argv) {
             else if (key == "--service-name") config.service_name = value;
             else if (key == "--upstream-multiplex") config.upstream_multiplex = switch_value(value);
             else if (key == "--coordinator") { config.coordinator = endpoint(value); config.coordinator_enabled = true; }
+            else if (key == "--data") { config.data = endpoint(value); }
             else if (key == "--namespace") { config.namespace_ = value; config.namespace_wire = true; namespace_selected = true; }
             else if (key == "--scope") { config.scope = value; scope_selected = true; }
             else if (key == "--journal") config.journal = value;
@@ -357,6 +360,10 @@ int main(int argc, char** argv) {
             throw std::invalid_argument("--service-token does not apply to cross routing");
         if (!config.upstream_token.empty() && config.routing == "cross")
             throw std::invalid_argument("--upstream-token does not apply to cross routing");
+        // The framework return sender is crossServer-only; any other role
+        // would silently ignore the endpoint, so refuse the misconfiguration.
+        if (!config.data.address.empty() && config.role != "crossServer")
+            throw std::invalid_argument("--data applies to crossServer only");
         // Multiplexing is the internal mode: only identified peers may upgrade
         // a shared connection, so an anonymous upstream link cannot be offered it.
         if (config.upstream_multiplex) {

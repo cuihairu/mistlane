@@ -85,7 +85,7 @@ if(BUILD_TESTING)
       coordinator.migration.authority coordinator.migration.fourstep
       api.signature api.tamper api.rotation api.replay api.acceptance api.acceptance.sqlite api.ownership api.wire api.http
       login.ticket login.ticket.wire
-      cross.admission cross.record cross.record.journal cross.return.queue probe.control scaffold.init
+      cross.admission cross.record cross.record.journal cross.return.queue cross.return.sender probe.control scaffold.init
       config.file cli.bot)
     string(REPLACE "." "_" test_name "${test_case}")
     add_test(NAME mistlane_${test_name} COMMAND mistlane test --case "${test_case}")

@@ -135,10 +135,10 @@ void LuaService::check(int status) {
 }
 LuaService::LuaService(const std::string& path, ServiceContext context, std::shared_ptr<RedisRuntime> redis,
                        WebsocketSink* sink, GameSessionSink* sessions, PlacementSink* placement,
-                       EntityRuntime* entity_runtime, const TicketIssuer* ticket_issuer)
+                       EntityRuntime* entity_runtime, const TicketIssuer* ticket_issuer, ReturnSink* return_sink)
   : state_(luaL_newstate()), context_(std::move(context)), websocket_sink_(sink), session_sink_(sessions),
     placement_sink_(placement), entity_runtime_(entity_runtime), ticket_issuer_(ticket_issuer),
-    async_context_(std::make_shared<AsyncContext>()), redis_(std::move(redis)) {
+    return_sink_(return_sink), async_context_(std::make_shared<AsyncContext>()), redis_(std::move(redis)) {
     if (!state_) throw std::runtime_error("cannot create Lua state");
     async_context_->state = state_;
     try {
@@ -153,6 +153,7 @@ LuaService::LuaService(const std::string& path, ServiceContext context, std::sha
         push_placement_api(state_, this);
         push_entity_api(state_, entity_runtime_);
         push_ticket_api(state_, this);
+        push_return_api(state_, this);
         lua_pushcfunction(state_, traceback);
         check(luaL_loadfile(state_, path.c_str()));
         check(protected_call(state_, 0, 1, 1));
@@ -346,6 +347,49 @@ void LuaService::push_ticket_api(lua_State* l, LuaService* service) {
     lua_newtable(l);
     lua_pushlightuserdata(l, service); lua_pushcclosure(l, ticket_issue, 1); lua_setfield(l, -2, "issue");
     lua_setfield(l, -2, "ticket"); lua_setglobal(l, "mistlane");
+}
+void LuaService::push_return_api(lua_State* l, LuaService* service) {
+    if (!service->return_sink_) return; // no home data endpoint configured
+    lua_getglobal(l, "mistlane");
+    if (!lua_istable(l, -1)) { lua_pop(l, 1); lua_newtable(l); }
+    lua_newtable(l);
+    lua_pushlightuserdata(l, service); lua_pushcclosure(l, return_seed, 1); lua_setfield(l, -2, "seed");
+    lua_pushlightuserdata(l, service); lua_pushcclosure(l, return_enqueue, 1); lua_setfield(l, -2, "enqueue");
+    lua_setfield(l, -2, "returning"); lua_setglobal(l, "mistlane");
+}
+// mistlane.returning.seed(realm, character) -> true | false, reason: asks home
+// data for the durable cursor and seeds the ordered queue from it. The sender
+// re-issues the LOAD over its own leg, so the result is asynchronous.
+int LuaService::return_seed(lua_State* l) {
+    auto* service = static_cast<LuaService*>(lua_touserdata(l, lua_upvalueindex(1)));
+    try {
+        if (!service->return_sink_) throw std::runtime_error("return sender is not configured on this node");
+        auto realm = checked_text(l, 1, "realm", 64);
+        auto character = checked_text(l, 2, "character", 64);
+        const std::string reason = service->return_sink_->seed(realm, character);
+        if (reason.empty()) { lua_pushboolean(l, 1); return 1; }
+        lua_pushboolean(l, 0); lua_pushlstring(l, reason.data(), reason.size()); return 2;
+    } catch (const std::exception& e) { return luaL_error(l, "%s", e.what()); }
+}
+// mistlane.returning.enqueue(realm, character, generation, sequence, payload)
+// -> true | false, reason: queues one change for ordered return. The queue
+// holds it until home data answers ACK durable, never on a volatile receipt.
+int LuaService::return_enqueue(lua_State* l) {
+    auto* service = static_cast<LuaService*>(lua_touserdata(l, lua_upvalueindex(1)));
+    try {
+        if (!service->return_sink_) throw std::runtime_error("return sender is not configured on this node");
+        auto realm = checked_text(l, 1, "realm", 64);
+        auto character = checked_text(l, 2, "character", 64);
+        if (!lua_isinteger(l, 3) || !lua_isinteger(l, 4)) throw std::runtime_error("generation and sequence must be integers");
+        const auto generation = static_cast<std::uint64_t>(lua_tointeger(l, 3));
+        const auto sequence = static_cast<std::uint64_t>(lua_tointeger(l, 4));
+        if (lua_type(l, 5) != LUA_TSTRING) throw std::runtime_error("payload must be a string");
+        std::size_t size = 0; const char* data = lua_tolstring(l, 5, &size);
+        if (size > max_frame) throw std::runtime_error("payload exceeds 1 MiB");
+        const std::string reason = service->return_sink_->enqueue(realm, character, generation, sequence, {data, size});
+        if (reason.empty()) { lua_pushboolean(l, 1); return 1; }
+        lua_pushboolean(l, 0); lua_pushlstring(l, reason.data(), reason.size()); return 2;
+    } catch (const std::exception& e) { return luaL_error(l, "%s", e.what()); }
 }
 // Mints a signed MLT1 entry ticket: mistlane.ticket.issue(realm, character,
 // instance, generation, expires) -> hex or nil, reason. Synchronous: the

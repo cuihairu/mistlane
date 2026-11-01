@@ -40,6 +40,9 @@ struct Config {
     // the data role's durable MLD1 records. An empty value keeps both stores
     // volatile (the historical default).
     std::string journal;
+    // Home data endpoint for a crossServer's framework-owned return sender.
+    // An empty address keeps the historical script-only behavior.
+    Endpoint data{"", 0};
     // Entity contract document (.def): a node that sets it hosts the entity
     // runtime and answers MLE1 frames instead of passing them to the script.
     // Only the entity-hosting roles may load one (gameServer/crossServer).

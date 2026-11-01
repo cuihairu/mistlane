@@ -389,6 +389,16 @@ public:
         send_cursor_[key] = sequence;
         return true;
     }
+    // The change currently in flight for a participant, if any.
+    const Change* peek(std::string_view realm, std::string_view character) const {
+        const auto key = std::pair{std::string(realm), std::string(character)};
+        const auto flight = in_flight_.find(key);
+        if (flight == in_flight_.end()) return nullptr;
+        const auto rows = pending_.find(key);
+        if (rows == pending_.end()) return nullptr;
+        const auto item = rows->second.find(flight->second);
+        return item == rows->second.end() ? nullptr : &item->second;
+    }
     bool ack_durable(std::string_view realm, std::string_view character, std::uint64_t sequence) {
         const auto key = std::pair{std::string(realm), std::string(character)};
         auto cursor = durable_cursor_.find(key);

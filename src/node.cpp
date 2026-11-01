@@ -489,6 +489,222 @@ private:
     std::map<std::uint64_t, Entry> sessions_;
     std::uint64_t next_id_ = 1;
 };
+// crossServer side of MLD1: one replaceable connection to home data. The
+// queue is the ordering boundary; only ACK durable drains a change. LOAD and
+// SUBMIT are serialized (one in-flight operation at a time), and every
+// connection loss returns an in-flight submit to the bounded retry queue
+// before reconnect, so a lost reply never silently drops a change.
+class ReturnSender : public ReturnSink, public std::enable_shared_from_this<ReturnSender> {
+public:
+    ReturnSender(asio::io_context& io, const Endpoint& endpoint, Diagnostics& diagnostics)
+      : endpoint_(tcp::endpoint(parse_address(endpoint.address), endpoint.port)), io_(io),
+        diagnostics_(diagnostics), timer_(io), queue_(3) {}
+    void start() { if (!started_) { started_ = true; connect(); } }
+    void stop() {
+        stopping_ = true;
+        timer_.cancel();
+        if (channel_) { channel_->close(); channel_ = nullptr; }
+    }
+    std::string seed(std::string_view realm, std::string_view character) override {
+        try {
+            const Key key{std::string(realm), std::string(character)};
+            if (seeded_.contains(key)) return "already seeding";
+            seeded_.insert(key);
+            send_next();
+            return {};
+        } catch (const std::exception&) { return "invalid"; }
+    }
+    std::string enqueue(std::string_view realm, std::string_view character,
+                        std::uint64_t generation, std::uint64_t sequence, std::string_view payload) override {
+        try {
+            const Key key{std::string(realm), std::string(character)};
+            Change change{key.first, key.second, generation, sequence, std::string(payload)};
+            // The script may enqueue before the seed LOAD has answered: hold the
+            // change until the cursor is seeded, then feed it into the ordered
+            // queue in submission order (the queue keeps per-participant order).
+            if (!loaded_cursor_.contains(key)) { pending_before_load_[key].push_back(std::move(change)); }
+            else queue_.enqueue(std::move(change));
+            send_next();
+            return {};
+        } catch (const std::exception&) { return "invalid"; }
+    }
+private:
+    using Key = std::pair<std::string, std::string>;
+    using Change = ReturnSendQueue::Change;
+    void connect() {
+        phase_ = Phase::connecting;
+        channel_ = std::make_shared<TcpChannel>(tcp::socket(io_));
+        channel_->start([self=shared_from_this()](Error) { self->pump(); });
+    }
+    void pump() {
+        if (stopping_ || !channel_) return;
+        if (phase_ == Phase::connecting) {
+            channel_->socket().async_connect(endpoint_, [self=shared_from_this()](Error ec) {
+                if (self->stopping_) return;
+                if (ec) return self->retry_later();
+                self->phase_ = Phase::ready;
+                self->pump();
+                self->send_next();
+            });
+            return;
+        }
+        if (reading_) return;
+        reading_ = true;
+        channel_->read([self=shared_from_this()](Error ec, std::string payload) {
+            self->reading_ = false;
+            if (self->stopping_) return;
+            if (ec) return self->retry_later();
+            self->receive(std::move(payload));
+            self->pump();
+        });
+    }
+    void receive(const std::string& payload) {
+        try {
+            if (payload.starts_with("MLD1 ACK durable ")) {
+                const auto ack = parse_durable_ack(payload);
+                if (!submitted_ || ack.realm != submitted_->first || ack.character != submitted_->second)
+                    throw std::invalid_argument("invalid");
+                (void)queue_.received(ack.realm, ack.character, ack.sequence);
+                if (!queue_.ack_durable(ack)) throw std::invalid_argument("invalid");
+                submitted_.reset(); submitted_sequence_ = 0;
+                return send_next();
+            }
+            if (payload.starts_with("MLD1 RECEIVED ")) {
+                std::istringstream in(payload);
+                std::string magic, state, gen_tag, gen, seq_tag, seq, extra;
+                std::uint64_t generation = 0, sequence = 0;
+                if (!(in >> magic >> state >> gen_tag >> gen >> seq_tag >> seq) || (in >> extra)
+                        || magic != "MLD1" || state != "RECEIVED"
+                        || gen_tag != "gen" || seq_tag != "seq"
+                        || !record_decimal(gen, generation) || !record_decimal(seq, sequence))
+                    throw std::invalid_argument("invalid");
+                if (!submitted_ || sequence != submitted_sequence_) throw std::invalid_argument("invalid");
+                (void)queue_.received(submitted_->first, submitted_->second, sequence);
+                submitted_.reset(); submitted_sequence_ = 0;
+                return send_next();
+            }
+            if (payload.starts_with("MLD1 ERR ")) {
+                // The home side refused (SEQ/STALE/FULL/STORAGE): the change
+                // stays queued; release the transport slot so retry budget
+                // decides whether it is reattempted. A hard STALE eventually
+                // exhausts and surfaces a failed return rather than a silent drop.
+                if (submitted_) (void)queue_.retry(submitted_->first, submitted_->second);
+                submitted_.reset(); submitted_sequence_ = 0;
+                return send_next();
+            }
+            if (payload.starts_with("MLD1 STATE ")) {
+                std::uint64_t generation = 0, sequence = 0;
+                if (!parse_load(payload, generation, sequence)) throw std::invalid_argument("invalid");
+                if (!load_in_flight_) throw std::invalid_argument("invalid");
+                queue_.seed(load_in_flight_->first, load_in_flight_->second, sequence);
+                queue_.owner_generation(load_in_flight_->first, load_in_flight_->second, generation);
+                loaded_cursor_.insert(*load_in_flight_);
+                load_in_flight_.reset();
+                drain_pending();
+                return send_next();
+            }
+            if (payload == "MLD1 EMPTY") {
+                if (!load_in_flight_) throw std::invalid_argument("invalid");
+                queue_.seed(load_in_flight_->first, load_in_flight_->second, 0);
+                loaded_cursor_.insert(*load_in_flight_);
+                load_in_flight_.reset();
+                drain_pending();
+                return send_next();
+            }
+            throw std::invalid_argument("invalid");
+        } catch (const std::exception&) {
+            diagnostics_.upstream_error();
+            retry_later();
+        }
+    }
+    void send_next() {
+        if (stopping_ || phase_ != Phase::ready || writing_) return;
+        if (!load_in_flight_ && !submitted_) {
+            for (const auto& key : seeded_)
+                if (!loaded_cursor_.contains(key)) { load_in_flight_ = key; break; }
+        }
+        if (load_in_flight_) {
+            writing_ = true;
+            return write("MLD1 LOAD "+load_in_flight_->first+" "+load_in_flight_->second);
+        }
+        if (!submitted_) {
+            for (const auto& key : loaded_cursor_) {
+                auto change = queue_.next(key.first, key.second);
+                if (change) {
+                    submitted_ = key;
+                    submitted_sequence_ = change->sequence;
+                    break;
+                }
+            }
+            if (!submitted_) return;
+        }
+        writing_ = true;
+        const auto& key = *submitted_;
+        const auto change = *queue_.peek(key.first, key.second);
+        return write("MLD1 SUBMIT "+change.realm+" "+change.character
+            + " gen "+std::to_string(change.generation)
+            + " seq "+std::to_string(change.sequence)
+            + (change.payload.empty() ? "" : " "+change.payload));
+    }
+    // After a seed LOAD answers, feed any changes the script enqueued before
+    // the cursor existed into the ordered queue (per-participant order kept).
+    void drain_pending() {
+        for (const auto& key : loaded_cursor_) {
+            auto it = pending_before_load_.find(key);
+            if (it == pending_before_load_.end()) continue;
+            for (auto& change : it->second) queue_.enqueue(std::move(change));
+            pending_before_load_.erase(it);
+        }
+    }
+    void write(std::string payload) {
+        channel_->write(std::move(payload), [self=shared_from_this()](Error ec) {
+            self->writing_ = false;
+            if (self->stopping_) return;
+            if (ec) return self->retry_later();
+        });
+    }
+    void retry_later() {
+        diagnostics_.upstream_error();
+        if (submitted_) (void)queue_.retry(submitted_->first, submitted_->second);
+        submitted_.reset(); submitted_sequence_ = 0;
+        load_in_flight_.reset();
+        teardown();
+        timer_.expires_after(std::chrono::milliseconds(50));
+        timer_.async_wait([self=shared_from_this()](Error ec) {
+            if (!ec && !self->stopping_) self->connect();
+        });
+    }
+    void teardown() {
+        reading_ = false;
+        writing_ = false;
+        phase_ = Phase::idle;
+        if (channel_) { channel_->close(); channel_ = nullptr; }
+    }
+    static bool parse_load(const std::string& payload, std::uint64_t& generation,
+                           std::uint64_t& sequence) {
+        std::istringstream in(payload);
+        std::string magic, state, gen_tag, gen, seq_tag, seq, extra;
+        if (!(in >> magic >> state >> gen_tag >> gen >> seq_tag >> seq) || (in >> extra)
+                || magic != "MLD1" || state != "STATE"
+                || gen_tag != "gen" || seq_tag != "seq"
+                || !record_decimal(gen, generation) || !record_decimal(seq, sequence)) return false;
+        return true;
+    }
+    enum class Phase { idle, connecting, ready };
+    tcp::endpoint endpoint_;
+    asio::io_context& io_;
+    Diagnostics& diagnostics_;
+    asio::steady_timer timer_;
+    ReturnSendQueue queue_;
+    std::set<Key> seeded_, loaded_cursor_;
+    std::map<Key, std::vector<Change>> pending_before_load_;
+    std::optional<Key> load_in_flight_, submitted_;
+    std::uint64_t submitted_sequence_ = 0;
+    std::shared_ptr<TcpChannel> channel_;
+    Phase phase_ = Phase::idle;
+    bool started_ = false, stopping_ = false;
+    bool reading_ = false, writing_ = false;
+};
 // Gateway side of MLM1: one upstream connection carries every logical session
 // that shares an endpoint, so a busy gateway stops opening a socket per client.
 // After MLS1 the gateway asks for "MLM1" and the peer answers "MLM1 OK"; every
@@ -2771,11 +2987,13 @@ public:
                 ticket_issuer_ = std::make_unique<TicketIssuer>(ticket_secrets(secrets));
             }
         }
+        if (config_.role == "crossServer" && !config_.data.address.empty())
+            return_sender_ = std::make_shared<ReturnSender>(io_, config_.data, *diagnostics_);
         if (script_role)
             service_ = std::make_shared<LuaService>(config_.script, service_context_, redis_,
                 websockets_.get(), game_sessions_.get(), this,
                 entity_endpoint_ ? &entity_endpoint_->runtime() : nullptr,
-                ticket_issuer_.get());
+                ticket_issuer_.get(), return_sender_.get());
         if (http_service) {
             // MLA1 rides the same listener as the Lua routes. Both variables
             // must be injected together; anything else leaves /mla1 as a
@@ -2824,6 +3042,7 @@ public:
             diagnostics_->set_ready(true);
             ready_ = true;
             if (member_) member_->start();
+            if (return_sender_) return_sender_->start();
             for (const auto& item : config_.listeners) announce(item);
             io_.run();
         } else {
@@ -3085,6 +3304,7 @@ private:
         auto registry_sessions = std::move(registry_sessions_);
         for (auto& session : registry_sessions) session->stop();
         if (member_) member_->stop();
+        if (return_sender_) return_sender_->stop();
         while (!sessions_.empty()) {
             auto session = *sessions_.begin();
             session->stop();
@@ -3111,6 +3331,7 @@ private:
     std::set<std::shared_ptr<RegistrySession>> registry_sessions_;
     std::unique_ptr<Registry> registry_;
     std::shared_ptr<RegistryMember> member_;
+    std::shared_ptr<ReturnSender> return_sender_;
     std::size_t cursor_ = 0;
     CrossAdmission admission_;
     // Only the data role routes frames into this; every other role passes

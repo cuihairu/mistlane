@@ -50,6 +50,20 @@ public:
     virtual void place(std::string_view role, std::string_view namespace_, std::string_view scope,
         std::function<void(std::string_view address, std::string_view reason)> answer) = 0;
 };
+// Cross-return sender adapter (crossServer): the framework owns the MLD1
+// ordered retry queue, so a script only seeds a participant's durable cursor
+// and enqueues changes; the sender connects to home data, submits in sequence
+// and drains each change only after a store-backed ACK durable. All calls run
+// on the node's event loop thread, so implementations need no locking.
+class ReturnSink {
+public:
+    virtual ~ReturnSink() = default;
+    // Seeds the durable cursor from LOAD; returns "" or a short reason.
+    virtual std::string seed(std::string_view realm, std::string_view character) = 0;
+    // Enqueues one change for ordered return; returns "" or a short reason.
+    virtual std::string enqueue(std::string_view realm, std::string_view character,
+        std::uint64_t generation, std::uint64_t sequence, std::string_view payload) = 0;
+};
 class RedisRuntime {
 public:
     RedisRuntime(boost::asio::io_context& io, std::string host, std::uint16_t port);
@@ -71,7 +85,7 @@ public:
     explicit LuaService(const std::string& path, ServiceContext context = {}, std::shared_ptr<RedisRuntime> redis = {},
                         WebsocketSink* websocket_sink = nullptr, GameSessionSink* session_sink = nullptr,
                         PlacementSink* placement_sink = nullptr, EntityRuntime* entity_runtime = nullptr,
-                        const TicketIssuer* ticket_issuer = nullptr);
+                        const TicketIssuer* ticket_issuer = nullptr, ReturnSink* return_sink = nullptr);
     ~LuaService();
     LuaService(const LuaService&) = delete;
     LuaService& operator=(const LuaService&) = delete;
@@ -118,6 +132,9 @@ private:
     static void push_entity_api(lua_State*, EntityRuntime*);
     static int ticket_issue(lua_State*);
     static void push_ticket_api(lua_State*, LuaService*);
+    static int return_seed(lua_State*);
+    static int return_enqueue(lua_State*);
+    static void push_return_api(lua_State*, LuaService*);
     EntityDispatcher::Handler make_entity_handler(const std::string& type, const std::string& name,
                                                   unsigned method_id, ContractArgs returns,
                                                   const EntityContract* shapes) const;
@@ -131,6 +148,7 @@ private:
     PlacementSink* placement_sink_ = nullptr;
     EntityRuntime* entity_runtime_ = nullptr;
     const TicketIssuer* ticket_issuer_ = nullptr;
+    ReturnSink* return_sink_ = nullptr;
     bool started_ = false, stopped_ = false, shutdown_ = false;
     std::shared_ptr<AsyncContext> async_context_;
     std::shared_ptr<RedisRuntime> redis_;
