@@ -57,9 +57,9 @@
 
 ### 缺口核对
 
-- 现有 MIG 动词已含 OWNER/PREPARE/EVENT/COMMIT/ABORT/RETIRE/TAKEOVER/STATUS（`:2026-2041`），无独立「放置记录表」持久化；`record_fence` 持久化已落地（`src/journal.cpp:559`），放置记录本身若需跨重启查询，须另立记录持久化（当前为内存协调面）。
+- 现有 MIG 动词已含 OWNER/PREPARE/EVENT/COMMIT/ABORT/RETIRE/TAKEOVER/STATUS（`:2026-2041`）；`record_fence` 持久化已落地（`src/journal.cpp:559`）；实例级放置记录表已持久化（2026-10-31，`MigrationJournal::save_placement/drop_placement/restore_placements`，`coordinator.placement.journal`），coordinator 崩溃后仍能恢复最后放置、休眠期间答 `EMPTY` 绝不路由死宿主——「放置记录表持久化待定」的缺口已关闭。
 - 「从 envelope 自报身份授予 owner 权限」在代码中未实现，保持不做（D09 定义真实绑定来源）。
-- 实例级放置记录的持久化半片已落地（2026-10-31，`MigrationJournal::save_placement` 等，见 D02 已执行节）：coordinator 崩溃后仍能恢复最后放置，休眠期间答 `EMPTY` 绝不路由死宿主。仍缺：修改权限表（创建/迁移 prepare/commit/abort/销毁的旧值比较基准）与完整实例状态机接线（D06 推荐为设计，实施轮按 D02 四步时序接线）。
+- 仍缺：实例级（scope/type_id/entity_id/incarnation）放置状态机接线。角色级四步移交已闭环（2026-11-01 `coordinator.migration.fourstep`：真实 data/gameServer/crossServer 跨进程，generation 8→9，旧写者 `MLD1 ERR STALE`，ctest 70/70）；路由代比较基准已持久化（2026-10-31 `b43b074`，崩溃恢复后 `ROUTE GET` 仍答同代）。实例级归属权威属设计决策需用户拍板（todo.md:93），保持 BLOCKED。
 
 ## D09 JS/C# 直接调用：可信绑定、准入、超时与取消
 
@@ -260,7 +260,7 @@ D17 风险 3：文档同时出现 `avatar_save` 与拟议 `writeToDB`，若各�
 
 ### 缺口核对
 
-- 现有单二进制已按角色启动（`test_cases.cpp:2127` login/data 成对、`:2142` apiServer）；跨宿主移交的运行时闭环未验证（D02/D30）。
+- 现有单二进制已按角色启动（`test_cases.cpp:2127` login/data 成对、`:2142` apiServer）；跨宿主移交的运行时闭环已验证（2026-11-01 `coordinator.migration.fourstep`，真实 data/gameServer/crossServer 跨进程，ctest 70/70）——「未验证」缺口已关闭。剩余解除条件「正常登录、保存真实通过」的 Avatar 场景运行时仍被第 145 行门控（原始业务协议文本不存在，需外部材料，todo.md:145）。
 - 不新增 router/Base/Cell 进程（D01「不做/延后」）；不凭帮助文本一致就勾选总项；真实负载均衡延后。
 
 ## D04 login、data、可选 apiServer 契约与接线
@@ -520,9 +520,7 @@ D17 风险 3：文档同时出现 `avatar_save` 与拟议 `writeToDB`，若各�
 
 已有：`HomeSequenceAuthority`（`record.hpp:125`）、`fence`（:153）、`final_sequence`（:203）；`record_fence` 持久化与恢复（`journal.cpp:369/544/559`）；`MLR1 MIG` 全部动词（`node.cpp:2026-2041` 含 TAKEOVER :2193）；`PersistentStore::save/confirm/restore`（D11）。
 
-**缺口（实施轮补，不重造）：** 放置记录表持久化（D06 缺口）；coordinator 的「比较旧值」目前是内存协调面，需持久化比较基准才能跨崩溃正确。不重复实现 SQLite journal 或 TAKEOVER；不以注册表成员消失当成安全接管（D02「不做/延后」）。
-
-**已执行（2026-10-31，放置记录持久化半片）：** 放置记录表已持久化到同一 SQLite journal——`MigrationJournal::save_placement/drop_placement/restore_placements`（`include/mistlane/journal.hpp`、`src/journal.cpp`），`Registry` 在 `set_route` 时落盘、成员退役时 `drop_placement` 清除、构造时恢复休眠路由（`src/node.cpp`）。coordinator 崩溃后重查仍能按最后放置记录答活成员（休眠期间答 `EMPTY`，绝不路由死宿主），`coordinator.placement.journal` 覆盖 设置→崩溃→恢复→重注册→活答。仍缺：coordinator「比较旧值」的持久比较基准（目前仍为内存协调面），以及完整四步时序的运行时闭环。
+**缺口（实施轮补，不重造）——截至 2026-11-01 已闭环，无剩余实现缺口：** 放置记录表已持久化（`MigrationJournal::save_placement/drop_placement/restore_placements`，`coordinator.placement.journal` 设置→崩溃→恢复→重注册→活答）；coordinator「比较旧值」持久基准已落地（`b43b074`：`MLR1 ROUTE SET` 携带 generation，commit 一并写 placement 行，崩溃恢复后 `ROUTE GET` 仍答同一 generation，陈旧发布可拒）；完整四步时序运行时闭环已验证（2026-11-01 `coordinator.migration.fourstep`：真实 data（`--journal`）`MLD1 FENCE` 冻结、真实 gameServer/crossServer 注册、coordinator 驱动 OWNER/PREPARE/DRAINED/FENCE/READY/COMMIT 比较旧值后发布新路由（scene+generation），旧写者 `MLD1 ERR STALE`、仅严格更新代从冻结游标续写；ctest 70/70）。不重复实现 SQLite journal 或 TAKEOVER；不以注册表成员消失当成安全接管（D02「不做/延后」）。剩余待决：实例级（scope/type_id/entity_id/incarnation）归属权威接线（D06），需用户拍板。
 
 ### 写权与路由的区别
 
