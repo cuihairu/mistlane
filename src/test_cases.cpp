@@ -4377,16 +4377,37 @@ void cross_return_sender() {
         "    if not ok then return 'ENQ '..tostring(reason) end\n"
         "    return 'ENQUEUED'\n"
         "  end\n"
+        "  if payload == 'neg' then\n"
+        "    local ok, reason = pcall(mistlane.returning.enqueue,'home','hero',-1,1,'hp=10')\n"
+        "    if ok then return 'NEG ACCEPTED' end\n"
+        "    return 'NEG '..tostring(reason)\n"
+        "  end\n"
+        "  if payload == 'zero' then\n"
+        "    local ok, reason = pcall(mistlane.returning.enqueue,'home','hero',5,0,'hp=10')\n"
+        "    if ok then return 'ZERO ACCEPTED' end\n"
+        "    return 'ZERO '..tostring(reason)\n"
+        "  end\n"
+        "  if payload == 'dup' then\n"
+        "    local a, ra = mistlane.returning.enqueue('home','hero',5,999,'hp=10')\n"
+        "    if not a then return 'SEEDFAIL '..tostring(ra) end\n"
+        "    local b, rb = mistlane.returning.enqueue('home','hero',5,999,'hp=10')\n"
+        "    if b then return 'DUP ACCEPTED' end\n"
+        "    return 'DUP '..tostring(rb)\n"
+        "  end\n"
         "  return 'noop'\n"
         "end\n"
         "return M");
     write(c.path("echo.lua"), echo);
     const auto data_port=port(), cross=port();
     const auto journal=c.path("return-records.sqlite");
+    // A tokened data endpoint demands MLS1 on every leg; the crossServer
+    // presents it through --upstream-token. This is the path the return
+    // sender's identify handshake must drain without wedging the write guard.
     c.node("data", data_port, {"--script", c.path("echo.lua").string(),
-        "--journal", journal.string()});
+        "--journal", journal.string(), "--service-token", "s3cret"});
     c.node("crossServer", cross, {"--script", c.path("return.lua").string(),
-        "--data", endpoint(data_port)});
+        "--data", endpoint(data_port), "--upstream-token", "s3cret",
+        "--service-name", "xs-1"});
     const auto send_frame=[](RawSocket& raw, std::string_view payload) {
         std::string frame(4, '\0');
         auto length=static_cast<std::uint32_t>(payload.size());
@@ -4404,7 +4425,15 @@ void cross_return_sender() {
         send_frame(raw, line);
         return read_frame(raw);
     };
-    const auto ask_data=[&](const std::string& line) { return ask(data_port, line); };
+    // The data node demands MLS1 first; every fresh probe leg presents the
+    // identity before its record frame, like the crossServer sender itself.
+    const auto ask_data=[&](const std::string& line) {
+        RawSocket raw(data_port);
+        send_frame(raw, "MLS1 crossServer xs-1 s3cret");
+        equal(read_frame(raw), "MLS1 OK");
+        send_frame(raw, line);
+        return read_frame(raw);
+    };
     // The crossServer leg joins, then drives the return sender from Lua.
     {
         RawSocket raw(cross);
@@ -4415,13 +4444,33 @@ void cross_return_sender() {
         send_frame(raw, "send");
         equal(read_frame(raw), "ENQUEUED");
     }
+    // A negative generation and a zero sequence are refused by the Lua
+    // boundary before they wrap to UINT64_MAX and burn the retry queue. The
+    // join declares epoch 1 (the node's route epoch), and the second token of
+    // an MLC1 join is the epoch, not a request id.
+    {
+        RawSocket raw(cross);
+        send_frame(raw, "MLC1 1 home g r1 ch hero gen 5 ret home g r1");
+        equal(read_frame(raw), "MLC1 OK 1");
+        send_frame(raw, "neg");
+        require(read_frame(raw).find("NEG ") == 0, "negative generation was accepted");
+        send_frame(raw, "zero");
+        require(read_frame(raw).find("ZERO ") == 0, "zero sequence was accepted");
+        send_frame(raw, "dup");
+        const auto dup_reply = read_frame(raw);
+        // Sequence 999 is not contiguous with the seed cursor, so the first
+        // enqueue holds it in the queue and the second is refused; a first
+        // enqueue failure is reported as SEEDFAIL, not a duplicate verdict.
+        require(dup_reply.find("DUP ") == 0 && dup_reply.find("ACCEPTED") == std::string::npos,
+                "duplicate sequence was accepted");
+    }
     // The sender performs LOAD, submits in sequence and home data ACKs durably.
     eventually([&] {
         return ask_data("MLD1 LOAD home hero") == "MLD1 STATE gen 5 seq 1 hp=10";
     }, 5s, "the return sender never drained the durable change");
     equal(ask_data("MLD1 LOAD home hero"), "MLD1 STATE gen 5 seq 1 hp=10");
     std::cout << "cross.return.sender: crossServer ordered queue drains only on "
-        "ACK durable against a real data endpoint [PASS]\n";
+        "ACK durable against a tokened data endpoint over MLS1 [PASS]\n";
 }
 void cross_home_fence() {
     // MLD1 FENCE is the data endpoint's explicit migration fence: it pins the
@@ -5480,6 +5529,31 @@ void cross_return_queue() {
     require(durable_queue.received("realm-a", "same-id", 5), "volatile receipt did not release transport slot");
     require(!durable_queue.ack_durable(DurableAck{"realm-a", "same-id", 2, 5}), "stale generation durable ack drained queue");
     require(durable_queue.ack_durable(ack), "durable acknowledgement failed to drain matching change");
+}
+void cross_return_queue_bounded() {
+    // The bounded queue refuses enqueue at capacity instead of growing
+    // without bound: the retry budget is per-item and the total occupancy is
+    // capped, matching the "bounded queue" contract.
+    ReturnSendQueue bounded(3, 2);
+    bounded.seed("realm", "hero", 0);
+    bounded.enqueue({"realm", "hero", 1, 1, "one"});
+    bounded.enqueue({"realm", "hero", 1, 2, "two"});
+    require(bounded.pending() == 2, "bounded queue occupancy miscounted");
+    must_fail([&] { bounded.enqueue({"realm", "hero", 1, 3, "three"}); });
+    // A durable ACK drains one slot, so the next enqueue succeeds. Only one
+    // frame per participant may be in flight, so each send needs a RECEIVED
+    // before the next can be taken (the queue's ordering invariant).
+    require(bounded.next("realm", "hero").has_value(), "first change not sendable");
+    require(bounded.received("realm", "hero", 1), "first change not acknowledged");
+    require(bounded.next("realm", "hero").has_value(), "second change not sendable");
+    require(bounded.received("realm", "hero", 2), "second change not acknowledged");
+    require(bounded.ack_durable("realm", "hero", 1)
+            && bounded.ack_durable("realm", "hero", 2), "bounded queue durable ack failed");
+    require(bounded.pending() == 0, "bounded queue did not release a durable slot");
+    bounded.enqueue({"realm", "hero", 1, 3, "three"});
+    require(bounded.contains("realm", "hero", 3), "bounded queue lost the re-enqueued change");
+    std::cout << "cross.return.queue.bounded: capacity refuses overflow and a "
+        "durable ACK frees a slot [PASS]\n";
 }
 void probe_control() {
     Context c;

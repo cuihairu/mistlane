@@ -366,6 +366,19 @@ public:
             throw std::invalid_argument("duplicate sequence");
         ++pending_count_;
     }
+    // Total changes waiting to be sent (before any durable ACK). This is the
+    // occupancy the sender's pre-load holding area must count against, so a
+    // pending pool cannot overflow the bounded queue when it is drained.
+    std::size_t pending() const { return pending_count_; }
+    // Whether a change with this sequence is already held (pending or in
+    // flight). Used by the sender's pre-load pool to reject a duplicate before
+    // it is moved into the queue, so a drain never fails halfway.
+    bool contains(std::string_view realm, std::string_view character,
+                  std::uint64_t sequence) const {
+        const auto key = std::pair{std::string(realm), std::string(character)};
+        const auto rows = pending_.find(key);
+        return rows != pending_.end() && rows->second.contains(sequence);
+    }
     std::optional<Change> next(std::string_view realm, std::string_view character) {
         const auto key = std::pair{std::string(realm), std::string(character)};
         if (in_flight_.contains(key)) return std::nullopt;

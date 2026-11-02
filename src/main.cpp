@@ -349,10 +349,15 @@ int main(int argc, char** argv) {
             throw std::invalid_argument("--coordinator applies to gameServer, crossServer and login");
         if (!config.coordinator_enabled && (namespace_selected || scope_selected))
             throw std::invalid_argument("--namespace and --scope require --coordinator");
-        if (!config.coordinator_enabled && !config.upstream_token.empty() && config.role != "gateway")
+        if (!config.coordinator_enabled && !config.upstream_token.empty() && config.role != "gateway"
+                && config.role != "crossServer")
             // Members present this identity when they register; anywhere else
             // the flag would silently do nothing.
             throw std::invalid_argument("--upstream-token applies to gateway or coordinator members");
+        if (config.role == "crossServer" && !config.upstream_token.empty() && config.data.address.empty())
+            // The crossServer presents this identity to its MLD1 data leg, not
+            // to a registry; without --data the flag would silently do nothing.
+            throw std::invalid_argument("--upstream-token on crossServer requires --data");
         // Cross routing keeps its own MLC1 join as the identity; accepting the
         // token flags there would silently skip the handshake instead of
         // surfacing the misconfiguration.

@@ -534,8 +534,21 @@ public:
             // change until the cursor is seeded, then feed it into the ordered
             // queue in submission order (the queue keeps per-participant order).
             if (!loaded_cursor_.contains(key)) {
-                if (pending_before_load_count_ >= pending_capacity_)
+                // The queue itself is bounded, so the pre-load pool shares that
+                // same occupancy budget; otherwise a burst could later overflow
+                // the queue during drain and strand changes silently.
+                if (pending_before_load_count_ + queue_.pending() >= pending_capacity_)
                     throw std::invalid_argument("return queue is full");
+                // The queue will reject a duplicate sequence once drained, so
+                // reject it here too: enqueue is the caller-facing boundary and
+                // must not promise a change it cannot deliver.
+                if (queue_.contains(key.first, key.second, change.sequence))
+                    throw std::invalid_argument("duplicate sequence");
+                const auto held = pending_before_load_.find(key);
+                if (held != pending_before_load_.end())
+                    for (const auto& queued : held->second)
+                        if (queued.sequence == change.sequence)
+                            throw std::invalid_argument("duplicate sequence");
                 pending_before_load_[key].push_back(std::move(change));
                 ++pending_before_load_count_;
             } else queue_.enqueue(std::move(change));
@@ -573,6 +586,12 @@ private:
                     self->channel_->write(self->identity_, [self](Error e) {
                         if (self->stopping_) return;
                         if (e) return self->retry_later();
+                        // The identity write finished: release the transport
+                        // slot so the ready phase can send LOAD/SUBMIT. Without
+                        // this the write guard stays set forever and a tokened
+                        // data endpoint never drains its return queue.
+                        self->writing_ = false;
+                        self->send_next();
                     });
                 } else {
                     self->phase_ = Phase::ready;
@@ -592,6 +611,9 @@ private:
                 if (payload != "MLS1 OK") { self->diagnostics_.upstream_error(); return self->retry_later(); }
                 self->phase_ = Phase::ready;
                 self->send_next();
+                // The identity read consumed the only armed read; re-arm the
+                // ready-phase read so the LOAD/SUBMIT verdicts are observed.
+                self->pump();
             });
             return;
         }
@@ -697,13 +719,30 @@ private:
     // After a seed LOAD answers, feed any changes the script enqueued before
     // the cursor existed into the ordered queue (per-participant order kept).
     void drain_pending() {
+        // The queue is the ordering boundary; every change that reached the
+        // pre-load pool must either land in it or fail loudly. A throw here is
+        // caught by receive() and turns into a retry/reconnect, but because the
+        // load cursor is already recorded the key is never re-loaded, so a
+        // partial drain would strand the remaining changes. Pre-validate the
+        // whole batch against the queue's invariants (capacity and per-key
+        // duplicates) before moving any change, so a refusal is atomic.
+        std::size_t incoming = 0;
+        for (const auto& key : loaded_cursor_) {
+            const auto it = pending_before_load_.find(key);
+            if (it == pending_before_load_.end()) continue;
+            incoming += it->second.size();
+            if (queue_.pending() + incoming > pending_capacity_)
+                throw std::invalid_argument("return queue is full");
+            for (const auto& change : it->second)
+                if (queue_.contains(key.first, key.second, change.sequence))
+                    throw std::invalid_argument("duplicate sequence");
+        }
         for (const auto& key : loaded_cursor_) {
             auto it = pending_before_load_.find(key);
             if (it == pending_before_load_.end()) continue;
-            for (auto& change : it->second) {
+            for (auto& change : it->second)
                 queue_.enqueue(std::move(change));
-                --pending_before_load_count_;
-            }
+            pending_before_load_count_ -= it->second.size();
             pending_before_load_.erase(it);
         }
     }
