@@ -5,12 +5,7 @@
 <h1 align="center">Mistlane</h1>
 
 <p align="center">
-  <a href="https://github.com/cuihairu/mistlane/actions/workflows/ci.yml"><img src="https://github.com/cuihairu/mistlane/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
-  <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-blue" alt="Apache-2.0"></a> <a href="https://cuihairu.github.io/mistlane/"><img src="https://img.shields.io/badge/docs-blue" alt="docs"></a>
-  <a href="CMakeLists.txt"><img src="https://img.shields.io/badge/C%2B%2B-20-00599C" alt="C++20"></a>
-  <a href="docs/dependencies.md"><img src="https://img.shields.io/badge/Lua-5.5.1-2C2D72" alt="Lua 5.5.1"></a>
-  <a href="vcpkg.json"><img src="https://img.shields.io/badge/dependencies-vcpkg-2f6484" alt="vcpkg"></a>
-  <a href="docs/index.md"><img src="https://img.shields.io/badge/docs-English%20%2F%20中文-2f6484" alt="Bilingual documentation"></a>
+<p align="center"><a href="https://github.com/cuihairu/mistlane/actions/workflows/ci.yml"><img src="https://github.com/cuihairu/mistlane/actions/workflows/ci.yml/badge.svg" alt="CI"></a> <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-blue" alt="Apache-2.0"></a> <a href="https://cuihairu.github.io/mistlane/"><img src="https://img.shields.io/badge/docs-blue" alt="docs"></a> <a href="CMakeLists.txt"><img src="https://img.shields.io/badge/C%2B%2B-20-00599C" alt="C++20"></a> <a href="docs/dependencies.md"><img src="https://img.shields.io/badge/Lua-5.5.1-2C2D72" alt="Lua 5.5.1"></a> <a href="vcpkg.json"><img src="https://img.shields.io/badge/dependencies-vcpkg-2f6484" alt="vcpkg"></a> <a href="docs/index.md"><img src="https://img.shields.io/badge/docs-English%20%2F%20中文-2f6484" alt="Bilingual documentation"></a></p>
   <img src="https://img.shields.io/badge/status-research%20%26%20learning-8250df" alt="For research and learning">
 </p>
 
