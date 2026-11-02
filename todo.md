@@ -147,15 +147,24 @@
 
 ## 代码深审 2026-11-01
 
-- [ ] P2 生命周期：src/node.cpp:461 session_send 把栈局部 reason 以引用捕获进异步写回调，异步失败（message_size/operation_aborted）完成后向已销毁栈帧写入（use-after-scope）。修复：回调改为按值捕获或把 reason 移入回调可写状态，同步拒绝语义改注释。
-- [ ] P2 逻辑/安全：include/mistlane/entry_ticket.hpp:180 TicketVerifier::verify 用 std::array::operator!= 非恒定时间比较 HMAC，与 src/api.cpp:95 CRYPTO_memcmp 不一致，MLT1 门票验证留下时序侧信道。修复：改 CRYPTO_memcmp。
-- [ ] P2 资源泄漏：src/lua_service.cpp:807 stream_publish 在 callback_ref 之后才做字段校验，校验抛异常时 Lua registry 引用未 unref。修复：校验前置或异常路径 unref。
-- [ ] P2 资源泄漏：include/mistlane/entity_runtime.hpp:48,58 delivered_ 集合只 emplace 从不 erase（destroy 只擦 entities_），长驻节点去重条目无界增长。修复：destroy/重基线时清理 delivered_。
-- [ ] P3 越界/逻辑：include/mistlane/entity_envelope.hpp:123 encode_entity_reply 以 16 位宽度写 reason.size()，>64KB 的 reason 静默截断。修复：拒绝超长 reason 或改宽编码。
-- [ ] P3 逻辑/竞态：src/web.cpp:57 deliver 置 credit_=true 后可能覆盖暂存 incoming_，单槽桥接下罕见消息丢失。修复：reader_ 重新 arm 前保留旧消息或先清 credit_。
-- [ ] P3 逻辑/竞态：include/mistlane/cross.hpp:92 cross_shard 做 hash % count，零 upstream 会除零；当前 main.cpp:334 守卫不可达，属防御缺失。修复：count==0 提前返回/断言。
-- [ ] P3 TLS/认证：src/node.cpp:1039 MLS1 服务令牌用 std::string::operator!= 非恒定时间比较。修复：改 CRYPTO_memcmp。
-- [ ] P3 TLS/认证：src/node.cpp:2096 registry 身份校验同样非恒定时间令牌比较。修复：改 CRYPTO_memcmp。
+- [x] P2 生命周期：src/node.cpp:461 session_send 把栈局部 reason 以引用捕获进异步写回调，异步失败（message_size/operation_aborted）完成后向已销毁栈帧写入（use-after-scope）。修复：回调改为按值捕获或把 reason 移入回调可写状态，同步拒绝语义改注释。
+  证据：commit 待填；ctest 72/72（排除 MySQL 环境项）
+- [x] P2 逻辑/安全：include/mistlane/entry_ticket.hpp:180 TicketVerifier::verify 用 std::array::operator!= 非恒定时间比较 HMAC，与 src/api.cpp:95 CRYPTO_memcmp 不一致，MLT1 门票验证留下时序侧信道。修复：改 CRYPTO_memcmp。
+  证据：commit 待填；ctest 72/72（排除 MySQL 环境项）
+- [x] P2 资源泄漏：src/lua_service.cpp:807 stream_publish 在 callback_ref 之后才做字段校验，校验抛异常时 Lua registry 引用未 unref。修复：校验前置或异常路径 unref。
+  证据：commit 待填；ctest 72/72（排除 MySQL 环境项）
+- [x] P2 资源泄漏：include/mistlane/entity_runtime.hpp:48,58 delivered_ 集合只 emplace 从不 erase（destroy 只擦 entities_），长驻节点去重条目无界增长。修复：destroy/重基线时清理 delivered_。
+  证据：commit 待填；ctest 72/72（排除 MySQL 环境项）
+- [x] P3 越界/逻辑：include/mistlane/entity_envelope.hpp:123 encode_entity_reply 以 16 位宽度写 reason.size()，>64KB 的 reason 静默截断。修复：拒绝超长 reason 或改宽编码。
+  证据：commit 待填；ctest 72/72（排除 MySQL 环境项）
+- [x] P3 逻辑/竞态：src/web.cpp:57 deliver 置 credit_=true 后可能覆盖暂存 incoming_，单槽桥接下罕见消息丢失。修复：reader_ 重新 arm 前保留旧消息或先清 credit_。
+  证据：commit 待填；ctest 72/72（排除 MySQL 环境项）
+- [x] P3 逻辑/竞态：include/mistlane/cross.hpp:92 cross_shard 做 hash % count，零 upstream 会除零；当前 main.cpp:334 守卫不可达，属防御缺失。修复：count==0 提前返回/断言。
+  证据：commit 待填；ctest 72/72（排除 MySQL 环境项）
+- [x] P3 TLS/认证：src/node.cpp:1039 MLS1 服务令牌用 std::string::operator!= 非恒定时间比较。修复：改 CRYPTO_memcmp。
+  证据：commit 待填；ctest 72/72（排除 MySQL 环境项）
+- [x] P3 TLS/认证：src/node.cpp:2096 registry 身份校验同样非恒定时间令牌比较。修复：改 CRYPTO_memcmp。
+  证据：commit 待填；ctest 72/72（排除 MySQL 环境项）
 
 
 - [ ] 审核发现：`--data` 的 ReturnSender 只在 `!web_mode_` 分支启动（src/node.cpp:3045），crossServer 以 WS/HTTP/HTTPS 监听（web_mode=true）运行时发送器永不 start，`mistlane.returning.seed/enqueue` 入队后无人发送（src/node.cpp:3038-3047）

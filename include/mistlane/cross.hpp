@@ -87,6 +87,7 @@ inline CrossContext cross_context(std::string_view payload) {
 }
 // FNV-1a is fixed across processes/platforms; realm intentionally does not affect room affinity.
 inline std::size_t cross_shard(const CrossContext& c, std::size_t count) {
+    if (!count) return 0; // no upstreams: the caller must gate before this, but never divide by zero.
     std::uint64_t hash = 14695981039346656037ULL;
     for (unsigned char ch : c.group + "/" + c.room) { hash ^= ch; hash *= 1099511628211ULL; }
     return hash % count;

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
 #include "mistlane/api.hpp"
+#include <openssl/crypto.h>
 #include <openssl/rand.h>
 #include <algorithm>
 #include <limits>
@@ -177,7 +178,11 @@ inline TicketVerdict TicketVerifier::verify(const EntryTicket& ticket, const Rec
             || !now) return TicketVerdict::Malformed;
     const auto secret = secrets_.find(ticket.character.first);
     if (secret == secrets_.end()) return TicketVerdict::UnknownRealm;
-    if (entry_ticket_sign(ticket, secret->second) != ticket.signature) return TicketVerdict::BadSignature;
+    const auto expected = entry_ticket_sign(ticket, secret->second);
+    // Constant-time signature check, matching the MLA1 verifier: the HMAC
+    // value is never a timing oracle for a valid-looking ticket.
+    if (CRYPTO_memcmp(expected.data(), ticket.signature.data(), expected.size()) != 0)
+        return TicketVerdict::BadSignature;
     if (now > ticket.expires) return TicketVerdict::Expired;
     if (ticket.character != arrival) return TicketVerdict::WrongCharacter;
     if (ticket.instance != instance_) return TicketVerdict::WrongInstance;

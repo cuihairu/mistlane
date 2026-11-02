@@ -179,6 +179,7 @@ Each `config/instances/<name>.env` file is sourced as shell assignments by `ops/
 | `ROUTE_EPOCH` | optional | Cross/crossServer epoch passed as `--route-epoch`; an empty value omits the flag. |
 | `COORDINATOR` | optional | Registry endpoint passed as `--coordinator`; valid for gameServer, crossServer and login. |
 | `SCOPE` | optional | Registry scope passed as `--scope`; requires `COORDINATOR` to be set. |
+| `DATA` | optional | Home data MLD1 endpoint passed as `--data`; valid for crossServer (the cross-return sender). |
 | `LISTENERS` | optional | Comma-separated `PROTO://IP:PORT` entries; each becomes one `--listener` flag, so an instance can expose TCP, WS, WSS and HTTP side by side. `wss`/`https` entries may append `?cert=FILE&key=FILE`; those query paths are passed through verbatim, not root-resolved. |
 | `CERT`, `KEY` | `wss`/`https` only | Certificate chain and private key, absolute or project-root relative; the launcher verifies both are readable. |
 
@@ -200,7 +201,7 @@ EOF
 
 - The first non-empty line must be the version marker `# mistlane-config 1`; a file without it is rejected, so a random shell env file (including the `config/instances/*.env` templates, which omit the marker) is never consumed silently.
 - Remaining lines are `KEY=VALUE`. Blank lines and `#` comments are ignored, empty values are skipped, and a repeated key is an error. Unknown keys are rejected with the file and line number.
-- Keys are the uppercase forms of the CLI options (`ROLE`, `LISTEN`, `TRANSPORT`, `SCRIPT`, `UPSTREAMS` comma-separated, `ROUTE_EPOCH`, `SERVICE_TOKEN`, `UPSTREAM_TOKEN`, `SERVICE_NAME`, `UPSTREAM_MULTIPLEX`, `CERT`, `KEY`, `LISTENERS` comma-separated, `REDIS`, `METRICS_LISTEN`, `PROBE_LISTEN`, `OVERLOAD_RATIO`, `READY_HYSTERESIS`, `MAX_CONNECTIONS`, `MEMORY_BUDGET_MIB`, `MAX_ROOM_SESSIONS`, `MAX_GROUP_SESSIONS`, `MAX_SHARD_SESSIONS`, `CRASHPAD_HANDLER`, `CRASHPAD_DATABASE`) plus `ROOT`.
+- Keys are the uppercase forms of the CLI options (`ROLE`, `LISTEN`, `TRANSPORT`, `SCRIPT`, `UPSTREAMS` comma-separated, `ROUTE_EPOCH`, `SERVICE_TOKEN`, `UPSTREAM_TOKEN`, `SERVICE_NAME`, `UPSTREAM_MULTIPLEX`, `CERT`, `KEY`, `LISTENERS` comma-separated, `DATA`, `COORDINATOR`, `NAMESPACE`, `SCOPE`, `JOURNAL`, `REDIS`, `METRICS_LISTEN`, `PROBE_LISTEN`, `OVERLOAD_RATIO`, `READY_HYSTERESIS`, `MAX_CONNECTIONS`, `MEMORY_BUDGET_MIB`, `MAX_ROOM_SESSIONS`, `MAX_GROUP_SESSIONS`, `MAX_SHARD_SESSIONS`, `CRASHPAD_HANDLER`, `CRASHPAD_DATABASE`) plus `ROOT`.
 - Precedence inside one run: file value, then a non-empty `MISTLANE_<KEY>` environment variable, then any explicit flag given after `--config`.
 - `SCRIPT`, `CERT`, `KEY`, `CRASHPAD_HANDLER` and `CRASHPAD_DATABASE` resolve relative paths against the config file's directory, or against `ROOT` when that key is set (itself relative to the config file's directory). This differs from the shell launcher, which resolves against the project root. To run a generated `config/instances/*.env` template through `--config`, prepend the version marker line and add `ROOT=../..`; its `SCRIPT` and `CERT` paths then resolve as the launcher would.
 - Secrets still belong in deployment-managed environment (`MISTLANE_*` or systemd `LoadCredential=`), not in a committed file.

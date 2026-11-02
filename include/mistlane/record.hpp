@@ -346,7 +346,11 @@ public:
         std::uint64_t generation = 0, sequence = 0;
         std::string payload;
     };
-    explicit ReturnSendQueue(std::size_t retry_limit) : retry_limit_(retry_limit) {}
+    // retry_limit bounds per-item attempts; capacity bounds total queued
+    // changes across all participants. A full queue refuses enqueue instead of
+    // growing without bound, matching the "bounded queue" help text.
+    explicit ReturnSendQueue(std::size_t retry_limit, std::size_t capacity = 1024)
+      : retry_limit_(retry_limit), capacity_(capacity) {}
     void seed(std::string realm, std::string character, std::uint64_t stored_sequence) {
         const auto key = std::pair{std::move(realm), std::move(character)};
         if (send_cursor_.contains(key)) throw std::invalid_argument("participant already seeded");
@@ -357,8 +361,10 @@ public:
         const auto key = std::pair{change.realm, change.character};
         if (!send_cursor_.contains(key) || !change.sequence || !change.generation)
             throw std::invalid_argument("unseeded participant or invalid sequence");
+        if (pending_count_ >= capacity_) throw std::invalid_argument("queue is full");
         if (!pending_[key].emplace(change.sequence, std::move(change)).second)
             throw std::invalid_argument("duplicate sequence");
+        ++pending_count_;
     }
     std::optional<Change> next(std::string_view realm, std::string_view character) {
         const auto key = std::pair{std::string(realm), std::string(character)};
@@ -407,6 +413,7 @@ public:
                 || sequence != cursor->second + 1 || sequence > send_cursor_[key]) return false;
         if (!rows->second.contains(sequence)) return false;
         rows->second.erase(sequence);
+        --pending_count_;
         cursor->second = sequence;
         return true;
     }
@@ -422,6 +429,8 @@ public:
 private:
     using Key = std::pair<std::string, std::string>;
     std::size_t retry_limit_;
+    std::size_t capacity_;
+    std::size_t pending_count_ = 0;
     std::map<Key, std::uint64_t> send_cursor_, durable_cursor_;
     std::map<Key, std::map<std::uint64_t, Change>> pending_;
     std::map<Key, std::map<std::uint64_t, std::size_t>> attempts_;

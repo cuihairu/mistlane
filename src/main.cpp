@@ -108,7 +108,7 @@ std::vector<std::pair<std::string, std::string>> config_flags(const std::filesys
         {"SERVICE_TOKEN","--service-token",0,0,0}, {"UPSTREAM_TOKEN","--upstream-token",0,0,0},
         {"SERVICE_NAME","--service-name",0,0,0}, {"UPSTREAM_MULTIPLEX","--upstream-multiplex",0,0,0},
         {"COORDINATOR","--coordinator",0,0,0}, {"NAMESPACE","--namespace",0,0,0},
-        {"SCOPE","--scope",0,0,0}, {"JOURNAL","--journal",1,0,0},
+        {"SCOPE","--scope",0,0,0}, {"DATA","--data",0,0,0}, {"JOURNAL","--journal",1,0,0},
         {"SCRIPT","--script",1,0,0}, {"CONTRACT","--contract",1,0,0},
         {"UPSTREAMS","--upstream",0,1,0}, {"CERT","--cert",1,0,0},
         {"KEY","--key",1,0,0}, {"LISTENERS","--listener",0,1,0}, {"REDIS","--redis",0,0,0},

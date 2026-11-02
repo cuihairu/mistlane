@@ -381,8 +381,15 @@ int LuaService::return_enqueue(lua_State* l) {
         auto realm = checked_text(l, 1, "realm", 64);
         auto character = checked_text(l, 2, "character", 64);
         if (!lua_isinteger(l, 3) || !lua_isinteger(l, 4)) throw std::runtime_error("generation and sequence must be integers");
-        const auto generation = static_cast<std::uint64_t>(lua_tointeger(l, 3));
-        const auto sequence = static_cast<std::uint64_t>(lua_tointeger(l, 4));
+        // lua_isinteger accepts negative numbers; casting -1 to uint64_t wraps
+        // to UINT64_MAX and would enqueue a change home data rejects as an
+        // overflow (record_decimal caps at 10 digits), burning the retry queue.
+        const auto generation_raw = lua_tointeger(l, 3);
+        const auto sequence_raw = lua_tointeger(l, 4);
+        if (generation_raw <= 0 || sequence_raw <= 0)
+            throw std::runtime_error("generation and sequence must be positive");
+        const auto generation = static_cast<std::uint64_t>(generation_raw);
+        const auto sequence = static_cast<std::uint64_t>(sequence_raw);
         if (lua_type(l, 5) != LUA_TSTRING) throw std::runtime_error("payload must be a string");
         std::size_t size = 0; const char* data = lua_tolstring(l, 5, &size);
         if (size > max_frame) throw std::runtime_error("payload exceeds 1 MiB");
@@ -805,7 +812,7 @@ int LuaService::stream_publish(lua_State* l) {
     auto* self=stream_service(l);
     try {
         auto stream=checked_text(l,1,"stream name"); if(!lua_istable(l,2)) throw std::runtime_error("fields must be a table");
-        int cb=callback_ref(l); std::vector<std::string> args{"*"}; std::size_t bytes=0;
+        std::vector<std::string> args{"*"}; std::size_t bytes=0;
         lua_pushnil(l); while(lua_next(l,2)) {
             if(lua_type(l,-2)!=LUA_TSTRING || lua_type(l,-1)!=LUA_TSTRING) throw std::runtime_error("stream fields must be string pairs");
             std::size_t kn=0,vn=0; const char* k=lua_tolstring(l,-2,&kn); const char* v=lua_tolstring(l,-1,&vn);
@@ -814,6 +821,7 @@ int LuaService::stream_publish(lua_State* l) {
             if(args.size()>129) throw std::runtime_error("stream entry has too many fields");
         }
         if(args.size()==1) throw std::runtime_error("stream entry must contain at least one field");
+        int cb=callback_ref(l);
         boost::redis::request req; req.push_range("XADD",stream_key(stream),args);
         submit_stream<std::string>(self->redis_,std::move(req),self->async_context_,cb,
           [](auto& response,auto life,int callback){ auto result=std::get<0>(response).value(); finish_lua(life,callback,"",[result=std::move(result)](lua_State* s){lua_pushlstring(s,result.data(),result.size());}); });

@@ -51,11 +51,12 @@ public:
     }
 private:
     void deliver(std::string data) {
-        // The bridge slot frees once the payload is dispatched, so a message
-        // that produces no reply (nil handler result, lifecycle message
-        // without websocket.send) still admits the next one.
-        credit_ = true;
+        // Keep the bridge slot held while a payload is buffered: the next
+        // incoming frame may not be admitted until this one leaves the channel,
+        // so a slow reader can never overwrite a stored message. The slot frees
+        // when the reader consumes it (below) or on the next drain.
         if (!reader_) { incoming_ = std::move(data); return; }
+        credit_ = true;
         auto cb = std::move(reader_); cb({}, std::move(data));
     }
     asio::any_io_executor executor_;

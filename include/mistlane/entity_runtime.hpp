@@ -48,7 +48,15 @@ public:
    if (correlation_id && !delivered_.emplace(a,correlation_id).second) return EntityError::CONFLICT;
    return std::nullopt;
  }
- bool destroy(EntityTarget ref) { return entities_.erase(address(ref)) != 0; }
+ bool destroy(EntityTarget ref) {
+   const auto a = address(ref);
+   if (entities_.erase(a) == 0) return false;
+   // Drop correlation tombstones for this exact incarnation so a re-spawn of
+   // the same address starts with a clean dedupe table instead of growing
+   // without bound on a long-lived node.
+   std::erase_if(delivered_, [a](const auto& row) { return row.first == a; });
+   return true;
+ }
 private:
  using Address=std::tuple<std::uint32_t,std::uint32_t,std::int64_t,std::uint32_t>;
  static Address address(const EntityTarget& r) { return {r.scope,r.type_id,r.entity_id,r.incarnation}; }

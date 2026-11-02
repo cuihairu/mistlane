@@ -15,6 +15,7 @@
 #include "mistlane/entity_codec.hpp"
 #include "mistlane/entity_endpoint.hpp"
 #include "mistlane/entity_gateway.hpp"
+#include <openssl/crypto.h>
 #include <utility>
 #include <boost/asio.hpp>
 #include <algorithm>
@@ -453,18 +454,20 @@ private:
         const auto& entry = found->second;
         const bool oversize = entry.correlated ? payload.size()+4 > max_frame : payload.size() > max_frame;
         if (oversize) return "payload exceeds 1 MiB";
-        // Refusals report synchronously before write() returns, so the stack
-        // `reason` is safe; a write that dies later only retires the session.
+        // Refusals report synchronously before write() returns, so the returned
+        // string carries them; a write that fails later runs after this stack
+        // frame is gone, so the callback writes into a shared reason owned by
+        // the capture instead of a destroyed local.
         auto fail = entry.fail;
-        std::string reason;
+        auto reason = std::make_shared<std::string>();
         entry.channel->write(entry.correlated ? correlated_frame(0, payload) : std::string(payload),
-            [&reason, fail](Error ec) {
+            [reason, fail](Error ec) {
             if (!ec) return;
-            if (ec == asio::error::message_size) { reason = "session backlogged"; return; }
-            if (ec == asio::error::operation_aborted) { reason = "unknown session id"; return; }
+            if (ec == asio::error::message_size) { *reason = "session backlogged"; return; }
+            if (ec == asio::error::operation_aborted) { *reason = "unknown session id"; return; }
             fail();
         });
-        return reason;
+        return *reason;
     }
     std::size_t session_broadcast(std::string_view payload) override {
         // Both channel types refuse synchronously; success completes
@@ -496,9 +499,11 @@ private:
 // before reconnect, so a lost reply never silently drops a change.
 class ReturnSender : public ReturnSink, public std::enable_shared_from_this<ReturnSender> {
 public:
-    ReturnSender(asio::io_context& io, const Endpoint& endpoint, Diagnostics& diagnostics)
+    ReturnSender(asio::io_context& io, const Endpoint& endpoint, Diagnostics& diagnostics,
+                 std::string identity)
       : endpoint_(tcp::endpoint(parse_address(endpoint.address), endpoint.port)), io_(io),
-        diagnostics_(diagnostics), timer_(io), queue_(3) {}
+        diagnostics_(diagnostics), timer_(io), queue_(3, pending_capacity_),
+        identity_(std::move(identity)) {}
     void start() { if (!started_) { started_ = true; connect(); } }
     void stop() {
         stopping_ = true;
@@ -519,11 +524,21 @@ public:
         try {
             const Key key{std::string(realm), std::string(character)};
             Change change{key.first, key.second, generation, sequence, std::string(payload)};
+            // The SUBMIT frame prepends "MLD1 SUBMIT <realm> <char> gen N seq N "
+            // before the payload; TcpChannel::write refuses anything over
+            // max_frame, so a near-limit payload would burn its retries on a
+            // frame that can never be sent. Reject it up front instead.
+            const auto header = submit_header(change);
+            if (header + change.payload.size() > max_frame) throw std::invalid_argument("payload too large for MLD1 frame");
             // The script may enqueue before the seed LOAD has answered: hold the
             // change until the cursor is seeded, then feed it into the ordered
             // queue in submission order (the queue keeps per-participant order).
-            if (!loaded_cursor_.contains(key)) { pending_before_load_[key].push_back(std::move(change)); }
-            else queue_.enqueue(std::move(change));
+            if (!loaded_cursor_.contains(key)) {
+                if (pending_before_load_count_ >= pending_capacity_)
+                    throw std::invalid_argument("return queue is full");
+                pending_before_load_[key].push_back(std::move(change));
+                ++pending_before_load_count_;
+            } else queue_.enqueue(std::move(change));
             send_next();
             return {};
         } catch (const std::exception&) { return "invalid"; }
@@ -531,6 +546,14 @@ public:
 private:
     using Key = std::pair<std::string, std::string>;
     using Change = ReturnSendQueue::Change;
+    static constexpr std::size_t pending_capacity_ = 1024;
+    static std::size_t submit_header(const Change& change) {
+        // Exact prefix length without the payload: the frame is rebuilt in
+        // send_next, so keep this in sync with it.
+        return 12 + change.realm.size() + 1 + change.character.size() + 5
+            + std::to_string(change.generation).size() + 5
+            + std::to_string(change.sequence).size() + 1;
+    }
     void connect() {
         phase_ = Phase::connecting;
         channel_ = std::make_shared<TcpChannel>(tcp::socket(io_));
@@ -542,8 +565,32 @@ private:
             channel_->socket().async_connect(endpoint_, [self=shared_from_this()](Error ec) {
                 if (self->stopping_) return;
                 if (ec) return self->retry_later();
-                self->phase_ = Phase::ready;
+                // A tokened data endpoint demands the MLS1 identity before any
+                // record frame; present it first and wait for the verdict.
+                if (!self->identity_.empty()) {
+                    self->phase_ = Phase::identifying;
+                    self->writing_ = true;
+                    self->channel_->write(self->identity_, [self](Error e) {
+                        if (self->stopping_) return;
+                        if (e) return self->retry_later();
+                    });
+                } else {
+                    self->phase_ = Phase::ready;
+                }
                 self->pump();
+                self->send_next();
+            });
+            return;
+        }
+        if (phase_ == Phase::identifying) {
+            if (reading_) return;
+            reading_ = true;
+            channel_->read([self=shared_from_this()](Error ec, std::string payload) {
+                self->reading_ = false;
+                if (self->stopping_) return;
+                if (ec) return self->retry_later();
+                if (payload != "MLS1 OK") { self->diagnostics_.upstream_error(); return self->retry_later(); }
+                self->phase_ = Phase::ready;
                 self->send_next();
             });
             return;
@@ -560,6 +607,7 @@ private:
     }
     void receive(const std::string& payload) {
         try {
+            if (phase_ == Phase::identifying) throw std::invalid_argument("invalid"); // guarded in pump
             if (payload.starts_with("MLD1 ACK durable ")) {
                 const auto ack = parse_durable_ack(payload);
                 if (!submitted_ || ack.realm != submitted_->first || ack.character != submitted_->second)
@@ -652,7 +700,10 @@ private:
         for (const auto& key : loaded_cursor_) {
             auto it = pending_before_load_.find(key);
             if (it == pending_before_load_.end()) continue;
-            for (auto& change : it->second) queue_.enqueue(std::move(change));
+            for (auto& change : it->second) {
+                queue_.enqueue(std::move(change));
+                --pending_before_load_count_;
+            }
             pending_before_load_.erase(it);
         }
     }
@@ -690,14 +741,16 @@ private:
                 || !record_decimal(gen, generation) || !record_decimal(seq, sequence)) return false;
         return true;
     }
-    enum class Phase { idle, connecting, ready };
+    enum class Phase { idle, connecting, identifying, ready };
     tcp::endpoint endpoint_;
     asio::io_context& io_;
     Diagnostics& diagnostics_;
     asio::steady_timer timer_;
     ReturnSendQueue queue_;
+    std::string identity_;
     std::set<Key> seeded_, loaded_cursor_;
     std::map<Key, std::vector<Change>> pending_before_load_;
+    std::size_t pending_before_load_count_ = 0;
     std::optional<Key> load_in_flight_, submitted_;
     std::uint64_t submitted_sequence_ = 0;
     std::shared_ptr<TcpChannel> channel_;
@@ -1036,7 +1089,11 @@ private:
                     if (!payload.starts_with("MLS1")) return refuse_service("MLS1", "TOKEN");
                     std::string role, instance, token;
                     if (!service_fields(payload, role, instance, token)) return refuse_service("MLS1", "INVALID");
-                    if (token != config_.service_token) return refuse_service("MLS1", "TOKEN");
+                    // Constant-time token check: the service identity is not a
+                    // timing oracle for a peer that probes with a guessed token.
+                    if (token.size() != config_.service_token.size()
+                            || CRYPTO_memcmp(token.data(), config_.service_token.data(), token.size()) != 0)
+                        return refuse_service("MLS1", "TOKEN");
                     service_ok_ = true;
                     return reply("MLS1 OK");
                 }
@@ -2093,7 +2150,9 @@ private:
         if (service_ok_ || config_.service_token.empty()) return refuse_service("MLS1", "UNEXPECTED");
         std::string role, instance, token;
         if (!service_fields(payload, role, instance, token)) return refuse_service("MLS1", "INVALID");
-        if (token != config_.service_token) return refuse_service("MLS1", "TOKEN");
+        if (token.size() != config_.service_token.size()
+                || CRYPTO_memcmp(token.data(), config_.service_token.data(), token.size()) != 0)
+            return refuse_service("MLS1", "TOKEN");
         service_ok_ = true;
         reply("MLS1 OK");
     }
@@ -2988,7 +3047,8 @@ public:
             }
         }
         if (config_.role == "crossServer" && !config_.data.address.empty())
-            return_sender_ = std::make_shared<ReturnSender>(io_, config_.data, *diagnostics_);
+            return_sender_ = std::make_shared<ReturnSender>(io_, config_.data, *diagnostics_,
+                config_.upstream_token.empty() ? "" : service_hello(config_));
         if (script_role)
             service_ = std::make_shared<LuaService>(config_.script, service_context_, redis_,
                 websockets_.get(), game_sessions_.get(), this,
@@ -3087,6 +3147,11 @@ public:
                         try {
                             if (service_) service_->start();
                             bind_entities();
+                            // Web mode still runs the registry member and the
+                            // cross-return sender: a WS/HTTP/HTTPS crossServer is
+                            // not exempt from readiness or home-data draining.
+                            if (member_) member_->start();
+                            if (return_sender_) return_sender_->start();
                             diagnostics_->set_ready(true);
                             ready_ = true;
                             for (const auto& item : config_.listeners)

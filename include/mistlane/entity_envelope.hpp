@@ -121,6 +121,9 @@ inline std::optional<std::string> encode_entity_reply(const EntityReply& reply) 
     out.push_back('\x01');
     out.push_back(static_cast<char>(reply.error));
     if (reply.error == EntityError::INVALID) {
+        // The width field is 16 bits; a longer reason cannot round-trip, so
+        // refuse rather than silently truncate the caller's text.
+        if (reply.reason.size() > 65535) return std::nullopt;
         envelope_push_be(out, reply.reason.size(), 2);
         out += reply.reason;
     }
