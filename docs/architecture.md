@@ -18,7 +18,7 @@ flowchart TB
   cross <--> data
 ```
 
-data denotes ownership-aware service access rather than one shared database for every region. Permanent crossServer changes return to home data. The [return protocol and acknowledgement semantics](./cross-return-protocol.md) are decided: MLD1 LOAD/SUBMIT and volatile RECEIVED, the ordered sender queue, durable ACK codec and lease state model are implemented; durable storage, ACK emission and crossServer/coordinator/Avatar runtime integration remain unimplemented. The edge does not authorize dual writers. Optional apiServer ingress and its callback flow are described in [HTTP and WebSocket](./http.md).
+data denotes ownership-aware service access rather than one shared database for every region. Permanent crossServer changes return to home data. The [return protocol and acknowledgement semantics](./cross-return-protocol.md) are decided: MLD1 LOAD/SUBMIT and volatile RECEIVED, the ordered sender queue, durable ACK codec, lease state model, the durable record store, ACK emission and the crossServer sender retry wiring are implemented; only coordinator/Avatar runtime integration remains. The edge does not authorize dual writers. Optional apiServer ingress and its callback flow are described in [HTTP and WebSocket](./http.md).
 
 ## Current runnable prototype
 
@@ -53,7 +53,7 @@ Libraries, owner thread and callbacks are grouped inside the execution process. 
 | `examples` | Echo, native cross context, MySQL and libcurl examples |
 | `tools` | Example client and allowlisted export; integration checks are in tests |
 
-The CMake targets are `mistlane::core` for Lua, `mistlane::net` for nodes, and `mistlane::mysql` for the database pool adapter. They can be linked after adding the project with CMake add_subdirectory. The C++ MySQL interface is not yet bound to Lua.
+The CMake targets are `mistlane::core` for Lua, `mistlane::net` for nodes, `mistlane::mysql` for the database pool adapter, and `mistlane::http` for the libcurl client. They can be linked after adding the project with CMake add_subdirectory. The C++ MySQL interface is not yet bound to Lua.
 
 ## Execution and connection model
 

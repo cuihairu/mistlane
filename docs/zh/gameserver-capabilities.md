@@ -67,6 +67,6 @@ Mistlane 当前没有可释放的场景对象（SIGTERM 排空的是会话，不
 
 - **gameServer** 以通用生命周期/空间/同步机制加 Lua 玩法规则承载场景实例——观察到的 C++/Lua 拆分延续；当前 Mistlane gameServer 只提供 Lua 执行外壳与准入，场景模型尚未开始。
 - **crossServer** 复用同一套机制、只是模板集不同：旧代码复用同一 `Scene` 类，用 `ServerUtil.isCrossServer`/`P_SIDX` 检查和 `IS_CROSS` 表（`GameSceneIndex.setScene`）区分跨服行为，而不是独立运行时。
-- **coordinator** 不从本页获得任何东西：场景的 tid/id 是进程内对象身份，不是归属记录；承载与迁移状态由[职责契约](./process-roles.md)约束，仍未实现。
+- **coordinator** 不从本页获得任何东西：场景的 tid/id 是进程内对象身份，不是归属记录；场景级承载与迁移状态由[职责契约](./process-roles.md)约束，仍未实现。角色级 coordinator 分配（`MLR1 PLACE`/`ROUTE`）与迁移事务（`MLR1 MIG`）是另一回事且已实现。
 
 旧代码位置：`d_hegel/ServerMain.cpp`、`d_hegel/HegelServer.cpp::startTick/doTick/onRegister`、`d_hegel/CAPI.cpp`（注册段）、`game/HegelMain.lua`、`game/Util/Timer.lua::doTick`、`game/Util/TimerQueue.lua`、`game/Hegel/Scene/SceneManager.lua::init/guaranteedGet/updateState/startTimer/delete`、`game/Hegel/Scene/SceneLogic.lua::newScene/createCloneScene/changeOne/leaveScene/doSwitchHegel`、`game/Hegel/Scene/Scene.lua::new/init/enter/leave/syncChar/updatePos/clear/destory`、`game/Hegel/GameScene/GameSceneIndex.lua::setScene/afterOpen/transferAllPlayer/afterClose`。

@@ -14,7 +14,7 @@
 | `data` | 按数据归属加载、缓存和持久化；定义事务、并发写入条件、保存结果和错误；对接数据库 | 缓存与数据库职责在此明确；不决定战斗胜负或奖励规则；不能把收到保存消息当成持久化完成 |
 | `apiServer`（可选） | HTTP/HTTPS 外部接口与回调、WebSocket upgrade 及连接消息；入口鉴权、原始请求校验、有界递交；调用内部业务服务 | 支付验签由应用实现，受理确认须符合持久化契约；奖励规则交给当前承载业务服务；升级后的帧走 WebSocket 回调 |
 
-`gateway` 是游戏接入职责；`apiServer` 是可选外部系统接入职责，TCP/HTTP/HTTPS/WS/WSS 是监听协议。游戏入口和 HTTP 服务均可按需启用 WS/WSS；目标是独立监听配置及明文/TLS 共存，不是把 WS 单独拆成一个进程。该能力仍待实现。
+`gateway` 是游戏接入职责；`apiServer` 是可选外部系统接入职责，TCP/HTTP/HTTPS/WS/WSS 是监听协议。游戏入口和 HTTP 服务均可按需启用 WS/WSS；目标是独立监听配置及明文/TLS 共存，不是把 WS 单独拆成一个进程。该能力已实现（`--listener PROTO://IP:PORT`、`LISTENERS=`），见[使用指南](./guide.md)。
 
 ## 外部接口能力与独立进程
 
@@ -37,14 +37,14 @@ coordinator 负责承载决策和注册状态；进程启动、重启与资源�
 1. **登录**：客户端经 gateway 到 login；login 请求 coordinator 分配 gameServer；目标 gameServer 经 data 加载角色，创建角色并进入场景；就绪后完成路由发布并通知客户端。分配与加载过程中保留显式状态，不能提前把角色标为游戏就绪。
 2. **普通游戏消息**：客户端 ↔ gateway ↔ 当前 gameServer/crossServer。角色和场景逻辑由游戏服务执行；coordinator 不作为每条消息的固定中转站。
 3. **同进程切场景**：角色离开旧 Scene、更新位置、进入目标 Scene，并更新必要摘要；没有跨进程角色复制。
-4. **跨进程切换**：coordinator 协调目标承载；旧承载停止相关写入并形成可恢复状态；目标接收并确认、路由切换、旧承载释放。超时/断连必须有明确恢复规则，不能同时运行两个可写角色。具体握手与故障恢复尚未实现。
+4. **跨进程切换**：coordinator 协调目标承载；旧承载停止相关写入并形成可恢复状态；目标接收并确认、路由切换、旧承载释放。超时/断连必须有明确恢复规则，不能同时运行两个可写角色。coordinator 迁移事务与 `MLR1 MIG` 线协议已实现；真实角色切换握手（Avatar 运行时）与其恢复仍未实现。
 5. **外部回调**：外部平台 → 外部接入模块（可选独立 apiServer） → 持久受理；查询当前承载后调用业务服务，执行业务校验、幂等和持久化，再通知在线客户端。离线时的执行策略需与角色加载/写入权一起设计。
 
 ## 跨服的数据归属
 
 进入 crossServer 改变运行位置，不自动改变账号、角色 ID 或数据所属区服。跨服参与上下文需携带可验证的来源区服、角色标识、承载版本及返回信息；路由通过 coordinator 查询/更新，不在订单或长期数据里固化 gameServer 地址。
 
-目标已明确为：角色可转移到 crossServer 执行，长期数据归属仍在原区服，跨服变更通过归属侧服务回传原 data 保存；不要求 crossServer 直接掌握各区服数据库地址。旧实现的 CrossWorld → 归属 World → Data/Cache 路径及其局限见[玩家、场景与跨服模型](./player-scene-model.md)；参与者上下文、唯一写入权与 MLD1 确认设计见[跨服回传与唯一写入权协议](./cross-return-protocol.md)——参与者上下文、data 侧 MLD1 端点及其记录存储已实现，发送侧与 home 最终序号权威未实现。图中的数据访问边表示该服务路径，不代表跨服直接写库或两个角色同时写入。
+目标已明确为：角色可转移到 crossServer 执行，长期数据归属仍在原区服，跨服变更通过归属侧服务回传原 data 保存；不要求 crossServer 直接掌握各区服数据库地址。旧实现的 CrossWorld → 归属 World → Data/Cache 路径及其局限见[玩家、场景与跨服模型](./player-scene-model.md)；参与者上下文、唯一写入权与 MLD1 确认设计见[跨服回传与唯一写入权协议](./cross-return-protocol.md)——参与者上下文、data 侧 MLD1 端点及其记录存储、crossServer 发送侧重试队列与 home 最终序号/墓碑权威均已实现，仅剩 Avatar 运行时交接。图中的数据访问边表示该服务路径，不代表跨服直接写库或两个角色同时写入。
 
 ## 旧代码对应关系
 
@@ -70,7 +70,7 @@ coordinator 负责承载决策和注册状态；进程启动、重启与资源�
 | `apiServer` | Lua HTTP/HTTPS 请求钩子；不带 transport 时默认 HTTP；可选 WS/WSS message | 平台回调业务、可靠内部调用及多监听 |
 | `coordinator` | 仅 TCP 的注册表：成员注册、心跳上报就绪与负载，按命名空间与作用域回答 QUERY/PLACE，断连即退役成员 | 承载决策与归属状态、区服/跨服组作用域、迁移握手、高可用与恢复 |
 | `login` | 已可按脚本服务启动（帧式会话、标准 Lua 钩子）；`--coordinator` 接通注册表客户端，Lua `mistlane.place` 执行分配查询 | 认证设计、角色列表与完整进入流程 |
-| `data` | 已可按脚本服务启动；`--service-token` 使每条链路要求 `MLS1`；MLD1 记录端点应答 LOAD/SUBMIT，含承载版本栅栏与按角色序号纪律；`--journal FILE` 使接受持久（提交后 `ACK durable`、重启恢复），无存储时仅作回执 | home 最终序号/墓碑权威、crossServer 发送侧重试接线、保存 |
+| `data` | 已可按脚本服务启动；`--service-token` 使每条链路要求 `MLS1`；MLD1 记录端点应答 LOAD/SUBMIT，含承载版本栅栏与按角色序号纪律；`--journal FILE` 使接受持久（提交后 `ACK durable`、重启恢复），无存储时仅作回执；home 最终序号/墓碑权威与 crossServer 发送侧重试接线均已实现 | 角色保存与 Avatar 运行时集成 |
 
 单二进制仍为 mistlane。现有运行角色已迁移，独立通用转发角色已删除，跨服静态入口归入 gateway 的 routing 策略；这不等于完成旧 World 的协调能力。旧角色名称不保留 CLI 别名。MLC1/PROBE1、room/group 键和 max-shard-sessions 配额参数本轮保持原协议含义，它们不是新增进程名称。
 

@@ -64,7 +64,7 @@ flowchart TB
   cross <--> data
 ```
 
-The database adapter is a separate C++ integration, not yet a Lua database bridge. Current routing is per connection; player migration, shared connection multiplexing, and distributed recovery are outside this version.
+The database adapter is a separate C++ integration, not yet a Lua database bridge. Routing is per connection by default; a gateway may optionally share one upstream connection across its sessions (`MLM1`, `--upstream-multiplex on`). Player migration and distributed recovery are outside this version.
 
 Start with the [guide](./guide.md), read the [architecture and limitations](./architecture.md), and check the [validation record](./validation.md).
 

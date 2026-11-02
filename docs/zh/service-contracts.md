@@ -40,7 +40,7 @@ data 拥有其归属区服的持久角色存储：唯一的记录写入方、MLD
 | 存储后端 | `--journal FILE` 启用 data 侧 SQLite 记录存储（与 coordinator 迁移 journal 同一边界）。有存储时 data 仅在 payload/序号行持久后才应答已提交的 `ACK durable`；无存储时 data 必须完全不发送 `ACK durable`，让发送方停留在重试/只读状态——这是诚实的降级，不是捷径 |
 | 排除 | 业务 schema、SQL、缓存表语义；存储引擎与脏追踪归实体契约链 |
 
-接线状态：角色外壳已可启动（`--role data` 加 `--script`），`--service-token` 对每条链路强制 `MLS1` 身份，MLD1 端点已在运行（帧式 TCP 上的 `MLD1 LOAD`/`SUBMIT`）：承载版本栅栏、按角色序号纪律、重发去重与存储后端的 `ACK durable` 已在框架内实现。带存储的 data 仅在记录行提交后应答 `ACK durable`，重启后的重发回弹已提交 ACK，写提交失败回 `MLD1 ERR STORAGE`；无 `--journal` 时应答 `MLD1 RECEIVED` 且不声明持久，按协议要求让发送方保留重试队列。仍未实现：crossServer 发送侧重试接线上行、home 最终序号/墓碑权威与 Avatar 运行时（记录存储本身只是 data 持久化链，不是运行时）。
+接线状态：角色外壳已可启动（`--role data` 加 `--script`），`--service-token` 对每条链路强制 `MLS1` 身份，MLD1 端点已在运行（帧式 TCP 上的 `MLD1 LOAD`/`SUBMIT`/`FENCE`）：承载版本栅栏、按角色序号纪律、重发去重、最终游标 pin 与存储后端的 `ACK durable` 已在框架内实现。带存储的 data 仅在记录行提交后应答 `ACK durable`，重启后的重发回弹已提交 ACK，写提交失败回 `MLD1 ERR STORAGE`；无 `--journal` 时应答 `MLD1 RECEIVED` 且不声明持久，按协议要求让发送方保留重试队列。crossServer 发送侧重试接线上行与 home 最终序号/墓碑权威也已实现。仍未实现：Avatar 运行时（记录存储、发送侧重试接线上行与 home 权威共同构成 data 持久化链，只缺运行时）。
 
 ## apiServer
 

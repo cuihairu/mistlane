@@ -5,12 +5,12 @@
 <h1 align="center">Mistlane</h1>
 
 <p align="center">
-  <a href="https://github.com/cuihairu/mistlane/releases"><img alt="Status" src="https://img.shields.io/badge/status-in%20development-orange"></a>
   <a href="https://github.com/cuihairu/mistlane/actions/workflows/ci.yml"><img src="https://github.com/cuihairu/mistlane/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-blue" alt="Apache-2.0"></a>
   <a href="CMakeLists.txt"><img src="https://img.shields.io/badge/C%2B%2B-20-00599C" alt="C++20"></a>
   <a href="docs/dependencies.md"><img src="https://img.shields.io/badge/Lua-5.5.1-2C2D72" alt="Lua 5.5.1"></a>
   <a href="vcpkg.json"><img src="https://img.shields.io/badge/dependencies-vcpkg-2f6484" alt="vcpkg"></a>
+  <a href="https://cuihairu.github.io/mistlane/"><img src="https://img.shields.io/badge/docs-blue" alt="docs"></a>
   <a href="docs/index.md"><img src="https://img.shields.io/badge/docs-English%20%2F%20中文-2f6484" alt="Bilingual documentation"></a>
   <img src="https://img.shields.io/badge/status-research%20%26%20learning-8250df" alt="For research and learning">
 </p>
@@ -91,7 +91,7 @@ Game clients can connect through a WS gateway while the gameServer uses internal
   --transport ws --upstream 127.0.0.1:7102
 ```
 
-Connect to `ws://server:8080/ws`; game messages reach Lua `message(payload)`. Each WS message is one payload with no TCP length header; responses are binary. For WSS select `--transport wss --cert FILE --key FILE` and connect to `wss://certificate-hostname:port/ws`. A gameServer can also listen directly with `--transport ws/wss --script FILE`. Sessions are full duplex: clients may pipeline requests, handlers may reply with nil, and Lua pushes to one or many live sessions through `mistlane.session.send`/`mistlane.session.broadcast` under a per-session output bound; an optional request-id correlation mode (`MLC2`) keeps replies and pushes distinguishable, internal legs can require a service identity handshake (`MLS1`, `--service-token`/`--upstream-token`) that stays invisible to clients, and a gateway may share one upstream connection across all of its sessions (`MLM1`, `--upstream-multiplex on`) with per-session logical ids. A `--role coordinator` process keeps a live process registry (`MLR1`): gameServer/crossServer members register and heartbeat readiness and load, and read-only `QUERY`/`PLACE` commands answer placement lookups per namespace and scope. Script-role HTTP listeners expose a separate WebSocket push API. See the [game connection guide](docs/guide.md) for both topologies, browser code and template certificate configuration.
+Connect to `ws://server:8080/ws`; game messages reach Lua `message(payload)`. Each WS message is one payload with no TCP length header; responses are binary. For WSS select `--transport wss --cert FILE --key FILE` and connect to `wss://certificate-hostname:port/ws`. A gameServer can also listen directly with `--transport ws/wss --script FILE`. Sessions are full duplex: clients may pipeline requests, handlers may reply with nil, and Lua pushes to one or many live sessions through `mistlane.session.send`/`mistlane.session.broadcast` under a per-session output bound; an optional request-id correlation mode (`MLC2`) keeps replies and pushes distinguishable, internal legs can require a service identity handshake (`MLS1`, `--service-token`/`--upstream-token`) that stays invisible to clients, and a gateway may share one upstream connection across all of its sessions (`MLM1`, `--upstream-multiplex on`) with per-session logical ids. A `--role coordinator` process keeps a live process registry (`MLR1`): gameServer/crossServer members register and heartbeat readiness and load, and read-only `QUERY`/`PLACE` commands answer placement lookups per scope. Script-role HTTP listeners expose a separate WebSocket push API. See the [game connection guide](docs/guide.md) for both topologies, browser code and template certificate configuration.
 
 For HTTP/HTTPS, run a gameServer with --transport http/https and examples/http.lua. The Lua handler accepts method/path/query/headers/body and returns status/headers/body. Its before_request, http, after_request, on_error, init, start, tick, stop and shutdown hooks are documented in the [lifecycle guide](docs/lua.md).
 
