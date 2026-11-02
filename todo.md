@@ -156,3 +156,11 @@
 - [ ] P3 TLS/认证：src/node.cpp:1039 MLS1 服务令牌用 std::string::operator!= 非恒定时间比较。修复：改 CRYPTO_memcmp。
 - [ ] P3 TLS/认证：src/node.cpp:2096 registry 身份校验同样非恒定时间令牌比较。修复：改 CRYPTO_memcmp。
 
+
+- [ ] 审核发现：`--data` 的 ReturnSender 只在 `!web_mode_` 分支启动（src/node.cpp:3045），crossServer 以 WS/HTTP/HTTPS 监听（web_mode=true）运行时发送器永不 start，`mistlane.returning.seed/enqueue` 入队后无人发送（src/node.cpp:3038-3047）
+- [ ] 审核发现：`LuaService::return_enqueue` 用 `lua_isinteger` 判型后直接 `static_cast<uint64_t>(lua_tointeger(...))` 接收 generation/sequence（src/lua_service.cpp:383-385），负数回绕为巨大值并通过 queue 的 `!change.sequence||!change.generation` 检查，data 侧 `record_decimal`（≤10 位）拒收后重试耗尽，变更静默卡死——与同批已修的 ticket_issue 负值缺陷同根因
+- [ ] 审核发现：ReturnSender 连 data 的腿用裸 TcpChannel 直发 `MLD1 LOAD/SUBMIT`，无 MLS1 身份握手（src/node.cpp:534-548）；带 `--service-token` 的 data（契约要求每条腿 MLS1，docs/service-contracts.md:36）会回 `MLS1 ERR TOKEN` 并关闭，`--data` 无法对接受保护的 data
+- [ ] 审核发现：「bounded queue」名不符实：`ReturnSendQueue` 只限每项重试次数（retry_limit_=3），容量无界（src/node.cpp:700 的 `pending_before_load_`、include/mistlane/record.hpp:424 的 `pending_` 均无限增长），与 src/main.cpp:266 帮助文案「retry in a bounded queue」及协议「队列满转只读」声明不符（文档已注明队列满未实现，但实现也没有任何容量上限）
+- [ ] 审核发现：`return_enqueue` 允许 payload 到 `max_frame`（src/lua_service.cpp:388），但 `send_next` 在其前拼上 `MLD1 SUBMIT <realm> <char> gen N seq N ` 头（src/node.cpp:642-647），`TcpChannel::write` 拒收 >max_frame，近满帧（约 1MiB 减去头长）永远发送失败并烧尽重试
+- [ ] 审核发现：新 `--data` 选项与 `DATA` 环境键未加入 docs/guide.md:203（及 docs/zh/guide.md:203）的配置/环境键清单，config 文件用户无法发现该键，文档与新增 CLI 不同步
+- [ ] 审核发现：todo.md 末尾新增了多余空行，`git diff --check` 报 `todo.md:158: new blank line at EOF`（todo.md:158）
