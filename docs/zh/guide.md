@@ -272,6 +272,21 @@ python3 tools/export.py
 
 归档仅包含 release-files.txt 显式清单中的文件和 SHA256 校验值，不包含父仓库历史、私有配置、原游戏玩法和预编译二进制。
 
+## 配置开关演示
+
+下列动态 GIF 逐一对比文档中每个开关在关闭与开启两种状态下的实际效果，全部由调试二进制的实时运行生成。用 `python3 tools/generate-config-gifs.py` 可重新生成（需要调试构建、`ffmpeg`、Pillow，以及 `--redis` 场景需要的本机 Redis）。
+
+| 开关 | 演示 |
+|---|---|
+| `--probe-listen` | ![探测监听开关](/config-gifs/config-probe.gif) |
+| `--metrics-listen` | ![指标端点开关](/config-gifs/config-metrics.gif) |
+| `--redis` | ![Redis 流开关](/config-gifs/config-redis.gif) |
+| `--contract` | ![实体运行时开关](/config-gifs/config-contract.gif) |
+| `--coordinator` | ![注册表分配开关](/config-gifs/config-coordinator.gif) |
+| `--upstream-multiplex` | ![上游复用开关](/config-gifs/config-multiplex.gif) |
+| `MISTLANE_TICKET_SECRETS` | ![入场凭据开关](/config-gifs/config-ticket.gif) |
+| `--journal` | ![持久日志开关](/config-gifs/config-journal.gif) |
+
 ## Crashpad handler 部署
 
 `cmake --install <build-dir> --prefix PREFIX` 会把 `mistlane` 和 Crashpad 的 `crashpad_handler` 并排安装到 `PREFIX/bin`；handler 在 vcpkg 工具目录存在时一并复制。两个二进制只需要系统运行库（glibc、`libstdc++`、`libgcc_s`、`libm`），第三方依赖全部静态链接。

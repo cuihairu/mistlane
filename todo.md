@@ -140,7 +140,8 @@
 - [x] 审核发现：`ticket_issue` 以 `static_cast<std::uint64_t>(lua_tointeger(...))` 接收 generation/expires（src/lua_service.cpp:380-383），`lua_isinteger` 接受负数，负值被回绕为巨大无符号数（-1 → UINT64_MAX），而 `!generation || !expires` 仅拒 0 故放行
   证据：commit 74d7c01；ctest 72/72；tests=1 passed
 
-- [ ] **DOC-GIF · P2 · 文档 · 配置开关效果动态图(每个开关 off→on 对比+GIF)**
+- [x] **DOC-GIF · P2 · 文档 · 配置开关效果动态图(每个开关 off→on 对比+GIF)**
+  证据：8 组 off→on GIF；`pnpm docs:build` + `pnpm docs:check` 通过；`python3 tools/export.py` 通过；gtest 72/72（排除本机 MariaDB 初始化失败的环境项）
 
 
 

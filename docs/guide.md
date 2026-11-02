@@ -272,6 +272,21 @@ python3 tools/export.py
 
 The archive uses the explicit `release-files.txt` allowlist and includes SHA256 checksums. It contains no parent repository history, private configuration, original gameplay code, or prebuilt binaries.
 
+## Configuration switch demos
+
+The animated GIFs below compare each documented switch in its off and on state, generated from live runs of the debug binary. Regenerate them with `python3 tools/generate-config-gifs.py` (requires the debug build, `ffmpeg`, Pillow, and a local Redis for the `--redis` switch).
+
+| Switch | Demo |
+|---|---|
+| `--probe-listen` | ![Probe listener off/on](/config-gifs/config-probe.gif) |
+| `--metrics-listen` | ![Metrics endpoint off/on](/config-gifs/config-metrics.gif) |
+| `--redis` | ![Redis streams off/on](/config-gifs/config-redis.gif) |
+| `--contract` | ![Entity runtime off/on](/config-gifs/config-contract.gif) |
+| `--coordinator` | ![Registry placement off/on](/config-gifs/config-coordinator.gif) |
+| `--upstream-multiplex` | ![Upstream multiplex off/on](/config-gifs/config-multiplex.gif) |
+| `MISTLANE_TICKET_SECRETS` | ![Entry ticket off/on](/config-gifs/config-ticket.gif) |
+| `--journal` | ![Durable journal off/on](/config-gifs/config-journal.gif) |
+
 ## Crashpad handler deployment
 
 `cmake --install <build-dir> --prefix PREFIX` installs `mistlane` and the Crashpad `crashpad_handler` side by side under `PREFIX/bin`; the handler is copied from the vcpkg tool directory when present. Both binaries need only the system runtime (glibc, `libstdc++`, `libgcc_s`, `libm`) because all third-party dependencies are linked statically.
