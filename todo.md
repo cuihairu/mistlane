@@ -182,11 +182,11 @@
 - [x] 审核发现：todo.md 末尾新增了多余空行，`git diff --check` 报 `todo.md:158: new blank line at EOF`（todo.md:158）
   证据：commit e143a77；`git diff --check` 通过
 - [x] 审核发现：ReturnSender 的 MLS1 身份写将 writing_ 置 true（src/node.cpp:572）而成功回调未复位（src/node.cpp:573-576），data 回 "MLS1 OK" 后 phase 转 ready（src/node.cpp:593）但 send_next 被 writing_ 守卫拦住（src/node.cpp:669），跨服回传对带 --upstream-token 的 data 永不发送 LOAD/SUBMIT，回归自 commit 09aacd6
-  证据：本 commit；ctest 72/73（排除 MySQL 环境项）
+  证据：commit 122629d；ctest 72/73（排除 MySQL 环境项）
 - [x] 审核发现：drain_pending 向 queue_ 逐条搬入待载变更（src/node.cpp:703-706），若 queue_ 已接近容量或同键重复序列则 queue_.enqueue 抛异常，receive 捕获后 retry_later 重连但 loaded_cursor_ 已含该键不再重载，剩余变更滞留 pending_before_load_ 且 pending_before_load_count_ 失真（上限被放宽），调用方已得成功却静默丢弃
-  证据：本 commit；ctest 72/73（排除 MySQL 环境项）
+  证据：commit 122629d；ctest 72/73（排除 MySQL 环境项）
 - [x] 审核发现：测试缺口——cross_return_sender（src/test_cases.cpp:4365）未给 crossServer 设 --upstream-token，ReturnSender 的 MLS1 identify 路径（src/node.cpp:570-596）无端到端覆盖，上述 writing_ 卡死不会被测试捕获；ReturnSendQueue 容量上限（record.hpp:364）与 return_enqueue 正数拒绝（lua_service.cpp:386-389）亦无直接用例
-  证据：本 commit；ctest 72/73（排除 MySQL 环境项）
+  证据：commit 122629d；ctest 72/73（排除 MySQL 环境项）
 
 - [x] 审核发现：本轮 diff 未见问题（9505e4fb..HEAD）：仅 docs 改动——README.md/README.zh-CN.md 徽章行布局调整（合并为单行、去除嵌套重复的 <p align="center">），且 README.zh-CN.md 将 docs 徽章链接从 https://cuihairu.github.io/mistlane/ 修正为 https://cuihairu.github.io/mistlane/zh/（与 .vitepress/config.ts 中 zh locale root='/zh/'、base='/mistlane/' 一致，修正了指向英文首页的错误链接）。无代码改动，无注入/反序列化/越界/泄漏/竞态/错误处理面，无测试适用。覆盖范围：9505e4fbc785..HEAD 全量（1 commit aa41fc4，README.md + README.zh-CN.md，+2/-10）
-  证据：本 commit；`git diff --stat 9505e4fb..HEAD` 仅 README.md/README.zh-CN.md（+2/-10），无代码/测试改动，已逐行核实为徽章行布局与中文文档链接修正，无问题
+  证据：commit 122629d；`git diff --stat 9505e4fb..HEAD` 仅 README.md/README.zh-CN.md（+2/-10），无代码/测试改动，已逐行核实为徽章行布局与中文文档链接修正，无问题
