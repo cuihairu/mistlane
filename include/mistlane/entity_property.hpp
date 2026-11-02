@@ -133,7 +133,14 @@ public:
             return false;
         }
         EntityValue* at = &values_.find(name)->second;
-        for (std::size_t i = 0; i + 1 < path.size(); ++i) at = descend(at, path[i]);
+        for (std::size_t i = 0; i + 1 < path.size(); ++i) {
+            at = descend(at, path[i]);
+            if (!at) {
+                error_ = "property '"+name+"' path "+path_text(path)
+                         +": index or field out of range; arrays grow through insert/append";
+                return false;
+            }
+        }
         if (!assign_child(at, path.back(), value)) {
             error_ = "property '"+name+"' path "+path_text(path)
                      +": index out of range; arrays grow through insert/append";
@@ -155,6 +162,7 @@ public:
             return false;
         }
         auto* array = array_at_value(name, path);
+        if (!array) return false;
         if (position > array->size()) { error_ = "insert position "+std::to_string(position)+" is beyond array size"; return false; }
         // Journal before the array takes the element: the entry must carry
         // the payload, not a moved-from husk.
@@ -169,6 +177,7 @@ public:
         const auto array_shape = array_at(*prop, name, path);
         if (!array_shape.ok) return false;
         auto* array = array_at_value(name, path);
+        if (!array) return false;
         if (position >= array->size()) { error_ = "remove position "+std::to_string(position)+" is beyond array size"; return false; }
         array->erase(array->begin()+static_cast<std::ptrdiff_t>(position));
         changes_.push_back(TreeChange{name, path, TreeChange::Kind::REMOVE, position, EntityValue(std::int64_t{0})});
@@ -280,12 +289,25 @@ private:
     }
     EntityArray* array_at_value(const std::string& name, const TreePath& path) {
         EntityValue* at = &values_.find(name)->second;
-        for (const auto& step : path) at = descend(at, step);
+        for (const auto& step : path) {
+            at = descend(at, step);
+            if (!at) { error_ = "property '"+name+"' path "+path_text(path)+" index out of range"; return nullptr; }
+        }
         return std::get_if<EntityArray>(&at->data);
     }
+    // Same checks as the const get_path above: writes must not reach past a
+    // shrunk array or a removed field just because a proxy kept the old path.
     static EntityValue* descend(EntityValue* at, const TreeStep& step) {
-        if (step.by_index) return &std::get<EntityArray>(at->data)[step.index];
-        return &std::get<EntityObject>(at->data).at(step.field);
+        if (step.by_index) {
+            auto* array = std::get_if<EntityArray>(&at->data);
+            if (!array || step.index >= array->size()) return nullptr;
+            return &(*array)[step.index];
+        }
+        auto* object = std::get_if<EntityObject>(&at->data);
+        if (!object) return nullptr;
+        auto field = object->find(step.field);
+        if (field == object->end()) return nullptr;
+        return &field->second;
     }
     static bool assign_child(EntityValue* at, const TreeStep& step, EntityValue value) {
         if (step.by_index) {

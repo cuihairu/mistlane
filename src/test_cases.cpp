@@ -442,6 +442,13 @@ void entity_tree() {
     // wrong kinds and unknown fields are refused without landing.
     require(!store.insert_at("tags", {}, std::size_t{5}, std::int64_t{1}), "insert beyond size+1 accepted");
     require(!store.remove_at("tags", {}, std::size_t{9}), "remove beyond size accepted");
+    // A write through an index a remove has vacated must be refused like the
+    // read path: descend bounds-checks every intermediate step (stale proxy).
+    require(store.remove_at("inventory", {field("items")}, std::size_t{1}), "nested remove refused");
+    require(!store.set_path("inventory", {field("items"), index(1), field("count")}, std::int64_t{5}),
+            "write through a vacated index accepted: "+store.error());
+    require(!store.insert_at("inventory", {field("items")}, std::size_t{3}, std::int64_t{1}),
+            "insert beyond the shrunk array accepted");
     require(!store.set_path("tags", {index(9)}, std::int64_t{1}), "out-of-range element write accepted");
     require(!store.set_path("inventory", {field("capacity")}, std::string("big")),
             "wrong kind into struct field accepted");
