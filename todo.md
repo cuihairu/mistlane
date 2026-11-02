@@ -148,36 +148,36 @@
 ## 代码深审 2026-11-01
 
 - [x] P2 生命周期：src/node.cpp:461 session_send 把栈局部 reason 以引用捕获进异步写回调，异步失败（message_size/operation_aborted）完成后向已销毁栈帧写入（use-after-scope）。修复：回调改为按值捕获或把 reason 移入回调可写状态，同步拒绝语义改注释。
-  证据：commit 9fc389f；ctest 72/72（排除 MySQL 环境项）
+  证据：commit baef107；ctest 72/72（排除 MySQL 环境项）
 - [x] P2 逻辑/安全：include/mistlane/entry_ticket.hpp:180 TicketVerifier::verify 用 std::array::operator!= 非恒定时间比较 HMAC，与 src/api.cpp:95 CRYPTO_memcmp 不一致，MLT1 门票验证留下时序侧信道。修复：改 CRYPTO_memcmp。
-  证据：commit 9fc389f；ctest 72/72（排除 MySQL 环境项）
+  证据：commit baef107；ctest 72/72（排除 MySQL 环境项）
 - [x] P2 资源泄漏：src/lua_service.cpp:807 stream_publish 在 callback_ref 之后才做字段校验，校验抛异常时 Lua registry 引用未 unref。修复：校验前置或异常路径 unref。
-  证据：commit 9fc389f；ctest 72/72（排除 MySQL 环境项）
+  证据：commit baef107；ctest 72/72（排除 MySQL 环境项）
 - [x] P2 资源泄漏：include/mistlane/entity_runtime.hpp:48,58 delivered_ 集合只 emplace 从不 erase（destroy 只擦 entities_），长驻节点去重条目无界增长。修复：destroy/重基线时清理 delivered_。
-  证据：commit 9fc389f；ctest 72/72（排除 MySQL 环境项）
+  证据：commit baef107；ctest 72/72（排除 MySQL 环境项）
 - [x] P3 越界/逻辑：include/mistlane/entity_envelope.hpp:123 encode_entity_reply 以 16 位宽度写 reason.size()，>64KB 的 reason 静默截断。修复：拒绝超长 reason 或改宽编码。
-  证据：commit 9fc389f；ctest 72/72（排除 MySQL 环境项）
+  证据：commit baef107；ctest 72/72（排除 MySQL 环境项）
 - [x] P3 逻辑/竞态：src/web.cpp:57 deliver 置 credit_=true 后可能覆盖暂存 incoming_，单槽桥接下罕见消息丢失。修复：reader_ 重新 arm 前保留旧消息或先清 credit_。
-  证据：commit 9fc389f；ctest 72/72（排除 MySQL 环境项）
+  证据：commit baef107；ctest 72/72（排除 MySQL 环境项）
 - [x] P3 逻辑/竞态：include/mistlane/cross.hpp:92 cross_shard 做 hash % count，零 upstream 会除零；当前 main.cpp:334 守卫不可达，属防御缺失。修复：count==0 提前返回/断言。
-  证据：commit 9fc389f；ctest 72/72（排除 MySQL 环境项）
+  证据：commit baef107；ctest 72/72（排除 MySQL 环境项）
 - [x] P3 TLS/认证：src/node.cpp:1039 MLS1 服务令牌用 std::string::operator!= 非恒定时间比较。修复：改 CRYPTO_memcmp。
-  证据：commit 9fc389f；ctest 72/72（排除 MySQL 环境项）
+  证据：commit baef107；ctest 72/72（排除 MySQL 环境项）
 - [x] P3 TLS/认证：src/node.cpp:2096 registry 身份校验同样非恒定时间令牌比较。修复：改 CRYPTO_memcmp。
-  证据：commit 9fc389f；ctest 72/72（排除 MySQL 环境项）
+  证据：commit baef107；ctest 72/72（排除 MySQL 环境项）
 
 
 - [x] 审核发现：`--data` 的 ReturnSender 只在 `!web_mode_` 分支启动（src/node.cpp:3045），crossServer 以 WS/HTTP/HTTPS 监听（web_mode=true）运行时发送器永不 start，`mistlane.returning.seed/enqueue` 入队后无人发送（src/node.cpp:3038-3047）
-  证据：commit 9fc389f；ctest 72/72（排除 MySQL 环境项）
+  证据：commit baef107；ctest 72/72（排除 MySQL 环境项）
 - [x] 审核发现：`LuaService::return_enqueue` 用 `lua_isinteger` 判型后直接 `static_cast<uint64_t>(lua_tointeger(...))` 接收 generation/sequence（src/lua_service.cpp:383-385），负数回绕为巨大值并通过 queue 的 `!change.sequence||!change.generation` 检查，data 侧 `record_decimal`（≤10 位）拒收后重试耗尽，变更静默卡死——与同批已修的 ticket_issue 负值缺陷同根因
-  证据：commit 9fc389f；ctest 72/72（排除 MySQL 环境项）
+  证据：commit baef107；ctest 72/72（排除 MySQL 环境项）
 - [x] 审核发现：ReturnSender 连 data 的腿用裸 TcpChannel 直发 `MLD1 LOAD/SUBMIT`，无 MLS1 身份握手（src/node.cpp:534-548）；带 `--service-token` 的 data（契约要求每条腿 MLS1，docs/service-contracts.md:36）会回 `MLS1 ERR TOKEN` 并关闭，`--data` 无法对接受保护的 data
-  证据：commit 9fc389f；ctest 72/72（排除 MySQL 环境项）
+  证据：commit baef107；ctest 72/72（排除 MySQL 环境项）
 - [x] 审核发现：「bounded queue」名不符实：`ReturnSendQueue` 只限每项重试次数（retry_limit_=3），容量无界（src/node.cpp:700 的 `pending_before_load_`、include/mistlane/record.hpp:424 的 `pending_` 均无限增长），与 src/main.cpp:266 帮助文案「retry in a bounded queue」及协议「队列满转只读」声明不符（文档已注明队列满未实现，但实现也没有任何容量上限）
-  证据：commit 9fc389f；ctest 72/72（排除 MySQL 环境项）
+  证据：commit baef107；ctest 72/72（排除 MySQL 环境项）
 - [x] 审核发现：`return_enqueue` 允许 payload 到 `max_frame`（src/lua_service.cpp:388），但 `send_next` 在其前拼上 `MLD1 SUBMIT <realm> <char> gen N seq N ` 头（src/node.cpp:642-647），`TcpChannel::write` 拒收 >max_frame，近满帧（约 1MiB 减去头长）永远发送失败并烧尽重试
-  证据：commit 9fc389f；ctest 72/72（排除 MySQL 环境项）
+  证据：commit baef107；ctest 72/72（排除 MySQL 环境项）
 - [x] 审核发现：新 `--data` 选项与 `DATA` 环境键未加入 docs/guide.md:203（及 docs/zh/guide.md:203）的配置/环境键清单，config 文件用户无法发现该键，文档与新增 CLI 不同步
-  证据：commit 9fc389f；docs:build + docs:check 通过
+  证据：commit baef107；docs:build + docs:check 通过
 - [x] 审核发现：todo.md 末尾新增了多余空行，`git diff --check` 报 `todo.md:158: new blank line at EOF`（todo.md:158）
-  证据：commit 9fc389f；`git diff --check` 通过
+  证据：commit baef107；`git diff --check` 通过
