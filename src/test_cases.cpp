@@ -3538,6 +3538,21 @@ void coordinator_registry() {
         require(scoped.wait() != 0 && scoped.output().find("--namespace and --scope require --coordinator") != std::string::npos,
                 "scope accepted without a coordinator");
     }
+    // A crossServer token can identify the registry leg, the MLD1 data leg,
+    // or both; only an endpoint-less token is silent and must refuse to start.
+    // The service name is concatenated into the MLS1 frame, so whitespace or
+    // any other non-identifier character would corrupt the handshake.
+    {
+        auto& orphan = c.spawn({self().string(), "--role", "crossServer", "--listen", endpoint(port()),
+            "--script", c.path("echo.lua").string(), "--upstream-token", "s3cret"});
+        require(orphan.wait() != 0 && orphan.output().find("--coordinator or --data") != std::string::npos,
+                "crossServer token accepted without a registry or data endpoint");
+        write(c.path("space.lua"), "return {message=function(p)return p end}");
+        auto& spaced = c.spawn({self().string(), "--role", "crossServer", "--listen", endpoint(port()),
+            "--script", c.path("space.lua").string(), "--service-name", "a b"});
+        require(spaced.wait() != 0 && spaced.output().find("single record identifier") != std::string::npos,
+                "service name whitespace was accepted");
+    }
     for (const auto* member : {&gs_a, &gs_b})
         require(member->output().find("callback failed") == std::string::npos, "registry member logged Lua failures");
     require(coord.output().find("unexpected frame") == std::string::npos, "coordinator log noise");
@@ -4394,6 +4409,25 @@ void cross_return_sender() {
         "    if b then return 'DUP ACCEPTED' end\n"
         "    return 'DUP '..tostring(rb)\n"
         "  end\n"
+        "  if payload == 'unseed' then\n"
+        "    -- enqueue before seed: the pre-load pool must refuse a participant\n"
+        "    -- it cannot ever LOAD, instead of holding the change forever.\n"
+        "    local ok, reason = pcall(mistlane.returning.enqueue,'away','ghost',5,1,'hp=10')\n"
+        "    if ok then return 'UNSEED ACCEPTED' end\n"
+        "    return 'UNSEED '..tostring(reason)\n"
+        "  end\n"
+        "  if payload == 'negpre' then\n"
+        "    -- enqueue before seed with non-positive generation/sequence: the\n"
+        "    -- pre-load pool must refuse, not strand an invalid change.\n"
+        "    local ok, reason = pcall(mistlane.returning.enqueue,'home','hero',-1,1,'hp=10')\n"
+        "    if ok then return 'NEGPRE ACCEPTED' end\n"
+        "    return 'NEGPRE '..tostring(reason)\n"
+        "  end\n"
+        "  if payload == 'zeropre' then\n"
+        "    local ok, reason = pcall(mistlane.returning.enqueue,'home','hero',5,0,'hp=10')\n"
+        "    if ok then return 'ZEROPRE ACCEPTED' end\n"
+        "    return 'ZEROPRE '..tostring(reason)\n"
+        "  end\n"
         "  return 'noop'\n"
         "end\n"
         "return M");
@@ -4452,6 +4486,15 @@ void cross_return_sender() {
         RawSocket raw(cross);
         send_frame(raw, "MLC1 1 home g r1 ch hero gen 5 ret home g r1");
         equal(read_frame(raw), "MLC1 OK 1");
+        // The pre-load pool refuses unseeded participants and non-positive
+        // generation/sequence before holding anything, so the same defensive
+        // invariants as the ordered queue apply to the seed window.
+        send_frame(raw, "unseed");
+        require(read_frame(raw).find("UNSEED ") == 0, "unseeded participant was accepted");
+        send_frame(raw, "negpre");
+        require(read_frame(raw).find("NEGPRE ") == 0, "negative pre-load generation was accepted");
+        send_frame(raw, "zeropre");
+        require(read_frame(raw).find("ZEROPRE ") == 0, "zero pre-load sequence was accepted");
         send_frame(raw, "neg");
         require(read_frame(raw).find("NEG ") == 0, "negative generation was accepted");
         send_frame(raw, "zero");

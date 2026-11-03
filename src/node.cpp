@@ -644,6 +644,7 @@ public:
                         std::uint64_t generation, std::uint64_t sequence, std::string_view payload) override {
         try {
             const Key key{std::string(realm), std::string(character)};
+            if (!generation || !sequence) throw std::invalid_argument("invalid generation or sequence");
             Change change{key.first, key.second, generation, sequence, std::string(payload)};
             // The SUBMIT frame prepends "MLD1 SUBMIT <realm> <char> gen N seq N "
             // before the payload; TcpChannel::write refuses anything over
@@ -655,6 +656,7 @@ public:
             // change until the cursor is seeded, then feed it into the ordered
             // queue in submission order (the queue keeps per-participant order).
             if (!loaded_cursor_.contains(key)) {
+                if (!seeded_.contains(key)) throw std::invalid_argument("unseeded participant");
                 // The queue itself is bounded, so the pre-load pool shares that
                 // same occupancy budget; otherwise a burst could later overflow
                 // the queue during drain and strand changes silently.
@@ -845,8 +847,9 @@ private:
         // caught by receive() and turns into a retry/reconnect, but because the
         // load cursor is already recorded the key is never re-loaded, so a
         // partial drain would strand the remaining changes. Pre-validate the
-        // whole batch against the queue's invariants (capacity and per-key
-        // duplicates) before moving any change, so a refusal is atomic.
+        // whole batch against the queue's invariants (capacity, per-key
+        // duplicates and positive generation/sequence) before moving any
+        // change, so a refusal is atomic.
         std::size_t incoming = 0;
         for (const auto& key : loaded_cursor_) {
             const auto it = pending_before_load_.find(key);
@@ -854,6 +857,9 @@ private:
             incoming += it->second.size();
             if (queue_.pending() + incoming > pending_capacity_)
                 throw std::invalid_argument("return queue is full");
+            for (const auto& change : it->second)
+                if (!change.generation || !change.sequence)
+                    throw std::invalid_argument("invalid generation or sequence");
             for (const auto& change : it->second)
                 if (queue_.contains(key.first, key.second, change.sequence))
                     throw std::invalid_argument("duplicate sequence");

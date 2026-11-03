@@ -4,6 +4,7 @@
 #include "mistlane/cli.hpp"
 #include "mistlane/contract_tool.hpp"
 #include "mistlane/scaffold.hpp"
+#include "mistlane/record.hpp"
 #include <charconv>
 #include <cstdlib>
 #include <filesystem>
@@ -357,10 +358,14 @@ int main(int argc, char** argv) {
             // Members present this identity when they register; anywhere else
             // the flag would silently do nothing.
             throw std::invalid_argument("--upstream-token applies to gateway or coordinator members");
-        if (config.role == "crossServer" && !config.upstream_token.empty() && config.data.address.empty())
-            // The crossServer presents this identity to its MLD1 data leg, not
-            // to a registry; without --data the flag would silently do nothing.
-            throw std::invalid_argument("--upstream-token on crossServer requires --data");
+        if (config.role == "crossServer" && !config.upstream_token.empty()
+                && !config.coordinator_enabled && config.data.address.empty())
+            // The token is the identity for the registry leg (--coordinator)
+            // and the MLD1 data leg (--data); with neither it would silently
+            // do nothing, so refuse the misconfiguration.
+            throw std::invalid_argument("--upstream-token on crossServer requires --coordinator or --data");
+        if (!config.service_name.empty() && !mistlane::record_identifier(config.service_name))
+            throw std::invalid_argument("--service-name must be a single record identifier");
         // Cross routing keeps its own MLC1 join as the identity; accepting the
         // token flags there would silently skip the handshake instead of
         // surfacing the misconfiguration.
