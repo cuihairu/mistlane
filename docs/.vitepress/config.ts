@@ -108,6 +108,7 @@ export default defineConfig({
         { text: 'Cross return and single-writer protocol', link: '/cross-return-protocol' },
         { text: 'login, data and apiServer contracts', link: '/service-contracts' },
         { text: 'Protocol analysis', link: '/protocol-analysis' },
+        { text: 'Business scenario bot and dashboard', link: '/business-bot' },
         { text: 'BigWorld-like protocol evolution', link: '/bigworld-like-protocol' },
         { text: 'Dependencies', link: '/dependencies' },
         { text: 'Validation', link: '/validation' }

@@ -76,6 +76,7 @@ void probe_control();
 void scaffold_init();
 void config_file();
 void cli_bot();
+void business_bot();
 void crashpad_startup(const fs::path&);
 void crashpad_minidump(const fs::path&);
 void redis_lua_api();
@@ -196,6 +197,7 @@ int run_tests(int argc, char** argv) {
         {"scaffold.init","scaffold",test::scaffold_init},
         {"config.file","config",test::config_file},
         {"cli.bot","cli",test::cli_bot},
+        {"business.bot","cli",test::business_bot},
         {"crashpad.startup","crashpad",[&] {test::crashpad_startup(handler);},true},
         {"crashpad.minidump","crashpad",[&] {test::crashpad_minidump(handler);},true},
         {"redis.lua","redis",test::redis_lua_api,true},

@@ -28,6 +28,15 @@ public:
 
     void set_ready(bool ready);
     void set_active_sessions(std::size_t count);
+    // Script-declared business gauges (mistlane.metrics.gauge in Lua): the
+    // closed framework families cannot know a game's vocabulary (rooms,
+    // queues), so scripts publish their own bounded set of named gauges onto
+    // the same registry the exposer and the dashboard serve.
+    void set_script_gauge(std::string_view name, double value);
+    // Serializes the whole registry in the Prometheus text format: the
+    // --dashboard-listen listener serves this at /metrics so the embedded page
+    // needs no second exposer and can never disagree with a scrape.
+    std::string metrics_text() const;
     void set_registry_members(std::size_t count);
     void set_registry_routes(std::size_t count);
     void reject(std::string_view reason);
@@ -56,6 +65,11 @@ private:
     prometheus::Counter* rejected_ = nullptr;
     std::map<std::string, prometheus::Counter*> record_results_;
     std::map<std::string, prometheus::Counter*> entity_results_;
+    // Named script gauges; the family is created lazily on the first set so a
+    // node without metrics still pays nothing. Bounded: a script may declare
+    // at most 32 distinct names, extra names are ignored, so a runaway loop
+    // cannot grow the registry unboundedly.
+    std::map<std::string, prometheus::Gauge*> script_gauges_;
     prometheus::Counter* messages_rx_ = nullptr;
     prometheus::Counter* messages_tx_ = nullptr;
     prometheus::Counter* rx_bytes_ = nullptr;

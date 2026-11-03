@@ -86,7 +86,7 @@ if(BUILD_TESTING)
       api.signature api.tamper api.rotation api.replay api.acceptance api.acceptance.sqlite api.ownership api.wire api.http
       login.ticket login.ticket.wire
       cross.admission cross.record cross.record.journal cross.return.queue cross.return.sender probe.control scaffold.init
-      config.file cli.bot)
+      config.file cli.bot business.bot)
     string(REPLACE "." "_" test_name "${test_case}")
     add_test(NAME mistlane_${test_name} COMMAND mistlane test --case "${test_case}")
     set_tests_properties(mistlane_${test_name} PROPERTIES TIMEOUT 60)

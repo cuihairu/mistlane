@@ -14,6 +14,7 @@
 #include "mistlane/entity_contract.hpp"
 #include "mistlane/entity_codec.hpp"
 #include "mistlane/entity_endpoint.hpp"
+#include "mistlane/dashboard.hpp"
 #include "mistlane/entity_gateway.hpp"
 #include <openssl/crypto.h>
 #include <utility>
@@ -426,6 +427,126 @@ private:
     }
     tcp::acceptor acceptor_;
     Answer answer_;
+    std::set<std::shared_ptr<Peer>> peers_;
+};
+// The embedded operations dashboard: a minimal HTTP listener serving the
+// self-contained page and the same Prometheus text the --metrics-listen
+// exposer serves. Read-only by construction — there is no write route and no
+// script in the path — so the page can observe the node without being able to
+// perturb it. Requests parse only as far as the first line; anything else is a
+// 404, and every connection is bounded in count, bytes and time like a probe.
+class DashboardServer : public std::enable_shared_from_this<DashboardServer> {
+public:
+    using Metrics = std::function<std::string()>;
+    static constexpr std::size_t max_peers = 64;
+    static constexpr std::size_t request_line_cap = 2048;
+    DashboardServer(asio::io_context& io, const Endpoint& listen, Metrics metrics)
+      : acceptor_(io, tcp::endpoint(parse_address(listen.address), listen.port)),
+        metrics_(std::move(metrics)) {}
+    void start() { accept(); }
+    void stop() {
+        Error ignored;
+        acceptor_.close(ignored);
+        for (auto& peer : peers_) peer->close();
+        peers_.clear();
+    }
+private:
+    class Peer : public std::enable_shared_from_this<Peer> {
+    public:
+        Peer(tcp::socket socket, Metrics metrics)
+          : socket_(std::move(socket)), timer_(socket_.get_executor()), metrics_(std::move(metrics)) {}
+        void start(const std::shared_ptr<DashboardServer>& server) {
+            server_ = server;
+            read();
+            expire();
+        }
+        void close() {
+            Error ignored;
+            timer_.cancel();
+            socket_.close(ignored);
+        }
+    private:
+        void read() {
+            auto self = shared_from_this();
+            // One request line decides the route; headers and bodies are
+            // irrelevant to a read-only surface and are never parsed.
+            asio::async_read_until(socket_, buffer_, '\n',
+              [self](Error ec, std::size_t) {
+                if (ec) return self->finish();
+                std::istream line(&self->buffer_);
+                std::string request;
+                std::getline(line, request);
+                self->reply(self->handle(request));
+            });
+        }
+        void expire() {
+            auto self = shared_from_this();
+            timer_.expires_after(std::chrono::seconds(5));
+            timer_.async_wait([self](Error ec) {
+                if (ec) return;
+                Error ignored;
+                self->socket_.close(ignored);
+            });
+        }
+        std::pair<int, std::string> handle(std::string_view request) {
+            // "GET /path HTTP/1.1" — method and path only. A slow-loris body
+            // or pipelined garbage hits the 5s expiry instead of logic.
+            const auto space = request.find(' ');
+            const auto trailing = space == std::string_view::npos
+                ? std::string_view{} : request.substr(space + 1);
+            const auto path = trailing.substr(0, trailing.find(' '));
+            if (request.substr(0, space) != "GET") return {405, "method not allowed\n"};
+            if (path == "/" || path == "/dashboard")
+                return {200, std::string(kDashboardHtml)};
+            if (path == "/metrics") return {200, metrics_()};
+            return {404, "not found\n"};
+        }
+        void reply(std::pair<int, std::string> answer) {
+            const auto* reason = answer.first == 200 ? "OK" : answer.first == 404 ? "Not Found"
+                : answer.first == 405 ? "Method Not Allowed" : "Error";
+            const auto* type = answer.second.starts_with("<!doctype html>") ? "text/html; charset=utf-8"
+                : "text/plain; version=0.0.4; charset=utf-8";
+            // asio::buffer never copies: the response must outlive the write.
+            auto body = std::make_shared<std::string>("HTTP/1.1 " + std::to_string(answer.first) + " " + reason
+                + "\r\nContent-Type: " + type + "\r\nContent-Length: " + std::to_string(answer.second.size())
+                + "\r\nConnection: close\r\n\r\n" + answer.second);
+            auto self = shared_from_this();
+            asio::async_write(socket_, asio::buffer(*body),
+              [self, body](Error, std::size_t) { self->finish(); });
+        }
+        void finish() {
+            if (finished_) return;
+            finished_ = true;
+            Error ignored;
+            timer_.cancel();
+            socket_.close(ignored);
+            if (auto server = server_) server->retire(shared_from_this());
+        }
+        tcp::socket socket_;
+        asio::steady_timer timer_;
+        asio::streambuf buffer_{request_line_cap};
+        Metrics metrics_;
+        std::shared_ptr<DashboardServer> server_;
+        bool finished_ = false;
+    };
+    void retire(const std::shared_ptr<Peer>& peer) { peers_.erase(peer); }
+    void accept() {
+        auto self = shared_from_this();
+        acceptor_.async_accept([self](Error ec, tcp::socket socket) {
+            if (ec) return;
+            if (self->peers_.size() >= max_peers) {
+                Error ignored;
+                socket.close(ignored);
+            } else {
+                auto peer = std::make_shared<Peer>(std::move(socket), self->metrics_);
+                self->peers_.insert(peer);
+                peer->start(self);
+            }
+            self->accept();
+        });
+    }
+    tcp::acceptor acceptor_;
+    Metrics metrics_;
     std::set<std::shared_ptr<Peer>> peers_;
 };
 // Framed game sessions of a script role, addressable by Lua through
@@ -2881,6 +3002,17 @@ private:
     Answer answer_;
     bool done_ = false;
 };
+// Bridges the script's mistlane.metrics.gauge onto the node's diagnostics
+// registry; lives only as long as the LuaService that borrows it.
+class ScriptGaugeSink final : public ScriptMetricsSink {
+public:
+    explicit ScriptGaugeSink(Diagnostics& diagnostics) : diagnostics_(diagnostics) {}
+    void script_gauge(std::string_view name, double value) override {
+        diagnostics_.set_script_gauge(name, value);
+    }
+private:
+    Diagnostics& diagnostics_;
+};
 // Lua websocket lifecycle sessions (script roles with an http/https listener).
 // Every method runs on the node's event loop thread, matching the WebsocketSink
 // contract, so no locking is needed. Sessions share max_connections with the
@@ -2977,6 +3109,7 @@ public:
         admission_(std::max<std::size_t>(1, config_.upstreams.size()), config_.max_room_sessions,
                    config_.max_group_sessions, config_.max_shard_sessions) {
         diagnostics_ = std::make_unique<Diagnostics>(config_);
+        metrics_sink_ = std::make_unique<ScriptGaugeSink>(*diagnostics_);
         if (config_.role == "data" && !config_.journal.empty()) {
             record_journal_ = std::make_unique<MigrationJournal>(config_.journal);
             records_.attach_backend(record_journal_.get());
@@ -2987,6 +3120,13 @@ public:
                     return command == "liveness" ? std::string("ok alive") : readiness_summary();
                 });
             probe_->start();
+        }
+        // Read-only observability surface: the embedded dashboard page plus
+        // /metrics from the same registry the exposer serves.
+        if (config_.dashboard_enabled) {
+            dashboard_ = std::make_shared<DashboardServer>(io_, config_.dashboard_listen,
+                [this] { return diagnostics_->metrics_text(); });
+            dashboard_->start();
         }
         // Reserve an admission envelope before allocating protocol buffers. Not a hard RSS quota.
         constexpr std::size_t session_envelope = 6*max_frame + 64*1024;
@@ -3092,7 +3232,7 @@ public:
             service_ = std::make_shared<LuaService>(config_.script, service_context_, redis_,
                 websockets_.get(), game_sessions_.get(), this,
                 entity_endpoint_ ? &entity_endpoint_->runtime() : nullptr,
-                ticket_issuer_.get(), return_sender_.get());
+                ticket_issuer_.get(), return_sender_.get(), metrics_sink_.get());
         if (http_service) {
             // MLA1 rides the same listener as the Lua routes. Both variables
             // must be injected together; anything else leaves /mla1 as a
@@ -3388,6 +3528,7 @@ private:
         ready_ = false;
         diagnostics_->set_ready(false);
         if (probe_) probe_->stop();
+        if (dashboard_) dashboard_->stop();
         Error ignored;
         for (const auto& acceptor : acceptors_) acceptor->close(ignored);
         // Close websocket sessions while the VM can still run their callbacks.
@@ -3464,6 +3605,8 @@ private:
     std::unique_ptr<TicketIssuer> ticket_issuer_;
     std::unique_ptr<Diagnostics> diagnostics_;
     std::shared_ptr<ProbeServer> probe_;
+    std::shared_ptr<DashboardServer> dashboard_;
+    std::unique_ptr<ScriptGaugeSink> metrics_sink_;
     std::exception_ptr startup_error_;
     bool ready_ = false, admitting_ = true;
     unsigned over_ticks_ = 0, healthy_ticks_ = 0;

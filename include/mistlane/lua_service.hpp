@@ -64,6 +64,15 @@ public:
     virtual std::string enqueue(std::string_view realm, std::string_view character,
         std::uint64_t generation, std::uint64_t sequence, std::string_view payload) = 0;
 };
+// Script-declared business gauge adapter: mistlane.metrics.gauge publishes a
+// named gauge onto the node's Prometheus registry (rooms, queue depths — the
+// game's own vocabulary). Implemented by Diagnostics; called on the node's
+// event-loop thread only, so implementations need no locking.
+class ScriptMetricsSink {
+public:
+    virtual ~ScriptMetricsSink() = default;
+    virtual void script_gauge(std::string_view name, double value) = 0;
+};
 class RedisRuntime {
 public:
     RedisRuntime(boost::asio::io_context& io, std::string host, std::uint16_t port);
@@ -85,7 +94,8 @@ public:
     explicit LuaService(const std::string& path, ServiceContext context = {}, std::shared_ptr<RedisRuntime> redis = {},
                         WebsocketSink* websocket_sink = nullptr, GameSessionSink* session_sink = nullptr,
                         PlacementSink* placement_sink = nullptr, EntityRuntime* entity_runtime = nullptr,
-                        const TicketIssuer* ticket_issuer = nullptr, ReturnSink* return_sink = nullptr);
+                        const TicketIssuer* ticket_issuer = nullptr, ReturnSink* return_sink = nullptr,
+                        ScriptMetricsSink* metrics_sink = nullptr);
     ~LuaService();
     LuaService(const LuaService&) = delete;
     LuaService& operator=(const LuaService&) = delete;
@@ -135,6 +145,8 @@ private:
     static int return_seed(lua_State*);
     static int return_enqueue(lua_State*);
     static void push_return_api(lua_State*, LuaService*);
+    static int metrics_gauge(lua_State*);
+    static void push_metrics_api(lua_State*, LuaService*);
     EntityDispatcher::Handler make_entity_handler(const std::string& type, const std::string& name,
                                                   unsigned method_id, ContractArgs returns,
                                                   const EntityContract* shapes) const;
@@ -149,6 +161,7 @@ private:
     EntityRuntime* entity_runtime_ = nullptr;
     const TicketIssuer* ticket_issuer_ = nullptr;
     ReturnSink* return_sink_ = nullptr;
+    ScriptMetricsSink* metrics_sink_ = nullptr;
     bool started_ = false, stopped_ = false, shutdown_ = false;
     std::shared_ptr<AsyncContext> async_context_;
     std::shared_ptr<RedisRuntime> redis_;

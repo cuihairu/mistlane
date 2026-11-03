@@ -135,10 +135,12 @@ void LuaService::check(int status) {
 }
 LuaService::LuaService(const std::string& path, ServiceContext context, std::shared_ptr<RedisRuntime> redis,
                        WebsocketSink* sink, GameSessionSink* sessions, PlacementSink* placement,
-                       EntityRuntime* entity_runtime, const TicketIssuer* ticket_issuer, ReturnSink* return_sink)
+                       EntityRuntime* entity_runtime, const TicketIssuer* ticket_issuer, ReturnSink* return_sink,
+                       ScriptMetricsSink* metrics_sink)
   : state_(luaL_newstate()), context_(std::move(context)), websocket_sink_(sink), session_sink_(sessions),
     placement_sink_(placement), entity_runtime_(entity_runtime), ticket_issuer_(ticket_issuer),
-    return_sink_(return_sink), async_context_(std::make_shared<AsyncContext>()), redis_(std::move(redis)) {
+    return_sink_(return_sink), metrics_sink_(metrics_sink), async_context_(std::make_shared<AsyncContext>()),
+    redis_(std::move(redis)) {
     if (!state_) throw std::runtime_error("cannot create Lua state");
     async_context_->state = state_;
     try {
@@ -154,6 +156,7 @@ LuaService::LuaService(const std::string& path, ServiceContext context, std::sha
         push_entity_api(state_, entity_runtime_);
         push_ticket_api(state_, this);
         push_return_api(state_, this);
+        push_metrics_api(state_, this);
         lua_pushcfunction(state_, traceback);
         check(luaL_loadfile(state_, path.c_str()));
         check(protected_call(state_, 0, 1, 1));
@@ -397,6 +400,29 @@ int LuaService::return_enqueue(lua_State* l) {
         if (reason.empty()) { lua_pushboolean(l, 1); return 1; }
         lua_pushboolean(l, 0); lua_pushlstring(l, reason.data(), reason.size()); return 2;
     } catch (const std::exception& e) { return luaL_error(l, "%s", e.what()); }
+}
+// mistlane.metrics.gauge(name, value): publishes one script-declared business
+// gauge onto the node's Prometheus registry. Writes run on the event-loop
+// thread; the sink bounds the label cardinality, so a script may declare at
+// most 32 distinct names and further names are silently dropped (a wrong name
+// is a visibility bug, not a fault worth tearing down the session).
+int LuaService::metrics_gauge(lua_State* l) {
+    auto* service = static_cast<LuaService*>(lua_touserdata(l, lua_upvalueindex(1)));
+    try {
+        if (!service->metrics_sink_) throw std::runtime_error("metrics are disabled on this node");
+        auto name = checked_text(l, 1, "name", 64);
+        if (!lua_isnumber(l, 2)) throw std::runtime_error("value must be a number");
+        service->metrics_sink_->script_gauge(name, lua_tonumber(l, 2));
+        lua_pushboolean(l, 1); return 1;
+    } catch (const std::exception& e) { return luaL_error(l, "%s", e.what()); }
+}
+void LuaService::push_metrics_api(lua_State* l, LuaService* service) {
+    if (!service->metrics_sink_) return; // registry disabled: no dashboard, no exposer
+    lua_getglobal(l, "mistlane");
+    if (!lua_istable(l, -1)) { lua_pop(l, 1); lua_newtable(l); }
+    lua_newtable(l);
+    lua_pushlightuserdata(l, service); lua_pushcclosure(l, metrics_gauge, 1); lua_setfield(l, -2, "gauge");
+    lua_setfield(l, -2, "metrics"); lua_setglobal(l, "mistlane");
 }
 // Mints a signed MLT1 entry ticket: mistlane.ticket.issue(realm, character,
 // instance, generation, expires) -> hex or nil, reason. Synchronous: the

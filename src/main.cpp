@@ -256,6 +256,8 @@ int main(int argc, char** argv) {
                              "    Redis TLS: MISTLANE_REDIS_TLS=on (chain+hostname verified),\n"
                              "    MISTLANE_REDIS_CA=FILE (optional trust anchor)\n"
                              "  --metrics-listen IP:PORT (optional; Prometheus /metrics endpoint)\n"
+                             "  --dashboard-listen IP:PORT (optional; embedded single-page dashboard:\n"
+                             "    GET / serves the self-contained HTML, GET /metrics the same registry text)\n"
                              "  --probe-listen IP:PORT (optional; internal PROBE1 liveness/readiness)\n"
                              "    --overload-ratio X (readiness gate, default 0.9) --ready-hysteresis N (default 3)\n"
                              "    upstreams take IP:PORT[:PROBE] so cross-routing gateways can check crossServer readiness\n"
@@ -299,6 +301,7 @@ int main(int argc, char** argv) {
             else if (key == "--contract") config.contract = value;
             else if (key == "--redis") { config.redis = endpoint(value); config.redis_enabled = true; }
             else if (key == "--metrics-listen") { config.metrics_listen = endpoint(value); config.metrics_enabled = true; }
+            else if (key == "--dashboard-listen") { config.dashboard_listen = endpoint(value); config.dashboard_enabled = true; }
             else if (key == "--probe-listen") { config.probe_listen = endpoint(value); config.probe_enabled = true; }
             else if (key == "--overload-ratio") config.overload_ratio = ratio(value);
             else if (key == "--ready-hysteresis") config.ready_hysteresis = number(value, 100000);

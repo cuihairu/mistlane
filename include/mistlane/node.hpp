@@ -51,9 +51,11 @@ struct Config {
     Endpoint redis{"127.0.0.1", 6379};
     Endpoint metrics_listen{"127.0.0.1", 9090};
     Endpoint probe_listen{"127.0.0.1", 7103};
+    Endpoint dashboard_listen{"127.0.0.1", 9091};
     bool redis_enabled = false;
     bool metrics_enabled = false;
     bool probe_enabled = false;
+    bool dashboard_enabled = false;
     std::string crashpad_handler, crashpad_database;
     std::string transport = "tcp";
     std::string certificate, private_key;

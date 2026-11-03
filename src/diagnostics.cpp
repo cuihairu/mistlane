@@ -7,6 +7,7 @@
 #include <prometheus/gauge.h>
 #include <prometheus/histogram.h>
 #include <prometheus/registry.h>
+#include <prometheus/text_serializer.h>
 
 #include <crashpad/client/crash_report_database.h>
 #include <crashpad/client/crashpad_client.h>
@@ -15,13 +16,18 @@
 #include <algorithm>
 #include <filesystem>
 #include <fstream>
+#include <sstream>
 #include <stdexcept>
 #include <cstdint>
 #include <unistd.h>
 
 namespace mistlane {
 Diagnostics::Diagnostics(const Config& config) {
-    if (config.metrics_enabled) {
+    // The registry backs both surfaces that speak Prometheus text: the
+    // --metrics-listen exposer and the --dashboard-listen page. Either one
+    // alone must still expose the full metric set, so a dashboard-only node
+    // builds the same registry without starting a second exposer.
+    if (config.metrics_enabled || config.dashboard_enabled) {
         registry_ = std::make_shared<prometheus::Registry>();
         const auto labels = prometheus::Labels{{"role", config.role}};
         ready_ = &prometheus::BuildGauge().Name("mistlane_ready").Help("Whether this process is ready.")
@@ -104,6 +110,26 @@ Diagnostics::~Diagnostics() = default;
 void Diagnostics::set_ready(bool ready) { if (ready_) ready_->Set(ready ? 1.0 : 0.0); }
 void Diagnostics::set_active_sessions(std::size_t count) {
     if (active_sessions_) active_sessions_->Set(static_cast<double>(count));
+}
+// All gauge writes (script and framework) run on the node's event-loop thread,
+// so the lazy family creation needs no locking; prometheus Registry::Collect
+// already synchronizes against the exposer's and the dashboard's reader
+// threads.
+void Diagnostics::set_script_gauge(std::string_view name, double value) {
+    if (!registry_ || (script_gauges_.size() >= 32 && !script_gauges_.contains(std::string(name))))
+        return; // bounded label cardinality: a runaway script cannot grow the registry
+    auto& slot = script_gauges_[std::string(name)];
+    if (!slot) slot = &prometheus::BuildGauge().Name("mistlane_script_gauge")
+        .Help("Script-declared business gauges (mistlane.metrics.gauge).")
+        .Register(*registry_).Add({{"name", std::string(name)}});
+    slot->Set(value);
+}
+std::string Diagnostics::metrics_text() const {
+    if (!registry_) return {};
+    prometheus::TextSerializer serializer;
+    std::ostringstream out;
+    serializer.Serialize(out, registry_->Collect());
+    return out.str();
 }
 void Diagnostics::set_registry_members(std::size_t count) {
     if (registry_members_) registry_members_->Set(static_cast<double>(count));
