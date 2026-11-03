@@ -191,3 +191,20 @@
 
 - [x] 审核发现：本轮 diff 未见问题（9505e4fb..HEAD）：仅 docs 改动——README.md/README.zh-CN.md 徽章行布局调整（合并为单行、去除嵌套重复的 <p align="center">），且 README.zh-CN.md 将 docs 徽章链接从 https://cuihairu.github.io/mistlane/ 修正为 https://cuihairu.github.io/mistlane/zh/（与 .vitepress/config.ts 中 zh locale root='/zh/'、base='/mistlane/' 一致，修正了指向英文首页的错误链接）。无代码改动，无注入/反序列化/越界/泄漏/竞态/错误处理面，无测试适用。覆盖范围：9505e4fbc785..HEAD 全量（1 commit aa41fc4，README.md + README.zh-CN.md，+2/-10）
   证据：commit 122629d；`git diff --stat 9505e4fb..HEAD` 仅 README.md/README.zh-CN.md（+2/-10），无代码/测试改动，已逐行核实为徽章行布局与中文文档链接修正，无问题
+
+## 审核发现
+
+- [x] 审核发现：main.cpp 允许 crossServer 携带 `--upstream-token` 时无条件要求 `--data`（src/main.cpp:360-363），但该 token 同时是 crossServer 注册 coordinator 时的 registry MLS1 身份（src/node.cpp:2824-2827），注释「The crossServer presents this identity to its MLD1 data leg, not to a registry」与 registry 腿实际使用同一 token 相矛盾；`crossServer --coordinator --upstream-token`（无 `--data`）此前为合法配置（旧校验仅 `!coordinator_enabled` 时拒绝），现被误拒
+  证据：commit 2f5240d；src/main.cpp:366；ctest 73/74（仅 MySQL 环境项失败）
+
+- [x] 审核发现：ReturnSender::drain_pending 预校验（src/node.cpp:850-860）只校验容量与同键重复序列，未校验 `generation>0 && sequence>0`，而 `queue_.enqueue`（include/mistlane/record.hpp:362）强制该不变量；零/负代或零序变更可经 pre-load 池入队（src/node.cpp:657-675 同样未校验正数），在搬入循环中途触发 enqueue 抛异常，造成部分搬入、剩余变更滞留——正是注释声称「atomic」要消除的失败模式（当前仅 Lua 边界 return_enqueue 拦截，属防御缺口）
+  证据：commit 2f5240d；src/node.cpp:647、src/node.cpp:862；ctest 73/74（仅 MySQL 环境项失败）
+
+- [x] 审核发现：pre-load 池 enqueue（src/node.cpp:657-675）接受尚未 seed 的参与者（未校验 send_cursor_ 含该键），变更永久滞留 pending_before_load_——该键不进 seeded_，send_next 永不 LOAD、drain_pending 永不搬入；而 queue 路径（include/mistlane/record.hpp:362）对未 seed 键抛「unseeded participant」，池边界与队列边界不变量不一致
+  证据：commit 2f5240d；src/node.cpp:659；ctest 73/74（仅 MySQL 环境项失败）
+
+- [x] 审核发现：测试缺口——cross_return_queue_bounded（src/test_cases.cpp:5533）仅覆盖独立 ReturnSendQueue 的容量/重复/contains，未覆盖 ReturnSender pre-load 池与 drain_pending 的联合容量记账及「满/重复在 drain 时拒收」路径；结合上述池边界不变量缺口，该路径目前可达且无端到端/单元用例（cross_return_sender 已覆盖带 token 的 MLS1 identify 端到端，主修复本身有测试）
+  证据：commit 2f5240d；src/test_cases.cpp:4492-4497；ctest 73/74（仅 MySQL 环境项失败）
+
+- [x] 审核发现：service_hello（src/node.cpp:182-186）把 `--service-name` 原样拼入空格分隔的 MLS1 四词帧，service_fields（src/node.cpp:174-178）要求恰好四词，而 `--service-name` 在 main.cpp 无空白/单词语校验（仅 MISTLANE_TICKET_SECRETS 时经 record_identifier，src/node.cpp:3220）；`--service-name "a b"` 会破坏帧使对端解析失败拒识——现被新用到 crossServer data 腿身份（src/node.cpp:3228-3230），属既有缺口被新路径暴露
+  证据：commit 2f5240d；src/main.cpp:368、src/test_cases.cpp:3550-3553；ctest 73/74（仅 MySQL 环境项失败）
