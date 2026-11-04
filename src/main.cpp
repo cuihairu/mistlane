@@ -5,7 +5,9 @@
 #include "mistlane/contract_tool.hpp"
 #include "mistlane/scaffold.hpp"
 #include "mistlane/record.hpp"
+#include <algorithm>
 #include <charconv>
+#include <cctype>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
@@ -364,8 +366,15 @@ int main(int argc, char** argv) {
             // and the MLD1 data leg (--data); with neither it would silently
             // do nothing, so refuse the misconfiguration.
             throw std::invalid_argument("--upstream-token on crossServer requires --coordinator or --data");
-        if (!config.service_name.empty() && !mistlane::record_identifier(config.service_name))
-            throw std::invalid_argument("--service-name must be a single record identifier");
+        // The service name is concatenated into the MLS1 identity frame, which
+        // is whitespace-delimited: any whitespace would corrupt the handshake.
+        // The frame itself accepts any single word (the default listen
+        // "addr:port" carries a colon), so only reject whitespace here; the
+        // registry member registration and ticket paths re-check the stricter
+        // record identifier at runtime.
+        if (std::any_of(config.service_name.begin(), config.service_name.end(),
+                [](unsigned char ch) { return std::isspace(ch); }))
+            throw std::invalid_argument("--service-name must be a single word");
         // Cross routing keeps its own MLC1 join as the identity; accepting the
         // token flags there would silently skip the handshake instead of
         // surfacing the misconfiguration.

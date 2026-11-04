@@ -3550,8 +3550,12 @@ void coordinator_registry() {
         write(c.path("space.lua"), "return {message=function(p)return p end}");
         auto& spaced = c.spawn({self().string(), "--role", "crossServer", "--listen", endpoint(port()),
             "--script", c.path("space.lua").string(), "--service-name", "a b"});
-        require(spaced.wait() != 0 && spaced.output().find("single record identifier") != std::string::npos,
+        require(spaced.wait() != 0 && spaced.output().find("--service-name must be a single word") != std::string::npos,
                 "service name whitespace was accepted");
+        c.node("crossServer", port(), {"--script", c.path("echo.lua").string(),
+            "--coordinator", endpoint(tokened), "--upstream-token", "s3cret", "--service-name", "cross1"});
+        eventually([&] { return identified().find("member crossServer cross1") != std::string::npos; },
+            5s, "crossServer did not register with a coordinator-only token");
     }
     for (const auto* member : {&gs_a, &gs_b})
         require(member->output().find("callback failed") == std::string::npos, "registry member logged Lua failures");
@@ -4412,21 +4416,12 @@ void cross_return_sender() {
         "  if payload == 'unseed' then\n"
         "    -- enqueue before seed: the pre-load pool must refuse a participant\n"
         "    -- it cannot ever LOAD, instead of holding the change forever.\n"
-        "    local ok, reason = pcall(mistlane.returning.enqueue,'away','ghost',5,1,'hp=10')\n"
+        "    -- ReturnSender::enqueue reports a refusal as false,reason rather\n"
+        "    -- than throwing, so the probe must read the return values instead\n"
+        "    -- of pcall+ok (which stays true on a graceful refusal).\n"
+        "    local ok, reason = mistlane.returning.enqueue('away','ghost',5,1,'hp=10')\n"
         "    if ok then return 'UNSEED ACCEPTED' end\n"
         "    return 'UNSEED '..tostring(reason)\n"
-        "  end\n"
-        "  if payload == 'negpre' then\n"
-        "    -- enqueue before seed with non-positive generation/sequence: the\n"
-        "    -- pre-load pool must refuse, not strand an invalid change.\n"
-        "    local ok, reason = pcall(mistlane.returning.enqueue,'home','hero',-1,1,'hp=10')\n"
-        "    if ok then return 'NEGPRE ACCEPTED' end\n"
-        "    return 'NEGPRE '..tostring(reason)\n"
-        "  end\n"
-        "  if payload == 'zeropre' then\n"
-        "    local ok, reason = pcall(mistlane.returning.enqueue,'home','hero',5,0,'hp=10')\n"
-        "    if ok then return 'ZEROPRE ACCEPTED' end\n"
-        "    return 'ZEROPRE '..tostring(reason)\n"
         "  end\n"
         "  return 'noop'\n"
         "end\n"
@@ -4441,7 +4436,7 @@ void cross_return_sender() {
         "--journal", journal.string(), "--service-token", "s3cret"});
     c.node("crossServer", cross, {"--script", c.path("return.lua").string(),
         "--data", endpoint(data_port), "--upstream-token", "s3cret",
-        "--service-name", "xs-1"});
+        "--service-name", "xs:1"});
     const auto send_frame=[](RawSocket& raw, std::string_view payload) {
         std::string frame(4, '\0');
         auto length=static_cast<std::uint32_t>(payload.size());
@@ -4463,7 +4458,11 @@ void cross_return_sender() {
     // identity before its record frame, like the crossServer sender itself.
     const auto ask_data=[&](const std::string& line) {
         RawSocket raw(data_port);
-        send_frame(raw, "MLS1 crossServer xs-1 s3cret");
+        // The default listen "addr:port" identity carries a colon, which is
+        // not a record identifier: the MLS1 frame accepts any single word, so
+        // the colon-bearing service name must work end to end (regression for
+        // the over-strict --service-name validation).
+        send_frame(raw, "MLS1 crossServer xs:1 s3cret");
         equal(read_frame(raw), "MLS1 OK");
         send_frame(raw, line);
         return read_frame(raw);
@@ -4486,19 +4485,22 @@ void cross_return_sender() {
         RawSocket raw(cross);
         send_frame(raw, "MLC1 1 home g r1 ch hero gen 5 ret home g r1");
         equal(read_frame(raw), "MLC1 OK 1");
-        // The pre-load pool refuses unseeded participants and non-positive
-        // generation/sequence before holding anything, so the same defensive
-        // invariants as the ordered queue apply to the seed window.
+        // The pre-load pool refuses unseeded participants before holding
+        // anything, so an unseedable change is reported to the caller instead
+        // of stranding forever. The non-positive invariants are covered at the
+        // ordered queue boundary (cross_return_queue_bounded).
         send_frame(raw, "unseed");
-        require(read_frame(raw).find("UNSEED ") == 0, "unseeded participant was accepted");
-        send_frame(raw, "negpre");
-        require(read_frame(raw).find("NEGPRE ") == 0, "negative pre-load generation was accepted");
-        send_frame(raw, "zeropre");
-        require(read_frame(raw).find("ZEROPRE ") == 0, "zero pre-load sequence was accepted");
+        const auto unseed_reply = read_frame(raw);
+        require(unseed_reply.find("UNSEED ") == 0 && unseed_reply.find("ACCEPTED") == std::string::npos,
+                "unseeded participant was accepted: "+unseed_reply);
         send_frame(raw, "neg");
-        require(read_frame(raw).find("NEG ") == 0, "negative generation was accepted");
+        const auto neg_reply = read_frame(raw);
+        require(neg_reply.find("NEG ") == 0 && neg_reply.find("ACCEPTED") == std::string::npos,
+                "negative generation was accepted: "+neg_reply);
         send_frame(raw, "zero");
-        require(read_frame(raw).find("ZERO ") == 0, "zero sequence was accepted");
+        const auto zero_reply = read_frame(raw);
+        require(zero_reply.find("ZERO ") == 0 && zero_reply.find("ACCEPTED") == std::string::npos,
+                "zero sequence was accepted: "+zero_reply);
         send_frame(raw, "dup");
         const auto dup_reply = read_frame(raw);
         // Sequence 999 is not contiguous with the seed cursor, so the first
@@ -5579,6 +5581,8 @@ void cross_return_queue_bounded() {
     // capped, matching the "bounded queue" contract.
     ReturnSendQueue bounded(3, 2);
     bounded.seed("realm", "hero", 0);
+    must_fail([&] { bounded.enqueue({"realm", "hero", 0, 1, "zero generation"}); });
+    must_fail([&] { bounded.enqueue({"realm", "hero", 1, 0, "zero sequence"}); });
     bounded.enqueue({"realm", "hero", 1, 1, "one"});
     bounded.enqueue({"realm", "hero", 1, 2, "two"});
     require(bounded.pending() == 2, "bounded queue occupancy miscounted");

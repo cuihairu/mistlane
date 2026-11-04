@@ -208,3 +208,12 @@
 
 - [x] 审核发现：service_hello（src/node.cpp:182-186）把 `--service-name` 原样拼入空格分隔的 MLS1 四词帧，service_fields（src/node.cpp:174-178）要求恰好四词，而 `--service-name` 在 main.cpp 无空白/单词语校验（仅 MISTLANE_TICKET_SECRETS 时经 record_identifier，src/node.cpp:3220）；`--service-name "a b"` 会破坏帧使对端解析失败拒识——现被新用到 crossServer data 腿身份（src/node.cpp:3228-3230），属既有缺口被新路径暴露
   证据：commit 2f5240d；src/main.cpp:368、src/test_cases.cpp:3550-3553；ctest 73/74（仅 MySQL 环境项失败）
+
+- [x] 审核发现：cross_return_sender 新增 unseed/negpre/zeropre 探针未真正验证新 sink 侧守卫——unseed 用 pcall+ok 判定，但 ReturnSender::enqueue 拒绝时是内部捕获返回 "invalid"（src/node.cpp:680），Lua 包装层以普通返回值下发 false,"invalid"（src/lua_service.cpp:400-401）而非抛 Lua 错，故 pcall 的 ok 恒为 true、回复恒为 "UNSEED ACCEPTED"，断言 find("UNSEED ")==0 无论 src/node.cpp:659 是否拒收都通过；negpre/zeropre 的负代/零序在 Lua 边界即被拒（src/lua_service.cpp:392-393），从未到达新增守卫 src/node.cpp:647 的 !generation||!sequence，仅重复既有 neg/zero 行为（src/test_cases.cpp:4412-4429、4492-4497）
+  证据：ctest -R "cross_return_sender|cross_return_queue_bounded" 2/2 Passed
+
+- [x] 审核发现：main.cpp:361-366 放宽 crossServer `--upstream-token --coordinator`（无 --data）为新合法配置，但无正例测试——新增 orphan 探针（src/test_cases.cpp:3546-3549）仅断言仍被拒的「无 coordinator 无 data」分支，未覆盖新放行的 coordinator-without-data 启动/注册路径，回退收紧不会被抓到（src/test_cases.cpp:3546-3549）
+  证据：ctest -R coordinator_registry 1/1 Passed
+
+- [x] 审核发现：--service-name 校验（src/main.cpp:367-368）用 record_identifier（禁 '.'/':'，src/record.hpp 或 include/mistlane/record.hpp:36-42），比线格式更严且与自身默认不一致——service_hello 默认身份为 listen 地址+':'+端口（src/node.cpp:183-184，如 "127.0.0.1:9000"），该串不满足 record_identifier；接收端 service_fields（src/node.cpp:174-178）只解析任意单词、不对 instance 做标识符校验，故校验拒绝的值在线上合法且是同一代码默认生成的串（src/main.cpp:367-368、src/node.cpp:183-184）
+  证据：ctest -R cross_return_sender 1/1 Passed
