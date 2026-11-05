@@ -3567,6 +3567,12 @@ void coordinator_registry() {
         require(bad_scope.wait() != 0
                 && bad_scope.output().find("--scope on a registering member must be a record identifier") != std::string::npos,
                 "a non-record member scope was accepted");
+        auto& default_scope = c.spawn({self().string(), "--role", "crossServer", "--listen", endpoint(port()),
+            "--script", c.path("echo.lua").string(), "--coordinator", endpoint(tokened),
+            "--upstream-token", "s3cret", "--scope", "-"});
+        require(default_scope.wait() != 0
+                && default_scope.output().find("--scope on a registering member must be a record identifier") != std::string::npos,
+                "a default-group member scope was accepted");
         auto& bad_ns = c.spawn({self().string(), "--role", "crossServer", "--listen", endpoint(port()),
             "--script", c.path("echo.lua").string(), "--coordinator", endpoint(tokened),
             "--upstream-token", "s3cret", "--namespace", "n:m"});

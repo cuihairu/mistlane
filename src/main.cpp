@@ -389,7 +389,10 @@ int main(int argc, char** argv) {
             if (!config.namespace_.empty() && config.namespace_ != "-"
                     && !mistlane::record_identifier(config.namespace_))
                 throw std::invalid_argument("--namespace on a registering member must be a record identifier");
-            if (config.scope.empty() || !mistlane::record_identifier(config.scope))
+            // "-" is the registry's default-group marker: a query or place
+            // clears it and refuses an empty scope (src/node.cpp registry_query),
+            // so a member storing it literally would never be placed anywhere.
+            if (config.scope.empty() || config.scope == "-" || !mistlane::record_identifier(config.scope))
                 throw std::invalid_argument("--scope on a registering member must be a record identifier");
         }
         // Cross routing keeps its own MLC1 join as the identity; accepting the
