@@ -18,7 +18,7 @@
 
 - [x] 整理目标进程职责及实际实现边界：docs/process-roles.md 与 docs/zh/process-roles.md；首页和架构图移除 router 必经层假设
   证据：commit 8c138c8
-- [ ] 按目标职责迁移运行角色（禁止只改名字冒充实现）：gateway、login、coordinator、gameServer、crossServer、data、可选 apiServer；保持单二进制方案可用，目录/target/CLI 一次性迁移并清理别名（部分完成）（BLOCKED）— 跳过：依赖跨服移交/回服故障恢复与 login/data/apiServer 契约（见下两项），需先定唯一写入权与持久化确认协议
+- [ ] 按目标职责迁移运行角色（禁止只改名字冒充实现）：gateway、login、coordinator、gameServer、crossServer、data、可选 apiServer；保持单二进制方案可用，目录/target/CLI 一次性迁移并清理别名（部分完成）（BLOCKED）— 跳过：MLD1 唯一写入权/持久化确认/离线回服故障恢复协议已设计并实现（docs/cross-return-protocol.md，含四步移交测试 coordinator_migration_fourstep），但 Avatar 运行时移交（含场景/回服）与 login/data/apiServer 契约运行时验收仍未实现（docs/avatar-runtime.md 无 Avatar 类型），父项仍依赖子项 30/31/34
   - [x] 定义服务身份、会话身份、请求关联和有界双向消息；替换强制一问一答路径，补推送/广播及服务连接复用
   证据：commit 0f720ff
   - [x] 实现 coordinator 的进程注册/就绪/负载、角色与场景归属、迁移状态；区服与跨服组明确作用域，router 不直接改名顶替该能力
@@ -27,8 +27,8 @@
       证据：2026-10-20；ctest 56/56
   - [x] 明确 gameServer 的角色、场景模板/实例、计时、同步和释放；从旧代码逐项评估通用能力，排除原游戏玩法和配置
   证据：commit 073bd52
-  - [ ] 实现 crossServer 的参与者来源、场景与返回上下文；长期变更回传归属侧 data；先确定回传与持久化确认协议及唯一写入权，再实现移交/结算/重试/离线/回服故障恢复（BLOCKED）— 跳过：需先与 data 侧敲定 MLD1 唯一写入权/持久化确认/离线回服故障恢复协议，尚无该协议设计
-  - [ ] 定义 login、data 和可选 apiServer 的服务契约及接线；保留数据归属，禁止订单固化承载进程地址（部分完成）（BLOCKED）— 跳过：login/data/apiServer 的服务契约与接线（含 MLD1/MLA1 职责边界）未完全定义，且依赖跨服移交完成
+  - [ ] 实现 crossServer 的参与者来源、场景与返回上下文；长期变更回传归属侧 data；先确定回传与持久化确认协议及唯一写入权，再实现移交/结算/重试/离线/回服故障恢复（BLOCKED）— 跳过：MLD1 唯一写入权/持久化确认/离线回服故障恢复协议已设计并实现（docs/cross-return-protocol.md，含四步移交测试 coordinator_migration_fourstep、sender 重试队列），但 Avatar 运行时移交/结算/回服故障恢复（含场景）仍未实现（docs/avatar-runtime.md 无 Avatar 类型），仍依赖实体运行时链
+  - [ ] 定义 login、data 和可选 apiServer 的服务契约及接线；保留数据归属，禁止订单固化承载进程地址（部分完成）（BLOCKED）— 跳过：login/data/apiServer 契约与接线已定义并部分实现（docs/service-contracts.md；MLD1 记录端点、MLS1 身份、MLA1 持久化接受、entry-ticket 已实现），但登录完整进入流程（data-issued generation 授权与 host 持久化写入授权）与 Avatar 运行时接线仍未实现，且依赖跨服移交完成
   - [x] 将现有可复用转发/Lua 执行/跨服准入迁入目标职责，CLI 与文档以当前实现为准，不保留旧别名
     证据：2026-10-19
   - [ ] 同步角色校验、Lua ServiceContext、脚手架、帮助、指标标签、测试与中英文文档；验证正常登录、双向消息、同进程切场景、跨进程/跨服移交、回调与多监听，运行时验收后再勾选（部分完成）（BLOCKED）— 跳过：跨进程/跨服移交与回调尚未实现，无法做运行时验收
@@ -232,10 +232,13 @@
 - [x] 审核发现：todo.md 本提交「已修复」证据的行号微偏——"src/main.cpp:388-394" 实际校验块为 387-394，"src/test_cases.cpp:3562-3576" 实际新增用例为 3564-3575（todo.md:223）——已修复：该发现所述行号微偏属实，且本提交继续修正了 `--scope "-"` 反例（见上一条），故更新 todo.md:223 的「已修复」证据引用为实际行号（src/main.cpp:387-395、src/test_cases.cpp:3564-3575）；纯 todo.md 记账更正，无代码改动
   证据：src/main.cpp:387-395 校验块、src/test_cases.cpp:3564-3575 新增用例；ctest -R coordinator_registry 1/1 Passed
 
-> 已删除审核行「本轮 diff 未见问题（bc4ba76d..0337b3d）」——不属实：bc4ba76d..0337b3d 含提交 00bafc7、b6ba329、1709c90、0337b3d，其 diff 含一条已修复缺陷（--scope "-" 启动期未拒收，src/main.cpp:395、src/test_cases.cpp:3570-3575）与多条已修复的 todo 记账更正，并非「未见问题」，该结论自相矛盾/陈旧
+> 已删除审核行「本轮 diff 未见问题（bc4ba76d..HEAD）」——不属实：bc4ba76d..HEAD 含提交 00bafc7、b6ba329、1709c90、0337b3d，其 diff 含一条已修复缺陷（--scope "-" 启动期未拒收，src/main.cpp:395、src/test_cases.cpp:3570-3575）与多条已修复的 todo 记账更正，并非「未见问题」，该结论自相矛盾/陈旧
 - [x] 审核发现：新增说明称 `bc4ba76d..HEAD` 仅含提交 `00bafc7`，但该区间还包含添加此说明的提交 `b6ba329` 与修复此说明的 `1709c90`，导致审核范围记录错误（todo.md:235）。——已修复：更正为「含提交 00bafc7、添加此说明的 b6ba329 与修复此说明的 1709c90」，并将区间终点由移动的 `..HEAD` 钉定为 `..0337b3d`（移动终点使每次修复提交自身进入区间、计数再度失效，钉定后不再漂移）；纯 todo.md 记账更正，无代码改动
   证据：git rev-list --count bc4ba76d..0337b3d = 4（00bafc7、b6ba329、1709c90、0337b3d）；TMPDIR=/tmp ctest 74/74 Passed（build/debug）
 - [x] 审核发现：`bc4ba76d..HEAD` 的区间说明及数量证据遗漏当前提交 `1709c90`，实际包含 3 个提交（todo.md:235）。——已修复：更正区间说明为「含提交 00bafc7、添加此说明的 b6ba329 与修复此说明的 1709c90」，并将区间终点钉定为 `0337b3d`、计数更新为 4；纯 todo.md 记账更正，无代码改动
   证据：git rev-list --count bc4ba76d..0337b3d = 4（00bafc7、b6ba329、1709c90、0337b3d）；TMPDIR=/tmp ctest 74/74 Passed（build/debug）
 - [x] 审核发现：`bc4ba76d..HEAD` 区间说明及计数证据遗漏当前提交 `0337b3d` 自身，实际含 4 个提交却记作 3 个（todo.md:235-237），复现了本提交自称已修复的「遗漏当前提交」缺陷。——已修复：将区间终点由移动的 `..HEAD` 钉定为 `..0337b3d`，记录计数为 4（00bafc7、b6ba329、1709c90、0337b3d）；移动终点使每次修复提交自身进入区间、计数再次失效，是此缺陷反复复现的根因，钉定终点后不再漂移；纯 todo.md 记账更正，无代码改动
   证据：git rev-list --count bc4ba76d..0337b3d = 4（00bafc7、b6ba329、1709c90、0337b3d）；TMPDIR=/tmp ctest 74/74 Passed（build/debug）
+
+- [x] 审核发现：钉定区间时同时改写了「已删除审核行」的引文，将原来的 bc4ba76d..HEAD 误记为 bc4ba76d..0337b3d，导致历史记录失真（todo.md:235）。——已修复：恢复「已删除审核行」引文为 bc4ba76d..HEAD（与 1709c90 的原始引文一致），历史区间不再失真；纯 todo.md 记账更正，无代码改动
+  证据：git show 2d0f62c^:todo.md 引文为 bc4ba76d..HEAD；TMPDIR=/tmp ctest 74/74 Passed（build/debug）
