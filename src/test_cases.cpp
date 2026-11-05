@@ -3561,6 +3561,18 @@ void coordinator_registry() {
         require(colon_named.wait() != 0
                 && colon_named.output().find("registering member must be a record identifier") != std::string::npos,
                 "a non-record member service name was accepted");
+        auto& bad_scope = c.spawn({self().string(), "--role", "crossServer", "--listen", endpoint(port()),
+            "--script", c.path("echo.lua").string(), "--coordinator", endpoint(tokened),
+            "--upstream-token", "s3cret", "--scope", "a:b"});
+        require(bad_scope.wait() != 0
+                && bad_scope.output().find("--scope on a registering member must be a record identifier") != std::string::npos,
+                "a non-record member scope was accepted");
+        auto& bad_ns = c.spawn({self().string(), "--role", "crossServer", "--listen", endpoint(port()),
+            "--script", c.path("echo.lua").string(), "--coordinator", endpoint(tokened),
+            "--upstream-token", "s3cret", "--namespace", "n:m"});
+        require(bad_ns.wait() != 0
+                && bad_ns.output().find("--namespace on a registering member must be a record identifier") != std::string::npos,
+                "a non-record member namespace was accepted");
         c.node("crossServer", port(), {"--script", c.path("echo.lua").string(),
             "--coordinator", endpoint(tokened), "--upstream-token", "s3cret", "--service-name", "cross1"});
         eventually([&] { return identified().find("member crossServer cross1") != std::string::npos; },

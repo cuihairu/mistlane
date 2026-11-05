@@ -384,6 +384,14 @@ int main(int argc, char** argv) {
                 && !config.service_name.empty()
                 && !mistlane::record_identifier(config.service_name))
             throw std::invalid_argument("--service-name on a registering member must be a record identifier");
+        if (config.coordinator_enabled
+                && (config.role == "gameServer" || config.role == "crossServer")) {
+            if (!config.namespace_.empty() && config.namespace_ != "-"
+                    && !mistlane::record_identifier(config.namespace_))
+                throw std::invalid_argument("--namespace on a registering member must be a record identifier");
+            if (config.scope.empty() || !mistlane::record_identifier(config.scope))
+                throw std::invalid_argument("--scope on a registering member must be a record identifier");
+        }
         // Cross routing keeps its own MLC1 join as the identity; accepting the
         // token flags there would silently skip the handshake instead of
         // surfacing the misconfiguration.
