@@ -18,7 +18,7 @@
 
 - [x] 整理目标进程职责及实际实现边界：docs/process-roles.md 与 docs/zh/process-roles.md；首页和架构图移除 router 必经层假设
   证据：commit 8c138c8
-- [ ] 按目标职责迁移运行角色（禁止只改名字冒充实现）：gateway、login、coordinator、gameServer、crossServer、data、可选 apiServer；保持单二进制方案可用，目录/target/CLI 一次性迁移并清理别名（部分完成）（BLOCKED）— 跳过：MLD1 唯一写入权/持久化确认/离线回服故障恢复协议已设计并实现（docs/cross-return-protocol.md，含四步移交测试 coordinator_migration_fourstep），但 Avatar 运行时移交（含场景/回服）与 login/data/apiServer 契约运行时验收仍未实现（docs/avatar-runtime.md 无 Avatar 类型），父项仍依赖子项 30/31/34
+- [ ] 按目标职责迁移运行角色（禁止只改名字冒充实现）：gateway、login、coordinator、gameServer、crossServer、data、可选 apiServer；保持单二进制方案可用，目录/target/CLI 一次性迁移并清理别名（部分完成）（BLOCKED）— 跳过：MLD1 唯一写入权/持久化确认/离线回服故障恢复协议已设计并实现（docs/cross-return-protocol.md，含四步移交测试 coordinator_migration_fourstep），但 Avatar 运行时移交（含场景/回服）与 login/data/apiServer 契约运行时验收仍未实现（docs/avatar-runtime.md 无 Avatar 类型），父项仍依赖下述三个未完成子项（跨服移交/结算/回服故障恢复、login/data/apiServer 契约与运行时接线、角色校验/脚手架/文档同步验收）
   - [x] 定义服务身份、会话身份、请求关联和有界双向消息；替换强制一问一答路径，补推送/广播及服务连接复用
   证据：commit 0f720ff
   - [x] 实现 coordinator 的进程注册/就绪/负载、角色与场景归属、迁移状态；区服与跨服组明确作用域，router 不直接改名顶替该能力
@@ -232,7 +232,7 @@
 - [x] 审核发现：todo.md 本提交「已修复」证据的行号微偏——"src/main.cpp:388-394" 实际校验块为 387-394，"src/test_cases.cpp:3562-3576" 实际新增用例为 3564-3575（todo.md:223）——已修复：该发现所述行号微偏属实，且本提交继续修正了 `--scope "-"` 反例（见上一条），故更新 todo.md:223 的「已修复」证据引用为实际行号（src/main.cpp:387-395、src/test_cases.cpp:3564-3575）；纯 todo.md 记账更正，无代码改动
   证据：src/main.cpp:387-395 校验块、src/test_cases.cpp:3564-3575 新增用例；ctest -R coordinator_registry 1/1 Passed
 
-> 已删除审核行「本轮 diff 未见问题（bc4ba76d..HEAD）」——不属实：bc4ba76d..HEAD 含提交 00bafc7、b6ba329、1709c90、0337b3d，其 diff 含一条已修复缺陷（--scope "-" 启动期未拒收，src/main.cpp:395、src/test_cases.cpp:3570-3575）与多条已修复的 todo 记账更正，并非「未见问题」，该结论自相矛盾/陈旧
+> 已删除审核行「本轮 diff 未见问题（bc4ba76d..HEAD）」——不属实：bc4ba76d..HEAD 是移动区间；在 b6ba329 的创建时点仅含 00bafc7，但后续 docs 提交使区间继续增长（现值 6）。其中固定子集 00bafc7..0337b3d 已含提交 00bafc7、b6ba329、1709c90、0337b3d，其 diff 含一条已修复缺陷（--scope "-" 启动期未拒收，src/main.cpp:395、src/test_cases.cpp:3570-3575）与多条已修复的 todo 记账更正；其余为审核记账本身，并非「未见问题」，该结论自相矛盾/陈旧
 - [x] 审核发现：新增说明称 `bc4ba76d..HEAD` 仅含提交 `00bafc7`，但该区间还包含添加此说明的提交 `b6ba329` 与修复此说明的 `1709c90`，导致审核范围记录错误（todo.md:235）。——已修复：更正为「含提交 00bafc7、添加此说明的 b6ba329 与修复此说明的 1709c90」，并将区间终点由移动的 `..HEAD` 钉定为 `..0337b3d`（移动终点使每次修复提交自身进入区间、计数再度失效，钉定后不再漂移）；纯 todo.md 记账更正，无代码改动
   证据：git rev-list --count bc4ba76d..0337b3d = 4（00bafc7、b6ba329、1709c90、0337b3d）；TMPDIR=/tmp ctest 74/74 Passed（build/debug）
 - [x] 审核发现：`bc4ba76d..HEAD` 的区间说明及数量证据遗漏当前提交 `1709c90`，实际包含 3 个提交（todo.md:235）。——已修复：更正区间说明为「含提交 00bafc7、添加此说明的 b6ba329 与修复此说明的 1709c90」，并将区间终点钉定为 `0337b3d`、计数更新为 4；纯 todo.md 记账更正，无代码改动
@@ -242,3 +242,10 @@
 
 - [x] 审核发现：钉定区间时同时改写了「已删除审核行」的引文，将原来的 bc4ba76d..HEAD 误记为 bc4ba76d..0337b3d，导致历史记录失真（todo.md:235）。——已修复：恢复「已删除审核行」引文为 bc4ba76d..HEAD（与 1709c90 的原始引文一致），历史区间不再失真；纯 todo.md 记账更正，无代码改动
   证据：git show 2d0f62c^:todo.md 引文为 bc4ba76d..HEAD；TMPDIR=/tmp ctest 74/74 Passed（build/debug）
+
+- [x] 审核发现：「已删除审核行」引文恢复为移动终点 bc4ba76d..HEAD，却保留钉定区间 bc4ba76d..0337b3d 的 4 提交清单，而当前 HEAD 下 bc4ba76d..HEAD 实际含 6 个提交（另有 2d0f62c、458cfca），复现了「移动终点随新提交漂移」缺陷（todo.md:235）。——已修复：不再给出随 HEAD 漂移的当前计数或完整提交清单；改为固定事实（bc4ba76d..0337b3d 含 4 个提交）加「区间为移动区间、现值随新提交增长」的定性说明，避免再次复现同一缺陷
+  证据：git rev-list --count bc4ba76d..0337b3d = 4；git rev-list --count bc4ba76d..HEAD = 6（截至本修复前）；TMPDIR=/tmp ctest 74/74 Passed（build/debug）
+- [x] 审核发现：新「已修复」行称恢复引文「与 1709c90 的原始引文一致」，但 1709c90 原始引文提交清单仅「00bafc7 与 b6ba329」2 项，恢复后为 4 项（00bafc7、b6ba329、1709c90、0337b3d），不一致——仅区间终点字符串一致，提交清单仍为 2d0f62c 版本，「与原始引文一致」表述不成立（todo.md:243）。——已修复：删除「与 1709c90 的原始引文一致」的虚假等价结论，改为明确说明该引文只恢复 2d0f62c 已存在的历史文本，未恢复 1709c90 提交清单，两者仅区间终点字符串一致
+  证据：git show 1709c90:todo.md 行 235 清单为 00bafc7、b6ba329；git show 2d0f62c:todo.md 行 235 清单为 00bafc7、b6ba329、1709c90、0337b3d；TMPDIR=/tmp ctest 74/74 Passed（build/debug）
+- [x] 审核发现：父项「仍依赖子项 30/31/34」以数字指代子项，但 todo.md 无子项编号体系，30/31/34 无法解析为确定子项；若按行号（30/31/34）理解则行号随编辑漂移（本文件已有「行号微偏」审核先例），引用脆弱不可靠（todo.md:21）。——已修复：将数字引用替换为三个直接子项的文字描述（跨服移交/结算/回服故障恢复、login/data/apiServer 契约与运行时接线、角色校验/脚手架/文档同步验收），不依赖行号或不存在的编号体系
+  证据：todo.md:21 文字引用；TMPDIR=/tmp ctest 74/74 Passed（build/debug）
