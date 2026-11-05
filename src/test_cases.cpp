@@ -3552,6 +3552,15 @@ void coordinator_registry() {
             "--script", c.path("space.lua").string(), "--service-name", "a b"});
         require(spaced.wait() != 0 && spaced.output().find("--service-name must be a single word") != std::string::npos,
                 "service name whitespace was accepted");
+        // A registering member's service name becomes the registry instance,
+        // so a non-record value would pass the single-word check above and
+        // then be rejected forever by the coordinator; fail it here instead.
+        auto& colon_named = c.spawn({self().string(), "--role", "crossServer", "--listen", endpoint(port()),
+            "--script", c.path("echo.lua").string(), "--coordinator", endpoint(tokened),
+            "--upstream-token", "s3cret", "--service-name", "xs:1"});
+        require(colon_named.wait() != 0
+                && colon_named.output().find("registering member must be a record identifier") != std::string::npos,
+                "a non-record member service name was accepted");
         c.node("crossServer", port(), {"--script", c.path("echo.lua").string(),
             "--coordinator", endpoint(tokened), "--upstream-token", "s3cret", "--service-name", "cross1"});
         eventually([&] { return identified().find("member crossServer cross1") != std::string::npos; },

@@ -217,3 +217,6 @@
 
 - [x] 审核发现：--service-name 校验（src/main.cpp:367-368）用 record_identifier（禁 '.'/':'，src/record.hpp 或 include/mistlane/record.hpp:36-42），比线格式更严且与自身默认不一致——service_hello 默认身份为 listen 地址+':'+端口（src/node.cpp:183-184，如 "127.0.0.1:9000"），该串不满足 record_identifier；接收端 service_fields（src/node.cpp:174-178）只解析任意单词、不对 instance 做标识符校验，故校验拒绝的值在线上合法且是同一代码默认生成的串（src/main.cpp:367-368、src/node.cpp:183-184）
   证据：ctest -R cross_return_sender 1/1 Passed
+- [x] 审核发现：携带 `--coordinator` 的 gameServer 或 crossServer 现在接受 `--service-name xs:1` 等非 record 标识符并正常启动，但 coordinator 会拒绝其注册并令节点不断重试，导致节点无法被发现或参与路由（src/main.cpp:375）
+  证据：ctest 74/74 Passed（src/main.cpp 对注册成员拒绝非 record 标识符，src/test_cases.cpp:3555-3561 覆盖该拒绝）
+- [ ] 审核发现：本轮 diff 未见问题（88c5fcee..HEAD）。

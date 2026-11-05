@@ -375,6 +375,15 @@ int main(int argc, char** argv) {
         if (std::any_of(config.service_name.begin(), config.service_name.end(),
                 [](unsigned char ch) { return std::isspace(ch); }))
             throw std::invalid_argument("--service-name must be a single word");
+        // A registering member's --service-name becomes the registry instance,
+        // which the coordinator re-checks as a record identifier (src/node.cpp
+        // register_member); a non-record name would start fine but fail to
+        // register and retry forever, so refuse it here instead.
+        if (config.coordinator_enabled
+                && (config.role == "gameServer" || config.role == "crossServer")
+                && !config.service_name.empty()
+                && !mistlane::record_identifier(config.service_name))
+            throw std::invalid_argument("--service-name on a registering member must be a record identifier");
         // Cross routing keeps its own MLC1 join as the identity; accepting the
         // token flags there would silently skip the handshake instead of
         // surfacing the misconfiguration.
