@@ -219,4 +219,7 @@
   证据：ctest -R cross_return_sender 1/1 Passed
 - [x] 审核发现：携带 `--coordinator` 的 gameServer 或 crossServer 现在接受 `--service-name xs:1` 等非 record 标识符并正常启动，但 coordinator 会拒绝其注册并令节点不断重试，导致节点无法被发现或参与路由（src/main.cpp:375）
   证据：ctest 74/74 Passed（src/main.cpp 对注册成员拒绝非 record 标识符，src/test_cases.cpp:3555-3561 覆盖该拒绝）
-- [ ] 审核发现：本轮 diff 未见问题（88c5fcee..HEAD）。
+
+- [ ] 审核发现：本提交只对注册成员的 `--service-name` 做启动期 record_identifier 拒收（src/main.cpp:382-386），但同一「启动正常、注册被拒、无限重试」缺陷仍经 `--scope` 与 `--namespace` 打开——coordinator 的 register_member 要求 `record_identifier(scope)`（src/node.cpp:2350）与 record_identifier 命名空间标记（src/node.cpp:2339），而 main.cpp 对 scope/namespace 仅校验「需 --coordinator」（src/main.cpp:356-357），无任何格式校验；注册成员携带 `--scope "a:b"` 或 `--namespace "n:m"`（无空白、可通过单词语帧）仍正常启动，协调者回 `MLR1 ERR INVALID`，成员 reschedule 无限重试（src/node.cpp:2859-2861、2901-2903），与本提交刚关闭的 service_name 故障同根因（src/main.cpp:382-386、src/node.cpp:2339/2350）
+
+- [x] 审核发现：todo.md 本提交新增末行「本轮 diff 未见问题（88c5fcee..HEAD）」（todo.md:222）的区间标注与本轮实际审核范围（2d67cf3891..7d3d792d3f）不符，且与同提交新增的已修复发现（todo.md:220）区间重叠——该行作为「未见问题」结论自相矛盾/陈旧，需修正区间或移除（todo.md:222）。——已修复：移除该陈旧「未见问题」行（该轮 2d67cf3..7d3d792 实际有已修复与待办发现各一条，「未见问题」不成立）；纯 todo.md 记账更正，无代码改动
