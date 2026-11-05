@@ -232,8 +232,10 @@
 - [x] 审核发现：todo.md 本提交「已修复」证据的行号微偏——"src/main.cpp:388-394" 实际校验块为 387-394，"src/test_cases.cpp:3562-3576" 实际新增用例为 3564-3575（todo.md:223）——已修复：该发现所述行号微偏属实，且本提交继续修正了 `--scope "-"` 反例（见上一条），故更新 todo.md:223 的「已修复」证据引用为实际行号（src/main.cpp:387-395、src/test_cases.cpp:3564-3575）；纯 todo.md 记账更正，无代码改动
   证据：src/main.cpp:387-395 校验块、src/test_cases.cpp:3564-3575 新增用例；ctest -R coordinator_registry 1/1 Passed
 
-> 已删除审核行「本轮 diff 未见问题（bc4ba76d..HEAD）」——不属实：bc4ba76d..HEAD 含提交 00bafc7、添加此说明的 b6ba329 与修复此说明的 1709c90，其 diff 含一条已修复缺陷（--scope "-" 启动期未拒收，src/main.cpp:395、src/test_cases.cpp:3570-3575）与一条已修复的 todo 证据行号更正，并非「未见问题」，该结论自相矛盾/陈旧
-- [x] 审核发现：新增说明称 `bc4ba76d..HEAD` 仅含提交 `00bafc7`，但该区间还包含添加此说明的提交 `b6ba329` 与修复此说明的 `1709c90`，导致审核范围记录错误（todo.md:235）。——已修复：更正为「含提交 00bafc7、添加此说明的 b6ba329 与修复此说明的 1709c90」（并更新计数证据为 3）；纯 todo.md 记账更正，无代码改动
-  证据：git rev-list --count bc4ba76d..HEAD = 3（00bafc7、b6ba329、1709c90）；TMPDIR=/tmp ctest 74/74 Passed（build/debug）
-- [x] 审核发现：`bc4ba76d..HEAD` 的区间说明及数量证据遗漏当前提交 `1709c90`，实际包含 3 个提交（todo.md:235）。——已修复：更正区间说明为「含提交 00bafc7、添加此说明的 b6ba329 与修复此说明的 1709c90」及数量证据为 3；纯 todo.md 记账更正，无代码改动
-  证据：git rev-list --count bc4ba76d..HEAD = 3（1709c90、b6ba329、00bafc7）；TMPDIR=/tmp ctest 74/74 Passed（build/debug）
+> 已删除审核行「本轮 diff 未见问题（bc4ba76d..0337b3d）」——不属实：bc4ba76d..0337b3d 含提交 00bafc7、b6ba329、1709c90、0337b3d，其 diff 含一条已修复缺陷（--scope "-" 启动期未拒收，src/main.cpp:395、src/test_cases.cpp:3570-3575）与多条已修复的 todo 记账更正，并非「未见问题」，该结论自相矛盾/陈旧
+- [x] 审核发现：新增说明称 `bc4ba76d..HEAD` 仅含提交 `00bafc7`，但该区间还包含添加此说明的提交 `b6ba329` 与修复此说明的 `1709c90`，导致审核范围记录错误（todo.md:235）。——已修复：更正为「含提交 00bafc7、添加此说明的 b6ba329 与修复此说明的 1709c90」，并将区间终点由移动的 `..HEAD` 钉定为 `..0337b3d`（移动终点使每次修复提交自身进入区间、计数再度失效，钉定后不再漂移）；纯 todo.md 记账更正，无代码改动
+  证据：git rev-list --count bc4ba76d..0337b3d = 4（00bafc7、b6ba329、1709c90、0337b3d）；TMPDIR=/tmp ctest 74/74 Passed（build/debug）
+- [x] 审核发现：`bc4ba76d..HEAD` 的区间说明及数量证据遗漏当前提交 `1709c90`，实际包含 3 个提交（todo.md:235）。——已修复：更正区间说明为「含提交 00bafc7、添加此说明的 b6ba329 与修复此说明的 1709c90」，并将区间终点钉定为 `0337b3d`、计数更新为 4；纯 todo.md 记账更正，无代码改动
+  证据：git rev-list --count bc4ba76d..0337b3d = 4（00bafc7、b6ba329、1709c90、0337b3d）；TMPDIR=/tmp ctest 74/74 Passed（build/debug）
+- [x] 审核发现：`bc4ba76d..HEAD` 区间说明及计数证据遗漏当前提交 `0337b3d` 自身，实际含 4 个提交却记作 3 个（todo.md:235-237），复现了本提交自称已修复的「遗漏当前提交」缺陷。——已修复：将区间终点由移动的 `..HEAD` 钉定为 `..0337b3d`，记录计数为 4（00bafc7、b6ba329、1709c90、0337b3d）；移动终点使每次修复提交自身进入区间、计数再次失效，是此缺陷反复复现的根因，钉定终点后不再漂移；纯 todo.md 记账更正，无代码改动
+  证据：git rev-list --count bc4ba76d..0337b3d = 4（00bafc7、b6ba329、1709c90、0337b3d）；TMPDIR=/tmp ctest 74/74 Passed（build/debug）
