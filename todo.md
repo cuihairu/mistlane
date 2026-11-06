@@ -232,7 +232,7 @@
 - [x] 审核发现：todo.md 本提交「已修复」证据的行号微偏——"src/main.cpp:388-394" 实际校验块为 387-394，"src/test_cases.cpp:3562-3576" 实际新增用例为 3564-3575（todo.md:223）——已修复：该发现所述行号微偏属实，且本提交继续修正了 `--scope "-"` 反例（见上一条），故更新 todo.md:223 的「已修复」证据引用为实际行号（src/main.cpp:387-395、src/test_cases.cpp:3564-3575）；纯 todo.md 记账更正，无代码改动
   证据：src/main.cpp:387-395 校验块、src/test_cases.cpp:3564-3575 新增用例；ctest -R coordinator_registry 1/1 Passed
 
-> 已删除审核行「本轮 diff 未见问题（bc4ba76d..HEAD）」——不属实：bc4ba76d..HEAD 是移动区间；在 b6ba329 的创建时点仅含 00bafc7，但后续 docs 提交使区间继续增长（现值 6）。其中固定子集 00bafc7..0337b3d 已含提交 00bafc7、b6ba329、1709c90、0337b3d，其 diff 含一条已修复缺陷（--scope "-" 启动期未拒收，src/main.cpp:395、src/test_cases.cpp:3570-3575）与多条已修复的 todo 记账更正；其余为审核记账本身，并非「未见问题」，该结论自相矛盾/陈旧
+> 已删除审核行「本轮 diff 未见问题（bc4ba76d..HEAD）」——不属实：bc4ba76d..HEAD 是移动区间；在 b6ba329 的创建时点仅含 00bafc7，但后续 docs 提交使区间继续增长（现值随新提交增长，不固定）。其中固定子集 bc4ba76d..0337b3d 已含提交 00bafc7、b6ba329、1709c90、0337b3d，其 diff 含一条已修复缺陷（--scope "-" 启动期未拒收，src/main.cpp:395、src/test_cases.cpp:3570-3575）与多条已修复的 todo 记账更正；其余为审核记账本身，并非「未见问题」，该结论自相矛盾/陈旧
 - [x] 审核发现：新增说明称 `bc4ba76d..HEAD` 仅含提交 `00bafc7`，但该区间还包含添加此说明的提交 `b6ba329` 与修复此说明的 `1709c90`，导致审核范围记录错误（todo.md:235）。——已修复：更正为「含提交 00bafc7、添加此说明的 b6ba329 与修复此说明的 1709c90」，并将区间终点由移动的 `..HEAD` 钉定为 `..0337b3d`（移动终点使每次修复提交自身进入区间、计数再度失效，钉定后不再漂移）；纯 todo.md 记账更正，无代码改动
   证据：git rev-list --count bc4ba76d..0337b3d = 4（00bafc7、b6ba329、1709c90、0337b3d）；TMPDIR=/tmp ctest 74/74 Passed（build/debug）
 - [x] 审核发现：`bc4ba76d..HEAD` 的区间说明及数量证据遗漏当前提交 `1709c90`，实际包含 3 个提交（todo.md:235）。——已修复：更正区间说明为「含提交 00bafc7、添加此说明的 b6ba329 与修复此说明的 1709c90」，并将区间终点钉定为 `0337b3d`、计数更新为 4；纯 todo.md 记账更正，无代码改动
@@ -240,7 +240,7 @@
 - [x] 审核发现：`bc4ba76d..HEAD` 区间说明及计数证据遗漏当前提交 `0337b3d` 自身，实际含 4 个提交却记作 3 个（todo.md:235-237），复现了本提交自称已修复的「遗漏当前提交」缺陷。——已修复：将区间终点由移动的 `..HEAD` 钉定为 `..0337b3d`，记录计数为 4（00bafc7、b6ba329、1709c90、0337b3d）；移动终点使每次修复提交自身进入区间、计数再次失效，是此缺陷反复复现的根因，钉定终点后不再漂移；纯 todo.md 记账更正，无代码改动
   证据：git rev-list --count bc4ba76d..0337b3d = 4（00bafc7、b6ba329、1709c90、0337b3d）；TMPDIR=/tmp ctest 74/74 Passed（build/debug）
 
-- [x] 审核发现：钉定区间时同时改写了「已删除审核行」的引文，将原来的 bc4ba76d..HEAD 误记为 bc4ba76d..0337b3d，导致历史记录失真（todo.md:235）。——已修复：恢复「已删除审核行」引文为 bc4ba76d..HEAD（与 1709c90 的原始引文一致），历史区间不再失真；纯 todo.md 记账更正，无代码改动
+- [x] 审核发现：钉定区间时同时改写了「已删除审核行」的引文，将原来的 bc4ba76d..HEAD 误记为 bc4ba76d..0337b3d，导致历史记录失真（todo.md:235）。——已修复：恢复「已删除审核行」引文为 bc4ba76d..HEAD（该引文只恢复 2d0f62c 已存在的历史文本，未恢复 1709c90 提交清单，两者仅区间终点字符串一致），历史区间不再失真；纯 todo.md 记账更正，无代码改动
   证据：git show 2d0f62c^:todo.md 引文为 bc4ba76d..HEAD；TMPDIR=/tmp ctest 74/74 Passed（build/debug）
 
 - [x] 审核发现：「已删除审核行」引文恢复为移动终点 bc4ba76d..HEAD，却保留钉定区间 bc4ba76d..0337b3d 的 4 提交清单，而当前 HEAD 下 bc4ba76d..HEAD 实际含 6 个提交（另有 2d0f62c、458cfca），复现了「移动终点随新提交漂移」缺陷（todo.md:235）。——已修复：不再给出随 HEAD 漂移的当前计数或完整提交清单；改为固定事实（bc4ba76d..0337b3d 含 4 个提交）加「区间为移动区间、现值随新提交增长」的定性说明，避免再次复现同一缺陷
@@ -249,3 +249,9 @@
   证据：git show 1709c90:todo.md 行 235 清单为 00bafc7、b6ba329；git show 2d0f62c:todo.md 行 235 清单为 00bafc7、b6ba329、1709c90、0337b3d；TMPDIR=/tmp ctest 74/74 Passed（build/debug）
 - [x] 审核发现：父项「仍依赖子项 30/31/34」以数字指代子项，但 todo.md 无子项编号体系，30/31/34 无法解析为确定子项；若按行号（30/31/34）理解则行号随编辑漂移（本文件已有「行号微偏」审核先例），引用脆弱不可靠（todo.md:21）。——已修复：将数字引用替换为三个直接子项的文字描述（跨服移交/结算/回服故障恢复、login/data/apiServer 契约与运行时接线、角色校验/脚手架/文档同步验收），不依赖行号或不存在的编号体系
   证据：todo.md:21 文字引用；TMPDIR=/tmp ctest 74/74 Passed（build/debug）
+- [x] 审核发现：`bc4ba76d..HEAD` 当前包含 7 个提交而非所述的 6 个，移动区间的「现值」再次随本次提交而失准（todo.md:235）。——已修复：将行 235 的漂移数值「现值 6」改为定性说明「现值随新提交增长，不固定」，不再给出随 HEAD 漂移的当前计数；纯 todo.md 记账更正，无代码改动
+  证据：git rev-list --count bc4ba76d..HEAD = 7（审核时实测，移动区间，现值随新提交增长）；TMPDIR=/tmp ctest 74/74 Passed（build/debug）
+- [x] 审核发现：`00bafc7..0337b3d` 排除起点 `00bafc7`，实际只有 3 个提交且 diff 仅涉及 todo.md，不能包含所述 scope 校验修复（todo.md:235）。——已修复：行 235 固定子集改引用 bc4ba76d..0337b3d（含 00bafc7、b6ba329、1709c90、0337b3d 共 4 个提交，diff 含 scope 校验修复）；00bafc7..0337b3d 排除起点后仅 3 个 docs 提交且只动 todo.md，不含该修复；纯 todo.md 记账更正，无代码改动
+  证据：git rev-list --count 00bafc7..0337b3d = 3（b6ba329、1709c90、0337b3d）；git diff --name-only 00bafc7..0337b3d = todo.md；git rev-list --count bc4ba76d..0337b3d = 4（00bafc7、b6ba329、1709c90、0337b3d）；TMPDIR=/tmp ctest 74/74 Passed（build/debug）
+- [x] 审核发现：记录声称已删除「与 1709c90 的原始引文一致」，但该表述仍保留在第 243 行，故此项标记已修复与文件现状不符（todo.md:248）。——已修复：将行 243 的「与 1709c90 的原始引文一致」改为准确说明「该引文只恢复 2d0f62c 已存在的历史文本，未恢复 1709c90 提交清单，两者仅区间终点字符串一致」，与行 248 修复结论一致；纯 todo.md 记账更正，无代码改动
+  证据：git show 1709c90:todo.md 行 235 清单为 00bafc7、b6ba329；git show 2d0f62c:todo.md 行 235 清单为 00bafc7、b6ba329、1709c90、0337b3d；todo.md:243 现为准确说明；TMPDIR=/tmp ctest 74/74 Passed（build/debug）
