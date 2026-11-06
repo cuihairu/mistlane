@@ -249,9 +249,10 @@
   证据：git show 1709c90:todo.md 行 235 清单为 00bafc7、b6ba329；git show 2d0f62c:todo.md 行 235 清单为 00bafc7、b6ba329、1709c90、0337b3d；TMPDIR=/tmp ctest 74/74 Passed（build/debug）
 - [x] 审核发现：父项「仍依赖子项 30/31/34」以数字指代子项，但 todo.md 无子项编号体系，30/31/34 无法解析为确定子项；若按行号（30/31/34）理解则行号随编辑漂移（本文件已有「行号微偏」审核先例），引用脆弱不可靠（todo.md:21）。——已修复：将数字引用替换为三个直接子项的文字描述（跨服移交/结算/回服故障恢复、login/data/apiServer 契约与运行时接线、角色校验/脚手架/文档同步验收），不依赖行号或不存在的编号体系
   证据：todo.md:21 文字引用；TMPDIR=/tmp ctest 74/74 Passed（build/debug）
-- [x] 审核发现：`bc4ba76d..HEAD` 当前包含 7 个提交而非所述的 6 个，移动区间的「现值」再次随本次提交而失准（todo.md:235）。——已修复：将行 235 的漂移数值「现值 6」改为定性说明「现值随新提交增长，不固定」，不再给出随 HEAD 漂移的当前计数；纯 todo.md 记账更正，无代码改动
-  证据：git rev-list --count bc4ba76d..HEAD = 7（审核时实测，移动区间，现值随新提交增长）；TMPDIR=/tmp ctest 74/74 Passed（build/debug）
+- [x] 审核发现：审核时点 b985ba8 下 `bc4ba76d..HEAD` 包含 7 个提交而非所述的 6 个，移动区间的「现值」随后续提交失准（todo.md:235）。——已修复：将行 235 的漂移数值「现值 6」改为定性说明「现值随新提交增长，不固定」，不再给出随 HEAD 漂移的当前计数；纯 todo.md 记账更正，无代码改动
+  证据：git rev-list --count bc4ba76d..b985ba8 = 7（审核时点）；git rev-list --count bc4ba76d..b151bb4 = 8（含修复提交自身，故不写死现值）；TMPDIR=/tmp ctest 74/74 Passed（build/debug）
 - [x] 审核发现：`00bafc7..0337b3d` 排除起点 `00bafc7`，实际只有 3 个提交且 diff 仅涉及 todo.md，不能包含所述 scope 校验修复（todo.md:235）。——已修复：行 235 固定子集改引用 bc4ba76d..0337b3d（含 00bafc7、b6ba329、1709c90、0337b3d 共 4 个提交，diff 含 scope 校验修复）；00bafc7..0337b3d 排除起点后仅 3 个 docs 提交且只动 todo.md，不含该修复；纯 todo.md 记账更正，无代码改动
   证据：git rev-list --count 00bafc7..0337b3d = 3（b6ba329、1709c90、0337b3d）；git diff --name-only 00bafc7..0337b3d = todo.md；git rev-list --count bc4ba76d..0337b3d = 4（00bafc7、b6ba329、1709c90、0337b3d）；TMPDIR=/tmp ctest 74/74 Passed（build/debug）
 - [x] 审核发现：记录声称已删除「与 1709c90 的原始引文一致」，但该表述仍保留在第 243 行，故此项标记已修复与文件现状不符（todo.md:248）。——已修复：将行 243 的「与 1709c90 的原始引文一致」改为准确说明「该引文只恢复 2d0f62c 已存在的历史文本，未恢复 1709c90 提交清单，两者仅区间终点字符串一致」，与行 248 修复结论一致；纯 todo.md 记账更正，无代码改动
   证据：git show 1709c90:todo.md 行 235 清单为 00bafc7、b6ba329；git show 2d0f62c:todo.md 行 235 清单为 00bafc7、b6ba329、1709c90、0337b3d；todo.md:243 现为准确说明；TMPDIR=/tmp ctest 74/74 Passed（build/debug）
+> 已删除审核行「本轮 diff 未见问题（b985ba83..HEAD）」——不属实：该区间含 b151bb4，其 diff 在记录移动区间提交数时只写审核时点的 7，未计入 b151bb4 自身，提交后实测 bc4ba76d..b151bb4 为 8，故「未见问题」不成立
