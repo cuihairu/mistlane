@@ -277,7 +277,7 @@
 
 目录/分类不合理处：
 
-- [ ] `docs/websocket-bad-weak-ptr.md:1`、`docs/entity-db-mapping-and-philosophy.md:1`、`docs/entity-sync-persistence.md:1`、`docs/mmo-engine-design-highlights.md:1`、`docs/mmo-engine-survey.md:1` 是英文占位，而完整内容只存在于 `docs/zh/` 对应页。
+- [x] `docs/websocket-bad-weak-ptr.md:1`、`docs/entity-db-mapping-and-philosophy.md:1`、`docs/entity-sync-persistence.md:1`、`docs/mmo-engine-design-highlights.md:1`、`docs/mmo-engine-survey.md:1` 是英文占位，而完整内容只存在于 `docs/zh/` 对应页。已完成：五页全部补全为完整英文翻译（19d0e20），zh 页未动仍为权威版本，首页语言链接落点不变；docs:build 绿（无死链）。
 - [ ] 中文审计文档 `docs/审计-文档一致性.md:1` 放在英文 locale 根目录，未进入 `docs/zh/`。
 - [ ] `docs/review/2026-10-30-decisions.md:1` 与 `docs/review/2026-10-30-exec-round.md:1` 是放在英文 locale 的大篇幅中文评审，`docs/zh/review/` 下没有对应文件名页面。
 - [ ] `examples/sproto_sdk_golden.cs:1` 与 `examples/sproto_sdk_golden.mjs:1` 是被 ctest 使用的协议 golden fixture（`CMakeLists.txt:94-109`），放在 `examples/` 下会误导读者以为它们是可复用 SDK 示例。
