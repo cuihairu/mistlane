@@ -102,7 +102,7 @@ if(BUILD_TESTING)
   find_program(MISTLANE_NODE_EXECUTABLE node)
   if(MISTLANE_NODE_EXECUTABLE)
     add_test(NAME mistlane_sproto_sdk_js_golden COMMAND "${MISTLANE_NODE_EXECUTABLE}"
-      "${CMAKE_CURRENT_SOURCE_DIR}/examples/sproto_sdk_golden.mjs"
+      "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/sproto_sdk_golden.mjs"
       "${CMAKE_CURRENT_BINARY_DIR}/sproto-fixture/avatar.bindings.js")
   endif()
   add_test(NAME mistlane_sproto_lua_roundtrip COMMAND mistlane-sproto-probe roundtrip

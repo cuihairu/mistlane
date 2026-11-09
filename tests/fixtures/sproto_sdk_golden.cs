@@ -8,7 +8,7 @@
 // Owner-run golden (the build requires no .NET toolchain): compile this file
 // together with the generated avatar.bindings.cs, e.g.
 //   dotnet new console -o cs-golden && cd cs-golden
-//   cp <repo>/examples/sproto_sdk_golden.cs Program.cs
+//   cp <repo>/tests/fixtures/sproto_sdk_golden.cs Program.cs
 //   cp <build>/sproto-fixture/avatar.bindings.cs .
 //   dotnet run
 using System;

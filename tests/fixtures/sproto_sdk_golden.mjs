@@ -2,7 +2,7 @@
 import { pathToFileURL } from 'node:url';
 
 const modulePath = process.argv[2];
-if (!modulePath) throw new Error('usage: node sproto_sdk_golden.mjs GENERATED.bindings.js');
+if (!modulePath) throw new Error('usage: node tests/fixtures/sproto_sdk_golden.mjs GENERATED.bindings.js');
 const { encodeRecord, decodeRecord, sprotoFields, encodeEnvelope, decodeEnvelope, encodeReply, decodeReply,
   entityTypes, entityMethods, EntityRpcQueue, EntityClient, PropertySync } = await import(pathToFileURL(modulePath));
 const hex = (bytes) => [...bytes].map((byte) => byte.toString(16).padStart(2, '0')).join('');
