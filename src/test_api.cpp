@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "test_support.hpp"
+#include "test_common.hpp"
 #include "mistlane/api.hpp"
 #include "mistlane/api_store.hpp"
 #include "mistlane/entry_ticket.hpp"
@@ -637,4 +638,230 @@ void login_ticket() {
     std::cout << "login.ticket roundtrip: issue then verify admits the arrival [PASS]\n";
     std::cout << "login.ticket ladder: tamper/identity/expiry/replay/capacity all refused [PASS]\n";
 }
+
+void api_http() {
+    Context c;
+    write(c.path("api.lua"), http_lua);
+    ApiSecret secret{};
+    for (auto& byte : secret) byte = 0x37;
+    std::string hex;
+    for (std::size_t i = 0; i < secret.size(); ++i) hex += "37";
+    const auto now = static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::seconds>(
+        std::chrono::system_clock::now().time_since_epoch()).count());
+    unsigned counter = 0;
+    const auto nonce = [&counter] {
+        char digits[33];
+        std::snprintf(digits, sizeof digits, "%032x", ++counter);
+        return std::string(digits);
+    };
+    const auto signed_body = [&](ApiRequest& request) {
+        request.signature = api_sign(request, secret);
+        return api_canonical(request) + std::string(request.signature.begin(), request.signature.end());
+    };
+    const auto accept_body = [&](const std::string& idempotency, const std::string& payload = "grant") {
+        ApiRequest request;
+        request.operation = ApiOperation::Accept;
+        request.audience = "platform";
+        request.principal = "ops-callback";
+        request.key_id = "key-2026";
+        request.timestamp = now;
+        request.nonce = nonce();
+        request.character = {"realm1", "char42"};
+        request.idempotency_key = idempotency;
+        request.payload = payload;
+        return signed_body(request);
+    };
+    const auto owner_body = [&] {
+        ApiRequest request;
+        request.operation = ApiOperation::Owner;
+        request.audience = "platform";
+        request.principal = "ops-callback";
+        request.key_id = "key-2026";
+        request.timestamp = now;
+        request.nonce = nonce();
+        request.character = {"realm1", "char42"};
+        return signed_body(request);
+    };
+    const auto reply_body = [](std::initializer_list<std::string_view> values) {
+        std::string bytes = "MLA1";
+        for (const auto& value : values) {
+            const auto size = static_cast<std::uint32_t>(value.size());
+            for (int shift : {24, 16, 8, 0}) bytes.push_back(static_cast<char>((size >> shift) & 255));
+            bytes.append(value);
+        }
+        return bytes;
+    };
+    {
+        ScopedEnv audience("MISTLANE_MLA1_AUDIENCE", "platform");
+        ScopedEnv credentials("MISTLANE_MLA1_CREDENTIAL", "ops-callback:key-2026:"+hex+":realm1");
+        const auto listen = port();
+        c.node("apiServer", listen, {"--script", c.path("api.lua").string()});
+        const auto base = "http://"+endpoint(listen);
+        // A signed acceptance inserts once, then deduplicates on retry.
+        auto sent = http(base+"/mla1", "POST", accept_body("grant-7"));
+        require(sent.status == 200, "a signed acceptance was not 200");
+        equal(sent.body, reply_body({"OK", "INSERTED", "VOLATILE", "grant", ""}));
+        sent = http(base+"/mla1", "POST", accept_body("grant-7"));
+        require(sent.status == 200, "a retried acceptance was not 200");
+        equal(sent.body, reply_body({"OK", "EXISTING", "VOLATILE", "grant", ""}));
+        // One idempotency key with a changed body conflicts, nothing stored.
+        sent = http(base+"/mla1", "POST", accept_body("grant-7", "grant-v2"));
+        require(sent.status == 409, "a changed body under one key was not 409");
+        equal(sent.body, reply_body({"OK", "CONFLICT", "VOLATILE", "", ""}));
+        // One flipped signature bit: 401 verdict word, never stored.
+        auto tampered = accept_body("grant-8");
+        tampered.back() = static_cast<char>(tampered.back() ^ 0x80);
+        sent = http(base+"/mla1", "POST", tampered);
+        require(sent.status == 401, "a tampered signature was not 401");
+        equal(sent.body, reply_body({"BAD_SIGNATURE", "", "", "", ""}));
+        // OWNER asks home facts; with no facts wired the answer is NOT_FOUND.
+        sent = http(base+"/mla1", "POST", owner_body());
+        require(sent.status == 404, "an unknown character was not 404");
+        equal(sent.body, reply_body({"OK", "", "", "", "NOT_FOUND"}));
+        // Structural garbage is a 400 verdict body, not a Lua trip.
+        sent = http(base+"/mla1", "POST", "garbage");
+        require(sent.status == 400, "a malformed body was not 400");
+        equal(sent.body, reply_body({"INVALID", "", "", "", ""}));
+        // Every other route (and GET /mla1) stays plain Lua routing.
+        equal(http(base+"/nowhere", "POST", "ping").body, "missing");
+        equal(http(base+"/mla1", "GET").body, "missing");
+    }
+    // Without credential variables /mla1 is ordinary Lua routing.
+    {
+        const auto listen = port();
+        c.node("apiServer", listen, {"--script", c.path("api.lua").string()});
+        equal(http("http://"+endpoint(listen)+"/mla1", "POST", accept_body("grant-9")).body, "missing");
+    }
+    // Half-configured or malformed credentials refuse startup.
+    {
+        ScopedEnv audience("MISTLANE_MLA1_AUDIENCE", "platform");
+        auto& lonely = c.spawn({self().string(), "--role", "apiServer", "--listen", endpoint(port()),
+            "--script", c.path("api.lua").string()});
+        require(lonely.wait() != 0 && lonely.output().find("MISTLANE_MLA1") != std::string::npos,
+                "an audience without credentials booted");
+        ScopedEnv bad("MISTLANE_MLA1_CREDENTIAL", "ops-callback:key-2026:not-hex:realm1");
+        auto& corrupt = c.spawn({self().string(), "--role", "apiServer", "--listen", endpoint(port()),
+            "--script", c.path("api.lua").string()});
+        require(corrupt.wait() != 0 && corrupt.output().find("MLA1 credential") != std::string::npos,
+                "a malformed credential booted");
+    }
+    // A rotation bound on the row: expired retires the key, live verifies.
+    {
+        ScopedEnv audience("MISTLANE_MLA1_AUDIENCE", "platform");
+        {
+            ScopedEnv expired("MISTLANE_MLA1_CREDENTIAL",
+                "ops-callback:key-2026:"+hex+":realm1:"+std::to_string(now-10));
+            const auto listen = port();
+            c.node("apiServer", listen, {"--script", c.path("api.lua").string()});
+            const auto sent = http("http://"+endpoint(listen)+"/mla1", "POST", accept_body("grant-old"));
+            require(sent.status == 401, "an expired rotation bound was not 401");
+            equal(sent.body, reply_body({"UNKNOWN_CREDENTIAL", "", "", "", ""}));
+        }
+        {
+            ScopedEnv bounded("MISTLANE_MLA1_CREDENTIAL",
+                "ops-callback:key-2026:"+hex+":realm1:"+std::to_string(now+3600));
+            const auto listen = port();
+            c.node("apiServer", listen, {"--script", c.path("api.lua").string()});
+            const auto sent = http("http://"+endpoint(listen)+"/mla1", "POST", accept_body("grant-live"));
+            require(sent.status == 200, "a live rotation bound refused a signed request");
+            equal(sent.body, reply_body({"OK", "INSERTED", "VOLATILE", "grant", ""}));
+        }
+        ScopedEnv bad("MISTLANE_MLA1_CREDENTIAL", "ops-callback:key-2026:"+hex+":realm1:soon");
+        auto& refused = c.spawn({self().string(), "--role", "apiServer", "--listen", endpoint(port()),
+            "--script", c.path("api.lua").string()});
+        require(refused.wait() != 0 && refused.output().find("rotation bound") != std::string::npos,
+                "a malformed rotation bound booted");
+    }
+    // --journal FILE makes the apiServer acceptance backend durable: the same
+    // MLA1 reply gains DURABLE only after the SQLite row commits, and a
+    // restarted server answers the lost-reply replay as EXISTING DURABLE.
+    {
+        ScopedEnv audience("MISTLANE_MLA1_AUDIENCE", "platform");
+        ScopedEnv credentials("MISTLANE_MLA1_CREDENTIAL", "ops-callback:key-2026:"+hex+":realm1");
+        const auto journal = c.path("api-acceptance.sqlite");
+        const auto listen = port();
+        auto& durable = c.node("apiServer", listen,
+            {"--script", c.path("api.lua").string(), "--journal", journal.string()});
+        const auto base = "http://"+endpoint(listen);
+        auto sent = http(base+"/mla1", "POST", accept_body("grant-durable"));
+        require(sent.status == 200, "a durable acceptance was not 200");
+        equal(sent.body, reply_body({"OK", "INSERTED", "DURABLE", "grant", ""}));
+        sent = http(base+"/mla1", "POST", accept_body("grant-durable"));
+        equal(sent.body, reply_body({"OK", "EXISTING", "DURABLE", "grant", ""}));
+        sent = http(base+"/mla1", "POST", accept_body("grant-durable", "grant-v2"));
+        require(sent.status == 409, "a durable key with a changed body was not 409");
+        equal(sent.body, reply_body({"OK", "CONFLICT", "DURABLE", "", ""}));
+        durable.signal(SIGTERM);
+        require(durable.wait() == 0, "a durable apiServer did not stop cleanly");
+        auto& restored = c.node("apiServer", listen,
+            {"--script", c.path("api.lua").string(), "--journal", journal.string()});
+        (void)restored;
+        sent = http(base+"/mla1", "POST", accept_body("grant-durable"));
+        require(sent.status == 200, "a restored durable acceptance was not 200");
+        equal(sent.body, reply_body({"OK", "EXISTING", "DURABLE", "grant", ""}));
+    }
+    std::cout << "api.http surface: signed POST /mla1 inserts, dedupes, refuses [PASS]\n";
+    std::cout << "api.http config: env-only enablement, malformed credentials refuse startup [PASS]\n";
+}
+void login_ticket_wire() {
+    Context c;
+    write(c.path("login.lua"),
+        "return {message=function(p,c)\n"
+        " local realm, character, instance, generation, expires = p:match('issue (%S+) (%S+) (%S+) (%S+) (%S+)')\n"
+        " if not realm then return 'usage: issue realm character instance generation expires' end\n"
+        " local ticket, err = mistlane.ticket.issue(realm, character, instance, tonumber(generation), tonumber(expires))\n"
+        " if not ticket then return 'ERR '..err end\n"
+        " return ticket\n"
+        "end}");
+    write(c.path("host.lua"),
+        "return {message=function(p,c)"
+        " return (c.character or 'anon')..' verified='..tostring(c.verified==true) end}");
+    ApiSecret secret{};
+    for (std::size_t i = 0; i < secret.size(); ++i) secret[i] = static_cast<unsigned char>(i*13+5);
+    static const char digits[] = "0123456789abcdef";
+    std::string hex;
+    for (unsigned char byte : secret) { hex += digits[byte/16]; hex += digits[byte%16]; }
+    const auto now = std::chrono::duration_cast<std::chrono::seconds>(
+        std::chrono::system_clock::now().time_since_epoch()).count();
+    const auto login = port(), host = port();
+    {
+        ScopedEnv secrets("MISTLANE_TICKET_SECRETS", "alpha:"+hex);
+        c.node("login", login, {"--script", c.path("login.lua").string()});
+        c.node("crossServer", host, {"--script", c.path("host.lua").string(), "--service-name", "xs-a"});
+    }
+    const auto ask = [&]() {
+        return tcp(login)->request("issue alpha hero xs-a 7 "+std::to_string(now+120));
+    };
+    const auto ticket = ask();
+    require(ticket.find("ERR ") != 0 && !ticket.empty(), "the login script failed to issue a ticket: "+ticket);
+    require(parse_entry_ticket(ticket).has_value(), "the Lua API did not return a valid MLT1 hex ticket");
+    const auto join = "MLC1 1 alpha arena r1 ch hero gen 7 ret alpha arena r1 tk "+ticket;
+    {
+        auto peer = tcp(host);
+        equal(peer->request(join), "MLC1 OK 1");
+        equal(peer->request("who"), "hero verified=true");
+    }
+    {
+        auto replay = tcp(host);
+        equal(replay->request(join), "MLC1 ERR TICKET");
+    }
+    const auto fresh = ask();
+    require(fresh != ticket, "the Lua issuer reused a nonce");
+    // An unconfigured login has no ticket API at all, so a script error is
+    // surfaced rather than minting an unsigned claim.
+    const auto unconfigured = port();
+    c.node("login", unconfigured, {"--script", c.path("login.lua").string()});
+    must_fail([&] { (void)tcp(unconfigured)->request("issue alpha hero xs-a 7 "+std::to_string(now+120)); });
+    // Bad ticket arguments must be Lua errors from lua_pcall, not C++
+    // exceptions crossing the boundary. The same login remains usable for the
+    // next well-formed request, and neither negative value can wrap to UINT64_MAX.
+    must_fail([&] { (void)tcp(login)->request("issue al!pha hero xs-a 7 99"); });
+    must_fail([&] { (void)tcp(login)->request("issue alpha hero xs-a -1 99"); });
+    must_fail([&] { (void)tcp(login)->request("issue alpha hero xs-a 7 -1"); });
+    require(!ask().empty(), "login did not keep serving after a rejected ticket argument");
+    std::cout << "login.ticket.wire: Lua issuer -> crossServer verifier [PASS]\n";
+}
+// Character route records: a route is only written against a registered
+// member, GET answers from the live member state, and a retiring member drops
+// every route that pointed at it.
 }
