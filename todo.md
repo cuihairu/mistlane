@@ -271,7 +271,7 @@
 超大文件候选：
 
 - [x] LAY-001 [P1] 拆分 `src/test_cases.cpp`（6744 行）——单文件串联协议、迁移、持久化、Lua、HTTP 和实体用例，案例表仍集中在 `src/selftest.cpp:9-84`、`src/selftest.cpp:129-206`。已完成：拆为 11 个 test_*.cpp + test_common.hpp（commit 7f0bb34），ctest 74/74 绿，导出清单 release-files.txt 137 文件已同步。
-- [ ] LAY-002 [P1] 拆分 `src/node.cpp`（3624 行）——同时包含 TCP/session、MLR1 registry、probe/dashboard 和顶层 node 生命周期（`src/node.cpp:1226-1894`、`src/node.cpp:2214-3010`、`src/node.cpp:296-560`）。
+- [x] LAY-002 [P1] 拆分 `src/node.cpp`（3624 行）——同时包含 TCP/session、MLR1 registry、probe/dashboard 和顶层 node 生命周期（`src/node.cpp:1226-1894`、`src/node.cpp:2214-3010`、`src/node.cpp:296-560`）。已完成：node.cpp 3624→749 行，四块各归其位——probe/dashboard（6ee82af observability.hpp）、TCP 通道与回传（d2f3eb5 tcp_channel.hpp/return_sender.hpp）、MLR1 registry（86556bf registry_service.hpp）、TCP/MLM1 会话（c2bad9e session_plane.hpp），仅留 Node 生命周期；ctest 74/74 绿。
 - [ ] LAY-003 [P1] 拆分 `include/mistlane/entity_contract.hpp`（2664 行）——XML 解析、兼容锁/digest/XSD 生成与 C++/JS/C# 绑定生成共享一个巨型头文件入口（`include/mistlane/entity_contract.hpp:94`）。
 - [ ] LAY-004 [P1] 拆分 `src/lua_service.cpp`（1063 行）——VM 生命周期、Redis/ticket/return/metrics/entity/HTTP API 和异步适配器混在同一实现文件（`src/lua_service.cpp:110-159`、`src/lua_service.cpp:136-1063`）。
 
