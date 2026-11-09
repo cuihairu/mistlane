@@ -61,6 +61,8 @@ ports/drogon/vcpkg.json
 release-files.txt
 src/http_client.cpp
 src/lua_service.cpp
+src/lua_service_api.cpp
+src/lua_service_internal.hpp
 src/diagnostics.cpp
 src/main.cpp
 src/node.cpp

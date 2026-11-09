@@ -16,7 +16,7 @@ find_package(Lua 5.5.1 REQUIRED)
 find_package(unofficial-sqlite3 CONFIG REQUIRED)
 find_package(crashpad CONFIG REQUIRED)
 find_package(prometheus-cpp CONFIG REQUIRED)
-add_library(mistlane_core src/lua_service.cpp src/diagnostics.cpp src/api.cpp src/api_store.cpp src/entity_lua.cpp src/journal.cpp)
+add_library(mistlane_core src/lua_service.cpp src/lua_service_api.cpp src/diagnostics.cpp src/api.cpp src/api_store.cpp src/entity_lua.cpp src/journal.cpp)
 target_include_directories(mistlane_core PUBLIC include)
 target_include_directories(mistlane_core SYSTEM PUBLIC ${LUA_INCLUDE_DIR})
 target_link_libraries(mistlane_core PUBLIC
