@@ -261,16 +261,16 @@
 
 ## 源码分层分析 2026-11-07
 
-- [ ] 抽象层清单：L1 进程与角色层——解析/校验单进程配置并选择命令目标（代表 `src/main.cpp:195`、`src/main.cpp:336-448`）。
-- [ ] 抽象层清单：L2 传输与会话层——终结多协议连接、组帧、认证/复用/限流并转发载荷（代表 `src/node.cpp:226`、`src/node.cpp:1146-1860`）。
-- [ ] 抽象层清单：L3 协调与注册层——维护成员/路由、回答放置并驱动迁移事务（代表 `src/node.cpp:2214-2793`、`src/node.cpp:2795-3010`）。
-- [ ] 抽象层清单：L4 服务执行层——托管沙箱 Lua VM、业务 API/回调并连接 Redis/HTTP（代表 `src/lua_service.cpp:136-1063`）。
-- [ ] 抽象层清单：L5 实体运行时层——解析契约、编解码/派发实体调用并跟踪属性/同步原型（代表 `include/mistlane/entity_contract.hpp:94`）。
-- [ ] 抽象层清单：L6 持久化、准入与可观测层——保存记录/迁移/API 受理，验证凭据并暴露探测/指标（代表 `include/mistlane/record.hpp:125-497`、`include/mistlane/diagnostics.hpp:22`）。
+- [x] 抽象层清单：L1 进程与角色层——解析/校验单进程配置并选择命令目标（代表 `src/main.cpp:195`、`src/main.cpp:336-448`）（verified：5fe6b18 六层表落档，代表 ref 抽查属实，docs:build 绿）。
+- [x] 抽象层清单：L2 传输与会话层——终结多协议连接、组帧、认证/复用/限流并转发载荷（代表 `src/node.cpp:226`、`src/node.cpp:1146-1860`）（verified：5fe6b18 六层表落档，代表 ref 抽查属实，docs:build 绿）。
+- [x] 抽象层清单：L3 协调与注册层——维护成员/路由、回答放置并驱动迁移事务（代表 `src/node.cpp:2214-2793`、`src/node.cpp:2795-3010`）（verified：5fe6b18 六层表落档，代表 ref 抽查属实，docs:build 绿）。
+- [x] 抽象层清单：L4 服务执行层——托管沙箱 Lua VM、业务 API/回调并连接 Redis/HTTP（代表 `src/lua_service.cpp:136-1063`）（verified：5fe6b18 六层表落档，代表 ref 抽查属实，docs:build 绿）。
+- [x] 抽象层清单：L5 实体运行时层——解析契约、编解码/派发实体调用并跟踪属性/同步原型（代表 `include/mistlane/entity_contract.hpp:94`）（verified：5fe6b18 六层表落档，代表 ref 抽查属实，docs:build 绿）。
+- [x] 抽象层清单：L6 持久化、准入与可观测层——保存记录/迁移/API 受理，验证凭据并暴露探测/指标（代表 `include/mistlane/record.hpp:125-497`、`include/mistlane/diagnostics.hpp:22`）（verified：5fe6b18 六层表落档，代表 ref 抽查属实，docs:build 绿）。
 
 超大文件候选：
 
-- [ ] LAY-001 [P1] 拆分 `src/test_cases.cpp`（6744 行）——单文件串联协议、迁移、持久化、Lua、HTTP 和实体用例，案例表仍集中在 `src/selftest.cpp:9-84`、`src/selftest.cpp:129-206`。
+- [x] LAY-001 [P1] 拆分 `src/test_cases.cpp`（6744 行）——单文件串联协议、迁移、持久化、Lua、HTTP 和实体用例，案例表仍集中在 `src/selftest.cpp:9-84`、`src/selftest.cpp:129-206`。已完成：拆为 11 个 test_*.cpp + test_common.hpp（commit 7f0bb34），ctest 74/74 绿，导出清单 release-files.txt 137 文件已同步。
 - [ ] LAY-002 [P1] 拆分 `src/node.cpp`（3624 行）——同时包含 TCP/session、MLR1 registry、probe/dashboard 和顶层 node 生命周期（`src/node.cpp:1226-1894`、`src/node.cpp:2214-3010`、`src/node.cpp:296-560`）。
 - [ ] LAY-003 [P1] 拆分 `include/mistlane/entity_contract.hpp`（2664 行）——XML 解析、兼容锁/digest/XSD 生成与 C++/JS/C# 绑定生成共享一个巨型头文件入口（`include/mistlane/entity_contract.hpp:94`）。
 - [ ] LAY-004 [P1] 拆分 `src/lua_service.cpp`（1063 行）——VM 生命周期、Redis/ticket/return/metrics/entity/HTTP API 和异步适配器混在同一实现文件（`src/lua_service.cpp:110-159`、`src/lua_service.cpp:136-1063`）。
