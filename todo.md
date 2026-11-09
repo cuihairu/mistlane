@@ -273,7 +273,7 @@
 - [x] LAY-001 [P1] 拆分 `src/test_cases.cpp`（6744 行）——单文件串联协议、迁移、持久化、Lua、HTTP 和实体用例，案例表仍集中在 `src/selftest.cpp:9-84`、`src/selftest.cpp:129-206`。已完成：拆为 11 个 test_*.cpp + test_common.hpp（commit 7f0bb34），ctest 74/74 绿，导出清单 release-files.txt 137 文件已同步。
 - [x] LAY-002 [P1] 拆分 `src/node.cpp`（3624 行）——同时包含 TCP/session、MLR1 registry、probe/dashboard 和顶层 node 生命周期（`src/node.cpp:1226-1894`、`src/node.cpp:2214-3010`、`src/node.cpp:296-560`）。已完成：node.cpp 3624→749 行，四块各归其位——probe/dashboard（6ee82af observability.hpp）、TCP 通道与回传（d2f3eb5 tcp_channel.hpp/return_sender.hpp）、MLR1 registry（86556bf registry_service.hpp）、TCP/MLM1 会话（c2bad9e session_plane.hpp），仅留 Node 生命周期；ctest 74/74 绿。
 - [x] LAY-003 [P1] 拆分 `include/mistlane/entity_contract.hpp`（2664 行）——XML 解析、兼容锁/digest/XSD 生成与 C++/JS/C# 绑定生成共享一个巨型头文件入口（`include/mistlane/entity_contract.hpp:94`）。已完成：cpp/js/csharp 三个 SDK 绑定生成器以类外 inline 定义拆入 include/mistlane/entity_contract_bindings.hpp（985b75f），entity_contract.hpp 2664→1053 行，伞形 include 保持两类任一入口同名可见；全目标构建 + ctest 74/74 绿。
-- [ ] LAY-004 [P1] 拆分 `src/lua_service.cpp`（1063 行）——VM 生命周期、Redis/ticket/return/metrics/entity/HTTP API 和异步适配器混在同一实现文件（`src/lua_service.cpp:110-159`、`src/lua_service.cpp:136-1063`）。
+- [x] LAY-004 [P1] 拆分 `src/lua_service.cpp`（1063 行）——VM 生命周期、Redis/ticket/return/metrics/entity/HTTP API 和异步适配器混在同一实现文件（`src/lua_service.cpp:110-159`、`src/lua_service.cpp:136-1063`）。已完成：Lua API 适配器（stream/leaderboard/websocket/session/placement/entity/ticket/return/metrics/redis HTTP）拆入 src/lua_service_api.cpp，共享 helper inline 化进 src/lua_service_internal.hpp（1076f0e），lua_service.cpp 1063→212 行只留 VM 生命周期；全目标构建 + ctest 74/74 绿。
 
 目录/分类不合理处：
 
