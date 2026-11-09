@@ -4,6 +4,7 @@
 // against the home data endpoint, MLS1 identity when configured.
 #pragma once
 #include "tcp_channel.hpp"
+#include "mistlane/lua_service.hpp"
 #include "mistlane/diagnostics.hpp"
 #include "mistlane/record.hpp"
 #include <chrono>

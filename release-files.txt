@@ -66,6 +66,12 @@ src/lua_service_internal.hpp
 src/diagnostics.cpp
 src/main.cpp
 src/node.cpp
+src/node_internal.hpp
+src/observability.hpp
+src/registry_service.hpp
+src/return_sender.hpp
+src/session_plane.hpp
+src/tcp_channel.hpp
 src/scaffold.cpp
 src/web.cpp
 tests/integration.py

@@ -5,6 +5,7 @@
 #pragma once
 #include "node_internal.hpp"
 #include "tcp_channel.hpp"
+#include "return_sender.hpp"
 #include "mistlane/api.hpp"
 #include "mistlane/cross.hpp"
 #include "mistlane/diagnostics.hpp"
