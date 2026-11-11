@@ -39,6 +39,22 @@ local rooms, seq = {}, 0
 function service.message(payload)
     local id = tonumber(string.match(payload, "^spawn (%d+)$"))
     if id then return mistlane.entity.spawn(1, 2, 1, id, 1) and "spawned" or "duplicate" end
+    if payload == "guards" then
+        local out = {}
+        local probes = {
+            function() return mistlane.entity.spawn("x", 2, 1, 1, 1) end,
+            function() return mistlane.entity.spawn(1, -1, 1, 1, 1) end,
+            function() return mistlane.entity.spawn(1, 2, 1, 1, "x") end,
+            function() return mistlane.entity.destroy(1, 2, 1) end,
+            function() return mistlane.entity.destroy(1, 2, 1, "x") end,
+            function() return mistlane.metrics.gauge("probe", "not-a-number") end,
+        }
+        for _, probe in ipairs(probes) do
+            local ok, err = pcall(probe)
+            out[#out+1] = tostring(ok)..":"..tostring(err):match("[^:]+$")
+        end
+        return table.concat(out, "|")
+    end
     return "echo:"..payload
 end
 service.entities = {
@@ -73,6 +89,36 @@ return service)");
     require(out.find("logins_ok=4") != std::string::npos && out.find("joins_ok=4") != std::string::npos
         && out.find("moves_ok=12") != std::string::npos && out.find("heartbeats_ok=12") != std::string::npos,
         "scenario counters wrong:\n" + out);
+    // Adapter guards answer as pcall-visible Lua errors with reasons instead
+    // of killing the session: bad ids, a bad generation and a non-numeric
+    // gauge are each refused, and the node keeps serving afterwards. The
+    // tokened node demands the MLS1 identity on the raw leg first.
+    const auto send_frame = [](RawSocket& raw, std::string_view payload) {
+        std::string frame(4, '\0');
+        auto length = static_cast<std::uint32_t>(payload.size());
+        for (int i = 3; i >= 0; --i) { frame[i] = static_cast<char>(length & 255); length >>= 8; }
+        raw.send(frame + std::string(payload));
+    };
+    const auto read_frame = [](RawSocket& raw) {
+        std::size_t length = 0;
+        for (unsigned char ch : raw.receive(4)) length = (length << 8) | ch;
+        return raw.receive(length);
+    };
+    RawSocket leg(listen);
+    send_frame(leg, "MLS1 gameServer biz-1 s3cret");
+    equal(read_frame(leg), "MLS1 OK");
+    const auto ask_guard = [&](std::string_view payload) {
+        send_frame(leg, payload);
+        return read_frame(leg);
+    };
+    equal(ask_guard("guards"),
+        "false: entity.spawn expects scope, type, incarnation, entity_id integers|"
+        "false: entity.spawn expects scope, type, incarnation, entity_id integers|"
+        "false: entity.spawn generation must be a non-negative 32-bit integer|"
+        "false: entity.destroy expects scope, type, incarnation, entity_id integers|"
+        "false: entity.destroy expects scope, type, incarnation, entity_id integers|"
+        "false: value must be a number");
+    equal(ask_guard("echo"), "echo:echo");
     // The dashboard page is self-contained HTML; /metrics is Prometheus text.
     const auto page = http_request({"http://" + endpoint(dashboard) + "/dashboard"});
     require(page.status == 200 && page.body.rfind("<!doctype html>", 0) == 0
@@ -98,10 +144,11 @@ return service)");
     require(value_of(dash, "mistlane_script_gauge", "\"rooms\"") == "2", "rooms gauge wrong:\n" + dash);
     require(value_of(dash, "mistlane_entity_results_total", "\"ok\"") == "32",
         "entity ok counter wrong:\n" + dash);
-    // Every connection sent one MLS1, one spawn and eight steps; each frame
-    // read in produced exactly one reply, so rx and tx agree.
-    require(value_of(dash, "mistlane_messages_total", "\"rx\"") == "40"
-        && value_of(dash, "mistlane_messages_total", "\"tx\"") == "40",
+    // Every connection sent one MLS1, one spawn and eight steps; the guard
+    // probe leg adds one MLS1 plus two more frames. Each frame read in
+    // produced exactly one reply, so rx and tx agree.
+    require(value_of(dash, "mistlane_messages_total", "\"rx\"") == "43"
+        && value_of(dash, "mistlane_messages_total", "\"tx\"") == "43",
         "message accounting wrong:\n" + dash);
 }
 }

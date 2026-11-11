@@ -253,6 +253,29 @@ void api_sqlite_acceptance() {
         require(store.create(ApiCommand{{"platform", "ops-callback", {"realm1", "char42"}, "k1"}, "p"}).result
                 == ApiCreate::Existing, "a full store refused its own stored key");
     }
+    // Storage failures surface as exceptions: a path inside a missing
+    // directory cannot open, and a non-database file fails at schema setup.
+    {
+        bool opened = false;
+        try {
+            ApiSqliteAcceptanceStore store((temp.path / "missing-dir" / "x.sqlite").string());
+            opened = true;
+        } catch (const std::exception& e) {
+            require(std::string(e.what()).starts_with("cannot open api acceptance store"),
+                "unexpected open failure: "+std::string(e.what()));
+        }
+        require(!opened, "a store inside a missing directory did not fail");
+        write(temp.path / "garbage.sqlite", "this is not a sqlite database at all");
+        bool schema_ok = false;
+        try {
+            ApiSqliteAcceptanceStore store((temp.path / "garbage.sqlite").string());
+            schema_ok = true;
+        } catch (const std::exception& e) {
+            require(std::string(e.what()).starts_with("api acceptance store schema failed"),
+                "unexpected schema failure: "+std::string(e.what()));
+        }
+        require(!schema_ok, "a garbage store file did not fail");
+    }
     std::cout << "api.acceptance.sqlite durable: Inserted/Existing/Conflict exactly once, "
         "restart dedup and Full bound [PASS]\n";
 }
@@ -858,6 +881,10 @@ void login_ticket_wire() {
     must_fail([&] { (void)tcp(login)->request("issue al!pha hero xs-a 7 99"); });
     must_fail([&] { (void)tcp(login)->request("issue alpha hero xs-a -1 99"); });
     must_fail([&] { (void)tcp(login)->request("issue alpha hero xs-a 7 -1"); });
+    // A well-formed realm the issuer holds no secret for answers nil+reason
+    // through the API instead of an error.
+    equal(tcp(login)->request("issue beta hero xs-a 7 "+std::to_string(now+120)),
+        "ERR no ticket secret for this realm or invalid arguments");
     require(!ask().empty(), "login did not keep serving after a rejected ticket argument");
     std::cout << "login.ticket.wire: Lua issuer -> crossServer verifier [PASS]\n";
 }
