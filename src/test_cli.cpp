@@ -71,7 +71,7 @@ service.entities = {
 }
 return service)");
     const auto listen = port(), dashboard = port(), metrics = port();
-    c.node("gameServer", listen, {"--script", c.path("business.lua").string(),
+    auto& node = c.node("gameServer", listen, {"--script", c.path("business.lua").string(),
         "--contract", c.path("business.def").string(), "--service-token", "s3cret",
         "--metrics-listen", endpoint(metrics), "--dashboard-listen", endpoint(dashboard)});
     // A scenario without its contract refuses before touching the network.
@@ -150,5 +150,9 @@ return service)");
     require(value_of(dash, "mistlane_messages_total", "\"rx\"") == "43"
         && value_of(dash, "mistlane_messages_total", "\"tx\"") == "43",
         "message accounting wrong:\n" + dash);
+    // Stop the node inside the test: a teardown kill would skip its graceful
+    // shutdown, and killed children never flush coverage records.
+    node.signal(SIGTERM);
+    require(node.wait() == 0, "business node should stop cleanly");
 }
 }
