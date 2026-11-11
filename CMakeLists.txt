@@ -66,7 +66,7 @@ add_executable(mistlane-mysql-probe examples/mysql_probe.cpp)
 target_link_libraries(mistlane-mysql-probe PRIVATE mistlane_mysql)
 include(CTest)
 if(BUILD_TESTING)
-  foreach(test_case IN ITEMS core.contracts contract.tool sproto.golden rpc.lifecycle core.roles transport.tcp transport.websocket transport.http
+  foreach(test_case IN ITEMS core.contracts contract.tool sproto.golden rpc.lifecycle core.roles transport.tcp transport.websocket transport.http transport.listeners
       transport.push transport.correlate transport.identity transport.multiplex coordinator.registry
       entity.envelope
       entity.properties
@@ -87,7 +87,8 @@ if(BUILD_TESTING)
       coordinator.migration.authority coordinator.migration.fourstep
       api.signature api.tamper api.rotation api.replay api.acceptance api.acceptance.sqlite api.ownership api.wire api.http
       login.ticket login.ticket.wire
-      cross.admission cross.record cross.record.journal cross.return.queue cross.return.sender probe.control scaffold.init
+      cross.admission cross.record cross.record.journal cross.return.queue cross.return.queue.bounded cross.return.sender probe.control scaffold.init
+      record.home.sequence record.home.sequence.journal record.home.fence record.home.fence.journal
       config.file cli.bot business.bot)
     string(REPLACE "." "_" test_name "${test_case}")
     add_test(NAME mistlane_${test_name} COMMAND mistlane test --case "${test_case}")
