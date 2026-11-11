@@ -588,7 +588,8 @@ private:
                     try {
                         auto replacement = std::make_shared<LuaService>(config_.script, service_context_, redis_,
                             websockets_.get(), game_sessions_.get(), this,
-                            entity_endpoint_ ? &entity_endpoint_->runtime() : nullptr);
+                            entity_endpoint_ ? &entity_endpoint_->runtime() : nullptr,
+                            ticket_issuer_.get(), return_sender_.get(), metrics_sink_.get());
                         replacement->start();
                         // Rebinding under the new state happens before the swap,
                         // so a bad implementation table keeps the old service.

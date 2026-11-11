@@ -217,6 +217,8 @@ public:
     }
 private:
     enum class Phase { connecting, identifying, switching, ready };
+    static constexpr int handshake_deadline_seconds = 10;
+    static constexpr int phase_ready_idle_seconds = 60;
     void start_connect() {
         dead_ = false;
         started_ = true;
@@ -245,7 +247,7 @@ private:
             // Only identified peers may upgrade, so the token always leads; a
             // tokenless link goes straight to the mode switch.
             self->phase_ = self->config_.upstream_token.empty() ? Phase::switching : Phase::identifying;
-            self->deadline();
+            self->deadline(handshake_deadline_seconds);
             if (self->phase_ == Phase::identifying)
                 self->write_raw(service_hello(self->config_), [self](Error) { self->pump(); });
             else
@@ -256,13 +258,13 @@ private:
         if (phase_ == Phase::identifying) {
             if (payload != "MLS1 OK") return fail(payload.c_str());
             phase_ = Phase::switching;
-            deadline();
+            deadline(handshake_deadline_seconds);
             return write_raw("MLM1", [self=shared_from_this()](Error) { self->pump(); });
         }
         if (phase_ == Phase::switching) {
             if (payload != "MLM1 OK") return fail(payload.c_str());
             phase_ = Phase::ready;
-            deadline();
+            deadline(phase_ready_idle_seconds);
             flush();
             return pump();
         }
@@ -276,6 +278,9 @@ private:
             return teardown();
         }
         found->second.deliver(std::move(payload));
+        // Every inbound frame proves the link is alive, so it re-arms the
+        // idle deadline like an outbound write does.
+        deadline();
         pump(); // keep reading: deliver alone never touches the socket
     }
     // "CLOSE <id>": the peer retired a logical session. The session's own
@@ -320,12 +325,16 @@ private:
     void write_enveloped(std::uint32_t id, std::string payload, Completion completion) {
         channel_->write(correlated_frame(id, payload),
           [self=shared_from_this(), cb=std::move(completion)](Error ec) mutable {
-            if (!ec) self->deadline();
+            if (!ec) self->deadline(self->phase_ == Phase::ready ? self->phase_ready_idle_seconds
+                                                                 : self->handshake_deadline_seconds);
             cb(ec);
             self->pump();
         });
     }
-    void deadline(int seconds = 10) {
+    // Handshake steps keep the tight 10s bound; the ready state rides a 60s
+    // idle deadline, matching the hub side's client-deadline budget so a
+    // quiet-but-healthy logical session does not tear the shared link down.
+    void deadline(int seconds = phase_ready_idle_seconds) {
         const auto generation = ++generation_;
         timer_.expires_after(std::chrono::seconds(seconds));
         timer_.async_wait([self=shared_from_this(), generation](Error ec) {

@@ -43,9 +43,20 @@ public:
    // asserts the entity's current ownership generation; a call from an older
    // or unknown generation is STALE, matching the MLD1 durable fence. Zero
    // marks a client-originated call, which asserts no generation. The fence
-   // precedes correlation registration, so a fenced call consumes no slot.
+   // precedes correlation registration, so a fenced call consumes no slot,
+   // and so does authorization: a FORBIDDEN call burns nothing.
    if (call.hosting_generation && call.hosting_generation != it->second) return EntityError::STALE;
+   if (!dispatcher_.authorized(call)) return EntityError::FORBIDDEN;
    if (correlation_id && !delivered_.emplace(a,correlation_id).second) return EntityError::CONFLICT;
+   if (correlation_id && delivered_.size() > correlation_cap) {
+     // The tombstone set is bounded per entity incarnation: the oldest rows
+     // of this entity age out, so an unretired replay window cannot grow the
+     // table without bound on a long-lived node.
+     const auto begin = delivered_.lower_bound(std::pair{a,0});
+     std::size_t aged = 0;
+     for (auto row = begin; row != delivered_.end() && row->first == a && aged < correlation_evict; ++row, ++aged)
+       delivered_.erase(row++);
+   }
    return std::nullopt;
  }
  bool destroy(EntityTarget ref) {
@@ -61,6 +72,10 @@ private:
  using Address=std::tuple<std::uint32_t,std::uint32_t,std::int64_t,std::uint32_t>;
  static Address address(const EntityTarget& r) { return {r.scope,r.type_id,r.entity_id,r.incarnation}; }
  static EntityDispatchResult fail(EntityError e) { EntityDispatchResult r;r.error=e;return r; }
+ // Per-entity tombstone retention: once an entity holds more than this many
+ // live correlations, the oldest are evicted (a replay older than the window
+ // may double-deliver, matching the bounded at-least-once contract).
+ static constexpr std::size_t correlation_cap = 4096, correlation_evict = 256;
  EntityDispatcher dispatcher_;
  std::map<Address,std::uint32_t> entities_;
  std::set<std::pair<Address,std::uint64_t>> delivered_;

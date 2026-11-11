@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "test_common.hpp"
+#include "lua_service_internal.hpp"
+#include <lua.hpp>
 namespace mistlane::test {
 void lua_lifecycle() {
     Context c; const auto script = c.path("service.lua"); write(script, echo);
@@ -30,6 +32,79 @@ void lua_lifecycle() {
     const auto heap = port(); c.node("gameServer", heap, {"--script", c.path("heap.lua").string()});
     equal(tcp(heap)->request("heap"), "heap");
     gameServer.signal(SIGTERM); require(gameServer.wait() == 0, "gameServer graceful shutdown failed");
+    // A SIGHUP reload hands the replacement service the same optional sinks
+    // (ticket issuer, return sender, metrics), so the API surface a script
+    // sees survives a reload instead of silently shrinking to the plain set.
+    // No role carries all three: the issuer lives on login, the return sender
+    // on crossServer, metrics on any script host, so each role's surface is
+    // asserted before and after its own reload.
+    {
+        const auto cross = port(), login = port();
+        ScopedEnv secrets("MISTLANE_TICKET_SECRETS",
+            "beta:3333333333333333333333333333333333333333333333333333333333333333");
+        write(c.path("deps.lua"),
+            "return {message=function(p)\n"
+            "  if p == 'deps' then\n"
+            "    return tostring(mistlane.ticket ~= nil)..','..tostring(mistlane.returning ~= nil)\n"
+            "      ..','..tostring(mistlane.metrics ~= nil)\n"
+            "  end\n"
+            "  return p\n"
+            "end}\n");
+        auto& node = c.node("crossServer", cross, {"--script", c.path("deps.lua").string(),
+            "--data", endpoint(port()), "--upstream-token", "t", "--service-name", "xs"});
+        auto& issuer = c.node("login", login, {"--script", c.path("deps.lua").string()});
+        const auto send_frame = [](RawSocket& raw, std::string_view payload) {
+            std::string frame(4, '\0');
+            auto length = static_cast<std::uint32_t>(payload.size());
+            for (int i = 3; i >= 0; --i) { frame[i] = static_cast<char>(length & 255); length >>= 8; }
+            raw.send(frame+std::string(payload));
+        };
+        const auto read_frame = [](RawSocket& raw) {
+            std::size_t length = 0;
+            for (unsigned char ch : raw.receive(4)) length = (length << 8) | ch;
+            return raw.receive(length);
+        };
+        const auto deps = [&](std::uint16_t where) {
+            RawSocket raw(where);
+            if (where == cross) {
+                send_frame(raw, "MLC1 1 home g r1 ch hero gen 1 ret home g r1");
+                read_frame(raw);
+            }
+            send_frame(raw, "deps");
+            return read_frame(raw);
+        };
+        eventually([&] { return deps(cross) == "false,true,true"; }, 5s,
+            "the crossServer optional sinks were not wired before the reload");
+        eventually([&] { return deps(login) == "true,false,true"; }, 5s,
+            "the login optional sinks were not wired before the reload");
+        node.signal(SIGHUP); node.ready("script reloaded");
+        equal(deps(cross), "false,true,true");
+        issuer.signal(SIGHUP); issuer.ready("script reloaded");
+        equal(deps(login), "true,false,true");
+        node.signal(SIGTERM); require(node.wait() == 0, "crossServer graceful shutdown failed");
+        issuer.signal(SIGTERM); require(issuer.wait() == 0, "login graceful shutdown failed");
+    }
+    // A push that throws reaches the Lua callback as its value argument with
+    // the stack rebalanced, instead of unwinding through the caller.
+    {
+        lua_State* l = luaL_newstate();
+        require(l != nullptr, "cannot open a probe lua state");
+        luaL_openlibs(l);
+        require(luaL_dostring(l,
+                "probe = nil return function(err, value) probe = tostring(err)..'|'..tostring(value) end")
+                == LUA_OK, "probe callback script failed");
+        const int reference = luaL_ref(l, LUA_REGISTRYINDEX);
+        auto life = std::make_shared<LuaService::AsyncContext>();
+        life->state = l;
+        finish_lua(life, reference, "", [](lua_State*) { throw std::runtime_error("push exploded"); });
+        lua_getglobal(l, "probe");
+        const char* probe = lua_tostring(l, -1);
+        require(probe && std::string(probe) == "nil|push exploded",
+            std::string("a throwing push did not reach the callback: ")+(probe ? probe : "?"));
+        require(lua_gettop(l) == 1, "the callback stack was left unbalanced");
+        lua_pop(l, 1);
+        lua_close(l);
+    }
 }
 void lua_http() {
     Context c; const auto script = c.path("http.lua"); write(script, http_lua);

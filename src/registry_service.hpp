@@ -183,9 +183,12 @@ public:
                    const std::string& instance, const std::string& namespace_,
                    std::uint64_t generation = 0, const std::string& scene = "-") {
         if (!members_.count(member_key(namespace_, scope, role, instance))) return false;
+        // The journal write leads: a STORAGE refusal must mean the route was
+        // not applied anywhere, not a memory/journal divergence a restart
+        // would resolve against the memory view.
+        persist_placement(namespace_, scope, realm, character, role, instance, scene, generation);
         routes_[route_key(namespace_, realm, character)] =
             Route{scope, role, instance, scene, generation};
-        persist_placement(namespace_, scope, realm, character, role, instance, scene, generation);
         return true;
     }
     // A committed migration moves the character route to the new owner; the
@@ -621,15 +624,25 @@ private:
         close_with(std::move(payload));
     }
     // MLR1 ROUTE SET NS <namespace> <scope> <realm> <character> <role> <instance>
-    //   -> MLR1 ROUTE OK | MLR1 ERR UNKNOWN | MLR1 ERR INVALID
+    //   -> MLR1 ROUTE OK | MLR1 ERR UNKNOWN | MLR1 ERR INVALID | MLR1 ERR STORAGE
     // MLR1 ROUTE GET NS <namespace> <realm> <character>
     //   -> MLR1 ROUTE AT <scope> <role> <instance> <listen> <probe>
     //      <ready|notready> <active>/<capacity>
     //   | MLR1 ROUTE EMPTY | MLR1 ERR INVALID
     // A route is only written against a member that is registered right now, so
     // it can never point at a host the registry does not know, and GET answers
-    // from the live member state so a sick host reads as notready.
+    // from the live member state so a sick host reads as notready. SET persists
+    // the placement through the journal; a journal failure must degrade into a
+    // named refusal on this frame (and keep the registry serving) instead of
+    // unwinding through the event loop.
     void route_frame(const std::string& payload) {
+        try {
+            route_frame_body(payload);
+        } catch (const std::exception&) {
+            refuse("STORAGE");
+        }
+    }
+    void route_frame_body(const std::string& payload) {
         std::istringstream in(payload);
         std::string magic, command, sub, namespace_, spare, marker;
         in >> magic >> command >> sub;

@@ -205,6 +205,12 @@ private:
             if (payload == "MLD1 EMPTY") {
                 if (!load_in_flight_) throw std::invalid_argument("invalid");
                 queue_.seed(load_in_flight_->first, load_in_flight_->second, 0);
+                // EMPTY answers LOAD for a participant the home has never
+                // heard of, so the first durable acceptance is necessarily
+                // that participant's first generation. Recording zero keeps
+                // ack_durable's owner-generation check satisfiable instead of
+                // rejecting every first ACK durable as unregistered.
+                queue_.owner_generation(load_in_flight_->first, load_in_flight_->second, 0);
                 loaded_cursor_.insert(*load_in_flight_);
                 load_in_flight_.reset();
                 drain_pending();
@@ -240,6 +246,12 @@ private:
         writing_ = true;
         const auto& key = *submitted_;
         const auto change = *queue_.peek(key.first, key.second);
+        // The submit claims this generation as the participant's current one,
+        // so the durable ACK for exactly this generation is judgeable — for an
+        // EMPTY-seeded participant (baseline zero) as much as a STATE-loaded
+        // one advancing to a newer generation. A stale-owner ACK from an older
+        // generation still mismatches and retries.
+        queue_.owner_generation(key.first, key.second, change.generation);
         return write("MLD1 SUBMIT "+change.realm+" "+change.character
             + " gen "+std::to_string(change.generation)
             + " seq "+std::to_string(change.sequence)

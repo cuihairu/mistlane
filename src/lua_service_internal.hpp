@@ -48,7 +48,17 @@ void finish_lua(std::weak_ptr<LuaService::AsyncContext> weak, int callback, std:
     lua_rawgeti(l, LUA_REGISTRYINDEX, callback);
     luaL_unref(l, LUA_REGISTRYINDEX, callback);
     if (!error.empty()) lua_pushlstring(l, error.data(), error.size()); else lua_pushnil(l);
-    push(l);
+    const int top = lua_gettop(l);
+    try {
+        push(l);
+    } catch (const std::exception& e) {
+        // A push that throws must not unwind into the event loop: restore the
+        // callback's two-argument shape and surface the failure through the
+        // callback's value slot instead.
+        const std::string message = e.what();
+        lua_settop(l, top);
+        lua_pushlstring(l, message.data(), message.size());
+    }
     if (lua_pcall(l, 2, 0, 0) != LUA_OK) {
         const char* message = lua_tostring(l, -1);
         std::cerr << "Redis stream callback failed: " << (message ? message : "unknown Lua error") << '\n';

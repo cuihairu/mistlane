@@ -411,6 +411,11 @@ void cross_return_sender() {
         "    if not ok then return 'ENQ '..tostring(reason) end\n"
         "    return 'ENQUEUED'\n"
         "  end\n"
+        "  if payload == 'send2' then\n"
+        "    local ok, reason = mistlane.returning.enqueue('home','hero',5,2,'hp=20')\n"
+        "    if not ok then return 'ENQ2 '..tostring(reason) end\n"
+        "    return 'ENQUEUED2'\n"
+        "  end\n"
         "  if payload == 'neg' then\n"
         "    local ok, reason = pcall(mistlane.returning.enqueue,'home','hero',-1,1,'hp=10')\n"
         "    if ok then return 'NEG ACCEPTED' end\n"
@@ -529,6 +534,19 @@ void cross_return_sender() {
         return ask_data("MLD1 LOAD home hero") == "MLD1 STATE gen 5 seq 1 hp=10";
     }, 5s, "the return sender never drained the durable change");
     equal(ask_data("MLD1 LOAD home hero"), "MLD1 STATE gen 5 seq 1 hp=10");
+    // The first ACK durable must be judgeable for a participant the home had
+    // never heard of (an EMPTY load answers the seed): the sender consumes it
+    // instead of resubmitting sequence one forever, so the next change drains.
+    {
+        RawSocket raw(cross);
+        send_frame(raw, "MLC1 1 home g r1 ch hero gen 5 ret home g r1");
+        equal(read_frame(raw), "MLC1 OK 1");
+        send_frame(raw, "send2");
+        equal(read_frame(raw), "ENQUEUED2");
+    }
+    eventually([&] {
+        return ask_data("MLD1 LOAD home hero") == "MLD1 STATE gen 5 seq 2 hp=20";
+    }, 5s, "the first durable ACK was never accepted for an EMPTY-seeded participant");
     std::cout << "cross.return.sender: crossServer ordered queue drains only on "
         "ACK durable against a tokened data endpoint over MLS1 [PASS]\n";
 }

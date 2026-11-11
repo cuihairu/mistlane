@@ -43,6 +43,18 @@ public:
  // Drops every binding without touching the contract: a script reload rebinds
  // from scratch, so a stale closure into a closed Lua state is impossible.
  void clear_handlers() { handlers_.clear(); }
+ // The caller-rights gate on its own: the runtime fence checks it before
+ // registering a correlation, so a refused call consumes no tombstone slot.
+ bool authorized(const EntityInvocation& call) const {
+   const auto entity = std::find_if(contract_.entities().begin(),contract_.entities().end(),[&](const auto& e){return e.id==call.target.type_id;});
+   if (entity == contract_.entities().end()) return false;
+   const auto& methods = call.side=="server" ? entity->server_methods : entity->client_methods;
+   const auto method=std::find_if(methods.begin(),methods.end(),[&](const auto& m){return m.id==call.method_id;});
+   if(method==methods.end()) return false;
+   return !((method->caller=="owner" && call.caller.kind!="owner") ||
+       (method->caller=="server" && call.caller.kind!="server") ||
+       (method->caller=="client" && call.caller.kind!="client") || call.caller.id==0);
+ }
  EntityDispatchResult dispatch(const EntityInvocation& call) const {
    if (!call.encoded_ok) return fail(EntityError::INVALID);
    const auto entity = std::find_if(contract_.entities().begin(), contract_.entities().end(), [&](const auto& e){return e.id==call.target.type_id;});

@@ -784,6 +784,26 @@ void entity_endpoint() {
             "zero caller id was not FORBIDDEN");
     std::cout << "entity.endpoint permission: zero caller id answered FORBIDDEN [PASS]\n";
 
+    // The FORBIDDEN refusal burns no correlation slot: the same id still
+    // dispatches for an authorized caller afterwards.
+    auto legal13 = endpoint.handle(request(13, 5, 2, 1, account4), {"server", 9}, result);
+    require(result == "ok" && !reply(legal13).is_error, "a refused call consumed the correlation slot");
+    std::cout << "entity.endpoint permission: a FORBIDDEN call burns no slot [PASS]\n";
+
+    // The tombstone set is bounded per entity incarnation: past the window the
+    // oldest correlations age out, so an aged replay may deliver again (the
+    // bounded at-least-once contract) instead of growing without bound.
+    {
+        constexpr std::uint64_t window = 4096, evict = 256;
+        for (std::uint64_t id = 1000; id < 1000 + window + evict + 8; ++id)
+            require(endpoint.handle(request(id, 5, 2, 1, account4), {"server", 9}, result).has_value(),
+                "eviction loop call failed");
+        auto replay = endpoint.handle(request(10, 5, 2, 1, account4), {"server", 9}, result);
+        require(result == "ok", "an aged correlation still refused; the window is not bounded");
+        (void)replay;
+    }
+    std::cout << "entity.endpoint slot: tombstones age out past the per-entity window [PASS]\n";
+
     const auto notified = endpoint.handle(request(0, 5, 3, 1, account4), {"server", 9}, result);
     require(notified.has_value() && notified->empty() && result == "notify" && touched,
             "notify was not handled without a reply");

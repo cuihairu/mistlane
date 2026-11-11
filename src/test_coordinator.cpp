@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "test_common.hpp"
+#include <sqlite3.h>
 namespace mistlane::test {
 void coordinator_registry() {
     Context c;
@@ -414,6 +415,42 @@ void coordinator_routes() {
         "MLR1 ROUTE OK"; }, 5s, "an identified route publish never landed");
     body = identified("MLR1 ROUTE GET NS - mist kate");
     require(body.starts_with("MLR1 ROUTE AT main gameServer gs-d "), "route answer wrong shape: "+body);
+    // A journal failure degrades to MLR1 ERR STORAGE on the frame: the route
+    // is not applied anywhere, the registry keeps serving and the coordinator
+    // does not terminate.
+    {
+        const auto journaled = port(), home = port();
+        const auto db = c.path("routes-journal.sqlite");
+        auto& jcoord = c.node("coordinator", journaled, {"--journal", db.string()});
+        c.node("gameServer", home, {"--script", c.path("echo.lua").string(),
+            "--coordinator", endpoint(journaled), "--scope", "alpha", "--service-name", "gs-j"});
+        const auto ask_j = [&](const std::string& line) {
+            RawSocket raw(journaled);
+            send_frame(raw, line);
+            body = read_frame(raw);
+            expect_close(raw);
+            return body;
+        };
+        eventually([&] { return ask_j("MLR1 QUERY -").find("MLR1 MEMBERS 1") != std::string::npos; },
+            5s, "the journaled coordinator never saw its member");
+        equal(ask_j("MLR1 ROUTE SET NS - alpha mist kestrel gameServer gs-j"), "MLR1 ROUTE OK");
+        require(ask_j("MLR1 ROUTE GET NS - mist kestrel").starts_with("MLR1 ROUTE AT alpha gameServer gs-j "),
+            "journaled route did not stick");
+        // Break persistence out-of-band: the table the next SET must write is
+        // gone, so its journal write throws inside save_placement.
+        sqlite3* handle = nullptr;
+        require(sqlite3_open(db.string().c_str(), &handle) == SQLITE_OK, "cannot reopen the journal");
+        char* message = nullptr;
+        require(sqlite3_exec(handle, "DROP TABLE placement", nullptr, nullptr, &message) == SQLITE_OK,
+            std::string("cannot drop placement: ")+(message ? message : "?"));
+        sqlite3_free(message);
+        sqlite3_close(handle);
+        equal(ask_j("MLR1 ROUTE SET NS - alpha mist kite gameServer gs-j"), "MLR1 ERR STORAGE");
+        equal(ask_j("MLR1 ROUTE GET NS - mist kite"), "MLR1 ROUTE EMPTY");
+        require(ask_j("MLR1 ROUTE GET NS - mist kestrel").starts_with("MLR1 ROUTE AT alpha gameServer gs-j "),
+            "the storage refusal disturbed a committed route");
+        require(jcoord.poll() == std::nullopt, "coordinator died on a journal failure");
+    }
     require(gs_a.output().find("callback failed") == std::string::npos &&
             gs_b.output().find("callback failed") == std::string::npos,
             "registry member logged Lua failures");

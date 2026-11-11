@@ -1044,6 +1044,14 @@ void transport_multiplex() {
     send_frame(b, "bcast");
     equal(read_frame(b), "bc"); equal(read_frame(b), "bcast=4");
     equal(read_frame(a), "bc");
+    // The ready-phase idle budget matches the hub's 60s client deadline and
+    // frames keep re-arming it: quiet stretches past the old 10s handshake
+    // bound, each followed by an exchange, still ride the same link.
+    phase = "idle renewal across the old handshake bound";
+    std::this_thread::sleep_for(11s);
+    send_frame(b, "idle-one"); equal(read_frame(b), "idle-one");
+    std::this_thread::sleep_for(11s);
+    send_frame(b, "idle-two"); equal(read_frame(b), "idle-two");
     // Nobody upgrades mid-session, whether through the gateway or directly.
     // Check for malformed hub traffic before the deliberate MLM1 refusals
     // below: those expected refusals are logged as "unexpected frame" too.
