@@ -46,8 +46,8 @@
 
 - [x] 编写通用 Entity 契约设计提案：docs/entity-contract.md 与 docs/zh/entity-contract.md；XML .def 为唯一手写契约，生成 sproto、服务器描述及 JS/C# SDK；客户端随契约构建发布，业务契约更新不重编 C++ 服务器。提案不是已实现能力
   证据：commit 46607a0
-- [ ] 按可复用库边界实现契约、类型存储、嵌套同步、绑定生成和快照编解码；Mistlane 提供网络/路由/观察者/归属 data 适配，先在仓库内模块化，不另建项目或新增命名（BLOCKED）— 跳过：需先审定实体契约格式并完成最小编解码原型（见下一大项），当前为提案阶段。复核注记（2026-11-06）：所缺条件仍缺——docs/entity-contract.md 仍为设计/提案阶段（定义期实现、进程内 harness、live transport 绑定已落地，但实体契约格式未经最终审定、无最小编解码原型），保持 BLOCKED
-- [ ] 按实体契约提案分阶段实现（先审定格式与最小编解码原型，再进入完整运行时）（BLOCKED）— 跳过：未审定格式与最小编解码原型，依赖提案与网络实体运行时；当前仅提案及静态运行时。复核注记（2026-11-06）：所缺条件仍缺——实体契约格式未经最终审定、无最小编解码原型，网络实体运行时未实现，保持 BLOCKED
+- [ ] 按可复用库边界实现契约、类型存储、嵌套同步、绑定生成和快照编解码；Mistlane 提供网络/路由/观察者/归属 data 适配，先在仓库内模块化，不另建项目或新增命名（BLOCKED）— 跳过：需先审定实体契约格式并完成最小编解码原型（见下一大项），当前为提案阶段。复核注记（2026-11-06）：所缺条件仍缺——docs/entity-contract.md 仍为设计/提案阶段（定义期实现、进程内 harness、live transport 绑定已落地，但实体契约格式未经最终审定、无最小编解码原型），保持 BLOCKED。复核注记（2026-11-12）：所缺条件其一已失效——最小编解码原型已落地且入门禁（CMakeLists.txt:97-112 六个 sproto golden 用例、tests/fixtures/sproto_sdk_golden.mjs node 实跑、.cs 同向量、entity.codec 全绿，todo.md:52 早已勾），五件套（契约校验 entity_contract.hpp:94-1052、类型存储 entity_property.hpp、嵌套同步 entity_sync.hpp、绑定生成 entity_contract_bindings.hpp、快照编解码 entity_codec.hpp）均仓内模块化且有 ctest 钉住；仍未满足：格式审定属用户决策（docs/entity-contract.md:3 仍标注 Research design note，仓内无审定标记）与观察者/归属 data 运行时适配（PropertyChannel/PersistentStore 非测试代码零调用方），保持 BLOCKED
+- [ ] 按实体契约提案分阶段实现（先审定格式与最小编解码原型，再进入完整运行时）（BLOCKED）— 跳过：未审定格式与最小编解码原型，依赖提案与网络实体运行时；当前仅提案及静态运行时。复核注记（2026-11-06）：所缺条件仍缺——实体契约格式未经最终审定、无最小编解码原型，网络实体运行时未实现，保持 BLOCKED。复核注记（2026-11-12）：所缺条件两项均部分失效——最小编解码原型已落地入门禁（见行 49 注记）；网络实体运行时已跨进程落地（node.cpp:312-333 --contract 建 EntityEndpoint、session_plane.hpp:595-611 本地会话路径 MLE1 拦截、entity.transport/entity.transport.gateway 双 OS 进程绿、business.bot 真实四连接流量）；仍未满足：格式审定（用户决策）与完整运行时余件——服务器侧不读 deadline_ms（entity_envelope.hpp:88-96 丢弃）、caller 仅 server/client 两态无 owner/cross 归属（session_plane.hpp:611）、宿主路由未实现（docs/entity-contract.md:5），保持 BLOCKED
   - [x] 固定 XML XSD 与语义检查（属性名作为标签、types.xml 复合类型引用、动态标签共享规则及项目 schema 生成）、EntityRef、稳定编号与保留规则、生成锁文件、方法权限、envelope 和错误协议；禁止按遍历顺序重编号
     证据：commit 46607a0
   - [x] 验证 sproto 在 C++/Lua、JavaScript、C# 的同源黄金样本；覆盖 INT64 bigint/long、嵌套结构、缺省值、未知字段和畸形输入，不预设现成 JS/C# 绑定可用
@@ -56,15 +56,15 @@
     证据：2026-10-19
   - [x] 实现通用 Entity 身份/生命周期、C++ 描述解释与 Lua 绑定、受控属性及只读保留代理；Avatar、Monster 共用运行时，不限定玩家实体，不引入 Base/Cell 进程
     证据：2026-11-03 核实；entity.properties/entity.tree/entity.endpoint/entity.transport 全绿（Avatar/Monster 同运行时、只读保留代理、Lua 绑定、SIGHUP 替换保留旧服务）；`--contract` 加载于游戏/跨服节点进程内，无 Base/Cell 进程
-  - [ ] 实现 JS/C# 直接操作 Avatar 的方法/属性/通知绑定（客户端不暴露 .server/.client 中间层，主要请求通过自己的 Avatar）、内部实体 RPC、身份权限校验、请求期限/取消、明确错误及有界队列；非幂等调用不能超时后静默重试（BLOCKED）— 跳过：JS/C# 绑定生成与完整运行时（网络实体 RPC、权限、有界队列）未实现，非幂等语义未定。复核注记（2026-11-06）：所缺条件仍缺——docs/entity-contract.md 仍明示网络实体 RPC、权限、有界队列及生产 JS/C# codecs 未实现，保持 BLOCKED
-  - [ ] 实现全量基线/增量/重连/观察者变更与接收者版本过滤；属性同步为核心机制，同步范围不等于空间 AOI（BLOCKED）— 跳过：观察者/接收者版本过滤及全量基线/重连协议未实现，需先有网络实体运行时。复核注记（2026-11-06）：所缺条件仍缺——观察者/接收者版本过滤及全量基线/重连协议未实现（仅 PropertySync 客户端接收器在进程内），无网络实体运行时，保持 BLOCKED
+  - [ ] 实现 JS/C# 直接操作 Avatar 的方法/属性/通知绑定（客户端不暴露 .server/.client 中间层，主要请求通过自己的 Avatar）、内部实体 RPC、身份权限校验、请求期限/取消、明确错误及有界队列；非幂等调用不能超时后静默重试（BLOCKED）— 跳过：JS/C# 绑定生成与完整运行时（网络实体 RPC、权限、有界队列）未实现，非幂等语义未定。复核注记（2026-11-06）：所缺条件仍缺——docs/entity-contract.md 仍明示网络实体 RPC、权限、有界队列及生产 JS/C# codecs 未实现，保持 BLOCKED。复核注记（2026-11-12）：SDK 侧有界队列与期限语义已实现并被 golden 钉住（生成的 EntityClient/EntityRpcQueue：有界准入、期限墓碑、仅幂等新关联重试，tests/fixtures/sproto_sdk_golden.mjs:248 双 golden 锁定）；仍缺：生产 JS/C# codecs、服务器侧期限/取消接线（deadline_ms 未被服务器读取）与 owner 归属设计（session_plane.hpp:611 仅 server/client），保持 BLOCKED
+  - [ ] 实现全量基线/增量/重连/观察者变更与接收者版本过滤；属性同步为核心机制，同步范围不等于空间 AOI（BLOCKED）— 跳过：观察者/接收者版本过滤及全量基线/重连协议未实现，需先有网络实体运行时。复核注记（2026-11-06）：所缺条件仍缺——观察者/接收者版本过滤及全量基线/重连协议未实现（仅 PropertySync 客户端接收器在进程内），无网络实体运行时，保持 BLOCKED。复核注记（2026-11-12）：五机制均已实现且 entity.sync 绿——全量基线/增量 delta/重连 resync/观察者 observe-depart/接收者版本过滤+整批原子回滚（entity_sync.hpp:42-151,157-223，test_contract.cpp:448-608）；「需先有网络实体运行时」前提已失效（MLE1 跨进程已落地，见行 50 注记）；仍缺：发送侧传输接线——PropertyChannel 无非测试调用方、无 per-entity PropertyStore 运行时实例、delta 字节序列化器未写（test_contract.cpp:1293-1299 明示随传输落地，docs/entity-contract.md:5），保持 BLOCKED
   - [x] 参考 BigWorld 的嵌套路径与数组切片同步，明确 KBEngine 当前普通容器原地修改的通知边界；实现受控结构/数组所有权链、嵌套增量、插删有序操作、生成的客户端属性回调和整批应用
     证据：2026-10-20
   - [x] 约束属性为有界值树：拒绝循环与初期按值递归、跨属性可变共享，复制赋值，旧容器句柄失效；处理 Lua/协议下标转换、结构变更前后路径合并、积压与重建基线
     证据：2026-10-20
   - [x] 验证嵌套修改自动同步/标记持久化，不靠顶层重新赋值或业务 setDirty；覆盖数组结构变化、旧句柄、混合观察者及在途保存，以大背包单项修改衡量字节/分配/CPU
     证据：2026-10-20
-  - [ ] 实现归属 data 加载/版本转换/默认值及持久化快照，generation/revision 条件保存与提交确认；仅一个强制保存入口，禁止发出消息就清空 dirty，索引与数据迁移显式管理（BLOCKED）— 跳过：需先实现网络实体运行时与归属 data 适配，当前归属侧持久化/迁移契约未接线。复核注记（2026-11-06）：所缺条件仍缺——归属侧持久化/迁移契约未接线（PersistentStore 为进程内模型，无存储后端），无网络实体运行时，保持 BLOCKED
+  - [ ] 实现归属 data 加载/版本转换/默认值及持久化快照，generation/revision 条件保存与提交确认；仅一个强制保存入口，禁止发出消息就清空 dirty，索引与数据迁移显式管理（BLOCKED）— 跳过：需先实现网络实体运行时与归属 data 适配，当前归属侧持久化/迁移契约未接线。复核注记（2026-11-06）：所缺条件仍缺——归属侧持久化/迁移契约未接线（PersistentStore 为进程内模型，无存储后端），无网络实体运行时，保持 BLOCKED。复核注记（2026-11-12）：条件保存机制已实现且 entity.persist 绿——generation+revision 双栅（STALE/CONFLICT 分明）、单一强制保存入口、save_id 确认门、dirty 存活至确认、整载拒绝+缺省补齐+generation 只进（entity_persist.hpp:88-146，test_contract.cpp:1206-1291）；「无网络实体运行时」前提已失效；仍缺：实体态存储后端——PersistentStore 仍进程内无非测试调用方，现有 SQLite journal 承载 record/lease/placement 而非实体态（record.hpp:175-177 明示合并实体态属后续契约工作，docs/entity-contract.md:328「no storage backend exists」），保持 BLOCKED
   - [ ] 实现契约不变的 Lua 安全替换，以及同二进制新进程加载新契约后的实体迁移、唯一写入权交接、在途请求与计时器处理；现有 SIGHUP 不等于该能力（BLOCKED）— 跳过：实体迁移/唯一写入权交接机制未实现，SIGHUP 仅替换脚本不迁移实体。复核注记（2026-11-06）：所缺条件仍缺——docs/entity-contract.md 明示现有 SIGHUP 不实现该提案，实体迁移/唯一写入权交接未实现，保持 BLOCKED
   - [ ] 验证新旧 JS/C# 客户端、混合观察者、兼容协商、迁移/保存失败与回滚；以相同服务器二进制摘要承载两版契约、新属性与新方法，证明服务器业务协议更新无需重编。（当前门控：条目 118 的实体迁移/唯一写入权交接机制待网络实体运行时；已有可用件（BLOCKED））— 跳过：门控的实体迁移/唯一写入权交接机制未实现，无法端到端验证。复核注记（2026-11-06）：所缺条件仍缺——实体迁移/唯一写入权交接机制未实现，无网络实体运行时，无法端到端验证，保持 BLOCKED
 
@@ -305,3 +305,12 @@
 - [x] P1-5 MuxLink 就绪态超时 10s→60s 对齐 hub：handshake 10s / ready idle 60s 双预算（src/session_plane.hpp:220-221,337），收帧同样续期（src/session_plane.hpp:970）。回归：静默 11s×2 跨旧 10s 界仍可收发（src/test_transport.cpp:1050-1054，22s 探针锁定 10→60 变更；收帧续期为代码级验证——区分需 65s+ 探针，超 ctest 60s TIMEOUT）。
 - [x] P1-6 finish_lua push 抛出走事件循环：push 包 try/catch，抛出转回调 value 槽、栈复位后 lua_pcall（src/lua_service_internal.hpp:46-62）。回归：throw 探针以 "nil|push exploded" 达回调且栈平衡（src/test_lua.cpp:94-104）。
 - 验证：cmake --build build/debug 绿；ctest 80/80 绿（首轮 #7 transport.websocket 偶发 abort 为 docs/websocket-bad-weak-ptr.md 在档已知间歇问题——HEAD 干净树复跑 1/6 亦现，与本批无关；复跑全绿）。
+
+## 复核批次 2026-11-12（mistlane-next.md：21 项未勾全量核验，零代码改动）
+
+- 核验方式：两路独立代码考古（契约/编解码/网络传输 与 同步/持久化/迁移），基线 ctest 80/80 绿。
+- 结论：21 项未勾全部核验完毕，**无一可在本轮完成**，全部保持 BLOCKED 不勾。其中 5 项（行 49/50/59/60/67）的 2026-11-06 注记含已失效前提，已就地追加 2026-11-12 更正注记：最小编解码原型（六 golden 入门禁）、跨进程 MLE1 网络实体运行时（node.cpp:312-333 + session_plane.hpp:595-611）、SDK 侧有界队列/期限（双 golden 钉住）、属性同步五机制（entity.sync 绿）、generation+revision 条件保存+确认门（entity.persist 绿）均已在仓；其余 16 项注记与现状相符，未改动。
+- 剩余门槛分三类，均非本轮可解：(a) 用户决策——实体契约格式审定（行 49/50，仓内无审定标记、docs/entity-contract.md:3 仍自我标注 Research design note）、版本号/发布说明/发布页（行 85/87/89，版本红线：须用户明确给号）；(b) 缺历史资产——原始业务 sproto 协议定义与客户端绑定（行 71-74，全仓除 build 夹具无 .sproto，docs/player-scene-model.md:54,56 所指 legacy 路径在仓外）；(c) 缺环境——压测集群/profiler/容器（行 92/94/97）；其余（行 21/30/31/34/68/69）阻塞于 Avatar 运行时与契约迁移两大切片，依序待 (a) 解锁。
+- 按任务书「跳过 BLOCKED」纪律，本轮无实现项可取，核验与注记更正即本轮交付；后续推进需用户先解 (a) 类门槛或明确解锁某个大切片。
+- 附带发现一：docs/entity-contract.md 两处自相矛盾——:33 "not a completed parser" 与状态段已实现解析器矛盾、:207 "All these APIs remain unimplemented" 过时（文档其余状态段与代码相符）；属文档批次工作，本轮未动。
+- 附带发现二：transport.websocket 与 transport.listeners 存在既有连接析构竞态间歇失败（pure virtual / bad_weak_ptr，docs/websocket-bad-weak-ptr.md 在档）；实测 listeners 20 轮 flake 率 25%，6a75788 前后同率（A/B 20+30 轮），非近期回归；另注：测试子进程泄漏（Context 异常退出残留 66 个 mistlane 子进程）会显著放大 flake 率至 55%+，复测前应 pkill 清理。
