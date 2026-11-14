@@ -77,6 +77,7 @@ void scaffold_init();
 void config_file();
 void cli_bot();
 void business_bot();
+void bots_smoke();
 void crashpad_startup(const fs::path&);
 void crashpad_minidump(const fs::path&);
 void redis_lua_api();
@@ -98,7 +99,7 @@ int run_tests(int argc, char** argv) {
         if (key=="--help") {
             std::cout << "mistlane test [--suite NAME | --case NAME] [--list] [--keep-temp]\n"
                 "mistlane test --script FILE [--script FILE ...] [--case SUITE.CASE] [--timeout-ms N]\n"
-                "Suites: core, contract, transport, coordinator, api, lua, cross, probe, scaffold, config, cli, crashpad, redis, mysql.\n"
+                "Suites: core, contract, transport, coordinator, api, lua, cross, probe, scaffold, config, cli (bots), crashpad, redis, mysql.\n"
                 "Default 'all' runs dependency-free suites; Redis/MySQL/Crashpad are opt-in.\n"
                 "  --crashpad-handler FILE  Handler used by the crashpad suite\n"
                 "  --list                   List matching cases without running them\n"
@@ -198,6 +199,7 @@ int run_tests(int argc, char** argv) {
         {"config.file","config",test::config_file},
         {"cli.bot","cli",test::cli_bot},
         {"business.bot","cli",test::business_bot},
+        {"bots.smoke","cli",test::bots_smoke},
         {"crashpad.startup","crashpad",[&] {test::crashpad_startup(handler);},true},
         {"crashpad.minidump","crashpad",[&] {test::crashpad_minidump(handler);},true},
         {"redis.lua","redis",test::redis_lua_api,true},

@@ -1,0 +1,10 @@
+<Contracts>
+  <Entity name="Player" id="2">
+    <ServerMethods>
+      <Method name="login" id="1" mode="request" caller="server"><Arg name="token" id="0" type="STRING"/><Returns><Field name="ok" id="1" type="UINT16"/></Returns></Method>
+      <Method name="joinRoom" id="2" mode="request" caller="server"><Arg name="room" id="0" type="UINT32"/><Returns><Field name="ok" id="1" type="UINT16"/></Returns></Method>
+      <Method name="move" id="3" mode="request" caller="server"><Arg name="x" id="0" type="INT32"/><Arg name="y" id="1" type="INT32"/><Returns><Field name="seq" id="2" type="UINT32"/></Returns></Method>
+      <Method name="heartbeat" id="4" mode="request" caller="server"><Returns><Field name="seq" id="0" type="UINT32"/></Returns></Method>
+    </ServerMethods>
+  </Entity>
+</Contracts>

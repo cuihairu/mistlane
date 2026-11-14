@@ -32,7 +32,7 @@ configure_file(src/test_resources.hpp.in generated/test_resources.hpp @ONLY)
 add_executable(mistlane src/main.cpp src/scaffold.cpp src/contract_tool.cpp src/cli_client.cpp src/bot.cpp
   src/selftest.cpp src/test_core.cpp src/test_contract.cpp src/test_transport.cpp src/test_coordinator.cpp
   src/test_lua.cpp src/test_cross.cpp src/test_probe.cpp src/test_config.cpp src/test_scaffold.cpp
-  src/test_cli.cpp src/test_crashpad.cpp src/test_api.cpp src/test_databases.cpp src/lua_tests.cpp)
+  src/test_cli.cpp src/test_bots.cpp src/test_crashpad.cpp src/test_api.cpp src/test_databases.cpp src/lua_tests.cpp)
 target_include_directories(mistlane PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/generated")
 target_link_libraries(mistlane PRIVATE mistlane_net mistlane_http Boost::mysql)
 target_compile_options(mistlane PRIVATE -Wall -Wextra -Wpedantic)
@@ -89,7 +89,7 @@ if(BUILD_TESTING)
       login.ticket login.ticket.wire
       cross.admission cross.record cross.record.journal cross.return.queue cross.return.queue.bounded cross.return.sender probe.control scaffold.init
       record.home.sequence record.home.sequence.journal record.home.fence record.home.fence.journal
-      config.file cli.bot business.bot)
+      config.file cli.bot business.bot bots.smoke)
     string(REPLACE "." "_" test_name "${test_case}")
     add_test(NAME mistlane_${test_name} COMMAND mistlane test --case "${test_case}")
     set_tests_properties(mistlane_${test_name} PROPERTIES TIMEOUT 60)
@@ -135,6 +135,12 @@ target_link_libraries(mistlane_http PUBLIC CURL::libcurl)
 add_library(mistlane::http ALIAS mistlane_http)
 add_executable(mistlane-http-probe examples/http_probe.cpp)
 target_link_libraries(mistlane-http-probe PRIVATE mistlane_http)
+# The standalone bots driver (tools/bots): reuses the real CLI client and the
+# shared business scenario (src/business_plan.hpp) against live test nodes.
+add_executable(mistlane-bots tools/bots/bots.cpp src/cli_client.cpp)
+target_include_directories(mistlane-bots PRIVATE src include)
+target_link_libraries(mistlane-bots PRIVATE Boost::asio Threads::Threads Drogon::Drogon mistlane_http)
+target_compile_options(mistlane-bots PRIVATE -Wall -Wextra -Wpedantic)
 add_executable(mistlane-crash-sample examples/crash_sample.cpp)
 target_link_libraries(mistlane-crash-sample PRIVATE crashpad::crashpad)
 target_compile_options(mistlane-crash-sample PRIVATE -Wall -Wextra -Wpedantic)

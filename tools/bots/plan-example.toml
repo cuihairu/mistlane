@@ -1,0 +1,37 @@
+# mistlane-bots load plan: 8 ramping connections, global 200 req/s target,
+# 10 seconds long. Start the node first, e.g.:
+#   mistlane --role gameServer --listen 127.0.0.1:7100 \
+#     --script tools/bots/example-business.lua \
+#     --contract tools/bots/example-business.def --service-token s3cret
+[run]
+url = "tcp://127.0.0.1:7100"
+mode = "load"
+concurrency = 8        # connections, 1..512
+ramp_ms = 500          # stagger the connection starts
+requests = 0           # unused here; duration_s or requests must be set
+duration_s = 10        # run for ten seconds
+rate = 200             # global target requests/second (shared tickets)
+timeout_ms = 5000
+
+[scenario]
+contract = "tools/bots/example-business.def" # methods resolve by name:
+                                             # login, joinRoom, move, heartbeat
+                                             # (examples/contracts/avatar.def
+                                             # serves different methods)
+service_token = "s3cret"   # MLS1 bots bots-<n> s3cret
+spawn = true               # spawn <entity-id>, expect "spawned"
+entity_base = 1000         # one entity per connection
+rooms = 4                  # join 1 + connection %% rooms
+heartbeat_every = 8        # every 8th step is a heartbeat
+# scope/entity_type/incarnation/generation address the envelope (defaults 1/2/1/1)
+
+# Output: one totals line (planned/completed/failed_connections/elapsed/
+# requests_per_second/p50/p95/p99) plus one type=<login|joinRoom|move|
+# heartbeat> line with ok/fail and per-kind latency percentiles.
+#
+# Fault-injection variant (same directory): --mode inject with
+# [inject] url_data = "tcp://127.0.0.1:7200"  (journal-backed data role)
+#          url_metrics = "http://127.0.0.1:7300"
+#          contract = "tools/bots/example-business.def"
+# Every guard prints verdict=held or BROKEN; a nonzero exit means a guard
+# broke and the finding belongs in the repository todo.
