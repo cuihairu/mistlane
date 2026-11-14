@@ -208,7 +208,7 @@ self.client:onReward(itemId, count)
 target:applyDamage(amount)
 ```
 
-上述均为拟实现接口。JS 以订阅回调、C# 以事件/处理接口接收通知；客户端复制属性只读，由服务器更改。服务端的 self.client 表示反向通知客户端，与客户端直接使用 Avatar 的入口不同。不是每个 Entity 都有绑定客户端；没有绑定或已离线时返回明确投递状态，不自动加载玩家或排队无限缓存通知。
+上述客户端侧行为目前仅以上文列出的最小 SDK 接口落地（`EntityClient`/`EntityRpcQueue` 门面与 `PropertySync` 副本，由两侧 SDK golden 锁定）；生产级 JS/C# codec 与服务器到客户端的线上属性同步仍开放。JS 以订阅回调、C# 以事件/处理接口接收通知；客户端复制属性只读，由服务器更改。服务端的 self.client 表示反向通知客户端，与客户端直接使用 Avatar 的入口不同。不是每个 Entity 都有绑定客户端；没有绑定或已离线时返回明确投递状态，不自动加载玩家或排队无限缓存通知。
 
 ### 绑定如何产生
 

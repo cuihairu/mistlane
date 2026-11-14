@@ -204,7 +204,7 @@ self.client:onReward(itemId, count)
 target:applyDamage(amount)
 ```
 
-Notifications return through the original gateway. Internal references obey contract permissions and deadlines too. Server-side self.client is the reverse notification route, distinct from direct client Avatar access. Not every Entity has an owner client; missing/offline delivery has explicit outcomes and does not implicitly activate a player or create unbounded queues. All these APIs remain unimplemented.
+Notifications return through the original gateway. Internal references obey contract permissions and deadlines too. Server-side self.client is the reverse notification route, distinct from direct client Avatar access. Not every Entity has an owner client; missing/offline delivery has explicit outcomes and does not implicitly activate a player or create unbounded queues. These client-facing behaviors ship today only as the minimal SDK surfaces listed above (`EntityClient`/`EntityRpcQueue` and the `PropertySync` replica, pinned by the SDK goldens); production JS/C# codecs and server-to-client wire property replication stay open.
 
 ### How bindings are produced
 
