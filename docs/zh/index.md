@@ -40,7 +40,7 @@ flowchart TB
   cross <--> data
 ```
 
-数据库适配目前属于独立 C++ 接入，尚未成为 Lua 数据库桥接。默认按连接路由；gateway 可选以 `MLM1`（`--upstream-multiplex on`）让全部会话共享一条上游连接。玩家迁服与分布式恢复不在本版中。
+数据库适配目前属于独立 C++ 接入，尚未成为 Lua 数据库桥接。默认按连接路由；gateway 可选以 `MLM1`（`--upstream-multiplex on`）让全部会话共享一条上游连接。coordinator 迁移事务与 `MLR1 MIG` 线协议已实现，crossServer 回传发送端（有界重试队列、home 最终序号权威）可在落库后回答 `ACK durable`；本版仍未落地的是角色切换的实时握手——把角色从一个宿主搬到另一个宿主并在失败后恢复的[Avatar 运行时](./avatar-runtime.md)。
 
 从[使用指南](./guide.md)开始，再阅读[架构与能力边界](./architecture.md)和[验证记录](./validation.md)。
 

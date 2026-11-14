@@ -12,7 +12,7 @@ Explain the extracted C++20 / Lua framework, its current implementation, and mig
 
 ## Capabilities and Constraints
 
-The user requires readable architecture diagrams, working Mermaid, and a redesigned documentation theme. Game ingress and the HTTP service must both support configurable WS/WSS listeners as a future runtime requirement. Current --transport selects one protocol; documentation must identify this limitation. Approved target responsibilities are gateway, login, coordinator, gameServer, crossServer, data and optional apiServer. Existing CLI names remain implementation facts until their planned migration. Distinguish implemented behavior from planned work.
+The user requires readable architecture diagrams, working Mermaid, and a redesigned documentation theme. Game ingress and the HTTP service must both support configurable WS/WSS listeners as a future runtime requirement. `--transport` still selects one protocol for the primary listener, but each `--listener PROTO://IP:PORT` flag adds an independent extra listener, so one process can expose TCP, WS, WSS and HTTP side by side (mixed plaintext/TLS allowed); documentation must keep both facts distinct. Approved target responsibilities are gateway, login, coordinator, gameServer, crossServer, data and optional apiServer. Existing CLI names remain implementation facts until their planned migration. Distinguish implemented behavior from planned work.
 
 ## Evidence on Hand
 

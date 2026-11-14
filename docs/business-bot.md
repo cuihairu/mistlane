@@ -96,6 +96,15 @@ and node load the same document) and `business.lua` (spawn/rooms message
 handlers plus the entity implementation table, publishing room occupancy as
 the `rooms` script gauge).
 
+## Standalone load and injection driver (`tools/bots`)
+
+`mistlane-bots` is a second standalone executable that reuses this page's business semantics over the same session plane (framed TCP, MLS1, MLE1 entity steps, MLD1 record legs), driven by a TOML plan:
+
+- **load mode** — the plan declares concurrency, a ramp window, a target rate and a duration; the run reports completed/failed counts, achieved rate and p50/p95/p99 latency, grouped by message type;
+- **inject mode** — it injects malformed contract frames, late/duplicate ACKs, slow clients and disconnect storms, then checks that the node's durable-ack, sequence-gap and capacity guards actually hold under pressure; a broken guard fails the run with a nonzero exit.
+
+Build and usage: [tools/bots/README.md](https://github.com/cuihairu/mistlane/blob/main/tools/bots/README.md); example plan: `plan-example.toml` beside it. It is a problem-discovery tool for this repository's own nodes, not a general-purpose load product.
+
 ## Embedded dashboard (`--dashboard-listen IP:PORT`)
 
 A read-only listener serving:

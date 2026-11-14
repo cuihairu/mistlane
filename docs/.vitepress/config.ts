@@ -87,8 +87,15 @@ export default defineConfig({
         { text: '源码分层分析', link: '/zh/source-layer-analysis' },
         { text: '术语表', link: '/zh/glossary' },
         { text: '类 BigWorld 协议体系演化', link: '/zh/bigworld-like-protocol' },
+        { text: '业务场景 bot 与内置仪表盘', link: '/zh/business-bot' },
         { text: '依赖管理', link: '/zh/dependencies' },
         { text: '验证记录', link: '/zh/validation' }
+      ] }, { text: '分析', items: [
+        { text: '实体库表映射与设计取向', link: '/zh/entity-db-mapping-and-philosophy' },
+        { text: '实体同步与持久化', link: '/zh/entity-sync-persistence' },
+        { text: 'MMO 引擎调研', link: '/zh/mmo-engine-survey' },
+        { text: 'MMO 引擎设计要点', link: '/zh/mmo-engine-design-highlights' },
+        { text: 'WebSocket bad weak_ptr 复盘', link: '/zh/websocket-bad-weak-ptr' }
       ] }],
       '/': [{ text: 'Mistlane', items: [
         { text: 'Introduction', link: '/' },
@@ -116,6 +123,12 @@ export default defineConfig({
         { text: 'BigWorld-like protocol evolution', link: '/bigworld-like-protocol' },
         { text: 'Dependencies', link: '/dependencies' },
         { text: 'Validation', link: '/validation' }
+      ] }, { text: 'Analysis', items: [
+        { text: 'Entity DB mapping and philosophy', link: '/entity-db-mapping-and-philosophy' },
+        { text: 'Entity sync and persistence', link: '/entity-sync-persistence' },
+        { text: 'MMO engine survey', link: '/mmo-engine-survey' },
+        { text: 'MMO engine design highlights', link: '/mmo-engine-design-highlights' },
+        { text: 'WebSocket bad weak_ptr postmortem', link: '/websocket-bad-weak-ptr' }
       ] }]
     }
   }

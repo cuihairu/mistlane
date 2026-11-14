@@ -64,6 +64,8 @@ ctest --preset linux-debug
 
 Use linux-release for Release. The baseline supplies Boost 1.92.0, Lua 5.5.1, and OpenSSL 3.6.5#2. OpenSSL upstream has 4.0.3; this project uses the version packaged in vcpkg. [Dependency policy](docs/dependencies.md).
 
+An in-repo vcpkg overlay pins Drogon to the stable 1.9.14 and lets vcpkg manage it together with Trantor; the Boost baseline on its own does not carry a new enough Drogon. The overlay is applied by the presets, not by a separate step. An example pool client ships as the `mistlane-mysql-probe` target (`examples/mysql_probe.cpp`); `python3 tests/mysql_integration.py ./build/debug/mistlane-mysql-probe` runs it against a disposable local MariaDB (see the [validation record](docs/validation.md)).
+
 ## Run
 
 Start these in three terminals from the repository root:
@@ -89,6 +91,14 @@ Connect to `ws://server:8080/ws`; game messages reach Lua `message(payload)`. Ea
 For HTTP/HTTPS, run a gameServer with --transport http/https and examples/http.lua. The Lua handler accepts method/path/query/headers/body and returns status/headers/body. Its before_request, http, after_request, on_error, init, start, tick, stop and shutdown hooks are documented in the [lifecycle guide](docs/lua.md).
 
 Generate a starter project with `./build/debug/mistlane init ./my-service`. It includes per-instance shell configuration, Lua entrypoints, local process operations and a systemd unit template. See [legacy and modern architecture comparison](docs/architecture-comparison.md) for the configuration and deployment analysis. The launcher shell files stay canonical for the generated project; the runtime itself also parses a native `KEY=VALUE` config through `--config FILE` (see the [guide](docs/guide.md)).
+
+## Tools
+
+| Tool | What it does |
+|---|---|
+| `mistlane bot` | In-tree client for echo/expect checks and the `business` scenario (`--scenario business --contract FILE.def`, documented on the [business scenario bot and dashboard](docs/business-bot.md) page) |
+| `mistlane-bots` | Standalone load and fault-injection driver over the same session plane, driven by a TOML plan ([tools/bots/README.md](tools/bots/README.md)) |
+| Mistlane DevTools | VS Code shell over [`tools/mistlane-devcore`](tools/mistlane-devcore): attach to a running node and watch its metrics, live log stream and entity contract surface ([tools/mistlane-vscode](tools/mistlane-vscode)) |
 
 ## Bilingual documentation
 

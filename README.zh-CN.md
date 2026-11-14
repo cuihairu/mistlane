@@ -38,6 +38,8 @@ flowchart LR
   B --> L[apiServer + Lua hooks]
   A[C++ 扩展] --> P[Boost.MySQL pool]
   P --> DB[(MySQL / MariaDB)]
+  W --> Q[异步 Lua Streams / 排行榜]
+  Q --> KV[(Redis)]
   E[区服 Gate] --> X[gateway · 跨服路由/准入]
   X --> S[crossServer Lua 房间]
 ```
@@ -68,6 +70,14 @@ ctest --preset linux-debug
 Release 使用 `linux-release` preset。第一次配置会由 vcpkg 下载和编译依赖；后续复用二进制缓存。`CMakeUserPresets.json` 可保存个人路径，已忽略提交。
 
 使用 `./build/debug/mistlane init ./my-service` 生成应用模板，内含逐进程 shell 配置、Lua 入口、本地运维脚本和 systemd unit 模板。旧项目配置/部署结构与新模板依据见[架构对比](docs/zh/architecture-comparison.md)。启动脚本仍是生成项目的标配；运行时也可经 `--config FILE` 直接解析原生 `KEY=VALUE` 配置（见[指南](docs/zh/guide.md)）。
+
+## 工具
+
+| 工具 | 说明 |
+|---|---|
+| `mistlane bot` | 内置客户端，做 echo/expect 校验与 `business` 场景（`--scenario business --contract FILE.def`，见[业务场景 bot 与内置仪表盘](docs/zh/business-bot.md)） |
+| `mistlane-bots` | 独立的压测与故障注入驱动，走同一套会话层，由 TOML 计划驱动（[tools/bots/README.md](tools/bots/README.md)） |
+| Mistlane DevTools | 基于 [`tools/mistlane-devcore`](tools/mistlane-devcore) 的 VS Code 外壳：接入运行中的节点，观察其指标曲线、实时日志流与实体契约面（[tools/mistlane-vscode](tools/mistlane-vscode)） |
 
 baseline 内 Boost 为 1.92.0，Lua 为 5.5.1，OpenSSL 为 3.6.5#2。OpenSSL 上游另有更新的 4.0.3；当前选用该 vcpkg baseline 提供的最新 port，不自行增加未经验证的 overlay。详见 [依赖策略](docs/zh/dependencies.md)。
 
