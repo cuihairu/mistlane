@@ -314,3 +314,4 @@
 - 按任务书「跳过 BLOCKED」纪律，本轮无实现项可取，核验与注记更正即本轮交付；后续推进需用户先解 (a) 类门槛或明确解锁某个大切片。
 - 附带发现一：docs/entity-contract.md 两处自相矛盾——:33 "not a completed parser" 与状态段已实现解析器矛盾、:207 "All these APIs remain unimplemented" 过时（文档其余状态段与代码相符）；属文档批次工作，本轮未动。
 - 附带发现二：transport.websocket 与 transport.listeners 存在既有连接析构竞态间歇失败（pure virtual / bad_weak_ptr，docs/websocket-bad-weak-ptr.md 在档）；实测 listeners 20 轮 flake 率 25%，6a75788 前后同率（A/B 20+30 轮），非近期回归；另注：测试子进程泄漏（Context 异常退出残留 66 个 mistlane 子进程）会显著放大 flake 率至 55%+，复测前应 pkill 清理。
+- [ ] BOTS-001 [P1] tools/bots 独立压测目录（2026-11-14 用户令）：独立 bot 进程（复用 BusinessPlan 语义，走 session_plane/cli_client 真实连接路径）+压测 plan TOML（并发/ramp/速率/时长+延迟分位/按消息类型分组统计，对齐 business.bot 四连接先例）+错误注入（坏 contract 帧/迟到 ack/慢客户端/断连风暴，验证 durable ack/gap 守卫压力下不破）+示例 plan+CI smoke。验收：全量测试绿+真实节点压测出 P99+注入发现如实立 todo。
