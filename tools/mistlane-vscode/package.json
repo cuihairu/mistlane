@@ -1,0 +1,87 @@
+{
+  "name": "mistlane-vscode",
+  "displayName": "Mistlane DevTools",
+  "description": "Attach to a running mistlane node: metrics curves, live log stream, entity contract browser.",
+  "version": "0.0.0",
+  "publisher": "cuihairu",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/cuihairu/mistlane"
+  },
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "main": "./dist/extension.js",
+  "activationEvents": [],
+  "contributes": {
+    "commands": [
+      {
+        "command": "mistlane.attach",
+        "title": "Mistlane: Attach Node",
+        "icon": "$(plug)"
+      },
+      {
+        "command": "mistlane.detach",
+        "title": "Mistlane: Detach"
+      },
+      {
+        "command": "mistlane.showPanel",
+        "title": "Mistlane: Show Dashboard"
+      }
+    ],
+    "configuration": {
+      "title": "Mistlane",
+      "properties": {
+        "mistlane.dashboardUrl": {
+          "type": "string",
+          "default": "http://127.0.0.1:21002",
+          "description": "Node dashboard/metrics base URL (the --dashboard-listen or --metrics-listen address)."
+        },
+        "mistlane.logFile": {
+          "type": "string",
+          "description": "Node log file to tail (the ops scripts land node output in var/log/<instance>.log)."
+        },
+        "mistlane.pid": {
+          "type": "number",
+          "description": "Node process id for CPU/RSS sampling."
+        },
+        "mistlane.pidFile": {
+          "type": "string",
+          "description": "File holding the node process id (read when mistlane.pid is not set)."
+        },
+        "mistlane.contractPath": {
+          "type": "string",
+          "description": "Entity contract .def to list in the panel (click a row to open the file)."
+        },
+        "mistlane.metricsPollMs": {
+          "type": "number",
+          "default": 1000,
+          "description": "Metrics poll interval in milliseconds."
+        },
+        "mistlane.logPollMs": {
+          "type": "number",
+          "default": 500,
+          "description": "Log tail poll interval in milliseconds."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "build": "node esbuild.mjs",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "package": "vsce package"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "@types/vscode": "^1.85.0",
+    "@vscode/vsce": "^3.2.0",
+    "esbuild": "^0.24.0",
+    "typescript": "^5.7.0",
+    "vitest": "^2.1.8"
+  }
+}
