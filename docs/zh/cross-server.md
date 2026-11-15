@@ -123,7 +123,7 @@ cross 节点的上游写作 `IP:PORT[:PROBE]`。带探测端口时，cross 会�
 
 Profiler 路线决策（2026-10-18）：采用作用于运行进程的外部采样器。不做进程内采样器：Asio 循环内的采样器消耗的正是它要测量的 CPU 预算，无法说明自身开销。gperftools 虽是 vcpkg port，但基于同样理由不进链接清单；仅当目标主机也封锁外部采样时，才以可选诊断构建重新评估。
 
-本仓库不声称任何采样开销数字：当前开发沙箱无法采集。`perf` 7.0.14 已安装，但 `kernel.perf_event_paranoid=4` 且无 `CAP_PERFMON` 时打不开任何事件（"Failure to open any events for recording"）；`strace -c -p` 报 `ptrace(PTRACE_SEIZE): Operation not permitted`；`eu-stack`/`pprof` 未安装。在目标主机上采集采样开销属于环境演练的一部分：届时在 `CAP_PERFMON` 与 `kernel.perf_event_paranoid<=1` 下执行 `perf record -F 99 -g -p PID -- sleep 30`（若 DWARF 展栈代价过高则回退 `--call-graph fp`），再用 build id 与归档符号匹配做符号化。
+本机的非特权采集路径依旧不通：`perf` 7.0.14 已安装，但 `kernel.perf_event_paranoid=4` 且无 `CAP_PERFMON` 时打不开任何事件（"Failure to open any events for recording"）；`strace -c -p` 报 `ptrace(PTRACE_SEIZE): Operation not permitted`；`eu-stack`/`pprof` 未安装。特权路径可以采集：持有 `CAP_PERFMON` 的进程（sudo）豁免于 `perf_event_paranoid`，因此 `sudo perf record` 能对普通用户启动的节点开事件（2026-11-15 验证）。可执行的完整配方、实测采样影响与负载门纪律见 [profiler 工作流](./profiling)。即便这条路也不通的主机上，采集采样开销仍属环境演练的一部分。
 
 可复现的压测不依赖外部工具：起一个 crossServer 加一个带 `--metrics-listen` 的 cross 节点，用内置压测器驱动，并在压测前、中、后抓取 `/metrics`：
 

@@ -81,6 +81,7 @@ export default defineConfig({
         ] }, { text: '运行与扩展', items: [
         { text: 'Lua 与生命周期', link: '/zh/lua' },
         { text: '跨服与过载保护', link: '/zh/cross-server' },
+        { text: 'Profiler 工作流', link: '/zh/profiling' },
         { text: '跨服回传与唯一写入权协议', link: '/zh/cross-return-protocol' },
         { text: 'login、data 与 apiServer 契约', link: '/zh/service-contracts' },
         { text: '协议面分析', link: '/zh/protocol-analysis' },
@@ -114,6 +115,7 @@ export default defineConfig({
         ] }, { text: 'Runtime and extensions', items: [
         { text: 'Lua lifecycle', link: '/lua' },
         { text: 'Cross-server and overload', link: '/cross-server' },
+        { text: 'Profiler workflow', link: '/profiling' },
         { text: 'Cross return and single-writer protocol', link: '/cross-return-protocol' },
         { text: 'login, data and apiServer contracts', link: '/service-contracts' },
         { text: 'Protocol analysis', link: '/protocol-analysis' },

@@ -89,9 +89,9 @@
 - [ ] 检查 GitHub 发布页包含 Apache-2.0 许可证链接和 NOTICE（BLOCKED）— 跳过：需发布页实际存在并核对链接/NOTICE，涉及用户凭证与真实发布。复核注记（2026-11-06）：所缺条件仍缺——仓库无 git tag/发布页，需真实 GitHub 发布与用户凭证，保持 BLOCKED
 ## J. 崩溃报告、Prometheus、内部探测与性能剖析
 
-- [ ] 为 profiler 工作流提供可重复的跨服压测场景和符号化步骤，记录采样对吞吐、P99 和 RSS 的影响（BLOCKED）— 跳过：需要真实压测集群/profiler 工具链与符号化环境，缺硬件与部署。复核注记（2026-11-06）：所缺条件仍缺——无真实压测集群/profiler/符号化环境，保持 BLOCKED
+- [x] 为 profiler 工作流提供可重复的跨服压测场景和符号化步骤，记录采样对吞吐、P99 和 RSS 的影响（2026-11-15 交付）— 前提已失效并补齐：sudo 持有 CAP_PERFMON 豁免 perf_event_paranoid=4，`sudo perf record` 实测可开事件；可重复场景=文档化跨服基准（crossServer+cross 网关+bot --join MLC1，32 连接×500 步闭环，绑核）；符号化=debug 构建直接解析（75 样本 0 丢失，asio mutex/luaS_hash 调用链全解析，build-id 注意事项入文档）；采样影响=12 次成对运行（sanity/F99 dwarf/F99 fp/F999 dwarf）：RSS 全程平坦 ~17MB、全部有效重复 16000/16000 零失败、被采样节点 CPU 在 999Hz DWARF +14/+20/+27%（中位 +20%）、99Hz 两种模式落在 sanity 对 +10% 记账底线内、持续 999Hz 触发内核自动节流（perf_event_max_sample_rate 级联 100000→37000）；交付面：docs/profiling.md + docs/zh/profiling.md（双侧栏）+ docs/cross-server.md「无法采集」表述更正（en/zh）+ validation.md 验证行
 
-- [ ] 在目标 Linux/容器环境执行崩溃演练、监控抓取、探针过载演练和压力剖析；未测试前不宣称已解决历史跨服卡死或容量问题（BLOCKED）— 跳过：需真实 Linux/容器环境与监控抓取，缺真实机器。复核注记（2026-11-06）：所缺条件仍缺——无真实 Linux/容器环境与监控抓取，保持 BLOCKED
+- [ ] 在目标 Linux/容器环境执行崩溃演练、监控抓取、探针过载演练和压力剖析；未测试前不宣称已解决历史跨服卡死或容量问题（BLOCKED）— 跳过：需真实 Linux/容器环境与监控抓取，缺真实机器。复核注记（2026-11-06）：所缺条件仍缺——无真实 Linux/容器环境与监控抓取，保持 BLOCKED。复核注记（2026-11-15）：部分前提已缓解——开发机即真实 Linux，压力剖析与监控抓取已可执行（docs/profiling.md 跨服基准+成对采样影响实测，/metrics 与 /proc 抓取路径打通）；仍缺：崩溃演练（Crashpad 生成/保留）、探针过载演练、目标容器环境定义与部署决策，保持 BLOCKED
 ## K. 项目初始化 CLI 与进程运维模板
 
 - [ ] 按架构比较文档继续补内部 liveness/readiness 探测、Crashpad 转储生成/保留与部署工作流；再依据真实压力测试决定动态 registry、lease/fencing、房间 drain/migration 或容器编排需求（BLOCKED）— 跳过：依赖真实压力测试（上一项）与容器编排决策，均未完成。复核注记（2026-11-06）：所缺条件仍缺——真实压力测试（上一项）与容器编排决策均未完成，保持 BLOCKED
