@@ -110,6 +110,8 @@ if(BUILD_TESTING)
   if(MISTLANE_PYTHON3_EXECUTABLE)
     add_test(NAME mistlane_protocol_recovery COMMAND "${MISTLANE_PYTHON3_EXECUTABLE}"
       "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_protocol_recovery.py")
+    add_test(NAME mistlane_avatar_contract COMMAND "${MISTLANE_PYTHON3_EXECUTABLE}"
+      "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_avatar_contract.py")
   endif()
   add_test(NAME mistlane_sproto_lua_roundtrip COMMAND mistlane-sproto-probe roundtrip
     "${CMAKE_CURRENT_BINARY_DIR}/sproto-fixture/avatar.sproto")

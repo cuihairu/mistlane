@@ -1,0 +1,71 @@
+{
+  "contract": "avatar-spawn-destroy",
+  "version": "2026-11-22",
+  "subject": "Avatar object spawn/destroy runtime obligations",
+  "supersedes": "docs/avatar-runtime.md five-state page is the state semantics; this is the spawn/destroy obligation contract it does not enumerate",
+  "oracle": "docs/avatar-lifecycle.md (PL-1): loading/active/suspended/visiting/transferring/reclaiming/closed",
+  "identity": [
+    {"field": "origin_realm", "type": "realm", "required": true, "default": null},
+    {"field": "character_id", "type": "id", "required": true, "default": null},
+    {"field": "hosting_generation", "type": "generation", "required": true, "default": null}
+  ],
+  "spawn": {
+    "creator_authority": "framework-only; the coordinator publishes the hosting generation and a host may spawn only a route it holds at the current generation",
+    "load_source": {"type": "enum", "values": ["home", "transfer-in"], "default": "home"},
+    "required_fields": [
+      {"field": "origin_realm", "type": "realm", "default": null},
+      {"field": "character_id", "type": "id", "default": null},
+      {"field": "hosting_generation", "type": "generation", "default": null},
+      {"field": "load_source", "type": "enum", "values": ["home", "transfer-in"], "default": "home"},
+      {"field": "declared_timers", "type": "list", "default": []}
+    ],
+    "persistence": "spawn itself does not persist; a record is loaded (MLD1 LOAD / home domain) and a spawn is visible only after avatar_load succeeds",
+    "aoi_edge": "spawn->active broadcasts appearance to scene observers; destroy broadcasts leave",
+    "failure_path": "load failed -> closed, no visible avatar, no tombstone (nothing was published); the generation stays non-writable",
+    "refusal": "a spawn without a route at the current generation, or a duplicate spawn for the same (realm, character, generation) with an existing active/loading avatar, is refused with AVATAR_ALREADY_ATTACHED"
+  },
+  "destroy": {
+    "obligations_in_order": [
+      {"step": 1, "name": "flush", "detail": "final avatar_save (single entry) acknowledged durable (ACK durable / MLD1 commit + FENCE)"},
+      {"step": 2, "name": "leave_broadcast", "detail": "AOI leave broadcast to scene observers"},
+      {"step": 3, "name": "ref_release", "detail": "release the scene-instance reference; the spatial cache decides eviction (two-phase, no resurrection)"},
+      {"step": 4, "name": "recycle_bin", "detail": "the object stays addressable but inert until obligations complete; it is not freed mid-reclaim"},
+      {"step": 5, "name": "tombstone", "detail": "fence the hosting generation; only a strictly newer generation may resume (cross-return single-writer rule)"}
+    ],
+    "source_of_order": "scene-lifecycle cleanup order (stop entry, stop timers, evacuate, free state, release reference) + cross-return writer-lease handoff FENCE",
+    "in_flight_handlers": "already-executing handlers finish; handlers arriving during transferring/loading/suspended/reclaiming are refused with the state rejection code",
+    "mid_life_reclaim": {
+      "trigger": "destroy requested while active",
+      "must": ["drain or refuse in-flight handlers", "run the full destroy obligation list", "tombstone the generation only after the final save is durable"],
+      "never": ["half-publish a visible avatar", "tombstone an unacknowledged change", "free the object mid-obligation"]
+    }
+  },
+  "four_paths": [
+    {
+      "name": "create_success",
+      "diagram": "docs/avatar-spawn-destroy.md#1-create-success",
+      "steps": ["spawn (route held)", "loading", "avatar_load + MLD1 LOAD", "state loaded, entry accepted", "active + AOI appearance broadcast"]
+    },
+    {
+      "name": "failure_rollback",
+      "diagram": "docs/avatar-spawn-destroy.md#2-failure-rollback",
+      "steps": ["spawn (route held)", "loading", "avatar_load fails", "closed, no visible avatar, no tombstone", "generation stays non-writable, surfaced to operator"]
+    },
+    {
+      "name": "reclaim_complete",
+      "diagram": "docs/avatar-spawn-destroy.md#3-reclaim-complete",
+      "steps": ["active -> reclaiming", "final avatar_save durable (ACK durable)", "AOI leave broadcast", "scene-instance ref released", "recycle bin (inert) -> tombstone generation -> closed"]
+    },
+    {
+      "name": "reclaim_interrupt_recovery",
+      "diagram": "docs/avatar-spawn-destroy.md#4-reclaim-interrupt-recovery",
+      "steps": ["active -> reclaiming", "save fails or disconnect mid-reclaim", "retry within budget, no tombstone", "generation stays recoverable (before tombstone, abort returns to active)", "after tombstone only a newer generation resumes"]
+    }
+  ],
+  "failure_compensation": [
+    {"interruption": "save fails during reclaiming", "state_held": "reclaiming", "compensation": "retry within the configured budget; no tombstone; generation stays recoverable; surface the condition to the operator/application"},
+    {"interruption": "disconnect during reclaiming", "state_held": "reclaiming", "compensation": "obligations continue (as suspended); never tombstone an unacknowledged change (cross-return: only ACK durable justifies a durability claim)"},
+    {"interruption": "host crash mid-reclaim", "state_held": "closed (abrupt)", "compensation": "crash guarantees nothing (avatar-runtime); coordinator recovery issues a strictly newer generation"},
+    {"interruption": "reference-release interrupted", "state_held": "reclaiming", "compensation": "two-phase ref release prevents resurrection; re-enter reclaim; the tombstone is not committed until the flush is durable"}
+  ]
+}
