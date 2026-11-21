@@ -16,6 +16,7 @@ import sys
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CONTRACT = os.path.join(ROOT, "contracts", "avatar-spawn-destroy.json")
 RECONNECT = os.path.join(ROOT, "contracts", "avatar-reconnect-cutover.json")
+CROSS = os.path.join(ROOT, "contracts", "cross-server-lifecycle.json")
 
 PIN = {
     "identity": ["origin_realm", "character_id", "hosting_generation"],
@@ -123,6 +124,52 @@ def main():
           f"{len(PIN['destroy_obligations'])} obligations / {len(PIN['four_paths'])} paths, "
           f"{len(subs)} suspended sub-states / {len(rpaths)} reconnect paths, "
           f"{len(names)} cutover layers / {len(rc['daily_cutover']['hook_signatures'])} cutover hooks")
+
+    # --- Cross-server lifecycle contract --------------------------------
+    x = json.load(open(CROSS, encoding="utf-8"))
+    check(x["contract"] == "cross-server-lifecycle", f"cross contract={x['contract']}")
+
+    # Visiting lifecycle phases, exact.
+    vph = list(x["visiting_lifecycle"].keys())
+    check(vph == ["create", "active", "return", "abnormal_termination"],
+          f"visiting phases={vph}")
+
+    # Writer lease plane surfaces.
+    lease = x["writer_lease_plane"]
+    for surf in ("lease_table", "heartbeat", "takeover", "expiry_reclaim"):
+        check(surf in lease, f"lease plane missing: {surf}")
+    check("g+1" in lease["takeover"] and "never" in lease["takeover"].lower(),
+          "takeover must issue g+1 and never auto-renew a second writer")
+
+    # Admission hook + overload degradation order.
+    aod = x["admission_and_overload"]
+    check("application-level admission gate" in aod["onCrossVisitAdmit"],
+          "onCrossVisitAdmit rule lost its application-level gate role")
+    order = aod["overload_degradation_order"]
+    check(len(order) == 5, f"overload order has {len(order)} steps, want 5")
+    check("NOT_READY" in order[0] and "read-only" in order[4],
+          "overload order endpoints drifted (reject new first, read-only last)")
+
+    # Event hooks, exact signatures.
+    eh = x["event_hooks"]
+    for hook in ("onCrossVisitStart", "onCrossVisitEnd", "onLeaseTaken", "onLeaseLost"):
+        check(hook in eh, f"missing event hook {hook}")
+
+    # Four paths, named exactly, each with steps + diagram reference.
+    xpaths = [p["name"] for p in x["four_paths"]]
+    check(xpaths == ["normal_return", "interrupted_return", "lease_expiry_takeover", "peer_down"],
+          f"cross paths={xpaths}")
+    for p in x["four_paths"]:
+        check(p["diagram"] and p["steps"], f"cross path {p['name']} missing diagram reference or steps")
+
+    # MLD1 zero-conflict rules: in-process, no new wire frame, generation not translated.
+    zc = x["mld1_zero_conflict"]
+    check(any("no new wire frame" in z for z in zc), "zero-conflict missing no-new-wire-frame rule")
+    check(any("hosting generation" in z for z in zc), "zero-conflict missing generation-is-MLD1 rule")
+
+    print(f"OK: cross-server lifecycle pinned: "
+          f"{len(vph)} visiting phases / {len(lease)} lease surfaces, "
+          f"{len(order)} overload steps / {len(eh)} hooks / {len(xpaths)} paths")
     return 0
 
 

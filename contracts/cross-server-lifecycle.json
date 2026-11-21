@@ -1,0 +1,70 @@
+{
+  "contract": "cross-server-lifecycle",
+  "version": "2026-11-22",
+  "subject": "Cross-server session object lifecycle and writer lease management plane",
+  "reconciles": {
+    "network_admission": "docs/cross-server.md (MLC1 handshake, ROOM_FULL/GROUP_FULL/SHARD_FULL, PROBE1 readiness, admission quotas)",
+    "durability": "docs/cross-return-protocol.md (MLD1 SUBMIT/ACK durable/FENCE, single-writer, lease handoff)",
+    "states": "docs/avatar-lifecycle.md (PL-1): the crossServer end of a transfer settles in `visiting`, not `active`"
+  },
+  "visiting_lifecycle": {
+    "create": "cross admission accepted (MLC1 OK + verified entry ticket) -> the visiting avatar is created at the crossServer",
+    "active": "visiting: provisional bounded write lease; cross-local writes allowed; durable changes return via MLD1",
+    "return": "visiting -> transferring (final SUBMIT) -> MLD1 ACK durable + FENCE -> closed on the crossServer; the home reattaches -> active",
+    "abnormal_termination": {
+      "causes": ["peer-down", "lease lost", "admission revoked", "lease-expiry takeover"],
+      "consequence": "closed on the crossServer; unacknowledged changes carry no durability claim"
+    }
+  },
+  "writer_lease_plane": {
+    "lease_table": "per (origin realm, character id, hosting generation) -> lease record {granted_at, heartbeat, scope, state}",
+    "heartbeat": "the crossServer renews its provisional lease on a local timer; a lease with no heartbeat past the threshold is expiring",
+    "takeover": "explicit coordinator takeover: home issues a strictly newer generation (g+1), tombstones g, grants a new lease; never auto-renewed by timeout",
+    "expiry_reclaim": "lease expires -> the crossServer flushes already-submitted changes, closes the visiting avatar, grants no second writer; the home recovers with a newer generation"
+  },
+  "admission_and_overload": {
+    "onCrossVisitAdmit": "(context) -> allow/deny; the application-level admission gate beyond the network quotas; runs before the lease is granted",
+    "overload_degradation_order": [
+      "reject new joins (MLC1 ERR NOT_READY)",
+      "admit only already-verified reconnects",
+      "stop granting new leases",
+      "drain and return existing visiting avatars",
+      "refuse durable writes on a full sender queue (read-only transition)"
+    ],
+    "source": "docs/cross-server.md PROBE1 readiness hysteresis and the cross-return-protocol queue-full read-only rule"
+  },
+  "event_hooks": {
+    "onCrossVisitStart": "(context) -> nothing; the visiting avatar was created",
+    "onCrossVisitEnd": "(context) -> nothing; the visiting avatar closed (returned or terminated)",
+    "onLeaseTaken": "(context) -> nothing; this host holds the lease",
+    "onLeaseLost": "(context) -> nothing; the lease expired or was taken over"
+  },
+  "four_paths": [
+    {
+      "name": "normal_return",
+      "diagram": "docs/cross-server-lifecycle.md#_1-normal-return",
+      "steps": ["visiting -> transferring", "final MLD1 SUBMIT (last change-set)", "home commits + ACK durable", "FENCE the generation", "closed on crossServer; home reattaches -> active"]
+    },
+    {
+      "name": "interrupted_return",
+      "diagram": "docs/cross-server-lifecycle.md#_2-interrupted-return",
+      "steps": ["visiting -> transferring", "MLD1 SUBMIT interrupted (home unreachable)", "retry within budget", "queue full -> read-only transition, surfaced", "return completes only when the final change-set is acknowledged durable"]
+    },
+    {
+      "name": "lease_expiry_takeover",
+      "diagram": "docs/cross-server-lifecycle.md#_3-lease-expiry-takeover",
+      "steps": ["lease expires (no heartbeat)", "no auto-renew to a second writer (single-writer rule)", "home issues a newer generation, tombstones the old", "new lease granted to a host", "old visiting avatar closed"]
+    },
+    {
+      "name": "peer_down",
+      "diagram": "docs/cross-server-lifecycle.md#_4-peer-down",
+      "steps": ["home or crossServer crashes", "lease is lost; unacknowledged changes carry no durability claim", "home recovery issues a strictly newer generation", "crossServer lease reclaimed by explicit takeover", "visiting avatar closed on the crossServer"]
+    }
+  ],
+  "mld1_zero_conflict": [
+    "the lease plane is in-process and separate from the MLD1 wire; it introduces no new wire frame",
+    "MLD1 remains the only durable-return channel (SUBMIT / ACK durable / FENCE / sequence discipline)",
+    "the lease's generation is the hosting generation MLD1 already carries; no translation",
+    "heartbeat is a local timer, takeover is coordinator-coordinated through the existing lease-gate states (requested / relinquished / tombstoned)"
+  ]
+}
