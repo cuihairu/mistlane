@@ -75,7 +75,7 @@ The cross-visit event surface, with call guarantees consistent with the oracle a
 | `onLeaseTaken` | This host acquires a lease (a new generation becomes current) | `(context, generation)` → nothing | Before any durable write under that generation; before `onCrossVisitStart` | The lease is relinquished; the visit aborts |
 | `onLeaseLost` | This host's lease is taken over or revoked | `(context, generation)` → nothing | Before any `onLeaseTaken` for a newer generation at this host; after the last durable write under the old one | Logged; the loss stands — the holder stops writing either way |
 
-The machine-consumable form of this surface is `contracts/hooks.xml` (see below); the full hook registry — every hook from every lifecycle page in one validated table — is the hook-registry slice, which this file seeds.
+The machine-consumable form of this surface is `contracts/hooks.xml`, the single hook registry, whose [human-readable face](./hook-registry.md) shows every hook from every lifecycle page in one validated table.
 
 ## Path 1 — normal return
 
@@ -169,7 +169,7 @@ Unacknowledged submissions in the crashed host's process-local queue are lost by
 
 ## Contract landing
 
-`contracts/hooks.xml` seeds the single hook registry with the cross-visit surface above, in the same authored-XML idiom as `contracts/lifecycle.xml`: closed vocabularies, explicit hook names, and per-hook attributes for signature, timing, thread, failure semantics and the avatar-lifecycle state the hook is legal in. The registry slice expands this file with every hook from the avatar lifecycle, reconnect, daily-reset and spawn/destroy pages, and adds the validation that no hook is an orphan (every hook names its oracle state or edge).
+`contracts/hooks.xml` is the single hook registry, in the same authored-XML idiom as `contracts/lifecycle.xml`: closed vocabularies, explicit hook names, and per-hook attributes for signature, timing, thread, failure semantics and the avatar-lifecycle state the hook is legal in. It now holds the cross-visit surface above alongside every hook from the avatar lifecycle, reconnect, daily-reset and spawn/destroy pages; `tools/check_hooks.py` validates that no hook is an orphan (every hook names an oracle state or a declared trigger) and that the Lua mapping is total.
 
 ## Relationship and errata
 
@@ -190,7 +190,7 @@ Zero conflict with the MLD1/lease semantics was found, so there is no errata row
 - Queue bounds, retry budgets, heartbeat intervals, queue jitter and every duration: measured at implementation.
 - Cross-visit *business* semantics (matchmaking, settlement, rewards): later crossServer slices, exactly as the return protocol defers them.
 - Seamless visit-to-visit moves (chaining cross hosts without returning home): a later slice; today a move is return-then-admit.
-- The full hook registry and its validator: the hook-registry slice, which this page's `contracts/hooks.xml` seeds.
+- The full hook registry's generated outputs (descriptors, Lua stubs): the [hook registry page](./hook-registry.md) names the validator as the only script.
 
 ## Verification
 

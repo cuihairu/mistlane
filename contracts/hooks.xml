@@ -1,60 +1,134 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!-- SPDX-License-Identifier: Apache-2.0
 
-  Single hook registry, seed scope. Authored contract in the same XML idiom as
+  The single hook registry. Authored contract in the same XML idiom as
   contracts/lifecycle.xml: explicit names, closed vocabularies, unknown
-  elements or attribute values are errors, never defaults. The hook-registry
-  slice expands this file with every hook from the avatar lifecycle, reconnect
-  and daily-reset, and spawn/destroy pages and adds the validator that refuses
-  an orphan hook (a hook naming no legal oracle state or edge).
+  elements or attribute values are errors, never defaults.
 
   Attributes (closed vocabularies):
     level     : process | object
     states    : the avatar-lifecycle oracle states in which the hook is legal,
                 space separated, drawn from the closed set
                 loading active suspended reconnecting transferring visiting
-                closing closed purged; empty only for a process-level hook
+                closing closed purged; empty for a process-level hook
+    trigger   : a declared process-level trigger (day-boundary), for a hook
+                with no oracle state to stand in
     thread    : asio (one VM per node, serial on the Asio thread; hooks never
                 interleave, so reentrancy is excluded by construction)
     failure   : refuse | logged | abort
                 refuse - the caller's request is refused, nothing published
                 logged - the failure is logged, the original consequence stands
                 abort  - the operation this hook belongs to is aborted
-    returns   : the result shape the script must produce
-    reentrant : always no (serial VM; a message handler cannot trigger a
-                lifecycle transition synchronously)
+    returns   : none | verdict | avatar-table | state-table | snapshot
+    reentrant : no (serial VM; a message handler cannot trigger a lifecycle
+                transition synchronously)
+    lua       : the avatar-runtime Lua hook surface this entry maps to, or
+                absent for a hook the existing Lua surface does not have
 
-  Scope here: the cross-server lifecycle's event surface. Nothing else is
-  registered yet; an absent hook is "not yet registered", not "does not exist".
+  A hook has a home: an object-level hook names at least one oracle state, and
+  a process-level hook names a declared trigger. tools/check_hooks.py refuses
+  any hook with neither, and checks the Lua mapping covers every Lua surface
+  hook exactly once.
 -->
-<HookRegistry version="1" scope="cross-visit">
-  <!-- Admission decision, above the existing hard quotas. A refusal here is a
-       typed MLC1 ERR and the participant never becomes a writer. -->
+<HookRegistry version="1" scope="all">
+  <!-- ===== avatar load, attach, tick, save, transfer, fail ===== -->
+  <Hook name="avatar_load" level="object" states="loading" thread="asio" failure="refuse" returns="avatar-table" reentrant="no" lua="avatar_load">
+    <Timing>When the framework creates an avatar at this host from a loaded record.</Timing>
+    <Signature><Arg name="context" kind="participant-context"/><Arg name="state" kind="record"/></Signature>
+    <Returns kind="avatar-table"/>
+    <Error>Load failed: no avatar is published and entry is refused with the cause.</Error>
+  </Hook>
+  <Hook name="avatar_enter" level="object" states="active" thread="asio" failure="refuse" returns="none" reentrant="no" lua="avatar_enter">
+    <Timing>A session attaches to an active avatar.</Timing>
+    <Signature><Arg name="context" kind="participant-context"/></Signature>
+    <Error>Entry refused with an explicit reason.</Error>
+  </Hook>
+  <Hook name="avatar_leave" level="object" states="active suspended" thread="asio" failure="logged" returns="none" reentrant="no" lua="avatar_leave">
+    <Timing>A session detaches (logout, evacuation).</Timing>
+    <Signature><Arg name="context" kind="participant-context"/></Signature>
+    <Error>Logged; never blocks the detach.</Error>
+  </Hook>
+  <Hook name="avatar_tick" level="object" states="active visiting" thread="asio" failure="logged" returns="none" reentrant="no" lua="avatar_tick">
+    <Timing>Node tick, active and visiting avatars only.</Timing>
+    <Signature><Arg name="context" kind="participant-context"/></Signature>
+    <Error>Logged; the avatar stays (matches tick semantics).</Error>
+  </Hook>
+  <Hook name="avatar_save" level="object" states="active suspended reconnecting visiting closing" thread="asio" failure="abort" returns="state-table" reentrant="no" lua="avatar_save">
+    <Timing>The single forced-save entry, and the final flush of an ordered close.</Timing>
+    <Signature><Arg name="context" kind="participant-context"/></Signature>
+    <Returns kind="state-table"/>
+    <Error>Save failed: surfaced to the operator; retry belongs to the sender queue, not the hook.</Error>
+  </Hook>
+  <Hook name="avatar_transfer_out" level="object" states="transferring" thread="asio" failure="abort" returns="snapshot" reentrant="no" lua="avatar_transfer_out">
+    <Timing>This host stops hosting.</Timing>
+    <Signature><Arg name="context" kind="participant-context"/></Signature>
+    <Returns kind="snapshot"/>
+    <Error>Transfer aborted; the avatar returns to active (home host) or visiting (cross host).</Error>
+  </Hook>
+  <Hook name="avatar_transfer_in" level="object" states="transferring visiting" thread="asio" failure="abort" returns="none" reentrant="no" lua="avatar_transfer_in">
+    <Timing>This host takes over hosting.</Timing>
+    <Signature><Arg name="context" kind="participant-context"/><Arg name="state" kind="snapshot"/></Signature>
+    <Error>The incoming avatar closes on this host; the source keeps its avatar.</Error>
+  </Hook>
+  <Hook name="avatar_detach" level="object" states="suspended" thread="asio" failure="logged" returns="none" reentrant="no" lua="avatar_detach">
+    <Timing>The owning session disconnected.</Timing>
+    <Signature><Arg name="context" kind="participant-context"/></Signature>
+    <Error>Logged; the avatar goes suspended regardless.</Error>
+  </Hook>
+  <Hook name="avatar_fail" level="object" states="loading active suspended reconnecting transferring visiting closing" thread="asio" failure="logged" returns="none" reentrant="no" lua="avatar_fail">
+    <Timing>Any avatar hook failed or timed out.</Timing>
+    <Signature><Arg name="context" kind="participant-context"/><Arg name="reason" kind="reason"/></Signature>
+    <Error>Best effort: it may not run during a VM replacement.</Error>
+  </Hook>
+  <!-- ===== world and interest edges ===== -->
+  <Hook name="onEnterWorld" level="object" states="active visiting" thread="asio" failure="logged" returns="none" reentrant="no">
+    <Timing>The avatar publishes to the interest layer for a scene it has entered.</Timing>
+    <Signature><Arg name="context" kind="participant-context"/><Arg name="scene" kind="scene-id"/></Signature>
+    <Error>Logged; presence is still published so a hook cannot hide an entity.</Error>
+  </Hook>
+  <Hook name="onEnterAOI" level="object" states="active visiting" thread="asio" failure="logged" returns="none" reentrant="no">
+    <Timing>An interest edge appears, fired on both sides of the edge.</Timing>
+    <Signature><Arg name="context" kind="participant-context"/><Arg name="ref" kind="entity-ref"/></Signature>
+    <Error>Logged; the interest set is authoritative, not the hook's verdict.</Error>
+  </Hook>
+  <Hook name="onLeaveAOI" level="object" states="active visiting closing" thread="asio" failure="logged" returns="none" reentrant="no">
+    <Timing>An interest edge disappears, fired on both sides, and at destroy.</Timing>
+    <Signature><Arg name="context" kind="participant-context"/><Arg name="ref" kind="entity-ref"/></Signature>
+    <Error>Logged; the leave is recorded on the interest layer either way.</Error>
+  </Hook>
+  <!-- ===== daily reset ===== -->
+  <Hook name="onDailyReset" level="process" states="" trigger="day-boundary" thread="asio" failure="abort" returns="none" reentrant="no">
+    <Timing>Once per day, when the process crosses its configured day boundary, strictly before every onAvatarDailyReset.</Timing>
+    <Signature><Arg name="context" kind="node-context"/><Arg name="day" kind="day-key"/></Signature>
+    <Error>Aborts the node-level reset for the day; no avatar is touched.</Error>
+  </Hook>
+  <Hook name="onAvatarDailyReset" level="object" states="active visiting" thread="asio" failure="abort" returns="none" reentrant="no">
+    <Timing>Per resettable avatar at the boundary, or at the end of its suspension window.</Timing>
+    <Signature><Arg name="context" kind="participant-context"/><Arg name="day" kind="day-key"/></Signature>
+    <Error>That avatar's reset is deferred to after the barrier; never double-run for one day.</Error>
+  </Hook>
+  <!-- ===== cross-server visit surface ===== -->
   <Hook name="onCrossVisitAdmit" level="object" states="loading" thread="asio" failure="refuse" returns="verdict" reentrant="no">
     <Timing>Once per join attempt, after the quota gates, before lease acquisition.</Timing>
     <Signature><Arg name="context" kind="participant-context"/></Signature>
-    <Returns kind="verdict" values="allow|queue|reject"/>
+    <Returns kind="verdict"/>
     <Error>An error answers reject(INVALID); never a silent allow.</Error>
   </Hook>
-  <!-- The visit becomes active: lease taken and snapshot materialized. -->
   <Hook name="onCrossVisitStart" level="object" states="visiting" thread="asio" failure="abort" returns="none" reentrant="no">
     <Timing>After onCrossVisitAdmit allowed, and after avatar_transfer_in at this host.</Timing>
     <Signature><Arg name="context" kind="participant-context"/></Signature>
     <Error>Aborts the visit: the lease is relinquished and the join is refused.</Error>
   </Hook>
-  <!-- Every started visit ends exactly once. -->
   <Hook name="onCrossVisitEnd" level="object" states="transferring closed purged" thread="asio" failure="logged" returns="none" reentrant="no">
     <Timing>Exactly once per started visit, after the final flush decision.</Timing>
     <Signature><Arg name="context" kind="participant-context"/><Arg name="outcome" kind="released|abandoned"/></Signature>
     <Error>Logged; never blocks the release.</Error>
   </Hook>
-  <!-- This host took a lease: no durable write under it may precede this hook. -->
   <Hook name="onLeaseTaken" level="object" states="visiting" thread="asio" failure="abort" returns="none" reentrant="no">
     <Timing>Before any durable write under the new generation, and before onCrossVisitStart.</Timing>
     <Signature><Arg name="context" kind="participant-context"/><Arg name="generation" kind="uint32"/></Signature>
     <Error>Relinquishes the lease and aborts the visit.</Error>
   </Hook>
-  <!-- This host's lease was taken over or revoked: it stops writing either way. -->
   <Hook name="onLeaseLost" level="object" states="visiting closed purged" thread="asio" failure="logged" returns="none" reentrant="no">
     <Timing>After the last durable write under the old generation, and before any onLeaseTaken for a newer generation at this host.</Timing>
     <Signature><Arg name="context" kind="participant-context"/><Arg name="generation" kind="uint32"/></Signature>

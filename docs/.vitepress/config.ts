@@ -115,6 +115,7 @@ export default defineConfig({
         { text: 'Spawn and destroy runtime contract', link: '/spawn-destroy-contract' },
         { text: 'Reconnect and daily reset', link: '/reconnect-and-daily-reset' },
         { text: 'Cross-server lifecycle and leases', link: '/cross-server-lifecycle' },
+        { text: 'Hook registry', link: '/hook-registry' },
         { text: 'Entity contracts and generation', link: '/entity-contract' },
         { text: 'Legacy and modern comparison', link: '/architecture-comparison' },
         { text: 'Migration status', link: '/migration-status' },
