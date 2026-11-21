@@ -1,0 +1,6327 @@
+# game-fogs business sproto protocol schema (recovered)
+# Recovered 2026-11-21 from game-fogs/game/proto/sproto.spb (game-fogs commit 37b640a).
+# Decoded with the vendored sproto decoder game-fogs/3rd/sproto/sproto.c via
+# tools/sproto_dump.c (sproto_create + sproto_dump).
+# Verified: 646 protocols / 1421 types / 4245 fields; every protocol name->id
+# cross-checks against game-fogs/game/proto/Protocol.lua (0 mismatches).
+# NOTE: this is the compiled schema, not the original .sproto text source; the
+# generation script and official client bindings are absent (recorded in
+# docs/protocol-contract-recovery.md).
+# Format: '=== N types ===' then per-type 'Name.request'/'Name.response' headers with
+# '\tname (tag) type' field lines; '=== N protocol ===' then '\tName (id) request:Type response:Type'.
+# Produced by: gcc -O2 -I<3rd/sproto> -o sproto_dump tools/sproto_dump.c <3rd/sproto>/sproto.c -lm
+
+=== 1421 types ===
+AC_BroadResult.request
+AC_BroadResult.response
+	rank (0) integer
+	score (1) integer
+AC_Broadcast.request
+	tp (0) integer
+	actid (1) integer
+	edTime (2) integer
+AC_CommitAnswer.request
+	index (0) integer
+AC_CommitAnswer.response
+	index (0) integer
+AC_DoShare.request
+	id (0) integer
+	type (1) integer
+AC_DoShare.response
+	share (0) Share
+AC_DoWildBossBat.request
+	index (0) integer
+AC_GetAccRwd.request
+AC_GetAchieveRwd.request
+	id (0) integer
+AC_GetAchieveRwd.response
+	record (0) Kval
+AC_GetActState.request
+	actid (0) integer
+	aid (1) integer
+	sid (2) integer
+AC_GetActState.response
+	actid (0) integer
+	state (1) integer
+AC_GetActivityList.request
+	timeStamp (0) integer
+AC_GetActivityList.response
+	list (0) *ActivityStDt[0]
+	timeStamp (1) integer
+AC_GetAnswerRank.request
+AC_GetAnswerRank.response
+	rankList (0) *CharSimpleRankData
+AC_GetQuestions.request
+AC_GetQuestions.response
+	questions (0) *Question
+	id (1) integer
+	stTime (2) integer
+AC_GetShareRwd.request
+	id (0) integer
+AC_GetWildBossDt.request
+AC_GetWildBossDt.response
+	wildBossArr (0) *WildBossDt
+AC_SyncState.request
+	index (0) integer
+	actid (1) integer
+	state (2) integer
+AC_WildBattleToHegel.request
+	aid (0) integer
+	ownerId (1) integer
+	bossId (2) integer
+	currentHp (3) integer
+	maxHp (4) integer
+	level (5) integer
+	totalPay (6) integer
+AC_WildBattleToHegel.response
+	aid (0) integer
+	bossId (1) integer
+	currentHp (2) integer
+	maxHp (3) integer
+AC_getBackRwd.request
+	id (0) integer
+	type (1) integer
+	times (2) integer
+AC_getRwd.request
+	id (0) integer
+AC_getRwd.response
+	dailyactivity (0) Dailyactivity
+AC_oneKeyCom.request
+	id (0) integer
+AFT_Act.request
+	pid (0) integer
+AFT_Act.response
+	artifact (0) Artifact
+AFT_ClLevelUp.request
+	pid (0) integer
+	index (1) integer
+AFT_ClLevelUp.response
+	artifact (0) Artifact
+AFT_ClTp.request
+	pid (0) integer
+AFT_ClTp.response
+	artifact (0) Artifact
+AFT_JJLevelUp.request
+	pid (0) integer
+	selected (1) integer
+AFT_JJLevelUp.response
+	artifact (0) Artifact
+AFT_JJTp.request
+	pid (0) integer
+AFT_JJTp.response
+	artifact (0) Artifact
+AFT_JL.request
+	pid (0) integer
+AFT_JL.response
+	artifact (0) Artifact
+AFT_LevelUp.request
+	pid (0) integer
+	selected (1) integer
+AFT_LevelUp.response
+	artifact (0) Artifact
+AFT_QlLevelUp.request
+	pid (0) integer
+	selected (1) integer
+AFT_QlLevelUp.response
+	artifact (0) Artifact
+AFT_QlTp.request
+	pid (0) integer
+AFT_QlTp.response
+	artifact (0) Artifact
+ANALY_DoRecord.request
+	aid (0) integer
+	ids (1) *integer
+	vals (2) *integer
+	isCovers (3) *integer
+	types (4) *string
+ANALY_REFDATA.response
+	analytics (0) Analytics
+AR_BattleResultFromHegel.request
+	aid (0) integer
+	tarAid (1) integer
+	isReal (2) integer
+	result (3) integer
+	time (4) integer
+AR_BuyBatTimes.request
+AR_DoRecord.request
+	aid (0) integer
+	history (1) string
+AR_DoRwd.request
+	aid (0) integer
+	rank (1) integer
+AR_ExtractEnemyFromWorld.request
+	aid (0) integer
+AR_ExtractEnemyToHegel.request
+	arenaDts (0) *ArenaData
+	aid (1) integer
+	myRank (2) integer
+AR_GET_ARENA.request
+AR_GET_ARENA.response
+	arena (0) Arena
+AR_GET_ENEMY.request
+AR_GET_ENEMY.response
+	arenaDts (0) *ArenaData
+	myRank (1) integer
+AR_GET_RANKLIST.request
+	len (0) integer
+AR_GET_RANKLIST.response
+	arenaDts (0) *ArenaData
+	myRank (1) integer
+AR_GetRankListFromWorld.request
+	aid (0) integer
+	len (1) integer
+AR_ReqEnemyDtFromWorld.request
+	aid (0) integer
+	tarRank (1) integer
+AR_StartBattleArena_Real.request
+	aid (0) integer
+	tarAid (1) integer
+AR_StartBattleArena_Robot.request
+	aid (0) integer
+	tarRank (1) integer
+	battleId (2) integer
+AUC_AddData.request
+	sid (0) integer
+	data (1) *Auction
+AUC_Bidding.request
+	tp (0) integer
+	auctp (1) integer
+	idx (2) integer
+	sid (3) integer
+	aid (4) integer
+	name (5) string
+	gold (6) integer
+	aucscore (7) integer
+AUC_Bidding.response
+	aid (0) integer
+	gold (1) integer
+AUC_GetData.request
+	tp (0) integer
+	aid (1) integer
+AUC_GetRecord.request
+	tp (0) integer
+	aid (1) integer
+AUC_SendShareAward.request
+	gid (0) integer
+	total (1) integer
+AUC_UpdateData.response
+	tp (0) integer
+	auctp (1) integer
+	aid (2) integer
+	datas (3) *Auction
+	ids (4) *integer
+Achievement
+	records (0) *Kval[0]
+ActData
+	data (0) *OneActData[0]
+ActGuildBoss
+	index (0) integer
+	datas (1) *GuildBoss[0]
+ActShowCharData
+	index (0) string
+	showChar (1) ShowCharData
+ActivityStDt
+	id (0) string
+	stTime (1) integer
+	edTime (2) integer
+Actscore
+	fb (0) integer
+	honor (1) integer
+	guildDevote (2) integer
+	iq (3) integer
+AddRouter.request
+	router (0) UserRouter
+Allmail
+	aid (0) integer
+	receraid (1) integer
+	mailp (2) Mailp
+	time (3) integer
+	attachment (4) Attachment
+	flag (5) integer
+	slots (6) integer
+	logType (7) integer
+Analytics
+	forever (0) *Kval[0]
+	day (1) *Kval[0]
+	week (2) *Kval[0]
+	month (3) *Kval[0]
+	lastDay (4) *Kval[0]
+	operations (5) *Operation[0]
+Arena
+	cdStTime (0) integer
+	history (1) *string
+	winNum (2) integer
+	buyTimes (3) integer
+	lastBuyTime (4) integer
+	times (5) integer
+ArenaData
+	aid (0) integer
+	isReal (1) integer
+	gs (2) integer
+	name (3) string
+	realAid (4) integer
+	dress (5) Dress
+	tempId (6) integer
+Artifact
+	key (0) string
+	tempId (1) integer
+	lv (2) integer
+	tlv (3) integer
+	sllv (4) integer
+	slexp (5) integer
+	sltp (6) integer
+	jjlv (7) integer
+	jjexp (8) integer
+	jjtp (9) integer
+	clquench (10) *integer
+	cllv (11) integer
+	exp (12) integer
+	texp (13) integer
+	skill (14) integer
+Artifacts
+	artifacts (0) *Artifact[0]
+Attachment
+	data (0) *RewardItem
+Auction
+	idx (0) integer
+	it (1) integer
+	ii (2) integer
+	num (3) integer
+	price (4) integer
+	buyPrice (5) integer
+	grow (6) integer
+	aid (7) integer
+	aidsid (8) integer
+	curnum (9) integer
+	name (10) string
+	et1 (11) integer
+	et2 (12) integer
+	et3 (13) integer
+	groupId (14) integer
+	groupName (15) string
+	sid (16) integer
+	getType (17) integer
+	getst (18) integer
+	addst (19) integer
+AuctionDay
+	aid (0) integer
+	num (1) integer
+	st (2) integer
+AuctionWorld
+	index (0) integer
+	record (1) *Auction
+	list (2) *Auction[0]
+	awardGroup (3) *AwardGroup[0]
+	awardAid (4) *AwardAid[0]
+	awardSt (5) integer
+	curId (6) integer
+AwardAid
+	aid (0) integer
+	num (1) integer
+AwardGroup
+	gid (0) integer
+	ids (1) *integer
+	total (2) integer
+BAT_AfterBattle.request
+BAT_AssistBoss.request
+	tarAid (0) integer
+	tid (1) integer
+	curIndex (2) integer
+	aid (3) integer
+	charData (4) CharData
+BAT_AssistBoss.response
+	aid (0) integer
+	tarAid (1) integer
+	charData (2) CharData
+BAT_AssistCallBack.request
+	aid (0) integer
+	tarAid (1) integer
+	result (2) integer
+	tid (3) integer
+	curIndex (4) integer
+	bid (5) integer
+BAT_BattleArena.request
+	tarRank (0) integer
+	isReal (1) integer
+BAT_BattleArena.response
+	battleResult (0) BattleResultData
+BAT_BattleBoss.request
+	bid (0) integer
+BAT_BattleBoss.response
+	batBoss (0) BatBoss
+	isAissist (1) integer
+BAT_BattleBoss_FB.request
+	index (0) integer
+BAT_BattleBoss_FB.response
+	dailyfb (0) Dailyfb
+	ref (1) integer
+BAT_BattleBoss_Per.request
+	index (0) integer
+BAT_BattleBoss_Per.response
+	bossList (0) *integer
+	ktList (1) *integer
+	ref (2) integer
+BAT_BattleByWorld.request
+	aid (0) integer
+	battleResult (1) BattleResultData
+BAT_BattleCLBS.request
+	sid (0) integer
+	reborn (1) integer
+BAT_BattleEnd.request
+BAT_BattleEnd.response
+	battleResult (0) BattleResultData
+BAT_BattleEndAdd.request
+	bid (0) integer
+BAT_BattleEndAdd.response
+	battleInfoList (0) *BattleRoundActionData
+	isEnd (1) integer
+	bid (2) integer
+BAT_BattleEndAward.request
+	bid (0) integer
+BAT_BattleEndAward.response
+	awardList (0) BattleOnePlayerAwardList
+	type (1) integer
+	itemList (2) *RewardItem
+	kingwar (3) KingWarPlayer
+	temRank (4) integer
+	bid (5) integer
+BAT_BattleFight_FB.request
+	tid (0) integer
+BAT_BattleFight_FB.response
+	tid (0) integer
+	fightBoss (1) integer
+BAT_BattleHhsj_FB.request
+BAT_BattleHhsj_FB.response
+	max (0) integer
+	cur (1) integer
+BAT_BattleMountain_FB.request
+BAT_BattleMountain_FB.response
+	floor (0) integer
+	current (1) integer
+BAT_BattlePvp.request
+	tid (0) integer
+	cid (1) integer
+BAT_BattleSpecial.request
+	id (0) integer
+BAT_BattleTrial_FB.request
+BAT_BattleTrial_FB.response
+	trial (0) integer
+BAT_BattleVipBoss.request
+	tid (0) integer
+BAT_BattleVipBoss.response
+	vipBoss (0) VipBoss
+BAT_BattleWalk.request
+BAT_BattleWalk.response
+	batBoss (0) BatBoss
+BAT_BookeFight.request
+	aid (0) integer
+	did (1) integer
+	pType (2) integer
+	booker (3) BookerBattleData
+BAT_BookeFight.response
+	aid (0) integer
+	did (1) integer
+	pType (2) integer
+	booker (3) BookerBattleData
+	isWin (4) integer
+BAT_DirectReward.response
+	battleResult (0) BattleResultData
+BAT_DispatchProp.request
+BAT_DispatchProp.response
+	testDt (0) BattleTestProp
+BAT_GBTopBattle.request
+BAT_ResultPanel.response
+	tp (0) integer
+	myRank (1) integer
+	item (2) *RewardItem
+	win (3) string
+	aid (4) integer
+	charData (5) WorldChar
+	aucitem (6) *RewardItem
+	campRank (7) integer
+BAT_ResultPanelNew.response
+	tp (0) integer
+	myRank (1) integer
+	item (2) *RewardItem
+	aid (3) integer
+	charData (4) WorldChar
+	mbid (5) integer
+	isOk (6) integer
+BAT_STAGE_REWARD.request
+BAT_STAGE_REWARD.response
+	stageReward (0) integer
+BAT_SynBattleResultToWorld.request
+	aid (0) integer
+	type (1) integer
+	fbid (2) integer
+	gs (3) integer
+	result (4) integer
+BAT_reqAssist.request
+	tid (0) integer
+	curIndex (1) integer
+	aid (2) integer
+Bag
+	itemBag (0) *ItemData[1]
+	equipBag (1) EquipBag
+	faBaobag (2) *FaBaoData
+BatBoss
+	star (0) integer
+	tid (1) integer
+	currentSection (2) integer
+	batIndex (3) integer
+	mapAwards (4) *MapAward[0]
+	hNum (5) integer
+	shNum (6) integer
+	lastTime (7) integer
+	lastReqTime (8) integer
+BatBoss_getAward.request
+	mid (0) integer
+BatBoss_getAward.response
+	mid (0) integer
+	sts (1) *integer
+BatListContant
+	bid (0) integer
+	battleInfoList (1) *BattleRoundActionData
+	isEnd (2) integer
+BatSkillList
+	skills (0) *SkillData
+	hms (1) *HeartLaw
+BattleActionData
+	type (0) integer
+	selfList (1) *BattleObjData
+	targetList (2) *BattleObjData
+	skillId (3) integer
+	cot (4) integer
+	batNum (5) integer
+	chase (6) integer
+	joinObj (7) BattleJoinObj
+	isFlow (8) integer
+BattleAwardList
+	aid (0) integer
+	list (1) BattleOnePlayerAwardList
+BattleBuffData
+	bid (0) integer
+	round (1) integer
+BattleDamageInfo
+	hurt (0) integer
+	isEnemy (1) integer
+	tempId (2) integer
+	lv (3) integer
+	star (4) integer
+	recHp (5) integer
+	cn (6) string
+	wxhurt (7) integer
+	wx (8) *integer
+BattleJoinObj
+	px (0) integer
+	py (1) integer
+	resId (2) integer
+	hejiType (3) string
+	tempIds (4) *integer
+	gp (5) integer
+BattleObjData
+	px (0) integer
+	py (1) integer
+	hp (2) integer
+	hpMax (3) integer
+	hurtHp (4) integer
+	recHp (5) integer
+	crit (6) integer
+	immune (7) integer
+	reborn (8) integer
+	dodge (9) integer
+	summonObj (10) BattlePosObjData
+	addbuffList (11) *BattleBuffData
+	delbuffList (12) *integer
+	hx (13) integer
+	clear (14) integer
+	fanTan (15) integer
+	fanZhen (16) integer
+	wxhurtHps (17) *integer
+	wxhurtRes (18) *integer
+	joinhurt (19) integer
+BattleOnePlayerAwardList
+	msgs (0) *PROMPTMESSGAE
+BattlePosObjData
+	aid (0) integer
+	charname (1) string
+	type (2) integer
+	px (3) integer
+	py (4) integer
+	hp (5) integer
+	hpMax (6) integer
+	dress (7) Dress
+	tempId (8) integer
+	dressColor (9) DressColor
+	flowerObj (10) FlowerBatObj
+	sidnum (11) integer
+BattleProp
+	attack (0) integer
+	defence (1) integer
+	hpMax (2) integer
+	speed (3) integer
+	critPt (4) integer
+	resiCritPt (5) integer
+	dodgePt (6) integer
+	hitPt (7) integer
+	skillId (8) integer
+	skillLv (9) integer
+BattleResultData
+	bid (0) integer
+	maxRound (1) integer
+	battleType (2) integer
+	posList (3) *BattlePosObjData
+	battleInfoList (4) *BattleRoundActionData
+	battleEndType (5) integer
+	awardShow (6) integer
+	awardList (7) *BattleAwardList[0]
+	type (8) integer
+	star (9) integer
+	extObj (10) *Kval[0]
+	result (11) integer
+	shareBoss (12) integer
+	currentHp (13) integer
+	maxHp (14) integer
+	sectype (15) integer
+	selfaids (16) *integer
+	taids (17) *integer
+	isEnd (18) integer
+	extData (19) *integer
+	rounds (20) integer
+	cgs (21) integer
+	top2DamageInfo (22) *BattleDamageInfo
+BattleRoundActionData
+	round (0) integer
+	actionList (1) *BattleActionData
+BattleTestProp
+	roleProper (0) BattleProp
+	bossProper (1) BattleProp
+	monsterProper (2) BattleProp
+BenisonLog
+	aid (0) integer
+	tm (1) integer
+	tp (2) integer
+	charname (3) string
+	tempId (4) integer
+Bet
+	key (0) string
+	list (1) *BetPlayer[0]
+BetAid
+	aid (0) string
+	list (1) *BetPlayer[6]
+BetPlayer
+	aid (0) string
+	btype (1) integer
+	gsArea (2) integer
+	bindex (3) integer
+	winaid (4) integer
+	time (5) integer
+	key (6) string
+	state (7) integer
+	sid (8) integer
+BookEnemy
+	data (0) *OneBookEnemy
+BookHit
+	data (0) *OneBookEnemy
+Booker
+	avtime (0) integer
+	avcolor (1) integer
+	state (2) integer
+	beKills (3) *integer
+	beKillNum (4) integer
+	rate (5) integer
+BookerBattleData
+	color (0) integer
+	etime (1) integer
+BookerData
+	aid (0) integer
+	rcolor (1) integer
+	rtime (2) integer
+	bookTime (3) integer
+	bookKillTime (4) integer
+	booker (5) Booker
+	bookEnemy (6) BookEnemy
+	bookHit (7) BookHit
+BookerDetail
+	aid (0) integer
+	guildName (1) string
+	gs (2) integer
+	name (3) string
+	color (4) integer
+	tempId (5) integer
+	etime (6) integer
+BossHp
+	curHp (0) string
+	proHp (1) string
+	hpMax (2) string
+	proHpMax (3) string
+Bosss
+	vipBoss (0) *VipBoss[0]
+Budokai
+	inittime (0) integer
+	idx (1) integer
+	oldidx (2) integer
+	challengeNum (3) integer
+	oldChallengeNum (4) integer
+	betList (5) *BetPlayer
+	oldBetList (6) *BetPlayer
+BudokaiArea
+	gsArea (0) string
+	round (1) integer
+	state (2) integer
+	matchMap (3) *BudokaiPlayer[11]
+	videoList (4) *BudokaiVideo[0]
+BudokaiAward
+	aid (0) integer
+	sid (1) integer
+	intps (2) *Kval[0]
+BudokaiPlayer
+	aid (0) integer
+	gs (1) integer
+	sid (2) integer
+	level (3) integer
+	charname (4) string
+	pos (5) integer
+	active (6) integer
+	lastround (7) integer
+	gsArea (8) integer
+	challengeNum (9) integer
+	dress (10) Dress
+	spos (11) string
+	tempId (12) integer
+BudokaiVideo
+	bindex (0) string
+	battleResult (1) BattleResultData
+ByeHandShake.request
+	name (0) string
+	sidx (1) integer
+ByeHandShake.response
+	name (0) string
+	sidx (1) integer
+CC_GetCityInfo.request
+	cid (0) integer
+CC_GetCityInfo.response
+	cid (0) integer
+	chars (1) *teamMem
+CC_LeaveCity.request
+CC_OccupyCity.response
+	cid (0) integer
+	camp (1) integer
+	chars (2) *teamMem
+	removeaids (3) *integer
+CHT_ChatSendNew.request
+	chatItem (0) ChatItemNew
+	gfid (1) integer
+CHT_ChatSendNew.response
+	chatItem (0) ChatItemNew
+CHT_GetHrefData.request
+	index (0) integer
+CHT_GetHrefData.response
+	ldatatype (0) integer
+	jsonstr (1) string
+CHT_GetPrivateChatList.request
+CHT_GetPrivateChatList.response
+	list (0) *PrivateChat
+CHT_GetRumors.request
+CHT_GetRumors.response
+	chatPopDts (0) *ChatPopDts[0]
+CHT_SendRumorToWorld.request
+	dt (0) ChatPopDt
+	limitNum (1) integer
+	areaTp (2) integer
+	index (3) integer
+CHT_SendToWorld.request
+	chatItem (0) ChatItemNew
+	index (1) integer
+	tp (2) integer
+CHT_SendToWorld.response
+CHT_Show.request
+	showtype (0) integer
+	param (1) string
+CHT_Show.response
+	result (0) integer
+CLD_GetMarriageChild.request
+	aid (0) integer
+CLD_GetMarriageChild.response
+	aid (0) integer
+	result (1) integer
+CSA_CommonOperate.request
+	type (0) integer
+	param (1) string
+CSA_CommonOperate.response
+	type (0) integer
+	season (1) integer
+	myDRank (2) integer
+	mySRank (3) integer
+	csArena (4) CsArena
+	myCsDt (5) CsArenaPlayer
+	enemyList (6) *CsArenaPlayer
+	dRankList (7) *CsArenaPlayer
+	sRankList (8) *CsArenaPlayer
+CSA_CommonOperateFromHegel.request
+	aid (0) integer
+	sid (1) integer
+	charData (2) CharData
+	type (3) integer
+	param (4) string
+CSA_CommonOperateFromHegel.response
+	aid (0) integer
+	type (1) integer
+	param (2) string
+	season (3) integer
+	myDRank (4) integer
+	mySRank (5) integer
+	myCsDt (6) CsArenaPlayer
+	enemyList (7) *CsArenaPlayer
+	dRankList (8) *CsArenaPlayer
+	sRankList (9) *CsArenaPlayer
+	charData (10) CharData
+CSA_SendAward.request
+	type (0) integer
+	season (1) integer
+	ranks (2) *CsArenaRankDt
+CSA_UpLoadCharList.request
+CSA_UpLoadCharList.response
+	sid (0) integer
+	charlist (1) *CsArenaPlayer
+CSA_UploadPlayer.request
+	taid (0) integer
+	hid (1) integer
+	aid (2) integer
+	ext (3) string
+CSA_UploadPlayer.response
+	aid (0) integer
+	sid (1) integer
+	hid (2) integer
+	charData (3) CharData
+	ext (4) string
+C_ACTIVESKIN.request
+	funcKey (0) string
+	id (1) integer
+C_ACTIVESKIN.response
+	funcKey (0) string
+	skin (1) Kval
+C_ActGodRing.request
+	type (0) integer
+	timeType (1) integer
+C_ActGodRing.response
+	godRing (0) GodRing
+C_ActStarTreasure.request
+	idx (0) integer
+C_ActStarTreasure.response
+	stars (0) *integer
+C_CHALLENGEGIFT.request
+	id (0) integer
+C_CHALLENGEGIFT.response
+	challengeGift (0) ChallengeData
+C_CHECKLOGIN.request
+C_CHECKSKIN.request
+C_ChangeHegel.request
+C_ChangeHegel.response
+C_ChangeName.request
+	name (0) string
+C_ChangeName.response
+	name (0) string
+C_ChangeNameFromWorld.request
+	aid (0) integer
+	name (1) string
+C_ChangeNameFromWorld.response
+	aid (0) integer
+	name (1) string
+C_CharChangeUpdate.response
+	cdress (0) Dress
+C_CharLevelUpdate.request
+C_CharLevelUpdate.response
+C_CharLogined.request
+	wchar (0) WorldChar
+	guildchar (1) GuildChar
+C_CharMapChanged.request
+	wchar (0) WorldChar
+C_CharModuleOpen.request
+	id (0) integer
+C_CharModuleOpen.response
+	module (0) Module
+C_CharPartDataUpdate.response
+	des (0) string
+	keyList (1) *string
+	charData (2) CharData
+C_CharPropShow.request
+C_CharPropShow.response
+	prop (0) *Property
+C_CheckGodRing.request
+	type (0) integer
+C_CheckGodRing.response
+	type (0) integer
+C_ComposeItem.request
+	id (0) integer
+	num (1) integer
+C_ComposeItem.response
+C_CreReset.request
+	pid (0) integer
+	tp (1) integer
+C_CreReset.response
+	pid (0) integer
+	tp (1) integer
+C_DOREFRESH.response
+C_DoFreeTry.request
+	type (0) integer
+	var1 (1) integer
+C_DoLoginMd5Check.request
+	pid (0) string
+	ocheckstr (1) string
+	checkstr (2) string
+C_DoLoginMd5Check.response
+	pid (0) string
+	ocheckstr (1) string
+	checkstr (2) string
+	sign (3) string
+C_DoMoBai.request
+	index (0) integer
+	aid (1) integer
+	mbname (2) string
+C_DoMoBai.response
+	mobai (0) MoBaiData
+C_ErrorRst.response
+	result (0) integer
+	value (1) *string
+C_ExitHegel.request
+C_ExitHegel.response
+C_GetBatCompareDt.request
+	bid (0) integer
+	type (1) integer
+C_GetBatCompareDt.response
+	myProper (0) *Property
+	enemyProper (1) *Property
+	batSkillList (2) *BatSkillList
+	damageRank (3) *BattleDamageInfo
+	isPvp (4) integer
+C_GetCharData.request
+	step (0) integer
+C_GetCharData.response
+	result (0) integer
+	charData (1) CharData
+	curTimeStamp (2) integer
+	serverStTime (3) integer
+	step (4) integer
+C_GetCharDetail.request
+	aid (0) integer
+C_GetCharDetail.response
+	player (0) PlayerDetailInfo
+C_GetExchange.request
+C_GetExchange.response
+C_GetGift.request
+	code (0) string
+	pid (1) string
+C_GetGuildBossLast.request
+	tp (0) integer
+	aid (1) integer
+C_GetGuildBossLast.response
+	tp (0) integer
+	last (1) string
+	dmgFst (2) string
+	tempId (3) integer
+C_GetOfflineRwd.request
+	type (0) integer
+C_GetOfflineRwd.response
+	offMin (0) integer
+	realMin (1) integer
+C_GetShowChar.request
+	index (0) integer
+C_GetShowChar.response
+	actShowChar (0) *ActShowCharData[0]
+C_GetSplitData.request
+C_GetSplitData.response
+	bag (0) Bag
+C_GetStartRwd.request
+C_GetVipRwd.request
+	vipIndex (0) integer
+	type (1) integer
+C_GetVipRwd.response
+C_GiftBack.request
+	aid (0) integer
+	code (1) string
+C_GsChange.request
+C_GsChange.response
+	key (0) *string
+	val (1) *integer
+C_LogRecFromWorld.request
+	aid (0) integer
+	key (1) string
+	value (2) integer
+	incr (3) integer
+C_OnGetGift.request
+	awardStr (0) string
+	code (1) string
+	giftName (2) string
+C_OnGetGift.response
+C_OpLog.request
+	aid (0) integer
+	logType (1) integer
+	logDesc (2) string
+C_OpenModule.response
+	charData (0) CharData
+C_RankMoBai.request
+C_RankMoBai.response
+	result (0) integer
+C_RefActScore.response
+	actscore (0) Actscore
+C_RefCurTime.request
+C_RefCurTime.response
+	curTimeStamp (0) integer
+C_RefPvpPropScore.request
+C_RefPvpPropScore.response
+	pvpPropScore (0) PvpPropScore
+C_SHOWSKIN.request
+	funcKey (0) string
+	id (1) integer
+	pid (2) integer
+C_SHOWSKIN.response
+	funcKey (0) string
+	skin (1) integer
+	pid (2) integer
+C_SHOW_ACTIVESKIN.response
+	skin (0) integer
+	funcKey (1) string
+	achId (2) integer
+C_SaveOpActLog.request
+	key (0) string
+	value (1) string
+C_SaveOpActLog.response
+	opActionLog (0) OpActionLog
+C_SyncCharDataFromWorld.request
+	aid (0) integer
+	chardata (1) CharData
+C_SyncDataFromCross.request
+	aid (0) integer
+	chardata (1) CharData
+C_SyncDataFromCross.response
+	aid (0) integer
+	chardata (1) CharData
+C_SyncDataFromHegelToWorld.request
+	aid (0) integer
+	key (1) string
+	intv (2) integer
+	strv (3) string
+C_SyncDataFromWorld.request
+	aid (0) integer
+	inc_gold (1) integer
+	guid (2) integer
+	gujob (3) integer
+	mtime (4) integer
+	contributionExp (5) integer
+	dayContributionExp (6) integer
+	guildName (7) string
+	benisonTime (8) integer
+	qjTimes (9) integer
+	kjTimes (10) integer
+	chatTimes (11) integer
+	temRank (12) integer
+C_SyncDataToCrossWorld.request
+	aid (0) integer
+	key (1) string
+	intv (2) integer
+C_SyncDressFromHegelToWorld.request
+	aid (0) integer
+	key (1) string
+	val (2) integer
+C_SyncGuildSucFromHegel.request
+	aid (0) integer
+	guildName (1) string
+C_SyncIntDatasFromHegelToWorld.request
+	aid (0) integer
+	keys (1) *string
+	intvs (2) *integer
+C_SyncMoneyFromHegelToWorld.request
+	result (0) integer
+	aid (1) integer
+	inc_gold (2) integer
+	reqId (3) integer
+	sk (4) *string
+	ik (5) *string
+	sv (6) *string
+	iv (7) *integer
+	inc_bindgold (8) integer
+C_SyncMoneyFromWorld.request
+	result (0) integer
+	aid (1) integer
+	inc_gold (2) integer
+	reqId (3) integer
+	sk (4) *string
+	ik (5) *string
+	sv (6) *string
+	iv (7) *integer
+	inc_bindgold (8) integer
+	logtype (9) integer
+C_UpCareer.request
+	career (0) integer
+	sex (1) integer
+C_UpCareer.response
+	skill (0) Skill
+	tempId (1) integer
+	career (2) integer
+	sex (3) integer
+C_ZeroRefresh.request
+CacheRow.request
+	table (0) string
+	aid (1) integer
+	ik (2) *string
+	sk (3) *string
+	iv (4) *integer
+	sv (5) *string
+	param (6) *integer
+CacheRow.response
+	result (0) integer
+	aid (1) integer
+	param (2) *integer
+Cbt_Floor
+	fd (0) *integer
+	wa (1) *integer
+	n (2) integer
+ChallengeData
+	key (0) string
+	val (1) *integer
+	tid (2) integer
+	kt (3) integer
+ChallengeGift
+	sign (0) *ChallengeData[0]
+CharBaseData
+	aid (0) integer
+	name (1) string
+	career (2) integer
+	level (3) integer
+	logintime (4) integer
+	deltime (5) integer
+	gs (6) integer
+	weapon (7) integer
+	equip (8) integer
+	wingId (9) integer
+	guild (10) string
+	fashion (11) *integer
+	weaponSuitEff (12) integer
+	armorSuitEff (13) integer
+	vipLevel (14) integer
+	blocktime (15) integer
+	createtime (16) integer
+CharData
+	aid (0) integer
+	accname (1) string
+	charname (2) string
+	level (3) integer
+	gs (4) integer
+	exp (5) integer
+	tempId (6) integer
+	logouttime (7) integer
+	logintime (8) integer
+	createtime (9) integer
+	loginip (10) string
+	logincount (11) integer
+	vipLevel (12) integer
+	onlineTime (13) integer
+	gold (14) integer
+	bagmoney (15) integer
+	bindgold (16) integer
+	aucscore (17) integer
+	guid (18) integer
+	gujob (19) integer
+	guildLv (20) integer
+	pmap (21) Pmap
+	equipon (22) Equipon
+	skill (23) Skill
+	achievement (24) Achievement
+	forge (25) Forge
+	bag (26) Bag
+	modules (27) Modules
+	batBoss (28) BatBoss
+	dress (29) Dress
+	quest (30) Quest
+	shopBuy (31) ShopBuy
+	pets (32) Pets
+	partners (33) Partners
+	xuanNvs (34) XuanNvs
+	skyGods (35) SkyGods
+	peractives (41) Peractives
+	shareboss (42) Shareboss
+	bosss (43) Bosss
+	arena (44) Arena
+	fb (45) Fb
+	growprop (46) Growprop
+	guildrecord (47) Guildrecord
+	skins (48) Skins
+	dailytask (49) Dailytask
+	paydata (50) Paydata
+	teamfbs (51) Teamfbs
+	dailyactivity (52) Dailyactivity
+	share (53) Share
+	analytics (54) Analytics
+	growsys (55) Growsys
+	serverId (56) integer
+	sidnum (57) integer
+	platsid (58) integer
+	sid (59) integer
+	platform (60) integer
+	marriage (61) Marriage
+	guname (62) string
+	godclass (63) Godclass
+	faBao (64) FaBao
+	totems (65) Totems
+	daydrop (66) Daydrop
+	kingwar (67) Kingwar
+	catchPetTimes (68) integer
+	logRec (69) LogRec
+	gametimes (70) Gametimes
+	hejiData (71) HejiData
+	budokai (72) Budokai
+	charPvp (73) CharPvp
+	giftpush (74) Giftpush
+	runeBag (75) RuneBag
+	serverFirstAward (77) ServerFirstAward
+	actData (78) ActData
+	soulRoot (79) SoulRoot
+	soulRootbag (80) SoulRootbag
+	perOps (81) PerOps
+	opActionLog (82) OpActionLog
+	moBaiData (83) MoBaiData
+	heavenBook (85) HeavenBook
+	artifacts (88) Artifacts
+	csArena (89) CsArena
+	myGuildFb (91) MyGuildFb
+	heartMagic (93) HeartMagic
+	pvpPropScore (95) PvpPropScore
+	maxDataLen (99) integer
+	bbRank (100) integer
+	jxtzRank (101) integer
+	hmsRank (102) integer
+	wxslRank (103) integer
+	hhsjRank (104) integer
+	fsslRank (105) integer
+	wxRank (106) integer
+	jxtzStar (107) integer
+	monthCard (108) integer
+	foreverCard (109) integer
+	faBaoGs (110) integer
+	runeGs (111) integer
+	soulRootGs (112) integer
+	heavenBookGs (113) integer
+	zinvGs (114) integer
+	gEquipon (115) GEquipon
+	petGs (116) integer
+	partnerGs (117) integer
+	xnGs (118) integer
+	godEquipGs (119) integer
+	tsGs (120) integer
+	artifactGs (121) integer
+	totemGs (122) integer
+	legend (125) Legend
+	combines (126) Combines
+	godRing (127) GodRing
+	challengeGift (128) ChallengeGift
+CharOfflineData
+	aid (0) integer
+	uid (1) string
+	level (2) integer
+	charname (3) string
+	sex (4) integer
+	gs (5) integer
+	logintime (6) integer
+	logouttime (7) integer
+	dress (8) Dress
+	tempId (9) integer
+	guid (10) integer
+	gujob (11) integer
+	bbRank (12) integer
+	wxslRank (13) integer
+	hmsRank (14) integer
+	jxtzRank (15) integer
+	vipLevel (16) integer
+	contributionExp (17) integer
+	dayContributionExp (18) integer
+	marriage (19) Marriage
+	wingGs (20) integer
+	rideGs (21) integer
+	shouhuGs (22) integer
+	shenhunGs (23) integer
+	shenbingGs (24) integer
+	par_titleGs (25) integer
+	par_shenhunGs (26) integer
+	par_guanghuanGs (27) integer
+	par_shouhuGs (28) integer
+	ts_titleGs (29) integer
+	ts_shenhunGs (30) integer
+	ts_guanghuanGs (31) integer
+	ts_shouhuGs (32) integer
+	pet_titleGs (33) integer
+	pet_shenhunGs (34) integer
+	pet_guanghuanGs (35) integer
+	pet_shouhuGs (36) integer
+	petGs (37) integer
+	partnerGs (38) integer
+	xnGs (39) integer
+	xn_titleGs (40) integer
+	xn_shenhunGs (41) integer
+	xn_guanghuanGs (42) integer
+	xn_shouhuGs (43) integer
+	jxtzStar (44) integer
+	monthCard (45) integer
+	foreverCard (46) integer
+	hhsjRank (47) integer
+	uid_ex (54) string
+CharPvp
+	cd (0) integer
+	times (1) integer
+	buyTimes (2) integer
+	lastBuyTime (3) integer
+	titleLv (4) integer
+	buyEmyTimes (5) integer
+	lastEmyTime (6) integer
+CharSimpleDataUpdate
+	aid (0) integer
+	name (1) string
+	level (2) integer
+	exp (3) integer
+	bagmoney (4) integer
+	bindgold (5) integer
+	gold (6) integer
+	gs (7) integer
+	guid (8) integer
+	gujob (9) integer
+	petCurrency (10) integer
+	bbRank (11) integer
+	jxtzRank (12) integer
+	hmsRank (13) integer
+	wxslRank (14) integer
+	aucscore (15) integer
+	catchPetTimes (16) integer
+	jxtzStar (17) integer
+	hhsjRank (18) integer
+	logintime (19) integer
+	onlineTime (20) integer
+	fsslRank (21) integer
+	wxRank (22) integer
+CharSimpleRankData
+	aid (0) integer
+	charname (1) string
+	gs (2) integer
+	level (3) integer
+	icon (4) integer
+	score (5) integer
+	hurtHp (6) integer
+ChatExtData
+	fabao (0) FaBaoData
+	pet (1) Pet
+	skill (2) integer
+	skygod (3) SkyGod
+	partner (4) Partner
+	item (5) ItemData
+	equip (6) EquipData
+	artifact (9) Artifact
+ChatItemNew
+	id (0) integer
+	time (1) integer
+	channel (2) integer
+	send (3) integer
+	sname (4) string
+	sparam (5) string
+	receive (6) integer
+	rname (7) string
+	rparam (8) string
+	strtype (9) integer
+	displace (10) integer
+	content (11) string
+	strlist (12) *string
+	lnList (13) *string
+	lpList (14) *string
+	ldList (15) *ChatExtData
+	sysp (16) string
+	ldjsonList (17) *string
+	vipLevel (18) integer
+	monthCard (19) integer
+	foreverCard (20) integer
+	guid (21) integer
+	sidnum (22) integer
+ChatPopDt
+	id (0) integer
+	chance (1) integer
+	tarType (2) integer
+	str (3) string
+	pow (4) integer
+ChatPopDts
+	cid (0) string
+	chatPopDts (1) *ChatPopDt
+Combines
+	pets (0) PetCombines
+CrossRankList
+	score (0) string
+	sidnum (1) integer
+	name (2) string
+	tempId (3) integer
+	num (4) integer
+	guname (5) string
+	camp (6) integer
+CrossRankTitle
+	cId (0) integer
+	tid (1) integer
+	ct (2) integer
+CrossRankVec
+	list (0) *CrossRankList
+	title (1) CrossRankTitle
+	myscore (2) string
+	myrank (3) integer
+CsArena
+	batTimes (0) integer
+	cdStTime (1) integer
+	buyTimes (2) integer
+	lastRefTime (3) integer
+	winNum (4) integer
+	isPromotion (5) integer
+	history (6) *string
+	clgTask (7) *Kval[0]
+	segTask (8) *Kval[0]
+	enemyList (9) *integer
+	timeStamp (10) integer
+CsArenaPlayer
+	aid (0) integer
+	serverId (1) integer
+	tempId (2) integer
+	level (3) integer
+	gs (4) integer
+	dScore (5) integer
+	sScore (6) integer
+	segLv (7) integer
+	charname (8) string
+	dress (9) Dress
+	timeStamp (10) integer
+	isRobot (11) integer
+CsArenaPlayerList
+	data (0) *CsArenaPlayer
+CsArenaRankDt
+	aid (0) integer
+	rank (1) integer
+	segLv (2) integer
+	score (3) integer
+DC_operate.request
+	type (0) integer
+	param (1) integer
+DC_operate.response
+	dayclg (0) Dayclg
+	type (1) integer
+DT_getRwd.request
+	type (0) integer
+DT_getRwd.response
+	dailytask (0) Dailytask
+DT_operateBoss.request
+	type (0) integer
+	index (1) integer
+DT_operateBoss.response
+	dailytask (0) Dailytask
+DailyDt
+	lastTime (0) integer
+	cdStTime (1) integer
+	getRwdTime (2) integer
+	stars (3) *integer
+	resIds (4) *integer
+Dailyactivity
+	getResSign (0) *Kval[0]
+	getExpSign (1) *Kval[0]
+	lastTime (2) integer
+Dailyfb
+	fbList (0) *Kval[0]
+Dailytask
+	boss (0) DailyDt
+	hangup (1) DailyDt
+DayDrops
+	id (0) integer
+	num (1) integer
+DayQuest
+	id (0) integer
+	judge (1) integer
+	num (2) integer
+Dayclg
+	comNum (0) integer
+	lastFreeTime (1) integer
+	score (2) integer
+	quests (3) *DayQuest
+	timeStamp (4) integer
+	todayFirst (5) integer
+Daydrop
+	st (0) integer
+	drops (1) *DayDrops[0]
+Dress
+	resId (0) integer
+	titleId (1) integer
+	weaponId (2) integer
+	rideId (3) integer
+	wingId (4) integer
+	shouhuId (5) integer
+	shenhunId (6) integer
+	shenbingId (7) integer
+	par_titleId (8) integer
+	par_shenhunId (9) integer
+	par_guanghuanId (10) integer
+	par_shouhuId (11) integer
+	ts_titleId (12) integer
+	ts_shenhunId (13) integer
+	ts_guanghuanId (14) integer
+	ts_shouhuId (15) integer
+	pet_titleId (16) integer
+	pet_shenhunId (17) integer
+	pet_guanghuanId (18) integer
+	pet_shouhuId (19) integer
+	xn_resId (20) integer
+	xn_titleId (21) integer
+	xn_shenhunId (22) integer
+	xn_guanghuanId (23) integer
+	xn_shouhuId (24) integer
+	ts_resId (25) integer
+	pet_resId (26) integer
+	par_resId (27) integer
+DressColor
+	resColor (0) integer
+EQU_ADDBAGNUM.request
+EQU_ADDBAGNUM.response
+	mm (0) integer
+EQU_AutoEquip.request
+	type (0) integer
+EQU_AutoEquip.response
+	equs (0) *EquipData[1]
+	equipType (1) integer
+	faBaos (2) *FaBaoData[6]
+EQU_DECOMPOSE.request
+	itemId (0) integer
+	num (1) integer
+EQU_DECOMPOSE.response
+EQU_QuickExchangeEqu.request
+	ids (0) *integer
+EQU_RecyleEqu.request
+	equList (0) *integer
+	isAutoRecycle (1) integer
+EQU_RecyleEqu.response
+EQU_SetAutoRecycle.request
+	autoRecycle (0) integer
+EQU_SetAutoRecycle.response
+	autoRecycle (0) integer
+EquipBag
+	mm (0) integer
+	m (1) integer
+	equips (2) *EquipData[1]
+	autoRecycle (3) integer
+EquipData
+	num (0) integer
+	vid (1) string
+	itemId (2) integer
+Equipon
+	equips (0) *EquipData[1]
+	weapons (1) *FaBaoData[6]
+	runes (2) *RuneSlot[0]
+FABAO_Break.request
+	ids (0) string
+FABAO_EquipOn.request
+	id (0) string
+	sid (1) integer
+FABAO_LevelUp.request
+	sid (0) integer
+	selected (1) integer
+FABAO_LevelUp.response
+	faBao (0) FaBao
+FABAO_Lock.request
+	id (0) string
+FABAO_Make.request
+	isTop (0) integer
+	selected (1) integer
+FABAO_Make.response
+	faBao (0) FaBao
+FABAO_MakeOneKey.request
+	isTop (0) integer
+	selected (1) integer
+FABAO_MakeOneKey.response
+	faBao (0) FaBao
+FBK_BATTLE_PVP.request
+	areaId (0) integer
+	gsArea (1) integer
+	player1 (2) CharData
+	player2 (3) CharData
+	paramtype (4) integer
+	param1 (5) integer
+FBK_BATTLE_PVP.response
+	areaId (0) integer
+	gsArea (1) integer
+	aid (2) integer
+	aid2 (3) integer
+	paramtype (4) integer
+	param1 (5) integer
+	isWin (6) integer
+FBK_BATTLE_PVP_GROUP.request
+	areaId (0) integer
+	gsArea (1) integer
+	round (2) integer
+	player1List (3) *CharData
+	player2List (4) *CharData
+	pos1List (5) *integer
+	pos2List (6) *integer
+	bindexList (7) *integer
+FBK_BATTLE_PVP_GROUP.response
+	areaId (0) integer
+	gsArea (1) integer
+	round (2) integer
+	pos1List (3) *integer
+	pos2List (4) *integer
+	bindexList (5) *integer
+	resultList (6) *integer
+	battleList (7) *BattleResultData
+FBK_BeKill.response
+	name (0) string
+FBK_Bet.request
+	gsArea (0) integer
+	bindex (1) integer
+	winaid (2) integer
+	btype (3) integer
+FBK_Bet.response
+	result (0) integer
+	myBetList (1) *BetPlayer[6]
+FBK_BetCross.request
+	sid (0) integer
+	aid (1) integer
+	gsArea (2) integer
+	bindex (3) integer
+	winaid (4) integer
+	btype (5) integer
+FBK_BetCross.response
+	sid (0) integer
+	aid (1) integer
+	gsArea (2) integer
+	bindex (3) integer
+	winaid (4) integer
+	btype (5) integer
+FBK_Challenge.request
+	pos (0) integer
+FBK_Challenge.response
+	result (0) integer
+	budokai (1) FirstBudokai
+FBK_ChallengeBattleEnd.request
+	areaId (0) integer
+	gsArea (1) integer
+	aid (2) integer
+	aid2 (3) integer
+	pos (4) integer
+	result (5) integer
+FBK_ChallengeBattleEnd.response
+FBK_ChallengeCross.request
+	sid (0) integer
+	aid (1) integer
+	pos (2) integer
+	charData (3) CharData
+FBK_ChallengeCross.response
+	areaId (0) integer
+	gsArea (1) integer
+	aid (2) integer
+	pos (3) integer
+	charData (4) CharData
+FBK_ChallengeHegel.request
+	sid (0) integer
+	aid (1) integer
+	pos (2) integer
+	consum (3) integer
+FBK_ChallengeHegel.response
+FBK_GetFirstBudokaiInfo.request
+FBK_GetFirstBudokaiInfo.response
+	result (0) integer
+	budokai (1) FirstBudokai
+	name (2) string
+FBK_GetSingleBudokai.request
+FBK_GetSingleBudokai.response
+	budokai (0) Budokai
+FBK_NoticeUploadPlayers.request
+	aidList (0) *integer
+FBK_NoticeUploadPlayers.response
+	sid (0) integer
+	rankList (1) *CharSimpleRankData
+FBK_PlayBattleVideo.request
+	gsArea (0) integer
+	bindex (1) integer
+	aid (2) integer
+	areaId (3) integer
+	hegelId (4) integer
+FBK_PlayBattleVideo.response
+	battleResult (0) BattleResultData
+	aid (1) integer
+FBK_SEND_AWARD.request
+	awardList (0) *BudokaiAward
+FBK_SEND_AWARD.response
+FBK_SycBudokaiToHegel.request
+	budokai (0) FirstBudokai
+FBK_SycBudokaiToHegel.response
+FBK_SycMatchesInfo.request
+	sid (0) integer
+	budokai (1) FirstBudokai
+	posLoseAid (3) integer
+	posGetAid (4) integer
+	betLog (5) BetAid
+FBK_SycMatchesInfo.response
+FBK_UploadPlayersBattleData.request
+	aidList (0) *integer
+FBK_UploadPlayersBattleData.response
+	sid (0) integer
+	charList (1) *CharData
+FB_DailyFBData.request
+FB_DailyFBData.response
+	day (0) integer
+FB_FightOneKeyMoppingUp.request
+FB_FightOneKeyMoppingUp.response
+	fd (0) *integer
+FB_FightStarReward.request
+	index (0) integer
+	floor (1) integer
+FB_FightStarReward.response
+	award (0) integer
+FB_HhsjAuto.request
+FB_HhsjAuto.response
+	cur (0) integer
+FB_MountainAuto.request
+FB_MountainAuto.response
+	current (0) integer
+FB_MountainReward.request
+	layers (0) integer
+FB_MountainReward.response
+	rewards (0) *Mountain_Award[0]
+FB_StarRewardAll.request
+FB_StarRewardAll.response
+	wa (0) *integer
+FG_UP.request
+	ftype (0) integer
+FG_UP.response
+	ftype (0) integer
+	forgeDatas (1) ForgeDatas
+FaBao
+	open (0) integer
+	mnum (1) integer
+	slotLv (2) *FaBaoSlotLv[0]
+	mnum1 (3) integer
+	mnum2 (4) integer
+FaBaoData
+	num (0) integer
+	itemId (1) integer
+	itemType (2) integer
+	slotType (3) integer
+	skill (4) *SkillData
+	id (5) string
+	sid (6) string
+	lock (7) integer
+FaBaoSlotLv
+	key (0) string
+	level (1) integer
+Fb
+	dailyfb (0) Dailyfb
+	day (1) integer
+	fight (2) Cbt_Floor
+	trial (3) integer
+	mountain (4) Mountain
+	hhsj (5) Hhsj
+	fstrial (6) integer
+FbkBetList
+	data (0) *Bet[0]
+FbkGsAreaList
+	data (0) *BudokaiArea[0]
+FbkPrePlayerList
+	data (0) *BudokaiPlayer[0]
+FetchChar.request
+	table (0) string
+	aid (1) integer
+	param (2) *integer
+	reqId (3) integer
+	cid (4) integer
+	way (5) integer
+FetchChar.response
+	result (0) integer
+	aid (1) integer
+	ik (2) *string
+	sk (3) *string
+	iv (4) *integer
+	sv (5) *string
+	param (6) *integer
+	reqId (7) integer
+	cid (8) integer
+	way (9) integer
+FetchRow.request
+	table (0) string
+	aid (1) integer
+	param (2) *integer
+	reqId (3) integer
+FetchRow.response
+	result (0) integer
+	aid (1) integer
+	ik (2) *string
+	sk (3) *string
+	iv (4) *integer
+	sv (5) *string
+	param (6) *integer
+	reqId (7) integer
+FightBoss
+	star (0) integer
+	tid (1) integer
+	bt (2) integer
+FirstBudokai
+	aid (0) integer
+	idx (1) integer
+	areaId (2) integer
+	state (3) integer
+	gsAreaList (4) *BudokaiArea[0]
+	betList (5) *Bet[0]
+	prePlayerList (6) *BudokaiPlayer[0]
+	playerList (7) *BudokaiPlayer[0]
+	lastChampion (8) BudokaiPlayer
+	betListByAid (9) *BetAid[0]
+	myBetList (10) *BetPlayer[6]
+	myGsArea (11) integer
+	sids (12) string
+Flower
+	itemid (0) integer
+	itemnum (1) integer
+	time (2) integer
+	name (3) string
+	aid (4) integer
+FlowerBatObj
+	tempId (0) integer
+	type (1) integer
+Flowerlog
+	data (0) *Flower
+Forge
+	data (0) *ForgeDatas[1]
+ForgeData
+	level (0) integer
+	key (1) string
+	part (2) integer
+	stype (3) integer
+ForgeDatas
+	data (0) *ForgeData[1]
+	key (1) string
+GB_BE_FIGHT.response
+	result (0) integer
+GB_FIGHT.request
+	aid (0) integer
+	bType (1) integer
+	etime (2) integer
+GB_FIGHT.response
+	myBooker (0) BookerData
+GB_GET_AWARD.request
+GB_GET_AWARD.response
+	myBooker (0) BookerData
+	result (1) integer
+GB_GET_AWARD_INFO.request
+GB_GET_AWARD_INFO.response
+	myBooker (0) BookerData
+	enemyList (1) *OneBookEnemy
+GB_GET_BOOK_INFO.request
+GB_GET_BOOK_INFO.response
+	myBooker (0) BookerData
+	bookers (1) *ShowBooker
+GB_GET_ENEMYLIST.request
+GB_GET_ENEMYLIST.response
+	enemyList (0) *OneBookEnemy
+	hitList (1) *OneBookEnemy
+GB_GET_MYBOOK.response
+	myBooker (0) BookerData
+GB_GetSecNum.request
+GB_GetSecNum.response
+	num (0) integer
+GB_GetTopData.request
+GB_GetTopData.response
+	data (0) *CharData
+GB_QUICK_FINISH.request
+GB_QUICK_FINISH.response
+	myBooker (0) BookerData
+	result (1) integer
+	bookers (2) *ShowBooker
+GB_RefreshItem.request
+	aid (0) integer
+	rtype (1) integer
+GB_SHOW_BOOKDETAIL.request
+	aid (0) integer
+	bType (1) integer
+	etime (2) integer
+GB_SHOW_BOOKDETAIL.response
+	bookDetail (0) BookerDetail
+	bType (1) integer
+GB_START.request
+GB_START.response
+	myBooker (0) BookerData
+	bookers (1) *ShowBooker
+GB_TopProtect.request
+GB_TopProtect.response
+GB_UP_BOOKER.request
+	type (0) integer
+	isItem (1) integer
+GB_UP_BOOKER.response
+	myBooker (0) BookerData
+	rtype (1) integer
+GE_On.request
+	sid (0) integer
+	tp (1) string
+	index (2) integer
+	tid (3) integer
+GE_On.response
+	data (0) *GEquiponData[0]
+GEquipon
+	data (0) *GEquiponData[0]
+GEquiponData
+	sid (0) string
+	tt (1) *integer
+	ts (2) *integer
+	sq (3) *integer
+GMAP_AutoDone.request
+	tp (0) integer
+GMAP_ChangeState.response
+	tp (0) integer
+	state (1) integer
+	count (2) integer
+GMAP_GetAward.request
+	tp (0) integer
+GMAP_Reset.request
+	tp (0) integer
+GMAP_UpQuest.response
+	guildquest (0) GuildQuest
+GOD_AwakeEquip.request
+	index (0) integer
+GOD_Operate.request
+	index (0) integer
+	type (1) integer
+	auto (2) integer
+	lockArr (3) *integer
+GOD_Operate.response
+	godslot (0) Godslot
+GP_CheckType.request
+	tp (0) integer
+GP_Operate.request
+	id (0) integer
+	param (1) string
+GP_Operate.response
+	item (0) Gift
+	com (1) integer
+GROWSYS_UpSysLv.request
+	funcKey (0) string
+	param (1) string
+GROWSYS_UpSysLv.response
+	growsys (0) Growsys
+GU_ActGuidGift.request
+	aid (0) integer
+	action (1) integer
+GU_AddGuildActRecord.request
+	aid (0) integer
+	type (1) string
+	num (2) integer
+GU_AddGuildMRecord.request
+	aid (0) integer
+	gid (1) integer
+	args (2) *string
+	tp (3) integer
+	serverId (4) integer
+GU_AddGuildMRecord.response
+	aid (0) integer
+	gid (1) integer
+	args (2) *string
+	tp (3) integer
+GU_ApplyJoin.request
+	guildIds (0) *integer
+GU_ApplyJoin.response
+	result (0) integer
+	guildId (1) integer
+	enter (2) integer
+GU_BatFb.request
+	fid (0) integer
+GU_BatFb.response
+	myGuildFb (0) MyGuildFb
+GU_BuyFbTime.request
+GU_BuyFbTime.response
+	myGuildFb (0) MyGuildFb
+GU_ChangeSet.request
+	isAuto (0) integer
+	mings (1) string
+GU_ChangeSet.response
+	isAuto (0) integer
+	mings (1) string
+GU_ClentGetGuildLevel.request
+GU_ClentGetGuildLevel.response
+	lv (0) integer
+GU_CreateGuild.request
+	guildName (0) string
+GU_CreateGuild.response
+	result (0) integer
+	guild (1) GuildInfo
+GU_DealApply.request
+	applyerAid (0) integer
+	agreed (1) integer
+GU_DealApply.response
+	result (0) integer
+	applyerAid (1) integer
+	gumyinfo (2) GuildMyInfo
+GU_GetBenisonDtFromHegel.request
+	aid (0) integer
+	index (1) integer
+GU_GetBenisonDtFromHegel.response
+GU_GetBenisonRewardFromHegel.request
+	aid (0) integer
+	index (1) integer
+GU_GetBenisonRewardFromHegel.response
+GU_GetBenisonRewardFromWorld.request
+	aid (0) integer
+	index (1) integer
+	benisonExp (2) integer
+GU_GetBenisonRewardFromWorld.response
+GU_GetFbData.request
+GU_GetFbData.response
+	guildFb (0) GuildFb
+GU_GetFbGaward.request
+	fid (0) integer
+GU_GetFbGaward.response
+	myGuildFb (0) MyGuildFb
+GU_GetFbGawardFromWorldToHegel.request
+	fid (0) integer
+	type (1) integer
+	aid (2) integer
+GU_GetFbTaward.request
+	apt (0) integer
+GU_GetFbTaward.response
+	myGuildFb (0) MyGuildFb
+GU_GetFbTawardFromWorldToHegel.request
+	aid (0) integer
+	apt (1) integer
+GU_GetGFbSimpleRank.request
+GU_GetGFbSimpleRank.response
+	ranks (0) *GU_GuildFbRank
+	granks (1) *GU_GuildFbRank
+	myRank (2) integer
+	myVal (3) integer
+	myGuidRank (4) integer
+	myGuidVal (5) integer
+	batInfo (6) *GU_GuildFbFloorPro[0]
+GU_GetGFbSimpleRankCross.request
+	aid (0) integer
+	sid (1) integer
+	guid (2) integer
+GU_GetGFbSimpleRankCross.response
+	ranks (0) *GU_GuildFbRank
+	granks (1) *GU_GuildFbRank
+	myRank (2) integer
+	myVal (3) integer
+	myGuidRank (4) integer
+	myGuidVal (5) integer
+	batInfo (6) *GU_GuildFbFloorPro[0]
+	aid (7) integer
+GU_GetGFbTotalRank.request
+GU_GetGFbTotalRank.response
+	ranks (0) *GU_GuildFbRank
+	granks (1) *GU_GuildFbRank
+	myRank (2) integer
+	myVal (3) integer
+	myGuidRank (4) integer
+	myGuidVal (5) integer
+GU_GetGFbTotalRankCross.request
+	aid (0) integer
+	sid (1) integer
+	guid (2) integer
+GU_GetGFbTotalRankCross.response
+	ranks (0) *GU_GuildFbRank
+	granks (1) *GU_GuildFbRank
+	myRank (2) integer
+	myVal (3) integer
+	myGuidRank (4) integer
+	myGuidVal (5) integer
+	aid (6) integer
+GU_GetGuildApplylist.request
+GU_GetGuildApplylist.response
+	result (0) integer
+	applicants (1) *GuildApplicantInfo
+GU_GetGuildBenison.request
+GU_GetGuildBenison.response
+	result (0) integer
+	gumyinfo (1) GuildMyInfo
+GU_GetGuildGift.request
+GU_GetGuildGift.response
+	result (0) integer
+	gift (1) GuildGift
+	data (2) *GuildGiftData
+	spData (3) *GuildGiftData
+GU_GetGuildList.request
+	index (0) integer
+	guildName (1) string
+GU_GetGuildList.response
+	result (0) integer
+	guilds (1) *GuildInfo
+	index (2) integer
+	totalNum (3) integer
+GU_GetGuildManagers.request
+GU_GetGuildManagers.response
+	result (0) integer
+	managers (1) *GuildMemberInfo
+GU_GetGuildMembers.request
+GU_GetGuildMembers.response
+	result (0) integer
+	members (1) *GuildMemberInfo
+	membernum (2) integer
+GU_GetGuildMyInfo.request
+GU_GetGuildMyInfo.response
+	result (0) integer
+	gumyinfo (1) GuildMyInfo
+GU_GetGuildPerData.request
+GU_GetGuildPerData.response
+	guildrecord (0) Guildrecord
+GU_GetMemDetail.request
+	aid (0) integer
+GU_GetMemDetail.response
+	result (0) integer
+	data (1) GuildMemberInfo
+GU_GetMrecord.request
+GU_GetMrecord.response
+	mrecord (0) *MrecordOne
+GU_GetShouhuPointReward.request
+	id (0) integer
+GU_GetShouhuPointReward.response
+	id (0) integer
+GU_GuildBenison.request
+	index (0) integer
+GU_GuildBenison.response
+	benisons (0) *integer
+	contribution (1) integer
+GU_GuildBenisonReward.request
+	index (0) integer
+GU_GuildBenisonReward.response
+	benisonlist (0) *integer
+GU_GuildFbFloorPro
+	floor (0) string
+	names (1) *string
+GU_GuildFbRank
+	aid (0) integer
+	rank (1) integer
+	val (2) integer
+	name (3) string
+GU_GuildJuanXian.request
+	itemid (0) integer
+	num (1) integer
+	addExp (2) integer
+	aid (3) integer
+GU_GuildJuanXian.response
+	result (0) integer
+	gumyinfo (1) GuildMyInfo
+GU_GuildQuestRing.request
+	index (0) integer
+GU_GuildQuestRing.response
+	quest (0) GuildQuest
+GU_GuildQuestRingEnd.request
+GU_GuildQuestRingEnd.response
+	quest (0) GuildQuest
+GU_GuildQuestRingStart.request
+GU_OpenGuildGift.request
+	iid (0) string
+	tp (1) integer
+GU_QuitGuild.request
+	quitAid (0) integer
+GU_QuitGuild.response
+	result (0) integer
+	quitAid (1) integer
+	aid (2) integer
+	gumyinfo (3) GuildMyInfo
+GU_ReceiveGuidGift.request
+	items (0) *GuildGiftItems
+	aid (1) integer
+GU_SendGuildFbWeekAwardCross.response
+	ranks (0) *GU_GuildFbRank
+	type (1) integer
+GU_ShowRedPoint.response
+	result (0) integer
+GU_SyncGuildsLevelToHegel.request
+	guilds (0) *GuildLevel
+GU_SyncGuildsLevelToHegel.response
+GU_SysGFStateCross.request
+GU_SysGFStateCross.response
+GU_SysMyGuildFb.request
+GU_SysMyGuildFb.response
+	myGuildFb (0) MyGuildFb
+GU_SysResultFromWorldToCross.request
+	aid (0) integer
+	sid (1) integer
+	guild (2) GuildFbDtCorss
+	charData (3) GuildFbPlayerCorss
+GU_ThGuildChair.request
+GU_ThGuildChair.response
+	result (0) integer
+	gumyinfo (1) GuildMyInfo
+	upmembers (2) *GuildMemberInfo
+GU_UpGuildChair.request
+	aid (0) integer
+GU_UpGuildChair.response
+	result (0) integer
+	gumyinfo (1) GuildMyInfo
+	upmembers (2) *GuildMemberInfo
+GU_UpGuildGw.request
+GU_UpGuildGw.response
+	guildFb (0) GuildFb
+GU_UpGuildJob.request
+	aid (0) integer
+	job (1) integer
+GU_UpGuildJob.response
+	result (0) integer
+	upmember (1) GuildMemberInfo
+GU_UpGuildSkill.request
+GU_UpGuildSkill.response
+	contribution (0) integer
+	skill (1) *integer
+GU_UpMyGuildGw.request
+GU_UpMyGuildGw.response
+	myGuildFb (0) MyGuildFb
+GU_UpdateGuildName.request
+	guildName (0) string
+	aid (1) integer
+GU_UpdateGuildName.response
+	result (0) integer
+	gumyinfo (1) GuildMyInfo
+GU_UpdateGuildNotice.request
+	notice (0) string
+GU_UpdateGuildNotice.response
+	result (0) integer
+	gumyinfo (1) GuildMyInfo
+GU_batFbFromWorldToHegel.request
+	fid (0) integer
+	currentHp (1) integer
+	time (2) integer
+	guid (3) integer
+	aid (4) integer
+	gw (5) integer
+	oafloor (6) integer
+GU_batFbFromWorldToHegel.response
+	fid (0) integer
+	currentHp (1) integer
+	time (2) integer
+	guid (3) integer
+	aid (4) integer
+	damg (5) integer
+GU_sendChairMsg.request
+GU_sendChairMsg.response
+	guildFb (0) GuildFb
+GW_AUTOEQUIP.request
+	funcKey (0) string
+GW_PROPUPLV.request
+	funcKey (0) string
+	autoBuy (1) integer
+GW_PROPUPLV.response
+	funcKey (0) string
+	data (1) GrowpropData
+GW_SHOWPROP.request
+	funcKey (0) string
+	resId (1) integer
+GW_SHOWPROP.response
+	funcKey (0) string
+	resId (1) integer
+GW_SKILLUPLV.request
+	funcKey (0) string
+	index (1) integer
+GW_SKILLUPLV.response
+	funcKey (0) string
+	index (1) integer
+GW_UsePropDan.request
+	funcKey (0) string
+	num (1) integer
+GactRecord
+	gdboss (0) integer
+	gdbat (1) integer
+	csboss (2) integer
+Gametimes
+	ninesky (0) integer
+GetUserOfflineData.request
+	reqId (0) integer
+	aids (1) *integer
+	names (2) *string
+GetUserOfflineData.response
+	result (0) integer
+	reqId (1) integer
+	userOffDatas (2) *CharOfflineData
+Gift
+	key (0) string
+	receiveTime (1) integer
+	expireTime (2) integer
+GiftItem
+	itemType (0) integer
+	id (1) integer
+	num (2) integer
+Giftinfo
+	data (0) *string
+Giftpush
+	gifts (0) *Gift[0]
+GodRing
+	godRing0 (0) integer
+	godRing1 (1) integer
+GodSlProp
+	t (0) integer
+	v (1) integer
+Godclass
+	godslots (0) *Godslot[0]
+Godslot
+	vid (0) string
+	spiritLv (1) integer
+	spiritExp (2) integer
+	quench (3) *integer
+	lastQuench (4) *integer
+	soldierLv (5) integer
+	suitLv (6) integer
+	num (7) integer
+	num2 (8) integer
+	lhLv (9) integer
+	lhState (10) integer
+	slProps (11) *GodSlProp
+	nslProps (12) *GodSlProp
+	time (13) integer
+Grecord
+	day (0) integer
+	benison (1) integer
+	benisonExp (2) integer
+	benisonLog (3) *BenisonLog
+GrowSysDt
+	level (0) integer
+	exp (1) integer
+Growprop
+	ride (0) GrowpropData
+	wing (1) GrowpropData
+	shouhu (2) GrowpropData
+	shenhun (3) GrowpropData
+	shenbing (4) GrowpropData
+	par_title (5) GrowpropData
+	par_shenhun (6) GrowpropData
+	par_guanghuan (7) GrowpropData
+	par_shouhu (8) GrowpropData
+	ts_title (9) GrowpropData
+	ts_shenhun (10) GrowpropData
+	ts_guanghuan (11) GrowpropData
+	ts_shouhu (12) GrowpropData
+	pet_title (13) GrowpropData
+	pet_shenhun (14) GrowpropData
+	pet_guanghuan (15) GrowpropData
+	pet_shouhu (16) GrowpropData
+	xn (17) GrowpropData
+	xn_title (18) GrowpropData
+	xn_shenhun (19) GrowpropData
+	xn_guanghuan (20) GrowpropData
+	xn_shouhu (21) GrowpropData
+	ts (22) GrowpropData
+GrowpropData
+	curState (0) integer
+	exp (1) integer
+	propDan (2) integer
+	skills (3) *integer
+Growsys
+	propDans (0) *integer
+	guildSkills (1) *integer
+	jingmai (2) *integer
+	furnace (3) GrowSysDt
+	dailyAct (4) GrowSysDt
+	guildShouHu (5) GrowSysDt
+	QiangHuaTarget (6) *integer
+	JingLianTarget (7) *integer
+	DuanZaoTarget (8) *integer
+	BaoShiTarget (9) *integer
+	QiYuanTarget (11) *integer
+	SkinTarget (12) *integer
+	GodSpiritTarget (13) *integer
+	GodEquTarget (14) *integer
+	GodSuit_One (15) *integer
+	GodSuit_Two (16) *integer
+	GodSuit_Four (17) *integer
+	GodSuit_Six (18) *integer
+	GodSuit_Eight (19) *integer
+	GodSuit_Ten (20) *integer
+	EquipTarget (21) *integer
+	GongMingTarget (22) *integer
+	wildclgLv (23) GrowSysDt
+	RuneTarget (24) *integer
+	BookTarget (25) *integer
+	XianYuanTarget (26) *integer
+	ArtifactLevel (29) *integer
+	GodLhTarget (30) *integer
+	SkyGodTp (31) *integer
+	PetCombine (32) *integer
+	PetLevel (33) *integer
+	PartnerLevel (34) *integer
+	SkygodLevel (35) *integer
+Gset
+	isAuto (0) integer
+	mings (1) string
+GuildApplicantInfo
+	aid (0) integer
+	charname (1) string
+	level (2) integer
+	tempId (3) integer
+	gs (4) integer
+	app_tm (5) integer
+GuildBoss
+	index (0) integer
+	fac (1) integer
+	last (2) string
+	dmgFst (3) string
+	tempId (4) integer
+GuildChar
+	aid (0) integer
+	guid (1) integer
+	contribution (2) integer
+	contributionExp (3) integer
+	dayContributionExp (4) integer
+GuildFb
+	floor (0) integer
+	currentHp (1) integer
+	time (2) integer
+	ftime (3) integer
+	afloor (4) integer
+	log (5) *GuildFb_Log
+	gw (6) integer
+	msg (7) integer
+	oafloor (8) integer
+GuildFbDtCorss
+	aid (0) integer
+	name (1) string
+	fb (2) GuildFb
+	sid (3) integer
+GuildFbPlayerCorss
+	aid (0) integer
+	name (1) string
+	dress (2) Dress
+	gs (3) integer
+	damg (4) integer
+	sid (5) integer
+	tempId (6) integer
+GuildFbRankDT
+	name (0) string
+	pt (1) integer
+	rank (2) integer
+	gname (3) string
+GuildFb_Log
+	aid (0) integer
+	strs (1) *string
+GuildGift
+	lv (0) integer
+	exp (1) integer
+GuildGiftData
+	tpId (0) integer
+	name (1) string
+	ct (2) integer
+	iid (3) string
+	tid (4) integer
+GuildGiftItems
+	id (0) integer
+	num (1) integer
+GuildInfo
+	aid (0) integer
+	name (1) string
+	chmname (2) string
+	level (3) integer
+	exp (4) integer
+	gs (5) integer
+	notice (6) string
+	member_sz (7) integer
+	rank (8) integer
+	app (9) integer
+	membernum (10) integer
+	tempId (11) integer
+	giftLv (12) integer
+GuildLevel
+	gid (0) integer
+	level (1) integer
+	name (2) string
+	member_sz (3) integer
+GuildMemberInfo
+	aid (0) integer
+	charname (1) string
+	level (2) integer
+	gujob (3) integer
+	online (4) integer
+	logouttime (5) integer
+	joingutm (6) integer
+	gs (7) integer
+	tempId (8) integer
+	contributionExp (9) integer
+	dayContributionExp (10) integer
+	dress (11) Dress
+	vipLevel (12) integer
+	monthCard (13) integer
+	foreverCard (14) integer
+GuildMyInfo
+	aid (0) integer
+	name (1) string
+	chmname (2) string
+	level (3) integer
+	exp (4) integer
+	gs (5) integer
+	notice (6) string
+	member_sz (7) integer
+	rank (8) integer
+	grecord (9) Grecord
+	gset (10) Gset
+	applicants (11) *GuildApplicantInfo
+	thjob (12) integer
+	giftLv (13) integer
+	gactRecord (14) GactRecord
+	guildFb (15) GuildFb
+GuildQuest
+	quest (0) *OneGuildQuest
+	cleart (1) integer
+GuildbossGuilds
+	data (0) *GuildFbDtCorss[0]
+GuildbossPlayers
+	data (0) *GuildFbPlayerCorss[0]
+GuildbossShowChar
+	data (0) ShowCharData
+GuildbossSids
+	data (0) *integer
+Guildrecord
+	contribution (0) integer
+	day (1) integer
+	skill (2) *integer
+	benison (3) integer
+	benisonlist (4) *integer
+	quest (5) GuildQuest
+	benisons (6) *integer
+HB_CommonOperate.request
+	type (0) integer
+	id (1) integer
+	auto (2) integer
+HB_CommonOperate.response
+	book (0) HeavenBookItem
+HJ_ActiveGroup.request
+	group (0) integer
+	itemId (1) integer
+HJ_ActiveGroup.response
+	hejiDataOne (0) HejiDataOne
+HJ_ActiveHj.response
+	hejiData (0) HejiData
+HM_Active.response
+	hms (0) *HeartLaw
+HM_BAPTIZE.request
+	index (0) integer
+	isTop (1) integer
+	selected (2) integer
+	lockArr (3) *integer
+HM_BAPTIZE.response
+	index (0) integer
+	heartLaw (1) HeartLaw
+HM_CHANGE.request
+	index (0) integer
+HM_CHANGE.response
+	index (0) integer
+	heartLaw (1) HeartLaw
+HandShake.request
+	name (0) string
+	sidx (1) integer
+	tarName (2) string
+	idx (4) integer
+	ip (5) string
+	port (6) integer
+HandShake.response
+	result (0) integer
+	sidx (1) integer
+	name (2) string
+	idx (4) integer
+	ip (5) string
+	port (6) integer
+HeartLaw
+	exp (0) integer
+	lv (1) integer
+	prop (2) *integer
+	nprop (3) *integer
+HeartMagic
+	hms (0) *HeartLaw
+	lockTime (1) integer
+	comTime (2) integer
+	topTime (3) integer
+HeavenBook
+	books (0) *HeavenBookItem[0]
+HeavenBookItem
+	key (0) string
+	level (1) integer
+	lvExp (2) integer
+	star (3) integer
+	starExp (4) integer
+	skill (5) integer
+HejiData
+	data (1) *HejiDataOne[0]
+HejiDataOne
+	key (0) string
+	jxs (1) *integer
+	gs (2) integer
+Hhsj
+	max (0) integer
+	cur (1) integer
+ITEM_AddItemList.request
+ITEM_AddItemList.response
+	items (0) *ItemData[1]
+	equips (1) *EquipData[1]
+	faBaos (2) *FaBaoData
+	runes (3) *RuneData[0]
+	soulroots (4) *SoulRootData[1]
+ITEM_Compound.request
+	tid (0) integer
+ITEM_Compounds.request
+	tid (0) integer
+	num (1) integer
+ITEM_DelItemList.request
+ITEM_DelItemList.response
+	items (0) *ItemData
+	equips (1) *EquipData
+	faBaos (2) *FaBaoData
+	runes (3) *RuneData
+	soulroots (4) *SoulRootData
+ITEM_TAKEGIFT.request
+	sts (0) *STab
+	logType (1) integer
+	aid (2) integer
+ITEM_TAKEGIFT_ITEMS.request
+	aid (0) integer
+	rwds (1) *GiftItem
+	logType (2) integer
+ITEM_UpItemList.response
+	faBao (0) FaBaoData
+ITEM_UseItem.request
+	itemId (0) integer
+	num (1) integer
+	extObj (2) *Kval[0]
+ITEM_UseItems.request
+	items (0) *GiftItem
+InitServerTime.request
+	year (0) integer
+	month (1) integer
+	day (2) integer
+	hour (3) integer
+InsertRow.request
+	table (0) string
+	aid (1) integer
+	ik (2) *string
+	sk (3) *string
+	iv (4) *integer
+	sv (5) *string
+	param (6) *integer
+InsertRow.response
+	result (0) integer
+	table (1) string
+	aid (2) integer
+	param (3) *integer
+Inviteds
+	data (0) *MentorInviteMember
+Inviters
+	data (0) *MentorInviteMember
+ItemData
+	num (0) integer
+	vid (1) string
+	limitObj (2) *Kval[0]
+KW_AwardSend.request
+	award (0) *KingWarAwardList[0]
+KW_AwardSend.response
+KW_BattleEndCross.request
+	areaId (0) integer
+	aid (1) integer
+	aid2 (2) integer
+	result (3) integer
+KW_BattleEndCross.response
+	aid (0) integer
+	player (1) KingWarPlayer
+KW_BuyMatchTimes.request
+KW_BuyMatchTimes.response
+	times (0) integer
+	buytimes (1) integer
+KW_GetKingWarInfo.request
+KW_GetKingWarInfo.response
+	kingwar (0) Kingwar
+KW_GetLastRankList.request
+KW_GetLastRankList.response
+	mobaiCount (0) integer
+	awardId (1) integer
+	myinfo (2) KingWarPlayer
+	king (3) KingWarPlayer
+	ranklist (4) *KingWarPlayer
+KW_GetLastRankListCross.request
+	aid (0) integer
+	sid (1) integer
+KW_GetLastRankListCross.response
+	mobaiCount (0) integer
+	awardId (1) integer
+	myinfo (2) KingWarPlayer
+	king (3) KingWarPlayer
+	ranklist (4) *KingWarPlayer
+KW_GetLastRankListCrossFromWorld.request
+	sid (0) integer
+KW_GetLastRankListCrossFromWorld.response
+	mobaiCount (0) integer
+	awardId (1) integer
+	myinfo (2) KingWarPlayer
+	king (3) KingWarPlayer
+	ranklist (4) *KingWarPlayer
+KW_GetRankList.request
+KW_GetRankList.response
+	myinfo (0) KingWarPlayer
+	ranklist (1) *KingWarPlayer
+KW_GetRankListCross.request
+	aid (0) integer
+	sid (1) integer
+KW_GetRankListCross.response
+	myinfo (0) KingWarPlayer
+	ranklist (1) *KingWarPlayer
+KW_GetWorshipAward.request
+	aid (0) integer
+	sid (1) integer
+KW_GetWorshipAward.response
+	aid (0) integer
+	awardId (1) integer
+	mobaiCount (2) integer
+KW_MATCH.request
+KW_MATCH.response
+	battleResult (0) BattleResultData
+	list (1) *KingWarPlayer
+KW_MatchCross.request
+	aid (0) integer
+	sid (1) integer
+	charData (2) CharData
+KW_MatchCross.response
+	areaId (0) integer
+	aid (1) integer
+	aid2 (2) integer
+	charData (3) CharData
+	charlist (4) *KingWarPlayer
+KW_NoticeUploadPlayers.request
+	aidList (0) *integer
+KW_NoticeUploadPlayers.response
+KW_UploadPlayersCross.request
+	sid (0) integer
+	charList (1) *CharData
+	robotList (2) *CharData
+KW_UploadPlayersCross.response
+KW_Worship.request
+KW_Worship.response
+	worshiptime (0) integer
+KW_WorshipCross.request
+	aid (0) integer
+	sid (1) integer
+KW_WorshipCross.response
+KingWarAward
+	aid (0) integer
+	type (1) integer
+	dropId (2) integer
+	param (3) integer
+KingWarAwardList
+	sid (0) integer
+	list (1) *KingWarAward
+KingWarPlayer
+	aid (0) integer
+	sid (1) integer
+	level (2) integer
+	gs (4) integer
+	charname (5) string
+	tempId (6) integer
+	segment (7) integer
+	klevel (8) integer
+	star (9) integer
+	rankfactor (10) integer
+	rank (11) integer
+	winnum (12) integer
+	contwin (13) integer
+	dress (14) Dress
+Kingwar
+	aid (0) integer
+	times (1) integer
+	buytimes (2) integer
+	buydate (3) integer
+	lastaddtime (4) integer
+	worshiptime (5) integer
+	segment (6) integer
+	klevel (7) integer
+	star (8) integer
+	winnum (9) integer
+	inittime (10) integer
+	contwin (11) integer
+	sids (12) string
+Kval
+	key (0) string
+	val (1) integer
+	tid (2) integer
+	kt (3) integer
+LE_ActivePiece.request
+	id (0) integer
+LE_ActivePiece.response
+	legend (0) Legend
+LE_ActiveToNext.request
+L_CreateChar.request
+	name (0) string
+	ip (1) string
+	sex (2) integer
+	career (3) integer
+	uid_ex (4) string
+L_CreateChar.response
+	result (0) integer
+L_GetUserData.response
+	result (0) integer
+	charlist (1) *CharBaseData
+L_KickChar.request
+	result (0) integer
+L_KickChar.response
+	result (0) integer
+L_Login.request
+	uid (0) string
+	ip (1) string
+	force (2) integer
+	imei (3) string
+	pid (4) string
+	t (5) integer
+	sign (6) string
+L_Login.response
+	result (0) integer
+L_SelectChar.response
+	result (0) integer
+	charData (1) CharData
+	curTimeStamp (2) integer
+	serverStTime (3) integer
+	version (4) string
+LastPlayerList
+	data (0) *KingWarPlayer
+Legend
+	signKey (0) integer
+	ownArr (1) *integer
+LogRec
+	tPay (0) integer
+	online (1) integer
+	tcgold (2) integer
+	tcbgold (3) integer
+	gs (4) integer
+	tgold (5) integer
+	tbgold (6) integer
+	gold (7) integer
+	bgold (8) integer
+	vip (9) integer
+	zx (10) integer
+	ll (11) integer
+	hy (12) integer
+	fy (13) integer
+	yg (14) integer
+	qj1 (16) integer
+	qj2 (17) integer
+	jct (18) integer
+	cl1 (19) integer
+	cl2 (20) integer
+	cbt (21) integer
+	llt (22) integer
+	yctt (23) integer
+	jj1 (24) integer
+	jj2 (25) integer
+	jj3 (26) integer
+	wz1 (27) integer
+	wz2 (28) integer
+	wz3 (29) integer
+	wz4 (30) integer
+	grb (31) integer
+	qm1 (32) integer
+	qm2 (33) integer
+	wb (34) integer
+	vb (35) integer
+	kfzd (36) integer
+	kfb (37) integer
+	bsy1 (38) integer
+	bsy2 (39) integer
+	bpb (40) integer
+	bpm1 (41) integer
+	bpm2 (42) integer
+	bpm3 (43) integer
+	bhfb (44) integer
+	petGs (45) integer
+	partnerGs (46) integer
+	wingGs (47) integer
+	rideGs (48) integer
+	shouhuGs (49) integer
+	shenhunGs (50) integer
+	shenbingGs (51) integer
+	xnGs (52) integer
+	tsGs (53) integer
+	par_titleGs (54) integer
+	par_shenhunGs (55) integer
+	par_guanghuanGs (56) integer
+	par_shouhuGs (57) integer
+	ts_titleGs (58) integer
+	ts_shenhunGs (59) integer
+	ts_guanghuanGs (60) integer
+	ts_shouhuGs (61) integer
+	pet_titleGs (62) integer
+	pet_shenhunGs (63) integer
+	pet_guanghuanGs (64) integer
+	pet_shouhuGs (65) integer
+	xn_titleGs (66) integer
+	xn_shenhunGs (67) integer
+	xn_guanghuanGs (68) integer
+	xn_shouhuGs (69) integer
+	baseEquip (70) string
+	godEquip (71) string
+	skillAvgLv (72) string
+	petcolor (73) string
+	ride_grow (74) string
+	wing_grow (75) string
+	shouhu_grow (76) string
+	shenhun_grow (77) string
+	shenbing_grow (78) string
+	par_title_grow (79) string
+	par_shenhun_grow (80) string
+	par_guanghuan_grow (81) string
+	par_shouhu_grow (82) string
+	ts_title_grow (83) string
+	ts_shenhun_grow (84) string
+	ts_guanghuan_grow (85) string
+	ts_shouhu_grow (86) string
+	pet_title_grow (87) string
+	pet_shenhun_grow (88) string
+	pet_guanghuan_grow (89) string
+	pet_shouhu_grow (90) string
+	xn_title_grow (91) string
+	xn_shenhun_grow (92) string
+	xn_guanghuan_grow (93) string
+	xn_shouhu_grow (94) string
+	xianhun_grow (95) string
+	title_skins (96) string
+	res_skins (97) string
+	shouhu_skins (98) string
+	shenbing_skins (99) string
+	wing_skins (100) string
+	xd (101) string
+	jm (102) integer
+	fbdz (103) string
+	fbsj (104) string
+	fbfj (105) string
+	xnfq (106) string
+	tsjs (107) string
+	tslv (108) string
+	tstf1 (109) string
+	tstf2 (110) string
+	tstp (111) string
+	tsbq (112) string
+	ttjh (113) integer
+	tttp (114) integer
+	zw1 (115) integer
+	zw2 (116) integer
+	ttzl (117) string
+	ttzq1 (118) string
+	ttzq2 (119) string
+	ts (120) integer
+	act (121) *LogRecAct[0]
+	vipFree (122) string
+	vipPay (123) string
+	pet_title_skins (124) string
+	pet_shenhun_skins (125) string
+	pet_guanghuan_skins (126) string
+	pet_shouhu_skins (127) string
+	par_title_skins (128) string
+	par_shenhun_skins (129) string
+	par_guanghuan_skins (130) string
+	par_shouhu_skins (131) string
+	xn_title_skins (132) string
+	xn_shenhun_skins (133) string
+	xn_guanghuan_skins (134) string
+	xn_shouhu_skins (135) string
+	xn_skins (136) string
+	totemGs (137) integer
+	godEquipGs (138) integer
+	hhsj (139) integer
+	forgeGs (140) integer
+	shenhun_skins (141) string
+	equGs (142) integer
+	titleGs (143) integer
+	fbsl (144) string
+	forgeAvgLv (145) string
+	titlenum (146) integer
+	fashionnum (147) integer
+	ghjn (148) string
+	parcolor (149) string
+	xndan (150) integer
+	tsdan (151) integer
+	runeStr (152) string
+	artifactGs (164) integer
+	artifactcolor (166) string
+	soulRootStr (167) string
+	tianShuStr (168) string
+	csArenaStr (170) string
+	parcolorjx (171) string
+	heartMagicStr (173) string
+	godclasslh (182) string
+	godclassll (183) string
+	petCsArenaStr (185) string
+LogRecAct
+	id (0) string
+	name (1) string
+	type (2) integer
+	value (3) string
+LotteryRecord
+	charname (0) string
+	item (1) ItemData
+	record (2) integer
+	aid (3) integer
+	tempId (4) integer
+MAR_AcceptProposal.request
+	aid (0) integer
+	reply (1) integer
+MAR_AcceptProposal.response
+	result (0) integer
+MAR_ApplyOneKeyProposal.request
+	conditions (0) string
+	aid (1) integer
+MAR_Beproposed.request
+MAR_Beproposed.response
+	result (0) integer
+	propose (1) Propose
+MAR_CommonCall.request
+	funcname (0) string
+	jsondata (1) string
+MAR_CommonCall.response
+	funcname (0) string
+	jsondata (1) string
+MAR_Divorce.request
+MAR_Divorce.response
+	result (0) integer
+MAR_GetCanProposeList.request
+MAR_GetCanProposeList.response
+	result (0) integer
+	pList (1) *ProposeChar
+MAR_GetMarriageInfoShared.request
+MAR_GetMarriageInfoShared.response
+	result (0) integer
+	marriage (1) MarriageShar
+MAR_GetMarriageInfoSingle.request
+MAR_GetMarriageInfoSingle.response
+	marriage (0) Marriage
+MAR_HegelCallWorld.request
+	aid (0) integer
+	pid (1) integer
+	ctype (2) integer
+	intp1 (3) integer
+	intp2 (4) integer
+	intp3 (5) integer
+	strp1 (6) string
+	isDiscount (7) integer
+MAR_HegelCallWorld.response
+MAR_HouseRenovation.request
+	rtype (0) integer
+MAR_HouseRenovation.response
+MAR_HouseUpgrade.request
+MAR_HouseUpgrade.response
+MAR_OneKeyPropose.request
+	conditions (0) string
+	mtype (1) integer
+	relation (2) string
+MAR_Propose.request
+	aid (0) integer
+	mtype (1) integer
+	relation (2) string
+MAR_Propose.response
+	result (0) integer
+MAR_ProposeStep1FromWorld.request
+	aid (0) integer
+	pid (1) integer
+	mtype (2) integer
+	relation (3) integer
+	conditions (4) string
+MAR_ProposeStep1FromWorld.response
+MAR_ProposeStep3FromWorld.request
+	aid (0) integer
+	isDiscount (1) integer
+	mtype (2) integer
+MAR_RemindEvent.request
+MAR_RemindEvent.response
+	result (0) integer
+	exp (1) integer
+	mtype (2) integer
+	flowerlog (3) *Flower
+	marry (4) MarriageShar
+	eventLv (5) integer
+	aid (6) integer
+	pid (7) integer
+MAR_ReqBless.request
+MAR_SendFlower.request
+	itemid (0) integer
+	itemnum (1) integer
+	autobuy (2) integer
+MAR_SendFlower.response
+MAR_SendGift.request
+	aid (0) integer
+	gtype (1) integer
+	eventLv (2) integer
+MAR_SendGift.response
+MAR_SyncMarriageDataFromWorld.request
+	aid (0) integer
+	pid (1) integer
+	mtype (2) integer
+	loveValue (3) integer
+	exp (4) integer
+	payaid (5) integer
+MAR_SyncMarriageDataFromWorld.response
+MTR_CommonCall.request
+	funcname (0) string
+	intklist (1) *string
+	intplist (2) *integer
+	strklist (3) *string
+	strplist (4) *string
+MTR_CommonCall.response
+	funcname (0) string
+	intklist (1) *string
+	intplist (2) *integer
+	strklist (3) *string
+	strplist (4) *string
+MTR_GetInviterList.request
+	invitetype (0) integer
+MTR_GetInviterList.response
+	invitetype (0) integer
+	list (1) *MentorInviteMember
+MTR_GetMentorInfo.request
+MTR_GetMentorInfo.response
+	result (0) integer
+	mentor (1) MentorInfo
+MTR_MentorAcceptExp.request
+MTR_MentorAcceptExp.response
+	result (0) integer
+	mentor (1) MentorInfo
+MTR_MentorInvite.request
+	aid (0) integer
+	invitetype (1) integer
+MTR_MentorInvite.response
+	result (0) integer
+	mentor (1) MentorInfo
+MTR_MentorLeave.request
+	isperfect (0) integer
+MTR_MentorLeave.response
+	result (0) integer
+	mentor (1) MentorInfo
+MTR_MentorPromise.request
+	aid (0) integer
+	invitetype (1) integer
+	accept (2) integer
+MTR_MentorPromise.response
+	result (0) integer
+	mentor (1) MentorInfo
+MTR_MentorRelease.request
+	aid (0) integer
+MTR_MentorTaskAward.request
+	tid (0) integer
+MTR_MentorTaskAward.response
+	result (0) integer
+	mentor (1) MentorInfo
+MTR_MentorTransferExp.request
+	aid (0) integer
+MTR_MentorTransferExp.response
+	result (0) integer
+	mentor (1) MentorInfo
+M_DelMail.request
+M_DelMail.response
+	list (0) *integer
+M_ExtractMail.request
+	aid (0) integer
+	mails (1) *SimpleMailHegel
+M_GetOneMail.request
+	aid (0) integer
+M_GetOneMail.response
+	data (0) Mail
+M_GetSimpleMail.request
+M_GetSimpleMail.response
+	data (0) *SimpleMail
+M_NewMail.request
+	aid (0) integer
+	mail (1) Mail
+	sid (2) integer
+M_NewMail.response
+	mail (0) SimpleMail
+M_RedPoint.response
+	red (0) integer
+M_SetExtractFlag.request
+	aid (0) integer
+	list (1) *integer
+Mail
+	aid (0) integer
+	receraid (1) integer
+	mailp (2) Mailp
+	time (3) integer
+	attachment (4) Attachment
+	flag (5) integer
+	slots (6) integer
+	logType (7) integer
+Mailp
+	id (0) integer
+	p (1) *string
+MapAward
+	smid (0) string
+	sts (1) *integer
+Marriage
+	aid (0) integer
+	relation (1) integer
+	houseType (2) integer
+	houseLevel (3) integer
+	houseExp (4) integer
+	loveValue (5) integer
+MarriageShar
+	aid (0) integer
+	pid (1) integer
+	mtime (2) integer
+	mtype (3) integer
+	relation (4) integer
+	exp (5) integer
+	proposelog (6) *Propose
+	flowerlog (7) *Flower
+	name (8) string
+	pname (9) string
+	tempId (10) integer
+	ptempId (11) integer
+	dress (12) Dress
+	pdress (13) Dress
+	eventLv (14) integer
+MentorInfo
+	aid (0) integer
+	teacher (1) MentorMember
+	students (2) *MentorMember
+	inviters (3) *MentorInviteMember
+	inviteds (4) *MentorInviteMember
+	suggestlist (5) *MentorInviteMember
+	delitemnum (6) integer
+MentorInviteMember
+	aid (0) integer
+	name (1) string
+	level (2) integer
+	time (3) integer
+	state (4) integer
+	online (5) integer
+	active (6) integer
+MentorMember
+	aid (0) integer
+	jointime (1) integer
+	transfertime (2) integer
+	transfernum (3) integer
+	complete (4) integer
+	tasks (5) *MentorTask
+	refreshtime (6) integer
+	name (7) string
+	online (8) integer
+	logoutime (9) integer
+	tempId (10) integer
+	level (11) integer
+	dress (12) Dress
+MentorTask
+	id (0) integer
+	now (1) integer
+	total (2) integer
+	awardsend (3) integer
+	award (4) integer
+MoBaiData
+	data (0) *OneMoBaiData[0]
+Mob
+	id (0) integer
+	cId (1) string
+	pos (2) UnitPosition
+	tp (3) integer
+	subType (4) integer
+	num (5) integer
+	cd (6) integer
+	endt (7) integer
+	tid (8) integer
+MobRemain
+	tid (0) integer
+	r (1) integer
+Module
+	name (0) string
+	time (1) integer
+Modules
+	list (0) *Module[0]
+Mountain
+	floor (0) integer
+	current (1) integer
+	rewards (2) *Mountain_Award[0]
+Mountain_Award
+	key (0) string
+	val (1) integer
+Mrecord
+	records (0) *MrecordOne
+MrecordOne
+	ts (0) integer
+	args (1) *string
+	tp (2) integer
+Multicast
+	aids (0) *integer
+MyGuildFb
+	buyTimes (0) integer
+	times (1) integer
+	award (2) *integer
+	taward (3) *integer
+	damg (4) integer
+	day (5) integer
+	gw (6) integer
+	count (7) integer
+NS_BeLeader.response
+	aid (0) integer
+NS_GetStepAward.request
+NextWave
+	t (0) integer
+	subType (1) integer
+	tp (2) integer
+OP_ActiveOp.response
+	act (0) Kval
+OP_BattleOpBoss.request
+	opId (0) integer
+	id (1) integer
+OP_BuyFinance.request
+	opId (0) integer
+OP_CommonRwd.response
+	awardList (0) BattleOnePlayerAwardList
+	extObj (1) *Kval[0]
+OP_GetLotteryRecord.request
+	opId (0) integer
+	timeStamp (1) integer
+OP_GetLotteryRecord.response
+	opId (0) integer
+	timeStamp (1) integer
+	records (2) *LotteryRecord
+OP_GetOpCommonRankList.request
+	opId (0) integer
+OP_GetOpCommonRankList.response
+	rankList (0) *OpCommonRankItem
+	myDt (1) OpCommonRankItem
+	opId (2) integer
+	myRank (3) integer
+	firstDress (4) Dress
+OP_GetOpRankList.request
+	opId (0) integer
+OP_GetOpRankList.response
+	rankList (0) *OpRankItem
+	myDt (1) OpRankItem
+	opId (2) integer
+	myRank (3) integer
+	firstDress (4) Dress
+	firstTempId (5) integer
+OP_GetRwd.request
+	opId (0) integer
+	ids (1) *integer
+OP_GetWelfareTopList.request
+OP_GetWelfareTopList.response
+	rankList (0) *OpRankItem
+	dresses (1) *Dress
+	tempIds (2) *integer
+OP_SelectSelfLottery.request
+	opId (0) integer
+	award (1) string
+OP_SelectSelfLottery.response
+	suc (0) integer
+OP_SyncCommonRecToWorld.request
+	aid (0) integer
+	vals (1) *integer
+	opIds (2) *integer
+OP_SyncLotteryRecordToWorld.request
+	opId (0) integer
+	records (1) *LotteryRecord
+OP_SyncRankRecordToWorld.request
+	aid (0) integer
+	val (1) integer
+	rankKey (2) string
+OP_SyncWelfareTopListToHegel.request
+	rankList (0) *OpRankItem
+	dresses (1) *Dress
+	tempIds (2) *integer
+OmAddItem.request
+	ok (0) OmKey
+	item (1) ItemData
+	type (2) integer
+OmAddItem.response
+	type (1) integer
+OmAllAidBan.request
+	sid (0) integer
+OmAllAidBan.response
+	sp (0) *OmAllBan
+OmAllBan
+	aid (0) integer
+	uid (1) string
+	chattime (2) integer
+	blocktime (3) integer
+OmAuth.request
+	user (0) string
+	pass (1) string
+OmAuth.response
+	result (0) integer
+	name (1) string
+	level (2) string
+OmBackMsg.response
+	result (0) integer
+	msg (1) string
+OmBlock.request
+	sid (0) integer
+	ok (1) *OmBlockArr
+OmBlock.response
+	result (0) integer
+OmBlockArr
+	type (0) integer
+	time (1) integer
+	aid (2) integer
+	uid (3) string
+OmChangePlayer.request
+	ok (0) OmKey
+	type (1) integer
+	value (2) integer
+	isadd (3) integer
+	aid (4) integer
+OmChangePlayer.response
+	aid (0) integer
+	charname (1) string
+	accname (2) string
+	exp (3) string
+	gold (4) integer
+	bindgold (5) integer
+	bagmoney (6) integer
+OmHotfix.request
+	script (0) string
+	type (1) integer
+	aid (2) integer
+	sid (3) integer
+	platform (4) integer
+OmKey
+	aid (0) integer
+	name (1) string
+	sname (2) string
+	suid (3) string
+OmKeyRst
+	aid (0) integer
+	charname (1) string
+	accname (2) string
+	tempId (3) integer
+	exp (4) integer
+	level (5) integer
+	vipLevel (6) integer
+	isonline (7) integer
+OmKickAllClient.request
+	sid (0) integer
+	isAll (2) integer
+OmKickAllClient.response
+	result (0) integer
+	msg (1) string
+OmKickClient.request
+	sid (0) integer
+	val (1) string
+OmKickClient.response
+	result (0) integer
+	msg (1) string
+OmModifyOpenTime.request
+	state (0) integer
+	openTime (1) integer
+OmNotice.request
+	sid (0) integer
+	platform (1) integer
+	id (2) integer
+	type (3) integer
+	str (4) string
+	color (5) string
+	stime (6) integer
+	etime (7) integer
+	ltime (8) integer
+	urlAdd (9) string
+	urlName (10) string
+OmNotice.response
+	result (0) integer
+OmPay.request
+	aid (0) integer
+	doid (1) integer
+	remark (2) string
+OmQueryAnouncement.request
+	sid (0) integer
+OmQueryAnouncement.response
+	result (0) integer
+	msg (1) *rollMsg
+OmQueryAnouncementById.request
+	type (0) integer
+	id (1) integer
+OmQueryAnouncementById.response
+	result (0) integer
+	msg (1) *rollMsg
+OmQueryChar.request
+	ok (0) OmKey
+OmQueryChar.response
+	okRst (0) OmKeyRst
+OmQueryCharBySnameSuid.request
+	ok (0) OmKey
+OmQueryCharBySnameSuid.response
+	okRst (0) *OmKeyRst
+OmReleaseAnouncement.request
+	type (0) integer
+	obj (1) rollMsg
+	sidArr (2) *serversArr
+OmReleaseAnouncement.response
+	result (0) integer
+	id (1) string
+OmSaveAnouncement.request
+	type (0) integer
+	obj (1) rollMsg
+	id (2) integer
+OmSaveAnouncement.response
+	result (0) integer
+	msg (1) string
+OmSendMail.request
+	aids (0) *integer
+	mailData (1) OmUserMailArr
+	sidArr (2) *serversArr
+OmSendMail.response
+	result (0) integer
+OmServerState.request
+	state (0) integer
+OmUnBan.request
+	sid (0) integer
+	ok (1) *OmUnBanArr
+	platform (2) integer
+OmUnBan.response
+	ok (0) *OmUnBanArr
+	result (1) integer
+OmUnBanArr
+	aid (0) integer
+	uid (1) string
+	type (2) integer
+OmUpatePayMetas.request
+	sidArr (0) *serversArr
+OmUpatePayMetas.response
+	id (0) integer
+OmUserBan.request
+	aid (0) integer
+	uid (1) string
+	sid (2) integer
+	type (3) integer
+OmUserBan.response
+	aid (0) integer
+	uid (1) string
+	chattime (2) integer
+	blocktime (3) integer
+OmUserMailArr
+	receraid (0) integer
+	type (1) integer
+	head (2) string
+	flag (3) integer
+	body (4) string
+	sender (5) string
+	aid (6) integer
+	time (7) integer
+	attachment (8) Attachment
+OneActData
+	aid (0) integer
+	life (1) integer
+	actStart (2) integer
+OneBookEnemy
+	aid (0) integer
+	ecolor (1) integer
+	state (2) integer
+	gs (3) integer
+	name (4) string
+	etime (5) integer
+	tempId (6) integer
+OneGuildQuest
+	tp (0) integer
+	count (1) integer
+	state (2) integer
+	reset (3) integer
+OneMoBaiData
+	key (0) string
+	value (1) integer
+OpActionLog
+	record (0) *OpActionLogOne[0]
+OpActionLogOne
+	key (0) string
+	value (1) string
+OpCommonRank
+	rankList (0) *OpCommonRankItem
+	opId (1) string
+	timeStamp (2) integer
+	rwdTime (3) integer
+	serverStTime (4) integer
+OpCommonRankItem
+	aid (0) integer
+	charname (1) string
+	tempId (2) integer
+	val1 (3) integer
+	val2 (4) integer
+	val3 (5) integer
+OpRank
+	rankList (0) *OpRankItem
+	opId (1) string
+	timeStamp (2) integer
+	rwdTime (3) integer
+	rwdItems (4) *OpRankRwdItem
+	extStr (5) string
+OpRankItem
+	aid (0) integer
+	val (1) integer
+	charname (2) string
+OpRankRwdItem
+	aid (0) integer
+	rwds (1) *RewardItem
+OpRecordItem
+	charname (0) string
+	item (1) ItemData
+	record (2) integer
+	aid (3) integer
+	tempId (4) integer
+OpRecordList
+	records (0) *OpRecordItem
+	opId (1) integer
+	timeStamp (2) integer
+Operation
+	opId (0) string
+	sign (1) *Kval[0]
+	timeStamp (2) integer
+	serverStTime (3) integer
+PAR_ACTIVATE.request
+	pid (0) integer
+PAR_ACTIVATE.response
+	partner (0) Partner
+PAR_ADVANCED.request
+	pid (0) integer
+	selected (1) integer
+PAR_ADVANCED.response
+	pid (0) integer
+	exp (1) integer
+	level (2) integer
+	gs (3) integer
+PAR_JXACT.request
+	pid (0) integer
+PAR_JXACT.response
+	pid (0) integer
+	partner (1) Partner
+PAR_JXStarUp.request
+	pid (0) integer
+	selected (1) integer
+PAR_JXStarUp.response
+	pid (0) integer
+	jxstar (1) integer
+	jxExp (2) integer
+PAR_OUT_BATTLE.request
+	pid (0) integer
+	index (1) integer
+PAR_OUT_BATTLE.response
+	aids (0) *integer
+	pid (1) integer
+PAR_SysncSkill.response
+	pid (0) integer
+	jxSkill (1) *SkillData
+PAR_UP_STAR.request
+	pid (0) integer
+PAR_UP_STAR.response
+	pid (0) integer
+	star (1) integer
+PAY_CharLogined.request
+	aid (0) integer
+	sid (1) integer
+	uid (2) string
+PAY_CheckCanPay.request
+PAY_CheckCanPay.response
+	cid (0) integer
+	ret (1) integer
+PAY_DeliverGoods.request
+	oid (0) string
+	doid (1) string
+	uid (2) string
+	drid (3) integer
+	money (4) string
+	coin (5) integer
+	time (6) integer
+	realUid (7) string
+	pid (8) string
+	remark (9) string
+PAY_DeliverGoods.response
+	oid (0) string
+PAY_DeliverGoodsSucc.response
+	oid (0) string
+	money (1) integer
+	aid (2) integer
+	isTest (3) integer
+PAY_GetPayHistory.request
+PAY_GetPayHistory.response
+	aidNum (0) integer
+	totalPay (1) integer
+	lastTime (2) integer
+PAY_GetPayHistoryWH.request
+	aidNum (0) integer
+	totalPay (1) integer
+	lastTime (2) integer
+PAY_ReloadPayMeta.request
+PAY_Supplement.response
+	channelId (0) integer
+	orderId (1) string
+	productId (2) string
+	sid (3) integer
+	uid (4) string
+	aid (5) integer
+	money (6) string
+	state (7) integer
+	logType (8) integer
+PA_PATCH_TEMP.request
+PA_PATCH_TEMP.response
+	patchTemp (0) *PatchTemp
+PER_BossData.request
+PER_BossData.response
+	bdata (0) string
+	bossList (1) *integer
+PETCSA_CommonOperate.request
+	type (0) integer
+	param (1) string
+PETCSA_CommonOperate.response
+	type (0) integer
+	season (1) integer
+	myDRank (2) integer
+	mySRank (3) integer
+	csArena (4) PetCsArena
+	myCsDt (5) PetCsArenaPlayer
+	enemyList (6) *PetCsArenaPlayer
+	dRankList (7) *PetCsArenaPlayer
+	sRankList (8) *PetCsArenaPlayer
+	bResult (9) *integer
+PETCSA_CommonOperateFromHegel.request
+	aid (0) integer
+	sid (1) integer
+	charData (2) CharData
+	type (3) integer
+	param (4) string
+	pets (5) *PetCs
+PETCSA_CommonOperateFromHegel.response
+	aid (0) integer
+	type (1) integer
+	param (2) string
+	season (3) integer
+	myDRank (4) integer
+	mySRank (5) integer
+	myCsDt (6) PetCsArenaPlayer
+	enemyList (7) *PetCsArenaPlayer
+	dRankList (8) *PetCsArenaPlayer
+	sRankList (9) *PetCsArenaPlayer
+	charData (10) CharData
+PETCSA_SendAward.request
+	type (0) integer
+	season (1) integer
+	ranks (2) *PetCsArenaRankDt
+PETCSA_UploadPlayer.request
+	taid (0) integer
+	hid (1) integer
+	aid (2) integer
+	ext (3) string
+	pets (4) *PetCs
+PETCSA_UploadPlayer.response
+	aid (0) integer
+	sid (1) integer
+	hid (2) integer
+	charData (3) CharData
+	ext (4) string
+	pets (5) *PetCs
+PET_ACTIVATE.request
+	pid (0) integer
+PET_ACTIVATE.response
+	pet (0) Pet
+PET_BAPTIZE.request
+	pid (0) integer
+	isTop (1) integer
+	selected (2) integer
+	lockArr (3) *integer
+PET_BAPTIZE.response
+	pid (0) integer
+	skillBaptize (1) SkillBaptize
+PET_BAPTIZENEW.request
+	pid (0) integer
+	isTop (1) integer
+	selected (2) integer
+	lockArr (3) *integer
+	ani (4) string
+	selected2 (5) integer
+PET_BAPTIZENEW.response
+	pid (0) integer
+	skillBaptize (1) SkillBaptize
+PET_CATCH.request
+	useGold (0) integer
+PET_CATCH.response
+	times (0) integer
+	catchRepeatTimes (1) integer
+	success (2) integer
+	catchPetId (3) integer
+PET_CHANGENAME.request
+	pid (0) integer
+	name (1) string
+PET_CHANGENAME.response
+	pid (0) integer
+	name (1) string
+PET_Combine.request
+	id (0) integer
+	items (1) *integer
+PET_Combine.response
+	level (0) integer
+	exp (1) integer
+	times (2) *integer
+	redTimes (3) integer
+	itemid (4) integer
+PET_DoTalentUp.request
+	pid (0) integer
+	selected (1) integer
+PET_DoTalentUp.response
+	pid (0) integer
+	varExp (1) integer
+	star (2) integer
+	gs (3) integer
+PET_LEVELUP.request
+	pid (0) integer
+	selected (1) integer
+PET_LEVELUP.response
+	pid (0) integer
+	exp (1) integer
+	level (2) integer
+	gs (3) integer
+PET_SET_BATTLE.request
+	pid (0) integer
+	index (1) integer
+	type (2) integer
+PET_SET_BATTLE.response
+	aids (0) *integer
+	pid (1) integer
+PET_SKILLCHANGE.request
+	pid (0) integer
+PET_SKILLCHANGE.response
+	pid (0) integer
+	bSkills (1) *integer
+PET_SKILLCHANGENEW.request
+	pid (0) integer
+	index (1) integer
+PET_SKILLCHANGENEW.response
+	pid (0) integer
+	bSkills (1) *integer
+PET_StarUp.request
+	pid (0) integer
+PET_StarUp.response
+	pid (0) integer
+	star (1) integer
+PET_SysncSkill.response
+	pid (0) integer
+	skill (1) Skill
+	jxSkill (2) *SkillData
+PING.request
+	ping (0) integer
+PING.response
+	time (0) integer
+	pong (1) integer
+PROMPTMESSGAE
+	sid (0) integer
+	ss (1) *string
+	tp (2) integer
+	s (3) integer
+PROMPT_MESSAGE.request
+PROMPT_MESSAGE.response
+	msgs (0) *PROMPTMESSGAE
+PS_GetRefreeList.request
+PS_GetRefreeList.response
+	result (0) integer
+	referees (1) *RelationBaseInfo
+PS_GetRelatinList.request
+	ver (0) integer
+PS_GetRelatinList.response
+	result (0) integer
+	concerns (1) *RelationBaseInfo
+	fans (2) *RelationBaseInfo
+	blacks (3) *RelationBaseInfo
+	givers (4) PsGivers
+	recipients (5) PsRecipients
+	ver (6) integer
+PS_GiveAndRec.request
+PS_GiveAndRec.response
+	result (0) integer
+	give (1) PsGiveData
+	rec (2) PsRecipientData
+	count (3) integer
+	tm (4) integer
+	type (5) integer
+PS_SendEvent.request
+	aid (0) integer
+	type (1) integer
+PS_SendEvent.response
+	tempId (0) integer
+	aid (1) integer
+	charname (2) string
+	type (3) integer
+	args (4) *string
+	sidnum (5) integer
+PS_SendEventCorss.response
+	tempId (0) integer
+	aid (1) integer
+	charname (2) string
+	type (3) integer
+	args (4) *string
+	oaid (5) integer
+	sidnum (6) integer
+PS_UpRelationList.request
+	aid (0) integer
+	type (1) integer
+PS_UpRelationList.response
+	result (0) integer
+	addConcern (1) RelationBaseInfo
+	addFan (2) RelationBaseInfo
+	addBlack (3) RelationBaseInfo
+	delConcern (4) integer
+	delFan (5) integer
+	delBlack (6) integer
+	delReferee (7) integer
+PS_UpRelationLists.request
+	aids (0) *integer
+	type (1) integer
+PVESB_BattleStart.request
+	sid (0) integer
+	reborn (1) integer
+	aid (2) integer
+PVESB_BattleStart.response
+	result (0) integer
+PVESB_BattleStartToHegel.request
+	sid (0) integer
+	currentHp (1) integer
+	maxHp (2) integer
+	battleId (3) integer
+	aid (4) integer
+PVESB_BattleStartToHegel.response
+	sid (0) integer
+	hurtHp (1) integer
+	aid (2) integer
+PVESB_BuyChallengeBossTimes.request
+PVESB_GetBossHp.request
+PVESB_GetBossHp.response
+	bosss (0) *SB_SHAREBOSS_DATA
+	playerNums (1) *integer
+PVESB_GetBossHurtRank.request
+	sid (0) integer
+PVESB_GetBossHurtRank.response
+	hurtHps (0) *integer
+	charnames (1) *string
+	aids (2) *integer
+PVESB_RefShareBossUserDt.response
+	shareboss (0) Shareboss
+PVESB_ReqRebornBossToHegel.request
+	sid (0) integer
+	aid (1) integer
+PVESB_ReqRebornBossToHegel.response
+	sid (0) integer
+	aid (1) integer
+PVESB_SynRankList.request
+	rankLists (0) *SynRankList[0]
+Partner
+	aid (0) integer
+	dress (1) Dress
+	level (2) integer
+	star (3) integer
+	exp (4) integer
+	key (5) string
+	tempId (6) integer
+	jxExp (7) integer
+	jxstar (8) integer
+Partners
+	aids (0) *integer
+	partners (1) *Partner[5]
+PatchTemp
+	name (0) string
+	id (1) integer
+	kval (2) *ValName
+PayItem
+	id (0) integer
+	lastTm (1) integer
+	timesDay (2) integer
+	timesTot (3) integer
+	firstChed (4) integer
+PayItemMeta
+	id (0) integer
+	productId (1) integer
+	desc (3) string
+	name (4) string
+	money (5) integer
+	isShow (6) integer
+	sort (7) integer
+	icon (8) string
+	bg (9) string
+	type (10) integer
+	gold (11) integer
+	five (12) integer
+	firstGold (13) integer
+	otherGold (14) integer
+	dayGold (15) integer
+	award (16) integer
+	times (17) integer
+Paydata
+	payItems (1) *PayItem[0]
+	firstPay (2) integer
+	payAward (3) integer
+	firstShow (4) integer
+	charing (5) integer
+	startChargTm (6) integer
+	todayPay (7) integer
+	count (8) integer
+	totalPay (9) integer
+PerOps
+	activeOps (0) *Kval[0]
+	operations (1) *Operation[0]
+Peractives
+	perboss (0) Perboss
+Perboss
+	bossList (0) *integer
+	ktList (1) *integer
+Pet
+	aid (0) integer
+	dress (1) Dress
+	level (2) integer
+	star (3) integer
+	exp (4) integer
+	bSkills (5) *integer
+	varExp (6) integer
+	key (7) string
+	tempId (8) integer
+	skillBaptize (9) SkillBaptize
+	name (10) string
+	n1 (11) integer
+	n2 (12) integer
+	n3 (13) integer
+PetCombines
+	times (0) *integer
+	level (1) integer
+	exp (2) integer
+	redTimes (3) integer
+PetCs
+	tid (0) integer
+	star (1) integer
+PetCsArena
+	batTimes (0) integer
+	cdStTime (1) integer
+	buyTimes (2) integer
+	lastRefTime (3) integer
+	winNum (4) integer
+	isPromotion (5) integer
+	history (6) *string
+	clgTask (7) *Kval[0]
+	segTask (8) *Kval[0]
+	enemyList (9) *integer
+	pets (10) *PetCs
+	timeStamp (11) integer
+	rscore (12) integer
+	rseglv (13) integer
+	rwinnum (14) integer
+	rlosenum (15) integer
+PetCsArenaPlayer
+	aid (0) integer
+	serverId (1) integer
+	tempId (2) integer
+	level (3) integer
+	gs (4) integer
+	dScore (5) integer
+	sScore (6) integer
+	segLv (7) integer
+	charname (8) string
+	dress (9) Dress
+	timeStamp (10) integer
+	isRobot (11) integer
+	pets (12) *PetCs
+PetCsArenaPlayerList
+	data (0) *PetCsArenaPlayer
+PetCsArenaRankDt
+	aid (0) integer
+	rank (1) integer
+	segLv (2) integer
+	score (3) integer
+Pets
+	aids (0) *integer
+	pets (1) *Pet[7]
+	op (2) *integer
+	pe1 (3) integer
+	pe2 (4) integer
+	pe3 (5) integer
+PlayerDetailInfo
+	aid (0) integer
+	level (1) integer
+	charname (2) string
+	sex (3) integer
+	gs (4) integer
+	online (5) integer
+	dress (6) Dress
+	guildName (7) string
+	isConcern (8) integer
+	isBlack (9) integer
+	vipLevel (10) integer
+	rankMainVal (11) integer
+	tempId (12) integer
+	spouse (13) string
+	monthCard (14) integer
+	foreverCard (15) integer
+PlayerList
+	data (0) *KingWarPlayer
+Pmap
+	scene (0) integer
+	tid (1) integer
+	pos (2) UnitPosition
+	bktid (3) integer
+PrivateChat
+	aid (0) integer
+	name (1) string
+	online (2) integer
+	tempId (3) integer
+	time (4) integer
+	new (5) integer
+	chatList (6) *ChatItemNew
+Property
+	key (0) integer
+	val (1) string
+Propose
+	aid (0) integer
+	ptime (1) integer
+	mtype (2) integer
+	relation (3) integer
+	name (4) string
+	isDiscount (5) integer
+	extStr (6) string
+ProposeChar
+	aid (0) integer
+	name (1) string
+	gs (2) integer
+	level (3) integer
+	tempId (4) integer
+Proposelog
+	data (0) *Propose
+PsBlacks
+	aids (0) *integer
+PsConcerns
+	aids (0) *integer
+PsFans
+	aids (0) *integer
+PsGiveData
+	said (0) string
+	tm (1) integer
+PsGivers
+	data (0) *PsGiveData[0]
+	count (1) integer
+	tm (2) integer
+PsRecipientData
+	said (0) string
+	tm (1) integer
+	rtm (2) integer
+PsRecipients
+	data (0) *PsRecipientData[0]
+	count (1) integer
+	tm (2) integer
+PvpPropScore
+	scoreStr (0) string
+	times (1) integer
+QUEST_COMPLTEE.request
+QUEST_COMPLTEE.response
+	teskId (0) integer
+	success (1) integer
+QUEST_UP_MESSAGER.request
+QUEST_UP_MESSAGER.response
+	type (0) integer
+	value (1) integer
+Quest
+	id (0) integer
+	questLog (1) *QuestLog
+QuestLog
+	key (0) integer
+	val (1) string
+Question
+	questionId (0) integer
+	answers (1) *integer
+RK_GET_RANKLIST.request
+	key (0) string
+	page (1) integer
+	pageNum (2) integer
+RK_GET_RANKLIST.response
+	key (0) string
+	ranks (1) *RankDetail
+	val (2) integer
+	rankDress (3) *RankDress
+	page (4) integer
+	pageMax (5) integer
+	myRank (6) integer
+RK_GET_SIMPLERANKLIST.request
+	type (0) integer
+RK_GET_SIMPLERANKLIST.response
+	type (0) integer
+	players (1) *PlayerDetailInfo
+RK_GET_SIMPLETOWERRANK.request
+	key (0) string
+RK_GET_SIMPLETOWERRANK.response
+	key (0) string
+	towers (1) *TowerDetail
+RK_GET_TOWERRANK.request
+	key (0) string
+RK_GET_TOWERRANK.response
+	key (0) string
+	towers (1) *TowerDetail
+	tower (2) integer
+RL_GetRecord.request
+	id (0) integer
+RL_GetRecord.response
+	data (0) RecordList
+RL_SyncRecordToWorld.request
+	aid (0) integer
+	param (1) string
+	id (2) integer
+RList
+	aids (0) *integer
+RM_AutoJoin.request
+	tp (0) integer
+	index (1) integer
+	charData (2) CharData
+	aid (3) integer
+	sid (4) integer
+RM_CreateRoom.request
+	tp (0) integer
+	index (1) integer
+	charData (2) CharData
+	aid (3) integer
+	sid (4) integer
+RM_CreateRoom.response
+	room (0) Room
+RM_Fill.request
+	tp (0) integer
+	index (1) integer
+	roomId (2) integer
+	num (3) integer
+RM_FirstCross.response
+	aids (0) *integer
+	charname (1) string
+	tempIds (2) *integer
+	index (3) integer
+	tp (4) integer
+RM_GetRecord.request
+	tp (0) integer
+	index (1) integer
+RM_GetRecord.response
+	tp (0) integer
+	index (1) integer
+	r (2) RoomData
+RM_GetRecords.request
+	tp (0) integer
+	idxs (1) *integer
+RM_GetRecords.response
+	tp (0) integer
+	rs (1) *RoomData
+	idxs (2) *integer
+RM_GetRoomList.request
+	tp (0) integer
+	index (1) integer
+	aid (2) integer
+RM_GetRoomList.response
+	tp (0) integer
+	index (1) integer
+	rooms (2) *Room
+RM_GetRoomNum.request
+	chapter (0) integer
+	aid (1) integer
+	tp (2) integer
+RM_GetRoomNum.response
+	nums (0) *integer
+RM_GetTopRecord.request
+	tp (0) integer
+RM_GetTopRecord.response
+	tp (0) integer
+	top (1) integer
+RM_JoinRoom.request
+	tp (0) integer
+	index (1) integer
+	roomId (2) integer
+	charData (3) CharData
+	aid (4) integer
+	sid (5) integer
+	isRob (6) integer
+RM_KickMem.request
+	tid (0) integer
+	aid (1) integer
+RM_LeaveRoom.request
+	tp (0) integer
+	aid (1) integer
+RM_LeaveRoom.response
+	tp (0) integer
+	index (1) integer
+	isKick (2) integer
+RM_OpenBox.request
+	tp (0) integer
+	index (1) integer
+RM_QuickAtt.request
+	tp (0) integer
+	index (1) integer
+RM_RoomEnd.response
+	battleResult (0) BattleResultData
+	aid (1) integer
+	fbId (2) integer
+	leader (3) integer
+	tempIds (4) *integer
+	myProper (5) *Property
+	enemyProper (6) *Property
+	batSkillList (7) *BatSkillList
+	damageRank (8) *BattleDamageInfo
+	isPvp (9) integer
+RM_RoomStart.request
+	aid (0) integer
+RM_RoomStart.response
+	room (0) Room
+RM_UpdateRoom.response
+	room (0) Room
+RPC_ToBaseWorld.request
+	tag (0) integer
+	type (1) integer
+	p (2) string
+	aid (3) integer
+	sid (4) integer
+RPC_ToCrossHegel.request
+	tag (0) integer
+	type (1) integer
+	p (2) string
+	aid (3) integer
+RP_NewRedPack.response
+	redpackDt (0) RedPacketDt
+RP_NewRedPackRain.response
+	state (0) integer
+RP_OpenRedPack.request
+	id (0) integer
+RP_OpenRedPack.response
+	id (0) integer
+	suc (1) integer
+RP_OpenRedPackRain.request
+	type (0) integer
+RP_onGetRedPack.response
+	num (0) integer
+	type (1) integer
+RP_onGetRedPackRain.response
+	num (0) integer
+	getTimes (1) integer
+	state (2) integer
+	type (3) integer
+RP_openRedPackRainToHegel.request
+	getTimes (0) integer
+	aid (1) integer
+	state (2) integer
+	type (3) integer
+	isFirst (4) integer
+RP_openRedPackToHegel.request
+	id (0) integer
+	aid (1) integer
+	type (2) integer
+RP_sendRedPackToWorld.request
+	id (0) integer
+	aid (1) integer
+RUNE_AutoCompose.request
+	composeId (0) integer
+	num (1) integer
+RUNE_AutoCompose.response
+RUNE_AutoEquip.request
+	pos (0) integer
+RUNE_AutoEquip.response
+	runes (1) *RuneSlot[0]
+RUNE_OneKeyUp.request
+	pos (0) integer
+RUNE_OneKeyUp.response
+	runes (1) *RuneSlot[0]
+RW_AddBatTimeCross.request
+	sid (0) integer
+	aid (1) integer
+RW_AddBatTimeCross.response
+	aid (0) integer
+	myInfo (1) ResourcewarPlayer
+RW_AddBatTimeCrossSuccess.request
+	sid (0) integer
+	aid (1) integer
+RW_AddBatTimeHegel.request
+RW_AddBatTimeHegel.response
+	result (0) integer
+	myInfo (1) ResourcewarPlayer
+RW_BattleEndCross.request
+	aid (0) integer
+	pos (1) integer
+	result (2) integer
+	areaId (3) integer
+	btype (4) integer
+	sid (5) integer
+	charData (6) CharData
+RW_BattleEndCross.response
+	aid (0) integer
+	sid (1) integer
+RW_ClearRwBatCDCross.request
+	sid (0) integer
+	aid (1) integer
+RW_ClearRwBatCDCross.response
+	aid (0) integer
+	result (1) integer
+RW_ClearRwBatCDCrossSuccess.request
+	sid (0) integer
+	aid (1) integer
+RW_ClearRwBatCDHegel.request
+RW_ClearRwBatCDHegel.response
+	batCD (0) integer
+	result (1) integer
+RW_GetPointCross.request
+	sid (0) integer
+	aid (1) integer
+RW_GetPointCross.response
+	point (0) integer
+	money (1) integer
+	myInfo (2) ResourcewarPlayer
+	aid (3) integer
+RW_GetPointHegel.request
+RW_GetPointHegel.response
+	result (0) integer
+	myInfo (1) ResourcewarPlayer
+RW_GetRwInfoCross.request
+	sid (0) integer
+	aid (1) integer
+	index (2) integer
+	charData (3) CharData
+RW_GetRwInfoCross.response
+	myInfo (0) ResourcewarPlayer
+	slots (1) *ResourceSlotData
+	charname (2) string
+	point (3) integer
+	aid (4) integer
+	index (5) integer
+	pageMax (6) integer
+	myAdd (7) integer
+	fk (8) integer
+	result (9) integer
+RW_GetRwInfoHegel.request
+	index (0) integer
+RW_GetRwInfoHegel.response
+	myInfo (0) ResourcewarPlayer
+	slots (1) *ResourceSlotData
+	charname (2) string
+	point (3) integer
+	aid (4) integer
+	index (5) integer
+	pageMax (6) integer
+	myAdd (7) integer
+	fk (8) integer
+	result (9) integer
+RW_GetRwLogCross.request
+	sid (0) integer
+	aid (1) integer
+RW_GetRwLogCross.response
+	aid (0) integer
+	logs (1) *ResourceLog
+RW_GetRwLogHegel.request
+RW_GetRwLogHegel.response
+	aid (0) integer
+	logs (1) *ResourceLog
+RW_GetRwRankCross.request
+	sid (0) integer
+	aid (1) integer
+RW_GetRwRankCross.response
+	dayRank (0) ResourceRankList
+	weekRank (1) ResourceRankList
+	aid (2) integer
+	weekPRank (3) ResourceRankList
+RW_GetRwRankHegel.request
+RW_GetRwRankHegel.response
+	dayRank (0) ResourceRankList
+	weekRank (1) ResourceRankList
+	weekPRank (2) ResourceRankList
+RW_InSlotCross.request
+	sid (0) integer
+	aid (1) integer
+	pos (2) integer
+	charData (3) CharData
+	index (4) integer
+RW_InSlotHegel.request
+	pos (0) integer
+	index (1) integer
+RW_RobCross.request
+	sid (0) integer
+	aid (1) integer
+	pos (2) integer
+	charData (3) CharData
+RW_RobCross.response
+	aid (0) integer
+	pos (1) integer
+	charData (2) CharData
+	areaId (3) integer
+	sid (4) integer
+RW_RobHegel.request
+	pos (0) integer
+RW_SendDayAwardCross.response
+	type (0) integer
+	ranks (1) *ResourceRankAndLog
+RW_SendGWEventCross.request
+RW_SendGWEventCross.response
+	aid (0) integer
+	eventType (1) integer
+RW_SendGWEventHegel.request
+RW_SendGWEventHegel.response
+	aid (0) integer
+	eventType (1) integer
+RW_SendWeekAwardCross.response
+	rank (0) integer
+	aids (1) *integer
+RankDetail
+	aid (0) integer
+	charname (1) string
+	gs (2) integer
+	vipLevel (3) integer
+	level (4) integer
+	ogs (5) integer
+RankDress
+	dress (0) Dress
+	tempId (1) integer
+	name (2) string
+Receraids
+	aids (0) *integer
+Record
+	mtime (0) integer
+RecordItem
+	aid (0) integer
+	tempId (1) integer
+	charname (2) string
+	param (3) string
+	timeStamp (4) integer
+RecordList
+	list (0) *RecordItem
+	id (1) integer
+RedPacketDt
+	senderId (0) integer
+	senderName (1) string
+	leftNum (2) integer
+	timeStamp (3) integer
+	id (4) integer
+	type (5) integer
+RelationBaseInfo
+	aid (0) integer
+	level (1) integer
+	charname (2) string
+	sex (3) integer
+	gs (4) integer
+	vipLevel (5) integer
+	online (6) integer
+	tempId (7) integer
+	logouttime (8) integer
+RemoveRouter.request
+	aid (0) integer
+ResourceLog
+	tempId (0) integer
+	strs (1) *string
+	time (2) integer
+ResourceRank
+	aid (0) integer
+	charname (1) string
+	point (2) integer
+	rank (3) integer
+ResourceRankAndLog
+	aid (0) integer
+	rank (1) integer
+	logData (2) ResourcewarPlayer
+ResourceRankList
+	rank (0) *ResourceRank
+	myRank (1) integer
+	point (2) integer
+ResourceShowChar
+	data (0) ShowCharData
+ResourceSlotData
+	index (0) integer
+	chars (1) *ResourceSlotSimpleChar
+	inTime (2) integer
+ResourceSlotSimpleChar
+	charname (0) string
+	gs (1) integer
+	index (2) integer
+	sid (3) integer
+	tempId (4) integer
+Resourcewar
+	aid (0) integer
+	resourcewarPlayers (1) ResourcewarPlayers
+	resourcewarSlots (2) ResourcewarSlots
+	resourceShowChar (3) ResourceShowChar
+	resourcewarLogs (4) ResourcewarLogs
+ResourcewarLog
+	aid (0) integer
+	logs (1) *ResourceLog
+ResourcewarLogs
+	data (0) *ResourcewarLog[0]
+ResourcewarPlayer
+	aid (0) integer
+	inTime (1) integer
+	usdTime (2) integer
+	rob (3) integer
+	sid (4) integer
+	areaId (5) integer
+	dayP (6) integer
+	weekP (7) integer
+	money (8) integer
+	pt (9) integer
+	rid (10) integer
+	charname (11) string
+	eventType (12) integer
+	robMax (13) integer
+	costTime (14) integer
+	moneyAdd (15) integer
+	ptAdd (16) integer
+	pvpC (17) integer
+ResourcewarPlayers
+	data (0) *ResourcewarPlayer[0]
+ResourcewarSlot
+	index (0) integer
+	aids (1) *integer
+	t (2) integer
+ResourcewarSlots
+	data (0) *ResourcewarSlot[0]
+RewardItem
+	id (0) integer
+	num (1) integer
+	itemType (2) integer
+	logType (3) integer
+	cateType (4) integer
+	special (5) string
+Room
+	idx (0) integer
+	tp (1) integer
+	index (2) integer
+	members (3) *CharData
+RoomData
+	first (0) RoomOneData
+	round (1) RoomOneData
+RoomIndex
+	index (0) integer
+	data (1) RoomData
+RoomOneData
+	names (0) *string
+	round (1) integer
+	t (2) integer
+	tempIds (3) *integer
+	sidnums (4) *integer
+	aids (5) *integer
+RoomRecord
+	tp (0) string
+	data (1) *RoomIndex[0]
+RuneBag
+	bag (0) *RuneData[0]
+RuneData
+	vid (0) string
+	num (1) integer
+	itemId (2) integer
+RuneSlot
+	vid (0) string
+	runeIds (1) *integer
+SB_SHAREBOSS_DATA
+	sid (0) integer
+	currentHp (1) integer
+	maxHp (2) integer
+	dead (3) integer
+SC_ActBulletScreen.request
+	id (0) integer
+	color (1) integer
+SC_ActBulletScreen.response
+	charname (0) string
+	id (1) integer
+	vipLevel (2) integer
+	actId (3) integer
+	color (4) integer
+SC_ActNotice.request
+SC_ActNotice.response
+	guid (0) integer
+	gujob (1) integer
+	charname (2) string
+	actid (3) integer
+	gametp (4) integer
+	index (5) integer
+	ignoreAids (6) *integer
+SC_BroadHp.response
+	bossHp (0) BossHp
+SC_BuyBatTimes.request
+SC_BuyGW.request
+	tp (0) integer
+SC_BuyLife.request
+SC_CHANGE.request
+SC_CHANGE.response
+	pmap (0) Pmap
+SC_ChangeScene.request
+	aid (0) integer
+	scene (1) integer
+	from (3) integer
+	intp (4) *integer
+	strp (5) *string
+SC_ChangeScene.response
+	aid (0) integer
+	scene (1) integer
+	scenei (2) integer
+	hid (3) integer
+	pos (4) UnitPosition
+	intp (5) *integer
+	strp (6) *string
+	avgLv (7) integer
+	leaderLv (8) integer
+SC_CharDataUpdate.response
+	simpledata (0) CharSimpleDataUpdate
+SC_CharDressUpdate.response
+	aid (0) integer
+	dress (1) Dress
+SC_CharEnter.response
+	chardata (0) WorldChar
+SC_CharLeave.response
+	aid (0) integer
+	scene (1) integer
+SC_ClickMob.request
+	id (0) integer
+	tp (1) integer
+	subType (2) integer
+SC_ClickMob.response
+	id (0) integer
+	tp (1) integer
+	subType (2) integer
+SC_ES_NEXTWAVES.request
+SC_ES_NEXTWAVES.response
+	nextwaves (0) *NextWave
+SC_ES_REMAIN.request
+SC_ES_REMAIN.response
+	remainmobdata (0) *MobRemain
+SC_ES_SELFMOBS.request
+SC_ES_SELFMOBS.response
+	selfmob (0) *Mob
+SC_ES_STAYMOBS.request
+SC_ES_STAYMOBS.response
+	staymob (0) *Staymob
+SC_EnterScene.request
+	scene (0) integer
+SC_EnterScene.response
+	scene (0) integer
+	pos (1) UnitPosition
+	mobs (2) *Mob
+	bossHp (3) BossHp
+	gametp (4) integer
+	remain (5) integer
+	chars (6) *WorldChar
+	selfmob (7) *Mob
+	staymob (8) *Staymob
+	nextwaves (9) *NextWave
+	remainmobdata (10) *MobRemain
+	camp (11) integer
+SC_EnterSpecial.request
+	tp (0) integer
+SC_GETSCENE_PLAYERS.request
+	scene (0) integer
+SC_GETSCENE_PLAYERS.response
+	players (0) *WorldChar
+SC_GatherDone.request
+	id (0) integer
+	cancel (1) integer
+SC_GatherDone.response
+	aid (0) integer
+	id (1) integer
+	num (2) integer
+SC_GetNewRank.request
+	tp (0) integer
+SC_GetNewRank.response
+	gametp (0) integer
+	tp (1) integer
+	list (2) *CrossRankVec
+SC_GetPvpData.request
+	aid (0) integer
+	mapId (1) integer
+SC_GetPvpData.response
+	attList (0) *WildpvpAttList
+	counterattList (1) *WildpvpAttList
+	nextst (2) integer
+	clearst (3) integer
+SC_GetRank.request
+	tp (0) integer
+SC_GetRank.response
+	gametp (0) integer
+	tp (1) integer
+	list (2) *CrossRankList
+	myRank (3) integer
+	myDmg (4) string
+	num (5) integer
+SC_GetSelfData.request
+SC_GetSelfData.response
+	gametp (0) integer
+	score (1) integer
+	awardIndex (2) integer
+	camp (3) integer
+	inCity (4) integer
+	teamId (5) integer
+	dmgBuff (6) integer
+	isTimer (7) integer
+	wavenum (8) integer
+	life (9) integer
+	blfnum (10) integer
+	dmgDeBuff (11) integer
+	sm (12) integer
+	gw (13) integer
+SC_LeaveScene.request
+SC_MobDie.response
+	id (0) integer
+SC_MobInScene.request
+SC_MobInScene.response
+	mobs (0) *Mob
+SC_NextBossHp.response
+	bossHp (0) BossHp
+SC_NextWave.response
+	nextwave (0) NextWave
+SC_NoLife.response
+	result (0) integer
+SC_OnChangeScene.request
+	aid (0) integer
+	sceneId (1) integer
+	scenetid (2) integer
+SC_PlayerInScene.request
+SC_PlayerInScene.response
+	players (0) *WorldChar
+	scene (1) integer
+SC_RefPvpData.response
+	charPvp (0) CharPvp
+SC_RemoveMob.response
+	mobids (0) *integer
+SC_RespCharBag.response
+	result (0) integer
+	bag (1) Bag
+SC_Revive.request
+SC_Revive.response
+SC_SearchPvpData.request
+	aid (0) integer
+	mapId (1) integer
+	money (2) integer
+SC_SelfMobRevive.response
+	id (0) integer
+	endt (1) integer
+SC_SetRevive.response
+	remain (0) integer
+SC_SpecialBack.request
+	aid (0) integer
+	clear (1) integer
+SC_SpecialChange.request
+	upScene (0) integer
+SC_StartBattle.request
+	taid (0) integer
+	tp (1) integer
+	aid (2) integer
+	diff (3) integer
+	charData (4) CharData
+	isRob (5) integer
+SC_SwitchHegel.request
+	aid (0) integer
+	hid (1) integer
+	type (2) integer
+	charData (3) CharData
+	intp (4) *integer
+	strp (5) *string
+SC_SwitchHegelCross.request
+	aid (0) integer
+	hid (1) integer
+	type (2) integer
+SC_Sync.request
+	pos (0) UnitPosition
+	scene (1) integer
+SC_Sync.response
+	chars (0) *WorldChar
+SC_UpTitle.request
+SDK_Sign.request
+	pid (0) string
+	func (1) string
+	signJson (2) string
+SDK_Sign.response
+	pid (0) string
+	func (1) string
+	signJson (2) string
+	sign (3) string
+SF_GetAward.request
+	tp (0) integer
+	idx (1) integer
+SF_GetAward.response
+	tp (0) integer
+	idx (1) integer
+SF_GetAwardFromWorld.request
+	aid (0) integer
+	tp (1) integer
+	idx (2) integer
+SGOD_Active.request
+	pid (0) integer
+SGOD_Active.response
+	skyGod (0) SkyGod
+SGOD_OpenModule.response
+	skyGods (0) SkyGods
+SGOD_SetBattle.request
+	pid (0) integer
+	index (1) integer
+SGOD_SetBattle.response
+	aids (0) *integer
+	pid (1) integer
+SGOD_TpEJx.request
+	pid (0) integer
+SGOD_TpEJx.response
+	pid (0) integer
+	skyGodJX (1) SkyGodJX
+SGOD_TpLevel.request
+	pid (0) integer
+SGOD_TpLevel.response
+	tpLevel (0) integer
+	pid (1) integer
+SGOD_TpTfLv.request
+	pid (0) integer
+SGOD_TpTfLv.response
+	pid (0) integer
+	tfData (1) SkyGodTFTM
+SGOD_UpAllELv.request
+	pid (0) integer
+SGOD_UpAllELv.response
+	pid (0) integer
+	skyGodJX (1) SkyGodJX
+SGOD_UpELv.request
+	pid (0) integer
+	key (1) string
+	isTop (2) integer
+SGOD_UpELv.response
+	pid (0) integer
+	key (1) string
+	exp (2) integer
+SGOD_UpLevel.request
+	pid (0) integer
+	selected (1) integer
+SGOD_UpLevel.response
+	pid (0) integer
+	exp (1) integer
+	level (2) integer
+SGOD_UpSS.request
+	pid (0) integer
+	isAuto (1) integer
+	type (2) integer
+SGOD_UpSS.response
+	skySS (0) SkyGodSS
+SGOD_UpTfLv.request
+	pid (0) integer
+SGOD_UpTfLv.response
+	pid (0) integer
+	tfData (1) SkyGodTFTM
+SGOD_UpTmLv.request
+	pid (0) integer
+SGOD_UpTmLv.response
+	pid (0) integer
+	tmData (1) SkyGodTFTM
+SGOD_UpWeaponLv.request
+	key (0) string
+	selected (1) integer
+SGOD_UpWeaponLv.response
+	key (0) string
+	level (1) integer
+	exp (2) integer
+SHOP_BUY.request
+	id (0) integer
+	num (1) integer
+SHOP_BUY.response
+	id (0) integer
+	num (1) integer
+	historyKey (2) string
+	expireTime (3) integer
+SHOP_REF_BUY.request
+	id (0) integer
+	num (1) integer
+SHOP_REF_ITEMS.request
+	id (0) integer
+SHOP_REF_ITEMS.response
+	history (0) ShopHistory
+SKILL_AUTOSKILL.request
+	skillId (0) integer
+SKILL_AUTOSKILL.response
+	skill (0) Skill
+SKILL_MOVEUP.request
+	upPoint (0) integer
+SKILL_MOVEUP.response
+	queue (0) *integer
+	upPoint (1) integer
+SOULROOT_AUTOEQUIP.request
+	ids (0) *integer
+SOULROOT_AUTOEQUIP.response
+SOULROOT_BREAK.request
+	soulRootData (0) *SoulRootData
+SOULROOT_BREAK.response
+SOULROOT_CHANGE_LUCK.request
+	luck (0) integer
+SOULROOT_CHANGE_LUCK.response
+	luck (0) integer
+SOULROOT_COMPOSE.request
+	id (0) integer
+SOULROOT_COMPOSE.response
+SOULROOT_DATACHANGE.response
+	soulRoot (0) SoulRoot
+SOULROOT_LEVELUP.request
+	type (0) integer
+	index (1) integer
+SOULROOT_LEVELUP.response
+SOULROOT_RANDOM.request
+	type (0) integer
+SOULROOT_RANDOM.response
+	newSoulRoots (0) *SoulRootData[1]
+	luck (1) integer
+ST_CommonCall.request
+	funcname (0) string
+	type (1) integer
+ST_CommonCall.response
+	funcname (0) string
+	type (1) integer
+ST_GetRwd.request
+	type (0) integer
+ST_GetRwd.response
+	mySnatch (0) Snatch
+	snatchDt (1) SnatchData
+ST_GetSelfTeam.request
+ST_GetSelfTeam.response
+	team (0) Team
+ST_GetStDt.request
+ST_GetStDt.response
+	mySnatch (0) Snatch
+	snatchDt (1) SnatchData
+ST_GetTeamList.request
+ST_GetTeamList.response
+	myIdx (0) integer
+	teams (1) *Team
+	oteams (2) *Team
+ST_TakePartIn.request
+ST_TakePartIn.response
+	mySnatch (0) Snatch
+	snatchDt (1) SnatchData
+ST_TeamControl.request
+	tp (0) integer
+	tid (1) integer
+	idx (2) integer
+	mings (3) string
+ST_TeamControl.response
+	aid (0) integer
+	tp (1) integer
+	team (2) Team
+	name (3) string
+	checkvalue (4) integer
+	tid (5) integer
+STab
+	st (0) integer
+	tp (1) integer
+	fac (2) integer
+SaveRow.request
+	name (0) string
+	aid (1) integer
+SendMailAidArr
+	aid (0) integer
+ServerAuth.response
+	cid (0) integer
+	auth (1) string
+ServerFirstAward
+	team2 (0) *ServerFirstAwardData[0]
+	team4 (1) *ServerFirstAwardData[0]
+	team5 (2) *ServerFirstAwardData[0]
+ServerFirstAwardData
+	key (0) string
+	val (1) integer
+ServerInfo
+	sidx (0) integer
+	name (1) string
+	idx (2) integer
+	ip (3) string
+	port (4) integer
+ServerStandBy.response
+	id (0) integer
+	tag (1) string
+Share
+	rwdTimes (0) integer
+	lastShareTime (1) integer
+	lastRwdTime (2) integer
+Shareboss
+	cdStTime (0) integer
+	buyTimes (1) integer
+	lastBuyTime (2) integer
+	times (3) integer
+Shop
+	vid (0) string
+	items (1) *ItemData[1]
+ShopBuy
+	history (0) *ShopHistory[0]
+ShopHistory
+	shopId (0) string
+	history (1) *Kval[0]
+	expireTime (2) integer
+	refTimes (3) integer
+ShowBooker
+	aid (0) integer
+	avcolor (1) integer
+	avtime (2) integer
+	gs (3) integer
+	name (4) string
+ShowCharData
+	aid (0) integer
+	tempId (1) integer
+	charname (2) string
+	dress (3) Dress
+	sidnum (4) integer
+	gs (5) integer
+	sid (6) integer
+SimpleMail
+	aid (0) integer
+	mailp (1) Mailp
+	flag (2) integer
+	time (3) integer
+	slots (4) integer
+	logType (5) integer
+	hasItem (6) integer
+SimpleMailHegel
+	aid (0) integer
+	attachment (1) Attachment
+	slots (2) integer
+	logType (3) integer
+SimpleUnitInfo
+	aid (0) integer
+	accname (1) string
+	charname (2) string
+	sex (3) integer
+	level (4) integer
+	gs (5) integer
+Skill
+	list (0) *SkillData
+	blist (1) *SkillData
+	queue (2) *integer
+SkillBaptize
+	exp (0) integer
+	lv (1) integer
+	skill (2) *integer
+	skills (3) *SkillBaptizeList
+	lockArr (4) *integer
+SkillBaptizeList
+	skills (0) *integer
+SkillData
+	skillId (0) integer
+	level (1) integer
+Skins
+	res (0) *Kval[0]
+	title (1) *Kval[0]
+	ride (2) *Kval[0]
+	wing (3) *Kval[0]
+	shouhu (4) *Kval[0]
+	shenhun (5) *Kval[0]
+	shenbing (6) *Kval[0]
+	xn (7) *Kval[0]
+	ts (8) *Kval[0]
+	pet_title (9) *Kval[0]
+	pet_shenhun (10) *Kval[0]
+	pet_guanghuan (11) *Kval[0]
+	pet_shouhu (12) *Kval[0]
+	par_title (13) *Kval[0]
+	par_shenhun (14) *Kval[0]
+	par_guanghuan (15) *Kval[0]
+	par_shouhu (16) *Kval[0]
+	xn_title (17) *Kval[0]
+	xn_shenhun (18) *Kval[0]
+	xn_guanghuan (19) *Kval[0]
+	xn_shouhu (20) *Kval[0]
+	ts_title (25) *Kval[0]
+	ts_shenhun (26) *Kval[0]
+	ts_guanghuan (27) *Kval[0]
+	ts_shouhu (28) *Kval[0]
+SkyGod
+	aid (0) integer
+	dress (1) Dress
+	level (2) integer
+	exp (3) integer
+	key (4) string
+	tempId (5) integer
+	tpLevel (6) integer
+	tfData (7) SkyGodTFTM
+	tmData (8) SkyGodTFTM
+	skyGodJX (9) SkyGodJX
+SkyGodEle
+	level (0) integer
+	exp (1) integer
+	key (2) string
+SkyGodJX
+	level (0) integer
+	skyGodEles (1) *SkyGodEle[2]
+SkyGodSS
+	level (0) integer
+	exp (1) integer
+	key (2) string
+SkyGodTFTM
+	level (0) integer
+	exp (1) integer
+SkyGodWeapon
+	key (0) string
+	level (1) integer
+	exp (2) integer
+SkyGods
+	aids (0) *integer
+	skyGods (1) *SkyGod[4]
+	skyWeapons (2) *SkyGodWeapon[0]
+	skySS (3) *SkyGodSS[2]
+Snatch
+	aid (0) integer
+	rwdDt (1) integer
+	charname (2) string
+	inTime (3) integer
+SnatchData
+	openTime (0) integer
+	players (1) *Snatch
+	round (2) integer
+	charname (3) string
+SoulRoot
+	slotLv (0) *integer
+	slotEquip (1) *integer
+	goldSlotLv (2) *integer
+	goldEquip (3) *integer
+	luck (4) integer
+SoulRootData
+	num (0) integer
+	vid (1) string
+SoulRootbag
+	bag (0) *SoulRootData[1]
+	num (1) integer
+StarTreasure
+	stars (0) *integer
+Staymob
+	cid (0) integer
+	camp (1) integer
+	chars (2) *teamMem
+Students
+	data (0) *MentorMember
+SynRankList
+	key (0) string
+	rankList (1) *RankDetail
+SyncCrossHegelConn.request
+SyncCrossHegelConn.response
+	crossHegels (0) *ServerInfo[0]
+SysRouter.request
+	router (0) UserRouter
+TTM_ActiveTotem.request
+	tid (0) integer
+TTM_ActiveTotem.response
+	totem (0) Totem
+TTM_TotemOn.request
+	tid (0) integer
+	pos (1) integer
+TTM_TotemOn.response
+	slots (0) *TotemSlot[1]
+	on (1) integer
+TTM_TotemOpen.request
+TTM_TotemOpen.response
+	open (0) integer
+TTM_TpTotem.request
+	tid (0) integer
+TTM_TpTotem.response
+	totem (0) Totem
+TTM_TpZQTotem.request
+	tid (0) integer
+	selected (1) integer
+TTM_TpZQTotem.response
+	totem (0) Totem
+TTM_UpTotem.request
+	tid (0) integer
+	index (1) integer
+TTM_UpTotem.response
+	totem (0) Totem
+	critSum (1) integer
+	critExp (2) integer
+TTM_UpZQTotem.request
+	tid (0) integer
+	selected (1) integer
+TTM_UpZQTotem.response
+	totem (0) Totem
+TTM_UpZlTotem.request
+	tid (0) integer
+	selected (1) integer
+TTM_UpZlTotem.response
+	totem (0) Totem
+T_RefTeamUserDt.response
+	teamfb (0) Teamfb
+	isRef (1) integer
+Teacher
+	data (0) MentorMember
+Team
+	idx (0) string
+	mings (1) string
+	members (2) *teamMem
+TeamFbPass
+	idx (0) integer
+	num (1) integer
+	box (2) integer
+Teamfb
+	type (0) string
+	hasComFb (1) *TeamFbPass[0]
+	lastGetRwdTime (2) integer
+	helpTimes (3) integer
+Teamfbs
+	teamfbs (0) *Teamfb[0]
+TjResourceRank
+	aid (0) integer
+	charname (1) string
+	point (2) integer
+	rank (3) integer
+	camp (4) integer
+TjResourceRankAndLog
+	aid (0) integer
+	rank (1) integer
+	logData (2) TjResourcewarPlayer
+TjResourceRankList
+	rank (0) *TjResourceRank
+	myRank (1) integer
+	point (2) integer
+TjResourceShowChar
+	data (0) ShowCharData
+TjResourcewarCamp
+	camp (0) integer
+	gs (1) integer
+TjResourcewarGss
+	data (0) *TjResourcewarCamp
+TjResourcewarLog
+	aid (0) integer
+	logs (1) *ResourceLog
+TjResourcewarLogs
+	data (0) *TjResourcewarLog[0]
+TjResourcewarPlayer
+	aid (0) integer
+	inTime (1) integer
+	usdTime (2) integer
+	rob (3) integer
+	sid (4) integer
+	dayP (5) integer
+	weekP (6) integer
+	money (7) integer
+	pt (8) integer
+	rid (9) integer
+	charname (10) string
+	eventType (11) integer
+	robMax (12) integer
+	costTime (13) integer
+	moneyAdd (14) integer
+	ptAdd (15) integer
+	pvpC (16) integer
+	camp (17) integer
+	pveC (18) integer
+	awards (19) *integer
+	last (20) integer
+	usdWeekTime (21) integer
+TjResourcewarPlayers
+	data (0) *TjResourcewarPlayer[0]
+TjResourcewarSids
+	data (0) *integer
+Totem
+	tempId (0) integer
+	level (1) integer
+	exp (2) integer
+	tpgpId (3) integer
+	zlLevel (4) integer
+	zlExp (5) integer
+	zqLevel (6) integer
+	zqExp (7) integer
+	zqTpgpId (8) integer
+	key (9) string
+	skills (10) *integer
+TotemSlot
+	totemId (0) integer
+	sid (1) string
+Totems
+	totems (0) *Totem[9]
+	slots (1) *TotemSlot[1]
+	open (2) integer
+	on (3) integer
+TowerDetail
+	aid (0) integer
+	charname (1) string
+	gs (2) integer
+	tower (3) integer
+	star (4) integer
+	sid (5) integer
+	time (6) integer
+TowerRank
+	bbRank (0) integer
+	wxslRank (1) integer
+	jxtzRank (2) integer
+	hmsRank (3) integer
+	hhsjRank (4) integer
+UnitPosition
+	x (0) integer
+	y (1) integer
+UserRouter
+	aid (0) integer
+	gw (1) integer
+	hid (2) integer
+	state (3) integer
+	ts (4) integer
+	cid (5) integer
+	uid (6) string
+	scenetid (7) integer
+	reconnect (8) integer
+	proIp (9) integer
+	sid (10) integer
+	ip (11) string
+VRH_DoMd5Check.request
+	pid (0) string
+	feeid (1) integer
+	opId (2) integer
+	id (3) integer
+	checkstr (4) string
+	ext (5) string
+VRH_DoMd5Check.response
+	check (0) string
+	feeid (1) integer
+	fee (2) integer
+	serverid (3) integer
+	uid (4) string
+	checkstr (5) string
+	ext (6) string
+VRH_UpdateMetaList.request
+VRH_UpdateMetaList.response
+	metas (0) *PayItemMeta[1]
+	paydata (1) Paydata
+VRH_UpdateMetaListWH.request
+	metas (0) *PayItemMeta
+ValName
+	key (0) string
+	val (1) string
+VipBoss
+	stid (0) string
+	count (1) integer
+	ftime (2) integer
+WD_NoticeCommon.request
+	aid (0) integer
+	type (1) integer
+	param (2) string
+WD_SetWorldData.request
+	key (0) integer
+	worlddata (1) Worlddata
+WD_SetWorldData.response
+WD_SetWorldDataSelf.request
+	key (0) integer
+	worlddata (1) Worlddata
+	serverId (2) integer
+	areaTP (3) integer
+WD_SetWorldDataSelf.response
+WildBossDt
+	bossId (0) integer
+	currentHp (1) integer
+	maxHp (2) integer
+	owner (3) WildOwner
+	escapeTime (4) integer
+	refTime (5) integer
+WildOwner
+	aid (0) integer
+	timeStamp (1) integer
+	tempId (2) integer
+	charname (3) string
+Wildpvp
+	attList (0) *WildpvpAttList
+	counterattList (1) *WildpvpAttList
+	nextst (2) integer
+	clearst (3) integer
+	mIdx (4) integer
+WildpvpAttList
+	aid (0) integer
+	charname (1) string
+	level (2) integer
+	gs (3) integer
+	diff (4) integer
+	tempId (5) integer
+	event (6) integer
+	isRob (7) integer
+WorldChar
+	aid (0) integer
+	uid (1) string
+	charname (2) string
+	sex (3) integer
+	level (4) integer
+	gs (5) integer
+	logintime (6) integer
+	dress (7) Dress
+	gold (8) integer
+	guid (9) integer
+	gujob (10) integer
+	mtime (11) integer
+	outgutm (12) integer
+	mapId (13) integer
+	petId (14) integer
+	petSkin (15) integer
+	partnerId (16) integer
+	partnerSkin (17) integer
+	bbRank (18) integer
+	wxslRank (19) integer
+	hmsRank (20) integer
+	jxtzRank (21) integer
+	vipLevel (22) integer
+	tempId (23) integer
+	leader (24) integer
+	pos (25) UnitPosition
+	ptime (26) integer
+	charBaseGs (27) integer
+	wingGs (28) integer
+	rideGs (29) integer
+	shouhuGs (30) integer
+	shenhunGs (31) integer
+	shenbingGs (32) integer
+	par_titleGs (33) integer
+	par_shenhunGs (34) integer
+	par_guanghuanGs (35) integer
+	par_shouhuGs (36) integer
+	ts_titleGs (37) integer
+	ts_shenhunGs (38) integer
+	ts_guanghuanGs (39) integer
+	ts_shouhuGs (40) integer
+	pet_titleGs (41) integer
+	pet_shenhunGs (42) integer
+	pet_guanghuanGs (43) integer
+	pet_shouhuGs (44) integer
+	petGs (45) integer
+	partnerGs (46) integer
+	xnGs (47) integer
+	xn_titleGs (48) integer
+	xn_shenhunGs (49) integer
+	xn_guanghuanGs (50) integer
+	xn_shouhuGs (51) integer
+	camp (52) integer
+	inCity (53) integer
+	tsGs (54) integer
+	skyGodId (55) integer
+	skyGodSkin (56) integer
+	xuanNvId (57) integer
+	xuanNvSkin (58) integer
+	teamId (59) integer
+	teamIdx (60) integer
+	isRevive (61) integer
+	pmap (62) Pmap
+	jxtzStar (63) integer
+	totemGs (64) integer
+	godEquipGs (65) integer
+	monthCard (66) integer
+	foreverCard (67) integer
+	sidnum (68) integer
+	hhsjRank (69) integer
+	serverId (70) integer
+	runeGs (71) integer
+	soulRootGs (72) integer
+	faBaoGs (73) integer
+	heavenBookGs (74) integer
+	artifactGs (82) integer
+	uid_ex (86) string
+WorldPayDt
+	aids (0) *integer
+	lastTime (1) integer
+	totalPay (2) integer
+	totalNum (3) integer
+WorldToHegel.request
+	sid (0) integer
+	mergeTime (1) integer
+Worlddata
+	payDt (0) WorldPayDt
+	room (1) *RoomRecord[0]
+	guildboss (2) *GuildBoss[0]
+	oprank (3) *OpRank[1]
+	auction (4) *AuctionWorld[0]
+	aucday (5) *AuctionDay[0]
+	chatPopDt (6) *ChatPopDts[0]
+	guildbattle (7) *GuildBoss[0]
+	recordLists (8) *RecordList[1]
+	opRecords (9) *OpRecordList[1]
+	actShowChar (10) *ActShowCharData[0]
+	opCommonRank (11) *OpCommonRank[1]
+	actshadeBoss (12) *ActGuildBoss[0]
+XN_ActiveFaQi.response
+	xnfaqi (0) XuanNvFaQi
+XN_ActiveXuanNv.response
+	xuanNvs (0) XuanNvs
+XN_FaQiBaptize.request
+	index (0) integer
+	isTop (1) integer
+	lockArr (2) *integer
+	selected (3) integer
+	skillLv (4) *integer
+XN_FaQiBaptize.response
+	index (0) integer
+	xnfaqi (1) XuanNvFaQi
+XN_FaQiPropChange.request
+	index (0) integer
+XN_FaQiPropChange.response
+	index (0) integer
+	xnfaqi (1) XuanNvFaQi
+XN_LevelUp.request
+	selected (0) integer
+XN_LevelUp.response
+	result (0) integer
+	xuanNv (1) XuanNv
+XuanNv
+	aid (0) integer
+	dress (1) Dress
+	name (2) string
+	itemType (3) integer
+	level (4) integer
+	exp (5) integer
+	bSkills (6) *integer
+	key (7) string
+	tempId (8) integer
+XuanNvFaQi
+	exp (0) integer
+	lv (1) integer
+	prop (2) *XuanNvFaQiProp
+	nprop (3) *XuanNvFaQiProp
+	time (4) integer
+XuanNvFaQiProp
+	t (0) integer
+	v (1) integer
+XuanNvs
+	xuanNv (0) XuanNv
+	faqi (1) *XuanNvFaQi
+	n1 (2) integer
+	n2 (3) integer
+ZLXPlayerDt
+	aid (0) integer
+	data (1) *integer
+ZLX_AddBatTimeCross.request
+	sid (0) integer
+	aid (1) integer
+ZLX_AddBatTimeCross.response
+	aid (0) integer
+	myInfo (1) TjResourcewarPlayer
+ZLX_AddBatTimeCrossSuccess.request
+	sid (0) integer
+	aid (1) integer
+ZLX_AddBatTimeHegel.request
+ZLX_AddBatTimeHegel.response
+	result (0) integer
+	myInfo (1) TjResourcewarPlayer
+ZLX_BattleEndCross.request
+	aid (0) integer
+	pos (1) integer
+	result (2) integer
+	areaId (3) integer
+	btype (4) integer
+	sid (5) integer
+	charData (6) CharData
+ZLX_BattleEndCross.response
+	aid (0) integer
+	sid (1) integer
+ZLX_GetCostTimeAward.request
+	adid (0) integer
+ZLX_GetCostTimeAward.response
+	result (0) integer
+	adid (1) integer
+	myInfo (2) TjResourcewarPlayer
+ZLX_GetCostTimeAwardCross.request
+	adid (0) integer
+	sid (1) integer
+	aid (2) integer
+	val (3) integer
+ZLX_GetCostTimeAwardCross.response
+	result (0) integer
+	adid (1) integer
+	myInfo (2) TjResourcewarPlayer
+	aid (3) integer
+ZLX_GetInfo.request
+	sid (0) integer
+	aid (1) integer
+	index (2) integer
+	charData (3) CharData
+ZLX_GetInfo.response
+	myInfo (0) TjResourcewarPlayer
+	slots (1) *ResourceSlotData
+	charname (2) string
+	point (3) integer
+	aid (4) integer
+	index (5) integer
+	pageMax (6) integer
+	myAdd (7) integer
+	result (8) integer
+ZLX_GetPoint.request
+	sid (0) integer
+	aid (1) integer
+ZLX_GetPoint.response
+	point (0) integer
+	money (1) integer
+	myInfo (2) TjResourcewarPlayer
+	aid (3) integer
+ZLX_GetRwLog.request
+	sid (0) integer
+	aid (1) integer
+ZLX_GetRwLog.response
+	aid (0) integer
+	logs (1) *ResourceLog
+ZLX_GetRwRank.request
+	sid (0) integer
+	aid (1) integer
+ZLX_GetRwRank.response
+	dayRank (0) TjResourceRankList
+	weekRank (1) TjResourceRankList
+	weekPRank (2) TjResourceRankList
+ZLX_RobCross.request
+	sid (0) integer
+	aid (1) integer
+	pos (2) integer
+	charData (3) CharData
+ZLX_RobCross.response
+	sid (0) integer
+	aid (1) integer
+	pos (2) integer
+	charData (3) CharData
+	areaId (4) integer
+ZLX_RobHegel.request
+	pos (0) integer
+ZLX_SendDayAwardCross.response
+	type (0) integer
+	ranks (1) *TjResourceRankAndLog
+ZLX_SendGWEventCross.request
+ZLX_SendGWEventCross.response
+	aid (0) integer
+	eventType (1) integer
+ZLX_SendPlayerPtCross.request
+ZLX_SendPlayerPtCross.response
+	datas (0) *ZLXPlayerDt
+ZLX_SendWeekAwardCross.response
+	rank (0) integer
+	aids (1) *integer
+package
+	type (0) integer
+	aid (1) integer
+	tag (2) integer
+	cid (3) integer
+	gmname (4) string
+rollMsg
+	id (0) integer
+	starttime (1) integer
+	endtime (2) integer
+	content (3) string
+	interval (4) integer
+	serverId (5) string
+serversArr
+	sid (0) integer
+teamMem
+	aid (0) integer
+	charname (1) string
+	tempId (2) integer
+	guid (3) integer
+	guname (4) string
+	sidnum (5) integer
+	curHp (6) integer
+	maxHp (7) integer
+	level (8) integer
+	gs (9) integer
+	camp (10) integer
+=== 646 protocol ===
+	HandShake (101) request:HandShake.request response:HandShake.response
+	PING (102) request:PING.request response:PING.response
+	ByeHandShake (103) request:ByeHandShake.request response:ByeHandShake.response
+	ServerAuth (104) request:(null) response:ServerAuth.response
+	ServerStandBy (105) request:(null) response:ServerStandBy.response
+	SyncCrossHegelConn (106) request:SyncCrossHegelConn.request response:SyncCrossHegelConn.response
+	FetchRow (201) request:FetchRow.request response:FetchRow.response
+	CacheRow (202) request:CacheRow.request response:CacheRow.response
+	InsertRow (203) request:InsertRow.request response:InsertRow.response
+	SaveRow (204) request:SaveRow.request
+	FetchChar (205) request:FetchChar.request response:FetchChar.response
+	GetUserOfflineData (206) request:GetUserOfflineData.request response:GetUserOfflineData.response
+	L_Login (1001) request:L_Login.request response:L_Login.response
+	L_CreateChar (1002) request:L_CreateChar.request response:L_CreateChar.response
+	L_SelectChar (1003) request:(null) response:L_SelectChar.response
+	L_ClientOff (1004) request:(null)
+	AddRouter (1005) request:AddRouter.request
+	SysRouter (1006) request:SysRouter.request
+	RemoveRouter (1007) request:RemoveRouter.request
+	L_KickChar (1008) request:L_KickChar.request response:L_KickChar.response
+	L_GetUserData (1009) request:(null) response:L_GetUserData.response
+	C_GetGift (2040) request:C_GetGift.request
+	C_OnGetGift (2041) request:C_OnGetGift.request response:C_OnGetGift.response
+	C_GiftBack (2044) request:C_GiftBack.request
+	C_DoMoBai (2045) request:C_DoMoBai.request response:C_DoMoBai.response
+	C_CHECKLOGIN (2046) request:C_CHECKLOGIN.request
+	C_GetCharDetail (2047) request:C_GetCharDetail.request response:C_GetCharDetail.response
+	C_ChangeName (2048) request:C_ChangeName.request response:C_ChangeName.response
+	C_GetShowChar (2049) request:C_GetShowChar.request response:C_GetShowChar.response
+	M_ExtractMail (2100) request:M_ExtractMail.request
+	M_SetExtractFlag (2101) request:M_SetExtractFlag.request
+	M_NewMail (2102) request:M_NewMail.request response:M_NewMail.response
+	M_GetSimpleMail (2103) request:M_GetSimpleMail.request response:M_GetSimpleMail.response
+	M_GetOneMail (2104) request:M_GetOneMail.request response:M_GetOneMail.response
+	M_DelMail (2105) request:M_DelMail.request response:M_DelMail.response
+	M_RedPoint (2106) request:(null) response:M_RedPoint.response
+	GU_CreateGuild (2201) request:GU_CreateGuild.request response:GU_CreateGuild.response
+	GU_GetGuildList (2202) request:GU_GetGuildList.request response:GU_GetGuildList.response
+	GU_GetGuildMembers (2203) request:GU_GetGuildMembers.request response:GU_GetGuildMembers.response
+	GU_ApplyJoin (2204) request:GU_ApplyJoin.request response:GU_ApplyJoin.response
+	GU_DealApply (2205) request:GU_DealApply.request response:GU_DealApply.response
+	GU_GetGuildApplylist (2206) request:GU_GetGuildApplylist.request response:GU_GetGuildApplylist.response
+	GU_GetGuildMyInfo (2207) request:GU_GetGuildMyInfo.request response:GU_GetGuildMyInfo.response
+	GU_QuitGuild (2208) request:GU_QuitGuild.request response:GU_QuitGuild.response
+	GU_UpGuildJob (2209) request:GU_UpGuildJob.request response:GU_UpGuildJob.response
+	GU_GetGuildManagers (2210) request:GU_GetGuildManagers.request response:GU_GetGuildManagers.response
+	GU_UpGuildChair (2211) request:GU_UpGuildChair.request response:GU_UpGuildChair.response
+	GU_ShowRedPoint (2212) request:(null) response:GU_ShowRedPoint.response
+	GU_UpdateGuildNotice (2213) request:GU_UpdateGuildNotice.request response:GU_UpdateGuildNotice.response
+	GU_ChangeSet (2214) request:GU_ChangeSet.request response:GU_ChangeSet.response
+	GU_GetMrecord (2215) request:GU_GetMrecord.request response:GU_GetMrecord.response
+	GU_ThGuildChair (2216) request:GU_ThGuildChair.request response:GU_ThGuildChair.response
+	GU_GetGuildGift (2217) request:GU_GetGuildGift.request response:GU_GetGuildGift.response
+	GU_OpenGuildGift (2218) request:GU_OpenGuildGift.request
+	GU_BatFb (2219) request:GU_BatFb.request response:GU_BatFb.response
+	GU_GetFbGaward (2220) request:GU_GetFbGaward.request response:GU_GetFbGaward.response
+	GU_GetFbData (2221) request:GU_GetFbData.request response:GU_GetFbData.response
+	GU_GetFbTaward (2222) request:GU_GetFbTaward.request response:GU_GetFbTaward.response
+	GU_UpGuildGw (2223) request:GU_UpGuildGw.request response:GU_UpGuildGw.response
+	GU_sendChairMsg (2224) request:GU_sendChairMsg.request response:GU_sendChairMsg.response
+	GU_GetMemDetail (2225) request:GU_GetMemDetail.request response:GU_GetMemDetail.response
+	ST_TakePartIn (2240) request:ST_TakePartIn.request response:ST_TakePartIn.response
+	ST_GetRwd (2241) request:ST_GetRwd.request response:ST_GetRwd.response
+	ST_GetStDt (2242) request:ST_GetStDt.request response:ST_GetStDt.response
+	GB_GET_BOOK_INFO (2250) request:GB_GET_BOOK_INFO.request response:GB_GET_BOOK_INFO.response
+	GB_UP_BOOKER (2251) request:GB_UP_BOOKER.request response:GB_UP_BOOKER.response
+	GB_START (2252) request:GB_START.request response:GB_START.response
+	GB_SHOW_BOOKDETAIL (2253) request:GB_SHOW_BOOKDETAIL.request response:GB_SHOW_BOOKDETAIL.response
+	GB_FIGHT (2254) request:GB_FIGHT.request response:GB_FIGHT.response
+	GB_GET_ENEMYLIST (2255) request:GB_GET_ENEMYLIST.request response:GB_GET_ENEMYLIST.response
+	GB_GET_AWARD_INFO (2256) request:GB_GET_AWARD_INFO.request response:GB_GET_AWARD_INFO.response
+	GB_GET_AWARD (2257) request:GB_GET_AWARD.request response:GB_GET_AWARD.response
+	GB_QUICK_FINISH (2258) request:GB_QUICK_FINISH.request response:GB_QUICK_FINISH.response
+	GB_GET_MYBOOK (2259) request:(null) response:GB_GET_MYBOOK.response
+	GB_BE_FIGHT (2260) request:(null) response:GB_BE_FIGHT.response
+	PA_PATCH_TEMP (2301) request:PA_PATCH_TEMP.request response:PA_PATCH_TEMP.response
+	AC_GetQuestions (2402) request:AC_GetQuestions.request response:AC_GetQuestions.response
+	AC_CommitAnswer (2403) request:AC_CommitAnswer.request response:AC_CommitAnswer.response
+	AC_GetAnswerRank (2404) request:AC_GetAnswerRank.request response:AC_GetAnswerRank.response
+	AC_BroadResult (2405) request:AC_BroadResult.request response:AC_BroadResult.response
+	AC_GetWildBossDt (2411) request:AC_GetWildBossDt.request response:AC_GetWildBossDt.response
+	AC_DoWildBossBat (2412) request:AC_DoWildBossBat.request
+	AC_GetActivityList (2430) request:AC_GetActivityList.request response:AC_GetActivityList.response
+	AC_GetActState (2431) request:AC_GetActState.request response:AC_GetActState.response
+	OP_GetLotteryRecord (2450) request:OP_GetLotteryRecord.request response:OP_GetLotteryRecord.response
+	OP_GetOpRankList (2451) request:OP_GetOpRankList.request response:OP_GetOpRankList.response
+	OP_GetOpCommonRankList (2452) request:OP_GetOpCommonRankList.request response:OP_GetOpCommonRankList.response
+	RP_OpenRedPack (2501) request:RP_OpenRedPack.request response:RP_OpenRedPack.response
+	RP_NewRedPack (2502) request:(null) response:RP_NewRedPack.response
+	RP_OpenRedPackRain (2503) request:RP_OpenRedPackRain.request
+	RP_NewRedPackRain (2504) request:(null) response:RP_NewRedPackRain.response
+	RL_GetRecord (2511) request:RL_GetRecord.request response:RL_GetRecord.response
+	T_RefTeamUserDt (2748) request:(null) response:T_RefTeamUserDt.response
+	AUC_GetData (2750) request:AUC_GetData.request
+	AUC_GetRecord (2751) request:AUC_GetRecord.request
+	AUC_SendShareAward (2752) request:AUC_SendShareAward.request
+	RK_GET_SIMPLETOWERRANK (2780) request:RK_GET_SIMPLETOWERRANK.request response:RK_GET_SIMPLETOWERRANK.response
+	RK_GET_TOWERRANK (2781) request:RK_GET_TOWERRANK.request response:RK_GET_TOWERRANK.response
+	RK_GET_RANKLIST (2782) request:RK_GET_RANKLIST.request response:RK_GET_RANKLIST.response
+	RK_GET_SIMPLERANKLIST (2783) request:RK_GET_SIMPLERANKLIST.request response:RK_GET_SIMPLERANKLIST.response
+	PS_GetRelatinList (2800) request:PS_GetRelatinList.request response:PS_GetRelatinList.response
+	PS_UpRelationList (2801) request:PS_UpRelationList.request response:PS_UpRelationList.response
+	PS_GetRefreeList (2802) request:PS_GetRefreeList.request response:PS_GetRefreeList.response
+	PS_GiveAndRec (2803) request:PS_GiveAndRec.request response:PS_GiveAndRec.response
+	PS_UpRelationLists (2804) request:PS_UpRelationLists.request
+	PS_SendEvent (2805) request:PS_SendEvent.request response:PS_SendEvent.response
+	SC_GETSCENE_PLAYERS (2850) request:SC_GETSCENE_PLAYERS.request response:SC_GETSCENE_PLAYERS.response
+	SC_StartBattle (2851) request:SC_StartBattle.request
+	PVESB_BattleStart (2900) request:PVESB_BattleStart.request response:PVESB_BattleStart.response
+	PVESB_GetBossHp (2901) request:PVESB_GetBossHp.request response:PVESB_GetBossHp.response
+	PVESB_GetBossHurtRank (2902) request:PVESB_GetBossHurtRank.request response:PVESB_GetBossHurtRank.response
+	PAY_DeliverGoods (3090) request:PAY_DeliverGoods.request response:PAY_DeliverGoods.response
+	PAY_DeliverGoodsSucc (3091) request:(null) response:PAY_DeliverGoodsSucc.response
+	PAY_CharLogined (3092) request:PAY_CharLogined.request
+	PAY_ReloadPayMeta (3093) request:PAY_ReloadPayMeta.request
+	PAY_CheckCanPay (3094) request:PAY_CheckCanPay.request response:PAY_CheckCanPay.response
+	PAY_Supplement (3095) request:(null) response:PAY_Supplement.response
+	PAY_GetPayHistory (3096) request:PAY_GetPayHistory.request response:PAY_GetPayHistory.response
+	RM_LeaveRoom (3150) request:RM_LeaveRoom.request response:RM_LeaveRoom.response
+	RM_KickMem (3151) request:RM_KickMem.request
+	RM_GetRoomList (3152) request:RM_GetRoomList.request response:RM_GetRoomList.response
+	RM_RoomStart (3153) request:RM_RoomStart.request response:RM_RoomStart.response
+	RM_Fill (3154) request:RM_Fill.request
+	RM_GetRecord (3155) request:RM_GetRecord.request response:RM_GetRecord.response
+	AR_GET_ENEMY (3156) request:AR_GET_ENEMY.request response:AR_GET_ENEMY.response
+	AR_GET_RANKLIST (3157) request:AR_GET_RANKLIST.request response:AR_GET_RANKLIST.response
+	RM_GetRoomNum (3158) request:RM_GetRoomNum.request response:RM_GetRoomNum.response
+	RM_GetRecords (3161) request:RM_GetRecords.request response:RM_GetRecords.response
+	RM_GetTopRecord (3162) request:RM_GetTopRecord.request response:RM_GetTopRecord.response
+	SF_GetAward (3181) request:SF_GetAward.request response:SF_GetAward.response
+	MTR_GetMentorInfo (3200) request:MTR_GetMentorInfo.request response:MTR_GetMentorInfo.response
+	MTR_MentorInvite (3201) request:MTR_MentorInvite.request response:MTR_MentorInvite.response
+	MTR_MentorPromise (3202) request:MTR_MentorPromise.request response:MTR_MentorPromise.response
+	MTR_MentorTransferExp (3203) request:MTR_MentorTransferExp.request response:MTR_MentorTransferExp.response
+	MTR_MentorAcceptExp (3204) request:MTR_MentorAcceptExp.request response:MTR_MentorAcceptExp.response
+	MTR_MentorTaskAward (3205) request:MTR_MentorTaskAward.request response:MTR_MentorTaskAward.response
+	MTR_MentorLeave (3206) request:MTR_MentorLeave.request response:MTR_MentorLeave.response
+	MTR_MentorRelease (3207) request:MTR_MentorRelease.request
+	MTR_GetInviterList (3208) request:MTR_GetInviterList.request response:MTR_GetInviterList.response
+	MAR_GetMarriageInfoShared (3220) request:MAR_GetMarriageInfoShared.request response:MAR_GetMarriageInfoShared.response
+	MAR_GetCanProposeList (3225) request:MAR_GetCanProposeList.request response:MAR_GetCanProposeList.response
+	MAR_Propose (3226) request:MAR_Propose.request response:MAR_Propose.response
+	MAR_AcceptProposal (3227) request:MAR_AcceptProposal.request response:MAR_AcceptProposal.response
+	MAR_Divorce (3228) request:MAR_Divorce.request response:MAR_Divorce.response
+	MAR_Beproposed (3229) request:MAR_Beproposed.request response:MAR_Beproposed.response
+	MAR_RemindEvent (3230) request:MAR_RemindEvent.request response:MAR_RemindEvent.response
+	MAR_ReqBless (3231) request:MAR_ReqBless.request
+	MAR_OneKeyPropose (3232) request:MAR_OneKeyPropose.request
+	MAR_ApplyOneKeyProposal (3233) request:MAR_ApplyOneKeyProposal.request
+	FBK_GetFirstBudokaiInfo (3251) request:FBK_GetFirstBudokaiInfo.request response:FBK_GetFirstBudokaiInfo.response
+	FBK_Challenge (3252) request:FBK_Challenge.request response:FBK_Challenge.response
+	FBK_PlayBattleVideo (3254) request:FBK_PlayBattleVideo.request response:FBK_PlayBattleVideo.response
+	CHT_GetRumors (3261) request:CHT_GetRumors.request response:CHT_GetRumors.response
+	CHT_GetHrefData (3262) request:CHT_GetHrefData.request response:CHT_GetHrefData.response
+	C_ErrorRst (4001) request:(null) response:C_ErrorRst.response
+	SC_EnterScene (4002) request:SC_EnterScene.request response:SC_EnterScene.response
+	SC_CharEnter (4003) request:(null) response:SC_CharEnter.response
+	SC_CharLeave (4004) request:(null) response:SC_CharLeave.response
+	SC_CharDataUpdate (4005) request:(null) response:SC_CharDataUpdate.response
+	SC_CharDressUpdate (4006) request:(null) response:SC_CharDressUpdate.response
+	SC_CHANGE (4007) request:SC_CHANGE.request response:SC_CHANGE.response
+	SC_LeaveScene (4008) request:SC_LeaveScene.request
+	SC_EnterSpecial (4009) request:SC_EnterSpecial.request
+	SC_GetRank (4010) request:SC_GetRank.request response:SC_GetRank.response
+	SC_PlayerInScene (4011) request:SC_PlayerInScene.request response:SC_PlayerInScene.response
+	SC_Revive (4012) request:SC_Revive.request response:SC_Revive.response
+	SC_ClickMob (4013) request:SC_ClickMob.request response:SC_ClickMob.response
+	SC_GatherDone (4014) request:SC_GatherDone.request response:SC_GatherDone.response
+	SC_Sync (4015) request:SC_Sync.request response:SC_Sync.response
+	SC_SpecialChange (4016) request:SC_SpecialChange.request
+	SC_SelfMobRevive (4017) request:(null) response:SC_SelfMobRevive.response
+	SC_ActNotice (4018) request:SC_ActNotice.request response:SC_ActNotice.response
+	SC_GetPvpData (4019) request:SC_GetPvpData.request response:SC_GetPvpData.response
+	SC_RefPvpData (4020) request:(null) response:SC_RefPvpData.response
+	SC_BuyBatTimes (4021) request:SC_BuyBatTimes.request
+	SC_SearchPvpData (4022) request:SC_SearchPvpData.request
+	SC_UpTitle (4023) request:SC_UpTitle.request
+	SC_ActBulletScreen (4024) request:SC_ActBulletScreen.request response:SC_ActBulletScreen.response
+	SC_GetNewRank (4025) request:SC_GetNewRank.request response:SC_GetNewRank.response
+	SC_BuyLife (4026) request:SC_BuyLife.request
+	SC_BuyGW (4027) request:SC_BuyGW.request
+	SC_ES_SELFMOBS (4028) request:SC_ES_SELFMOBS.request response:SC_ES_SELFMOBS.response
+	SC_ES_STAYMOBS (4029) request:SC_ES_STAYMOBS.request response:SC_ES_STAYMOBS.response
+	SC_ES_NEXTWAVES (4030) request:SC_ES_NEXTWAVES.request response:SC_ES_NEXTWAVES.response
+	SC_ES_REMAIN (4031) request:SC_ES_REMAIN.request response:SC_ES_REMAIN.response
+	C_SyncDataFromCross (4050) request:C_SyncDataFromCross.request response:C_SyncDataFromCross.response
+	C_CharPropShow (4051) request:C_CharPropShow.request response:C_CharPropShow.response
+	C_ChangeHegel (4052) request:C_ChangeHegel.request response:C_ChangeHegel.response
+	C_ExitHegel (4053) request:C_ExitHegel.request response:C_ExitHegel.response
+	C_CharLevelUpdate (4054) request:C_CharLevelUpdate.request response:C_CharLevelUpdate.response
+	C_CharChangeUpdate (4056) request:(null) response:C_CharChangeUpdate.response
+	C_CharModuleOpen (4057) request:C_CharModuleOpen.request response:C_CharModuleOpen.response
+	C_SyncDataFromHegelToWorld (4058) request:C_SyncDataFromHegelToWorld.request
+	C_SyncDressFromHegelToWorld (4059) request:C_SyncDressFromHegelToWorld.request
+	C_GetOfflineRwd (4060) request:C_GetOfflineRwd.request response:C_GetOfflineRwd.response
+	C_SyncDataFromWorld (4061) request:C_SyncDataFromWorld.request
+	C_RefActScore (4062) request:(null) response:C_RefActScore.response
+	C_ACTIVESKIN (4063) request:C_ACTIVESKIN.request response:C_ACTIVESKIN.response
+	C_SHOWSKIN (4064) request:C_SHOWSKIN.request response:C_SHOWSKIN.response
+	C_CHECKSKIN (4065) request:C_CHECKSKIN.request
+	C_SyncGuildSucFromHegel (4066) request:C_SyncGuildSucFromHegel.request
+	C_SyncMoneyFromWorld (4067) request:C_SyncMoneyFromWorld.request
+	C_SyncMoneyFromHegelToWorld (4068) request:C_SyncMoneyFromHegelToWorld.request
+	C_SHOW_ACTIVESKIN (4069) request:(null) response:C_SHOW_ACTIVESKIN.response
+	C_ZeroRefresh (4070) request:C_ZeroRefresh.request
+	C_GetVipRwd (4071) request:C_GetVipRwd.request response:C_GetVipRwd.response
+	C_RefCurTime (4072) request:C_RefCurTime.request response:C_RefCurTime.response
+	C_ComposeItem (4073) request:C_ComposeItem.request response:C_ComposeItem.response
+	NS_GetStepAward (4074) request:NS_GetStepAward.request
+	C_GetGuildBossLast (4075) request:C_GetGuildBossLast.request response:C_GetGuildBossLast.response
+	SC_GetSelfData (4076) request:SC_GetSelfData.request response:SC_GetSelfData.response
+	SC_RespCharBag (4077) request:(null) response:SC_RespCharBag.response
+	C_RankMoBai (4078) request:C_RankMoBai.request response:C_RankMoBai.response
+	C_ChangeNameFromWorld (4079) request:C_ChangeNameFromWorld.request response:C_ChangeNameFromWorld.response
+	C_SyncCharDataFromWorld (4080) request:C_SyncCharDataFromWorld.request
+	C_GetCharData (4082) request:C_GetCharData.request response:C_GetCharData.response
+	C_GetStartRwd (4083) request:C_GetStartRwd.request
+	C_DoFreeTry (4084) request:C_DoFreeTry.request
+	C_ActGodRing (4085) request:C_ActGodRing.request response:C_ActGodRing.response
+	C_CheckGodRing (4086) request:C_CheckGodRing.request response:C_CheckGodRing.response
+	C_ActStarTreasure (4087) request:C_ActStarTreasure.request response:C_ActStarTreasure.response
+	SC_NoLife (4088) request:(null) response:SC_NoLife.response
+	C_OpenModule (4089) request:(null) response:C_OpenModule.response
+	C_GetSplitData (4090) request:C_GetSplitData.request response:C_GetSplitData.response
+	C_GetBatCompareDt (4091) request:C_GetBatCompareDt.request response:C_GetBatCompareDt.response
+	C_RefPvpPropScore (4092) request:C_RefPvpPropScore.request response:C_RefPvpPropScore.response
+	C_SyncIntDatasFromHegelToWorld (4093) request:C_SyncIntDatasFromHegelToWorld.request
+	ST_TeamControl (4200) request:ST_TeamControl.request response:ST_TeamControl.response
+	ST_GetTeamList (4201) request:ST_GetTeamList.request response:ST_GetTeamList.response
+	ST_GetSelfTeam (4203) request:ST_GetSelfTeam.request response:ST_GetSelfTeam.response
+	RP_openRedPackToHegel (4341) request:RP_openRedPackToHegel.request
+	RP_sendRedPackToWorld (4342) request:RP_sendRedPackToWorld.request
+	RP_onGetRedPack (4343) request:(null) response:RP_onGetRedPack.response
+	RP_openRedPackRainToHegel (4344) request:RP_openRedPackRainToHegel.request
+	RP_onGetRedPackRain (4345) request:(null) response:RP_onGetRedPackRain.response
+	EQU_AutoEquip (4402) request:EQU_AutoEquip.request response:EQU_AutoEquip.response
+	EQU_RecyleEqu (4403) request:EQU_RecyleEqu.request response:EQU_RecyleEqu.response
+	EQU_DECOMPOSE (4404) request:EQU_DECOMPOSE.request response:EQU_DECOMPOSE.response
+	EQU_ADDBAGNUM (4405) request:EQU_ADDBAGNUM.request response:EQU_ADDBAGNUM.response
+	EQU_SetAutoRecycle (4406) request:EQU_SetAutoRecycle.request response:EQU_SetAutoRecycle.response
+	EQU_QuickExchangeEqu (4407) request:EQU_QuickExchangeEqu.request
+	QUEST_COMPLTEE (4451) request:QUEST_COMPLTEE.request response:QUEST_COMPLTEE.response
+	QUEST_UP_MESSAGER (4452) request:QUEST_UP_MESSAGER.request response:QUEST_UP_MESSAGER.response
+	GOD_AwakeEquip (4501) request:GOD_AwakeEquip.request
+	GOD_Operate (4502) request:GOD_Operate.request response:GOD_Operate.response
+	GROWSYS_UpSysLv (4551) request:GROWSYS_UpSysLv.request response:GROWSYS_UpSysLv.response
+	SKILL_AUTOSKILL (4561) request:SKILL_AUTOSKILL.request response:SKILL_AUTOSKILL.response
+	SKILL_MOVEUP (4562) request:SKILL_MOVEUP.request response:SKILL_MOVEUP.response
+	PROMPT_MESSAGE (4571) request:PROMPT_MESSAGE.request response:PROMPT_MESSAGE.response
+	SHOP_BUY (4581) request:SHOP_BUY.request response:SHOP_BUY.response
+	SHOP_REF_ITEMS (4582) request:SHOP_REF_ITEMS.request response:SHOP_REF_ITEMS.response
+	SHOP_REF_BUY (4583) request:SHOP_REF_BUY.request
+	PAR_ACTIVATE (4611) request:PAR_ACTIVATE.request response:PAR_ACTIVATE.response
+	PAR_ADVANCED (4612) request:PAR_ADVANCED.request response:PAR_ADVANCED.response
+	PAR_OUT_BATTLE (4613) request:PAR_OUT_BATTLE.request response:PAR_OUT_BATTLE.response
+	PAR_UP_STAR (4614) request:PAR_UP_STAR.request response:PAR_UP_STAR.response
+	PAR_JXACT (4616) request:PAR_JXACT.request response:PAR_JXACT.response
+	PAR_SysncSkill (4617) request:(null) response:PAR_SysncSkill.response
+	PAR_JXStarUp (4618) request:PAR_JXStarUp.request response:PAR_JXStarUp.response
+	PET_ACTIVATE (4621) request:PET_ACTIVATE.request response:PET_ACTIVATE.response
+	PET_LEVELUP (4622) request:PET_LEVELUP.request response:PET_LEVELUP.response
+	PET_SET_BATTLE (4623) request:PET_SET_BATTLE.request response:PET_SET_BATTLE.response
+	PET_StarUp (4624) request:PET_StarUp.request response:PET_StarUp.response
+	PET_DoTalentUp (4625) request:PET_DoTalentUp.request response:PET_DoTalentUp.response
+	PET_BAPTIZE (4627) request:PET_BAPTIZE.request response:PET_BAPTIZE.response
+	PET_SKILLCHANGE (4628) request:PET_SKILLCHANGE.request response:PET_SKILLCHANGE.response
+	PET_CATCH (4629) request:PET_CATCH.request response:PET_CATCH.response
+	PET_CHANGENAME (4630) request:PET_CHANGENAME.request response:PET_CHANGENAME.response
+	PET_SysncSkill (4631) request:(null) response:PET_SysncSkill.response
+	PET_BAPTIZENEW (4632) request:PET_BAPTIZENEW.request response:PET_BAPTIZENEW.response
+	PET_SKILLCHANGENEW (4633) request:PET_SKILLCHANGENEW.request response:PET_SKILLCHANGENEW.response
+	PET_Combine (4634) request:PET_Combine.request response:PET_Combine.response
+	AR_GET_ARENA (4643) request:AR_GET_ARENA.request response:AR_GET_ARENA.response
+	AR_BuyBatTimes (4644) request:AR_BuyBatTimes.request
+	AR_ExtractEnemyFromWorld (4650) request:AR_ExtractEnemyFromWorld.request
+	AR_ExtractEnemyToHegel (4651) request:AR_ExtractEnemyToHegel.request
+	AR_GetRankListFromWorld (4652) request:AR_GetRankListFromWorld.request
+	AR_BattleResultFromHegel (4654) request:AR_BattleResultFromHegel.request
+	AR_ReqEnemyDtFromWorld (4655) request:AR_ReqEnemyDtFromWorld.request
+	AR_StartBattleArena_Robot (4656) request:AR_StartBattleArena_Robot.request
+	AR_StartBattleArena_Real (4657) request:AR_StartBattleArena_Real.request
+	AR_DoRecord (4658) request:AR_DoRecord.request
+	AR_DoRwd (4659) request:AR_DoRwd.request
+	PER_BossData (4671) request:PER_BossData.request response:PER_BossData.response
+	FB_DailyFBData (4691) request:FB_DailyFBData.request response:FB_DailyFBData.response
+	FB_FightStarReward (4692) request:FB_FightStarReward.request response:FB_FightStarReward.response
+	FB_FightOneKeyMoppingUp (4693) request:FB_FightOneKeyMoppingUp.request response:FB_FightOneKeyMoppingUp.response
+	FB_MountainAuto (4694) request:FB_MountainAuto.request response:FB_MountainAuto.response
+	FB_MountainReward (4695) request:FB_MountainReward.request response:FB_MountainReward.response
+	FB_StarRewardAll (4696) request:FB_StarRewardAll.request response:FB_StarRewardAll.response
+	FB_HhsjAuto (4697) request:FB_HhsjAuto.request response:FB_HhsjAuto.response
+	GU_UpGuildSkill (4711) request:GU_UpGuildSkill.request response:GU_UpGuildSkill.response
+	GU_GuildBenison (4712) request:GU_GuildBenison.request response:GU_GuildBenison.response
+	GU_GetBenisonDtFromHegel (4713) request:GU_GetBenisonDtFromHegel.request response:GU_GetBenisonDtFromHegel.response
+	GU_GetGuildBenison (4714) request:GU_GetGuildBenison.request response:GU_GetGuildBenison.response
+	GU_GuildBenisonReward (4715) request:GU_GuildBenisonReward.request response:GU_GuildBenisonReward.response
+	GU_GetBenisonRewardFromHegel (4716) request:GU_GetBenisonRewardFromHegel.request response:GU_GetBenisonRewardFromHegel.response
+	GU_GetBenisonRewardFromWorld (4717) request:GU_GetBenisonRewardFromWorld.request response:GU_GetBenisonRewardFromWorld.response
+	GU_GuildQuestRing (4718) request:GU_GuildQuestRing.request response:GU_GuildQuestRing.response
+	GU_GuildQuestRingEnd (4719) request:GU_GuildQuestRingEnd.request response:GU_GuildQuestRingEnd.response
+	GU_SyncGuildsLevelToHegel (4720) request:GU_SyncGuildsLevelToHegel.request response:GU_SyncGuildsLevelToHegel.response
+	GU_GetGuildPerData (4721) request:GU_GetGuildPerData.request response:GU_GetGuildPerData.response
+	GU_ClentGetGuildLevel (4722) request:GU_ClentGetGuildLevel.request response:GU_ClentGetGuildLevel.response
+	GU_GuildQuestRingStart (4723) request:GU_GuildQuestRingStart.request
+	GU_GetShouhuPointReward (4724) request:GU_GetShouhuPointReward.request response:GU_GetShouhuPointReward.response
+	GU_UpdateGuildName (4725) request:GU_UpdateGuildName.request response:GU_UpdateGuildName.response
+	GU_GuildJuanXian (4726) request:GU_GuildJuanXian.request response:GU_GuildJuanXian.response
+	GMAP_UpQuest (4727) request:(null) response:GMAP_UpQuest.response
+	GMAP_GetAward (4728) request:GMAP_GetAward.request
+	GMAP_AutoDone (4729) request:GMAP_AutoDone.request
+	GMAP_Reset (4730) request:GMAP_Reset.request
+	GMAP_ChangeState (4731) request:(null) response:GMAP_ChangeState.response
+	GU_ActGuidGift (4732) request:GU_ActGuidGift.request
+	GU_ReceiveGuidGift (4733) request:GU_ReceiveGuidGift.request
+	GU_AddGuildActRecord (4734) request:GU_AddGuildActRecord.request
+	GU_AddGuildMRecord (4735) request:GU_AddGuildMRecord.request response:GU_AddGuildMRecord.response
+	GU_GetGFbSimpleRank (4736) request:GU_GetGFbSimpleRank.request response:GU_GetGFbSimpleRank.response
+	GU_BuyFbTime (4737) request:GU_BuyFbTime.request response:GU_BuyFbTime.response
+	GU_GetGFbTotalRank (4738) request:GU_GetGFbTotalRank.request response:GU_GetGFbTotalRank.response
+	GU_SysMyGuildFb (4739) request:GU_SysMyGuildFb.request response:GU_SysMyGuildFb.response
+	GU_UpMyGuildGw (4740) request:GU_UpMyGuildGw.request response:GU_UpMyGuildGw.response
+	BAT_DispatchProp (5000) request:BAT_DispatchProp.request response:BAT_DispatchProp.response
+	BAT_BattleEnd (5001) request:BAT_BattleEnd.request response:BAT_BattleEnd.response
+	BAT_BattleWalk (5002) request:BAT_BattleWalk.request response:BAT_BattleWalk.response
+	BAT_BattleBoss (5003) request:BAT_BattleBoss.request response:BAT_BattleBoss.response
+	BAT_STAGE_REWARD (5004) request:BAT_STAGE_REWARD.request response:BAT_STAGE_REWARD.response
+	BAT_BattleBoss_Per (5005) request:BAT_BattleBoss_Per.request response:BAT_BattleBoss_Per.response
+	BAT_BattleArena (5006) request:BAT_BattleArena.request response:BAT_BattleArena.response
+	BAT_BattleEndAward (5007) request:BAT_BattleEndAward.request response:BAT_BattleEndAward.response
+	BAT_BattleBoss_FB (5008) request:BAT_BattleBoss_FB.request response:BAT_BattleBoss_FB.response
+	BAT_BattleFight_FB (5009) request:BAT_BattleFight_FB.request response:BAT_BattleFight_FB.response
+	BAT_BattleTrial_FB (5010) request:BAT_BattleTrial_FB.request response:BAT_BattleTrial_FB.response
+	BAT_BattleMountain_FB (5011) request:BAT_BattleMountain_FB.request response:BAT_BattleMountain_FB.response
+	BAT_BattleVipBoss (5012) request:BAT_BattleVipBoss.request response:BAT_BattleVipBoss.response
+	BAT_BattleSpecial (5013) request:BAT_BattleSpecial.request
+	BAT_BookeFight (5014) request:BAT_BookeFight.request response:BAT_BookeFight.response
+	BAT_BattlePvp (5015) request:BAT_BattlePvp.request
+	BAT_AfterBattle (5016) request:BAT_AfterBattle.request
+	BAT_GBTopBattle (5017) request:BAT_GBTopBattle.request
+	BAT_ResultPanel (5018) request:(null) response:BAT_ResultPanel.response
+	BAT_BattleEndAdd (5019) request:BAT_BattleEndAdd.request response:BAT_BattleEndAdd.response
+	BAT_DirectReward (5020) request:(null) response:BAT_DirectReward.response
+	BAT_reqAssist (5021) request:BAT_reqAssist.request
+	BAT_AssistBoss (5022) request:BAT_AssistBoss.request response:BAT_AssistBoss.response
+	BAT_AssistCallBack (5023) request:BAT_AssistCallBack.request
+	BAT_BattleByWorld (5024) request:BAT_BattleByWorld.request
+	BAT_BattleCLBS (5025) request:BAT_BattleCLBS.request
+	BAT_ResultPanelNew (5026) request:(null) response:BAT_ResultPanelNew.response
+	BAT_BattleHhsj_FB (5027) request:BAT_BattleHhsj_FB.request response:BAT_BattleHhsj_FB.response
+	GW_SKILLUPLV (5501) request:GW_SKILLUPLV.request response:GW_SKILLUPLV.response
+	GW_PROPUPLV (5502) request:GW_PROPUPLV.request response:GW_PROPUPLV.response
+	GW_SHOWPROP (5503) request:GW_SHOWPROP.request response:GW_SHOWPROP.response
+	GW_AUTOEQUIP (5504) request:GW_AUTOEQUIP.request
+	GW_UsePropDan (5505) request:GW_UsePropDan.request
+	LE_ActivePiece (5521) request:LE_ActivePiece.request response:LE_ActivePiece.response
+	LE_ActiveToNext (5522) request:LE_ActiveToNext.request
+	RUNE_AutoEquip (5526) request:RUNE_AutoEquip.request response:RUNE_AutoEquip.response
+	RUNE_AutoCompose (5527) request:RUNE_AutoCompose.request response:RUNE_AutoCompose.response
+	RUNE_OneKeyUp (5528) request:RUNE_OneKeyUp.request response:RUNE_OneKeyUp.response
+	SOULROOT_RANDOM (5531) request:SOULROOT_RANDOM.request response:SOULROOT_RANDOM.response
+	SOULROOT_COMPOSE (5532) request:SOULROOT_COMPOSE.request response:SOULROOT_COMPOSE.response
+	SOULROOT_CHANGE_LUCK (5533) request:SOULROOT_CHANGE_LUCK.request response:SOULROOT_CHANGE_LUCK.response
+	SOULROOT_LEVELUP (5534) request:SOULROOT_LEVELUP.request response:SOULROOT_LEVELUP.response
+	SOULROOT_BREAK (5535) request:SOULROOT_BREAK.request response:SOULROOT_BREAK.response
+	SOULROOT_AUTOEQUIP (5536) request:SOULROOT_AUTOEQUIP.request response:SOULROOT_AUTOEQUIP.response
+	SOULROOT_DATACHANGE (5537) request:(null) response:SOULROOT_DATACHANGE.response
+	ANALY_REFDATA (5541) request:(null) response:ANALY_REFDATA.response
+	OP_GetRwd (5551) request:OP_GetRwd.request
+	OP_BattleOpBoss (5552) request:OP_BattleOpBoss.request
+	OP_BuyFinance (5553) request:OP_BuyFinance.request
+	OP_GetWelfareTopList (5554) request:OP_GetWelfareTopList.request response:OP_GetWelfareTopList.response
+	OP_CommonRwd (5555) request:(null) response:OP_CommonRwd.response
+	OP_ActiveOp (5556) request:(null) response:OP_ActiveOp.response
+	HB_CommonOperate (5561) request:HB_CommonOperate.request response:HB_CommonOperate.response
+	OP_SelectSelfLottery (5566) request:OP_SelectSelfLottery.request response:OP_SelectSelfLottery.response
+	AC_GetAchieveRwd (5571) request:AC_GetAchieveRwd.request response:AC_GetAchieveRwd.response
+	AC_DoShare (5572) request:AC_DoShare.request response:AC_DoShare.response
+	AC_GetShareRwd (5573) request:AC_GetShareRwd.request
+	AC_GetAccRwd (5574) request:AC_GetAccRwd.request
+	DT_getRwd (5581) request:DT_getRwd.request response:DT_getRwd.response
+	DT_operateBoss (5582) request:DT_operateBoss.request response:DT_operateBoss.response
+	DC_operate (5591) request:DC_operate.request response:DC_operate.response
+	GP_Operate (5596) request:GP_Operate.request response:GP_Operate.response
+	GP_CheckType (5597) request:GP_CheckType.request
+	ITEM_AddItemList (5611) request:ITEM_AddItemList.request response:ITEM_AddItemList.response
+	ITEM_DelItemList (5612) request:ITEM_DelItemList.request response:ITEM_DelItemList.response
+	ITEM_UseItem (5613) request:ITEM_UseItem.request
+	ITEM_TAKEGIFT (5614) request:ITEM_TAKEGIFT.request
+	ITEM_Compound (5615) request:ITEM_Compound.request
+	ITEM_TAKEGIFT_ITEMS (5616) request:ITEM_TAKEGIFT_ITEMS.request
+	ITEM_UpItemList (5617) request:(null) response:ITEM_UpItemList.response
+	ITEM_Compounds (5618) request:ITEM_Compounds.request
+	ITEM_UseItems (5619) request:ITEM_UseItems.request
+	BatBoss_getAward (5621) request:BatBoss_getAward.request response:BatBoss_getAward.response
+	FABAO_Make (5630) request:FABAO_Make.request response:FABAO_Make.response
+	FABAO_EquipOn (5631) request:FABAO_EquipOn.request
+	FABAO_Break (5632) request:FABAO_Break.request
+	FABAO_LevelUp (5633) request:FABAO_LevelUp.request response:FABAO_LevelUp.response
+	FABAO_Lock (5634) request:FABAO_Lock.request
+	FABAO_MakeOneKey (5635) request:FABAO_MakeOneKey.request response:FABAO_MakeOneKey.response
+	XN_ActiveXuanNv (5641) request:(null) response:XN_ActiveXuanNv.response
+	XN_LevelUp (5642) request:XN_LevelUp.request response:XN_LevelUp.response
+	XN_ActiveFaQi (5643) request:(null) response:XN_ActiveFaQi.response
+	XN_FaQiBaptize (5644) request:XN_FaQiBaptize.request response:XN_FaQiBaptize.response
+	XN_FaQiPropChange (5645) request:XN_FaQiPropChange.request response:XN_FaQiPropChange.response
+	TTM_ActiveTotem (5656) request:TTM_ActiveTotem.request response:TTM_ActiveTotem.response
+	TTM_UpTotem (5657) request:TTM_UpTotem.request response:TTM_UpTotem.response
+	TTM_TpTotem (5658) request:TTM_TpTotem.request response:TTM_TpTotem.response
+	TTM_UpZlTotem (5659) request:TTM_UpZlTotem.request response:TTM_UpZlTotem.response
+	TTM_UpZQTotem (5660) request:TTM_UpZQTotem.request response:TTM_UpZQTotem.response
+	TTM_TpZQTotem (5661) request:TTM_TpZQTotem.request response:TTM_TpZQTotem.response
+	TTM_TotemOn (5662) request:TTM_TotemOn.request response:TTM_TotemOn.response
+	TTM_TotemOpen (5663) request:TTM_TotemOpen.request response:TTM_TotemOpen.response
+	SGOD_OpenModule (5666) request:(null) response:SGOD_OpenModule.response
+	SGOD_Active (5667) request:SGOD_Active.request response:SGOD_Active.response
+	SGOD_UpLevel (5668) request:SGOD_UpLevel.request response:SGOD_UpLevel.response
+	SGOD_SetBattle (5669) request:SGOD_SetBattle.request response:SGOD_SetBattle.response
+	SGOD_TpLevel (5670) request:SGOD_TpLevel.request response:SGOD_TpLevel.response
+	SGOD_UpWeaponLv (5671) request:SGOD_UpWeaponLv.request response:SGOD_UpWeaponLv.response
+	SGOD_UpTfLv (5672) request:SGOD_UpTfLv.request response:SGOD_UpTfLv.response
+	SGOD_TpTfLv (5674) request:SGOD_TpTfLv.request response:SGOD_TpTfLv.response
+	SGOD_UpTmLv (5675) request:SGOD_UpTmLv.request response:SGOD_UpTmLv.response
+	SGOD_UpELv (5676) request:SGOD_UpELv.request response:SGOD_UpELv.response
+	SGOD_TpEJx (5677) request:SGOD_TpEJx.request response:SGOD_TpEJx.response
+	SGOD_UpAllELv (5678) request:SGOD_UpAllELv.request response:SGOD_UpAllELv.response
+	SGOD_UpSS (5679) request:SGOD_UpSS.request response:SGOD_UpSS.response
+	HJ_ActiveHj (5691) request:(null) response:HJ_ActiveHj.response
+	HJ_ActiveGroup (5692) request:HJ_ActiveGroup.request response:HJ_ActiveGroup.response
+	RM_CreateRoom (5800) request:RM_CreateRoom.request response:RM_CreateRoom.response
+	RM_JoinRoom (5801) request:RM_JoinRoom.request
+	RM_AutoJoin (5802) request:RM_AutoJoin.request
+	RM_QuickAtt (5803) request:RM_QuickAtt.request
+	RM_OpenBox (5804) request:RM_OpenBox.request
+	GB_GetSecNum (5815) request:GB_GetSecNum.request response:GB_GetSecNum.response
+	GB_GetTopData (5816) request:GB_GetTopData.request response:GB_GetTopData.response
+	GB_TopProtect (5817) request:GB_TopProtect.request response:GB_TopProtect.response
+	FG_UP (5831) request:FG_UP.request response:FG_UP.response
+	MAR_SendGift (5851) request:MAR_SendGift.request response:MAR_SendGift.response
+	MAR_SendFlower (5852) request:MAR_SendFlower.request response:MAR_SendFlower.response
+	MAR_HouseRenovation (5853) request:MAR_HouseRenovation.request response:MAR_HouseRenovation.response
+	MAR_HouseUpgrade (5854) request:MAR_HouseUpgrade.request response:MAR_HouseUpgrade.response
+	MAR_GetMarriageInfoSingle (5855) request:MAR_GetMarriageInfoSingle.request response:MAR_GetMarriageInfoSingle.response
+	CC_GetCityInfo (5870) request:CC_GetCityInfo.request response:CC_GetCityInfo.response
+	CC_LeaveCity (5872) request:CC_LeaveCity.request
+	CC_OccupyCity (5873) request:(null) response:CC_OccupyCity.response
+	KW_GetKingWarInfo (5880) request:KW_GetKingWarInfo.request response:KW_GetKingWarInfo.response
+	KW_MATCH (5881) request:KW_MATCH.request response:KW_MATCH.response
+	KW_Worship (5882) request:KW_Worship.request response:KW_Worship.response
+	KW_BuyMatchTimes (5883) request:KW_BuyMatchTimes.request response:KW_BuyMatchTimes.response
+	KW_GetRankList (5884) request:KW_GetRankList.request response:KW_GetRankList.response
+	KW_GetLastRankList (5885) request:KW_GetLastRankList.request response:KW_GetLastRankList.response
+	KW_GetWorshipAward (5886) request:KW_GetWorshipAward.request response:KW_GetWorshipAward.response
+	FBK_Bet (5900) request:FBK_Bet.request response:FBK_Bet.response
+	FBK_BeKill (5901) request:(null) response:FBK_BeKill.response
+	AUC_UpdateData (5910) request:(null) response:AUC_UpdateData.response
+	AUC_AddData (5911) request:AUC_AddData.request
+	AUC_Bidding (5912) request:AUC_Bidding.request response:AUC_Bidding.response
+	RW_RobHegel (5930) request:RW_RobHegel.request
+	RW_GetRwInfoHegel (5931) request:RW_GetRwInfoHegel.request response:RW_GetRwInfoHegel.response
+	RW_InSlotHegel (5932) request:RW_InSlotHegel.request
+	RW_GetRwRankHegel (5933) request:RW_GetRwRankHegel.request response:RW_GetRwRankHegel.response
+	RW_ClearRwBatCDHegel (5934) request:RW_ClearRwBatCDHegel.request response:RW_ClearRwBatCDHegel.response
+	RW_GetRwLogHegel (5935) request:RW_GetRwLogHegel.request response:RW_GetRwLogHegel.response
+	RW_GetPointHegel (5936) request:RW_GetPointHegel.request response:RW_GetPointHegel.response
+	RW_SendGWEventHegel (5937) request:RW_SendGWEventHegel.request response:RW_SendGWEventHegel.response
+	RW_AddBatTimeHegel (5938) request:RW_AddBatTimeHegel.request response:RW_AddBatTimeHegel.response
+	CSA_CommonOperate (5976) request:CSA_CommonOperate.request response:CSA_CommonOperate.response
+	PETCSA_CommonOperate (5978) request:PETCSA_CommonOperate.request response:PETCSA_CommonOperate.response
+	AFT_Act (5981) request:AFT_Act.request response:AFT_Act.response
+	AFT_LevelUp (5982) request:AFT_LevelUp.request response:AFT_LevelUp.response
+	AFT_JL (5983) request:AFT_JL.request response:AFT_JL.response
+	AFT_QlLevelUp (5984) request:AFT_QlLevelUp.request response:AFT_QlLevelUp.response
+	AFT_QlTp (5985) request:AFT_QlTp.request response:AFT_QlTp.response
+	AFT_JJLevelUp (5986) request:AFT_JJLevelUp.request response:AFT_JJLevelUp.response
+	AFT_JJTp (5987) request:AFT_JJTp.request response:AFT_JJTp.response
+	AFT_ClLevelUp (5988) request:AFT_ClLevelUp.request response:AFT_ClLevelUp.response
+	AFT_ClTp (5989) request:AFT_ClTp.request response:AFT_ClTp.response
+	HM_BAPTIZE (6011) request:HM_BAPTIZE.request response:HM_BAPTIZE.response
+	HM_CHANGE (6012) request:HM_CHANGE.request response:HM_CHANGE.response
+	HM_Active (6013) request:(null) response:HM_Active.response
+	ZLX_RobHegel (6041) request:ZLX_RobHegel.request
+	ZLX_GetInfo (6042) request:ZLX_GetInfo.request response:ZLX_GetInfo.response
+	ZLX_GetRwRank (6043) request:ZLX_GetRwRank.request response:ZLX_GetRwRank.response
+	ZLX_GetRwLog (6044) request:ZLX_GetRwLog.request response:ZLX_GetRwLog.response
+	ZLX_GetPoint (6045) request:ZLX_GetPoint.request response:ZLX_GetPoint.response
+	ZLX_AddBatTimeHegel (6046) request:ZLX_AddBatTimeHegel.request response:ZLX_AddBatTimeHegel.response
+	ZLX_GetCostTimeAward (6047) request:ZLX_GetCostTimeAward.request response:ZLX_GetCostTimeAward.response
+	GE_On (6066) request:GE_On.request response:GE_On.response
+	AC_getRwd (10001) request:AC_getRwd.request response:AC_getRwd.response
+	AC_getBackRwd (10002) request:AC_getBackRwd.request
+	AC_oneKeyCom (10003) request:AC_oneKeyCom.request
+	SF_GetAwardFromWorld (10021) request:SF_GetAwardFromWorld.request
+	SDK_Sign (12500) request:SDK_Sign.request response:SDK_Sign.response
+	CHT_ChatSendNew (12600) request:CHT_ChatSendNew.request response:CHT_ChatSendNew.response
+	CHT_SendToWorld (12601) request:CHT_SendToWorld.request response:CHT_SendToWorld.response
+	CHT_Show (12602) request:CHT_Show.request response:CHT_Show.response
+	CHT_GetPrivateChatList (12603) request:CHT_GetPrivateChatList.request response:CHT_GetPrivateChatList.response
+	CHT_SendRumorToWorld (12604) request:CHT_SendRumorToWorld.request
+	C_GetExchange (12651) request:C_GetExchange.request response:C_GetExchange.response
+	C_UpCareer (12652) request:C_UpCareer.request response:C_UpCareer.response
+	C_SaveOpActLog (12653) request:C_SaveOpActLog.request response:C_SaveOpActLog.response
+	C_DoLoginMd5Check (12654) request:C_DoLoginMd5Check.request response:C_DoLoginMd5Check.response
+	C_CreReset (12655) request:C_CreReset.request response:C_CreReset.response
+	C_GsChange (12656) request:C_GsChange.request response:C_GsChange.response
+	C_CHALLENGEGIFT (12657) request:C_CHALLENGEGIFT.request response:C_CHALLENGEGIFT.response
+	C_DOREFRESH (12658) request:(null) response:C_DOREFRESH.response
+	VRH_UpdateMetaList (13190) request:VRH_UpdateMetaList.request response:VRH_UpdateMetaList.response
+	VRH_DoMd5Check (13191) request:VRH_DoMd5Check.request response:VRH_DoMd5Check.response
+	PVESB_BattleStartToHegel (13201) request:PVESB_BattleStartToHegel.request response:PVESB_BattleStartToHegel.response
+	PVESB_ReqRebornBossToHegel (13202) request:PVESB_ReqRebornBossToHegel.request response:PVESB_ReqRebornBossToHegel.response
+	PVESB_RefShareBossUserDt (13203) request:(null) response:PVESB_RefShareBossUserDt.response
+	PVESB_BuyChallengeBossTimes (13204) request:PVESB_BuyChallengeBossTimes.request
+	PVESB_SynRankList (13205) request:PVESB_SynRankList.request
+	AC_WildBattleToHegel (13217) request:AC_WildBattleToHegel.request response:AC_WildBattleToHegel.response
+	BAT_SynBattleResultToWorld (13251) request:BAT_SynBattleResultToWorld.request
+	OP_SyncLotteryRecordToWorld (13300) request:OP_SyncLotteryRecordToWorld.request
+	OP_SyncRankRecordToWorld (13301) request:OP_SyncRankRecordToWorld.request
+	OP_SyncWelfareTopListToHegel (13302) request:OP_SyncWelfareTopListToHegel.request
+	OP_SyncCommonRecToWorld (13303) request:OP_SyncCommonRecToWorld.request
+	RL_SyncRecordToWorld (13310) request:RL_SyncRecordToWorld.request
+	ANALY_DoRecord (13320) request:ANALY_DoRecord.request
+	C_CharLogined (20001) request:C_CharLogined.request
+	C_CharMapChanged (20002) request:C_CharMapChanged.request
+	VRH_UpdateMetaListWH (20003) request:VRH_UpdateMetaListWH.request
+	PAY_GetPayHistoryWH (20004) request:PAY_GetPayHistoryWH.request
+	RM_UpdateRoom (20005) request:(null) response:RM_UpdateRoom.response
+	RM_RoomEnd (20006) request:(null) response:RM_RoomEnd.response
+	C_CharPartDataUpdate (20007) request:(null) response:C_CharPartDataUpdate.response
+	RM_FirstCross (20008) request:(null) response:RM_FirstCross.response
+	InitServerTime (20010) request:InitServerTime.request
+	C_SyncDataToCrossWorld (20038) request:C_SyncDataToCrossWorld.request
+	SC_OnChangeScene (20039) request:SC_OnChangeScene.request
+	SC_ChangeScene (20040) request:SC_ChangeScene.request response:SC_ChangeScene.response
+	SC_SwitchHegelCross (20041) request:SC_SwitchHegelCross.request
+	SC_SwitchHegel (20042) request:SC_SwitchHegel.request
+	SC_SpecialBack (20043) request:SC_SpecialBack.request
+	SC_MobInScene (20044) request:SC_MobInScene.request response:SC_MobInScene.response
+	SC_MobDie (20045) request:(null) response:SC_MobDie.response
+	SC_BroadHp (20046) request:(null) response:SC_BroadHp.response
+	SC_SetRevive (20047) request:(null) response:SC_SetRevive.response
+	SC_RemoveMob (20048) request:(null) response:SC_RemoveMob.response
+	NS_BeLeader (20049) request:(null) response:NS_BeLeader.response
+	C_LogRecFromWorld (20050) request:C_LogRecFromWorld.request
+	SC_NextWave (20051) request:(null) response:SC_NextWave.response
+	SC_NextBossHp (20052) request:(null) response:SC_NextBossHp.response
+	MAR_CommonCall (21000) request:MAR_CommonCall.request response:MAR_CommonCall.response
+	MAR_HegelCallWorld (21001) request:MAR_HegelCallWorld.request response:MAR_HegelCallWorld.response
+	MAR_ProposeStep1FromWorld (21002) request:MAR_ProposeStep1FromWorld.request response:MAR_ProposeStep1FromWorld.response
+	MAR_SyncMarriageDataFromWorld (21003) request:MAR_SyncMarriageDataFromWorld.request response:MAR_SyncMarriageDataFromWorld.response
+	MAR_ProposeStep3FromWorld (21004) request:MAR_ProposeStep3FromWorld.request
+	FBK_NoticeUploadPlayers (21010) request:FBK_NoticeUploadPlayers.request response:FBK_NoticeUploadPlayers.response
+	FBK_UploadPlayersBattleData (21011) request:FBK_UploadPlayersBattleData.request response:FBK_UploadPlayersBattleData.response
+	FBK_SycMatchesInfo (21012) request:FBK_SycMatchesInfo.request response:FBK_SycMatchesInfo.response
+	FBK_GetSingleBudokai (21013) request:FBK_GetSingleBudokai.request response:FBK_GetSingleBudokai.response
+	FBK_BetCross (21014) request:FBK_BetCross.request response:FBK_BetCross.response
+	FBK_ChallengeHegel (21015) request:FBK_ChallengeHegel.request response:FBK_ChallengeHegel.response
+	FBK_ChallengeCross (21016) request:FBK_ChallengeCross.request response:FBK_ChallengeCross.response
+	FBK_ChallengeBattleEnd (21017) request:FBK_ChallengeBattleEnd.request response:FBK_ChallengeBattleEnd.response
+	FBK_BATTLE_PVP (21018) request:FBK_BATTLE_PVP.request response:FBK_BATTLE_PVP.response
+	FBK_BATTLE_PVP_GROUP (21019) request:FBK_BATTLE_PVP_GROUP.request response:FBK_BATTLE_PVP_GROUP.response
+	FBK_SEND_AWARD (21020) request:FBK_SEND_AWARD.request response:FBK_SEND_AWARD.response
+	FBK_SycBudokaiToHegel (21022) request:FBK_SycBudokaiToHegel.request response:FBK_SycBudokaiToHegel.response
+	KW_NoticeUploadPlayers (21029) request:KW_NoticeUploadPlayers.request response:KW_NoticeUploadPlayers.response
+	KW_UploadPlayersCross (21030) request:KW_UploadPlayersCross.request response:KW_UploadPlayersCross.response
+	KW_MatchCross (21031) request:KW_MatchCross.request response:KW_MatchCross.response
+	KW_BattleEndCross (21032) request:KW_BattleEndCross.request response:KW_BattleEndCross.response
+	KW_WorshipCross (21033) request:KW_WorshipCross.request response:KW_WorshipCross.response
+	KW_GetRankListCross (21034) request:KW_GetRankListCross.request response:KW_GetRankListCross.response
+	KW_GetLastRankListCross (21035) request:KW_GetLastRankListCross.request response:KW_GetLastRankListCross.response
+	KW_AwardSend (21036) request:KW_AwardSend.request response:KW_AwardSend.response
+	KW_GetLastRankListCrossFromWorld (21037) request:KW_GetLastRankListCrossFromWorld.request response:KW_GetLastRankListCrossFromWorld.response
+	MTR_CommonCall (21050) request:MTR_CommonCall.request response:MTR_CommonCall.response
+	ST_CommonCall (21051) request:ST_CommonCall.request response:ST_CommonCall.response
+	CSA_UpLoadCharList (21071) request:CSA_UpLoadCharList.request response:CSA_UpLoadCharList.response
+	CSA_UploadPlayer (21072) request:CSA_UploadPlayer.request response:CSA_UploadPlayer.response
+	CSA_CommonOperateFromHegel (21073) request:CSA_CommonOperateFromHegel.request response:CSA_CommonOperateFromHegel.response
+	CSA_SendAward (21074) request:CSA_SendAward.request
+	PETCSA_UploadPlayer (21075) request:PETCSA_UploadPlayer.request response:PETCSA_UploadPlayer.response
+	PETCSA_CommonOperateFromHegel (21076) request:PETCSA_CommonOperateFromHegel.request response:PETCSA_CommonOperateFromHegel.response
+	PETCSA_SendAward (21077) request:PETCSA_SendAward.request
+	PS_SendEventCorss (21100) request:(null) response:PS_SendEventCorss.response
+	CLD_GetMarriageChild (21110) request:CLD_GetMarriageChild.request response:CLD_GetMarriageChild.response
+	GU_batFbFromWorldToHegel (21120) request:GU_batFbFromWorldToHegel.request response:GU_batFbFromWorldToHegel.response
+	GU_GetFbGawardFromWorldToHegel (21121) request:GU_GetFbGawardFromWorldToHegel.request
+	GU_SysResultFromWorldToCross (21122) request:GU_SysResultFromWorldToCross.request
+	GU_SendGuildFbWeekAwardCross (21123) request:(null) response:GU_SendGuildFbWeekAwardCross.response
+	GU_GetGFbSimpleRankCross (21124) request:GU_GetGFbSimpleRankCross.request response:GU_GetGFbSimpleRankCross.response
+	GU_GetGFbTotalRankCross (21125) request:GU_GetGFbTotalRankCross.request response:GU_GetGFbTotalRankCross.response
+	GU_SysGFStateCross (21126) request:GU_SysGFStateCross.request response:GU_SysGFStateCross.response
+	GU_GetFbTawardFromWorldToHegel (21127) request:GU_GetFbTawardFromWorldToHegel.request
+	WorldToHegel (29000) request:WorldToHegel.request
+	WD_SetWorldData (29001) request:WD_SetWorldData.request response:WD_SetWorldData.response
+	AC_Broadcast (29002) request:AC_Broadcast.request
+	AC_SyncState (29003) request:AC_SyncState.request
+	RPC_ToCrossHegel (29004) request:RPC_ToCrossHegel.request
+	RPC_ToBaseWorld (29005) request:RPC_ToBaseWorld.request
+	C_OpLog (29006) request:C_OpLog.request
+	WD_SetWorldDataSelf (29007) request:WD_SetWorldDataSelf.request response:WD_SetWorldDataSelf.response
+	WD_NoticeCommon (29008) request:WD_NoticeCommon.request
+	RW_RobCross (29050) request:RW_RobCross.request response:RW_RobCross.response
+	RW_BattleEndCross (29051) request:RW_BattleEndCross.request response:RW_BattleEndCross.response
+	RW_InSlotCross (29052) request:RW_InSlotCross.request
+	RW_GetRwInfoCross (29053) request:RW_GetRwInfoCross.request response:RW_GetRwInfoCross.response
+	RW_GetRwRankCross (29054) request:RW_GetRwRankCross.request response:RW_GetRwRankCross.response
+	RW_ClearRwBatCDCross (29055) request:RW_ClearRwBatCDCross.request response:RW_ClearRwBatCDCross.response
+	RW_ClearRwBatCDCrossSuccess (29056) request:RW_ClearRwBatCDCrossSuccess.request
+	RW_GetRwLogCross (29057) request:RW_GetRwLogCross.request response:RW_GetRwLogCross.response
+	RW_SendDayAwardCross (29058) request:(null) response:RW_SendDayAwardCross.response
+	RW_SendWeekAwardCross (29059) request:(null) response:RW_SendWeekAwardCross.response
+	RW_GetPointCross (29060) request:RW_GetPointCross.request response:RW_GetPointCross.response
+	RW_SendGWEventCross (29061) request:RW_SendGWEventCross.request response:RW_SendGWEventCross.response
+	RW_AddBatTimeCross (29062) request:RW_AddBatTimeCross.request response:RW_AddBatTimeCross.response
+	RW_AddBatTimeCrossSuccess (29063) request:RW_AddBatTimeCrossSuccess.request
+	ZLX_RobCross (29065) request:ZLX_RobCross.request response:ZLX_RobCross.response
+	ZLX_BattleEndCross (29066) request:ZLX_BattleEndCross.request response:ZLX_BattleEndCross.response
+	ZLX_SendDayAwardCross (29067) request:(null) response:ZLX_SendDayAwardCross.response
+	ZLX_SendWeekAwardCross (29068) request:(null) response:ZLX_SendWeekAwardCross.response
+	ZLX_SendGWEventCross (29069) request:ZLX_SendGWEventCross.request response:ZLX_SendGWEventCross.response
+	ZLX_AddBatTimeCross (29070) request:ZLX_AddBatTimeCross.request response:ZLX_AddBatTimeCross.response
+	ZLX_AddBatTimeCrossSuccess (29071) request:ZLX_AddBatTimeCrossSuccess.request
+	ZLX_GetCostTimeAwardCross (29072) request:ZLX_GetCostTimeAwardCross.request response:ZLX_GetCostTimeAwardCross.response
+	ZLX_SendPlayerPtCross (29073) request:ZLX_SendPlayerPtCross.request response:ZLX_SendPlayerPtCross.response
+	GB_RefreshItem (29080) request:GB_RefreshItem.request
+	OmAuth (30001) request:OmAuth.request response:OmAuth.response
+	OmQueryChar (30002) request:OmQueryChar.request response:OmQueryChar.response
+	OmBackMsg (30004) request:(null) response:OmBackMsg.response
+	OmHotfix (30005) request:OmHotfix.request
+	OmChangePlayer (30006) request:OmChangePlayer.request response:OmChangePlayer.response
+	OmAddItem (30007) request:OmAddItem.request response:OmAddItem.response
+	OmQueryCharBySnameSuid (30008) request:OmQueryCharBySnameSuid.request response:OmQueryCharBySnameSuid.response
+	OmServerState (30009) request:OmServerState.request
+	OmPay (30010) request:OmPay.request
+	OmBlock (30011) request:OmBlock.request response:OmBlock.response
+	OmUserBan (30012) request:OmUserBan.request response:OmUserBan.response
+	OmAllAidBan (30013) request:OmAllAidBan.request response:OmAllAidBan.response
+	OmModifyOpenTime (30014) request:OmModifyOpenTime.request
+	OmUnBan (30015) request:OmUnBan.request response:OmUnBan.response
+	OmNotice (30016) request:OmNotice.request response:OmNotice.response
+	OmSendMail (30017) request:OmSendMail.request response:OmSendMail.response
+	OmQueryAnouncement (30020) request:OmQueryAnouncement.request response:OmQueryAnouncement.response
+	OmSaveAnouncement (30021) request:OmSaveAnouncement.request response:OmSaveAnouncement.response
+	OmReleaseAnouncement (30022) request:OmReleaseAnouncement.request response:OmReleaseAnouncement.response
+	OmQueryAnouncementById (30023) request:OmQueryAnouncementById.request response:OmQueryAnouncementById.response
+	OmKickClient (30197) request:OmKickClient.request response:OmKickClient.response
+	OmKickAllClient (30198) request:OmKickAllClient.request response:OmKickAllClient.response
+	OmUpatePayMetas (30211) request:OmUpatePayMetas.request response:OmUpatePayMetas.response
