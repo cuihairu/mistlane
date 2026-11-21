@@ -121,6 +121,7 @@ std::vector<std::pair<std::string, std::string>> config_flags(const std::filesys
         {"MAX_ROOM_SESSIONS","--max-room-sessions",0,0,0}, {"MAX_GROUP_SESSIONS","--max-group-sessions",0,0,0},
         {"MAX_SHARD_SESSIONS","--max-shard-sessions",0,0,0}, {"ROUTE_EPOCH","--route-epoch",0,0,0},
         {"CRASHPAD_HANDLER","--crashpad-handler",1,0,0}, {"CRASHPAD_DATABASE","--crashpad-database",1,0,0},
+        {"CRASHPAD_RETENTION","--crashpad-retention",0,0,0},
         {"ROOT","",0,0,1},
     };
     std::ifstream in(file);
@@ -265,6 +266,7 @@ int main(int argc, char** argv) {
                              "    --overload-ratio X (readiness gate, default 0.9) --ready-hysteresis N (default 3)\n"
                              "    upstreams take IP:PORT[:PROBE] so cross-routing gateways can check crossServer readiness\n"
                              "  --crashpad-handler FILE --crashpad-database DIR (optional; local dumps only)\n"
+                             "    --crashpad-retention N (keep N dumps, default 20; 0 disables pruning)\n"
                              "  cross routing/crossServer: --route-epoch N --max-room-sessions N\n"
                              "    --max-group-sessions N --max-shard-sessions N\n"
                              "  crossServer return sender: --data IP:PORT (home data MLD1 endpoint;\n"
@@ -310,6 +312,9 @@ int main(int argc, char** argv) {
             else if (key == "--ready-hysteresis") config.ready_hysteresis = number(value, 100000);
             else if (key == "--crashpad-handler") config.crashpad_handler = value;
             else if (key == "--crashpad-database") config.crashpad_database = value;
+            // 0 is the one deliberate exception to number(): it turns pruning off.
+            else if (key == "--crashpad-retention")
+                config.crashpad_retention = value == "0" ? 0u : number(value, 100000);
             else if (key == "--memory-budget-mib") config.memory_budget_mib = number(value, 100000);
             else if (key == "--max-room-sessions") config.max_room_sessions = number(value, 100000);
             else if (key == "--max-group-sessions") config.max_group_sessions = number(value, 100000);

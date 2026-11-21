@@ -111,9 +111,13 @@ if(BUILD_TESTING)
   add_test(NAME mistlane_sproto_dispatch COMMAND mistlane-sproto-probe dispatch
     "${CMAKE_CURRENT_BINARY_DIR}/sproto-fixture/avatar.sproto")
   if(EXISTS "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/tools/crashpad_handler")
+    # The suite filter runs every crashpad case, retention included.
     add_test(NAME mistlane_crashpad_startup COMMAND mistlane test --suite crashpad
       --crashpad-handler "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/tools/crashpad_handler")
-    set_tests_properties(mistlane_crashpad_startup PROPERTIES TIMEOUT 15)
+    set_tests_properties(mistlane_crashpad_startup PROPERTIES TIMEOUT 30)
+    add_test(NAME mistlane_crashpad_retention COMMAND mistlane test --case crashpad.retention
+      --crashpad-handler "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/tools/crashpad_handler")
+    set_tests_properties(mistlane_crashpad_retention PROPERTIES TIMEOUT 30)
   endif()
 endif()
 

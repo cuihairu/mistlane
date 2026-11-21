@@ -57,6 +57,7 @@ struct Config {
     bool probe_enabled = false;
     bool dashboard_enabled = false;
     std::string crashpad_handler, crashpad_database;
+    unsigned crashpad_retention = 20; // dumps kept (pruned oldest-first); 0 disables pruning
     std::string transport = "tcp";
     std::string certificate, private_key;
     std::vector<Listener> listeners; // the authoritative listener set, filled by the CLI

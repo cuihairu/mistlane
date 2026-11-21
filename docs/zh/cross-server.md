@@ -98,7 +98,7 @@ crossServer 不可用时关闭受影响会话，不自动转移或重放。其�
 |---|---|---|
 | Prometheus 指标 | 观测活动会话、准入拒绝、收发字节和延迟、Lua 回调/tick 耗时、事件循环定时器延迟，以及可用时的 RSS/CPU | 从私有 metrics 监听端口抓取；标签保持低基数（role/crossServer/result），不使用玩家或房间 ID。 |
 | 内部探测 | 报告进程响应性和就绪/容量状态 | 以 `--probe-listen` 提供 PROBE1 协议（见下节）。未就绪时拒绝新加入，但保留现有房间归属。 |
-| Crashpad | native 崩溃后保留本地 minidump | 启动独立 handler，使用有界本地数据库；默认不配置上传端点。每个构建归档对应符号。 |
+| Crashpad | native 崩溃后保留本地 minidump | 启动独立 handler，使用有界本地数据库：转储按最旧优先裁剪到 `--crashpad-retention N`（默认 20，0 表示关闭裁剪），因此启用后不会写满磁盘。默认不配置上传端点。每个构建归档对应符号。 |
 | Profiler | 把 CPU 和内存分配成本归因到代码路径 | 只用外部采样器作用于运行中的进程；不做进程内采样器：自我采样消耗的正是它要测量的 CPU 预算。见下方操作手册。 |
 
 ### 内部探测协议（PROBE1）
@@ -133,7 +133,7 @@ mistlane bot --url tcp://127.0.0.1:<cross-port> --join "MLC1 1 realm g bench" --
 
 `--join` 每条连接先执行一次 MLC1 握手并期待 `MLC1 OK 1`；不带它时 cross 节点会拒绝所有请求。bot 连接同样占用节点的准入配额（`--max-connections` 经内存预算封顶，启动日志打印），因此 `--clients` 要低于该上限，或先调高节点的 `--max-connections`。从同一次抓取读取 `mistlane_request_seconds`、`mistlane_messages_total`、`mistlane_event_loop_lag_seconds`、RSS 与准入拒绝数。只有场景脚本、房间布局、上游列表与压测器参数完全一致时数字才可比；否则只是噪声。
 
-当前可选 `/metrics` 端点导出就绪状态、活动会话、准入拒绝、Lua 回调耗时、RSS、按方向的收发消息数与字节数（`mistlane_messages_total`、`mistlane_payload_bytes_total`）、客户端请求耗时（`mistlane_request_seconds`）、上游错误与截止超时计数（`mistlane_upstream_errors_total`、`mistlane_upstream_timeouts_total`），以及事件循环 tick 调度延迟（`mistlane_event_loop_lag_seconds` 及运行期最大值）。`mistlane_ready` 与探测应答使用同一个滞回准入状态，`mistlane_admission_rejections_total` 同时统计连接上限与 cross 准入拒绝。全部指标只带 role 标签，桶边界固定。Crashpad 可显式启用，并将报告保存在关闭上传的本地数据库。崩溃转储保留限制、内存 profiler 评估和目标环境过载演练仍待补齐；CPU 采样路线已定，实测开销见 [profiler 工作流](./profiling)。不会因节点暂时未就绪就自动把有状态房间转移到别的 crossServer。这些诊断能提供过载证据，但仍需目标环境压测才能得出容量结论。
+当前可选 `/metrics` 端点导出就绪状态、活动会话、准入拒绝、Lua 回调耗时、RSS、按方向的收发消息数与字节数（`mistlane_messages_total`、`mistlane_payload_bytes_total`）、客户端请求耗时（`mistlane_request_seconds`）、上游错误与截止超时计数（`mistlane_upstream_errors_total`、`mistlane_upstream_timeouts_total`），以及事件循环 tick 调度延迟（`mistlane_event_loop_lag_seconds` 及运行期最大值）。`mistlane_ready` 与探测应答使用同一个滞回准入状态，`mistlane_admission_rejections_total` 同时统计连接上限与 cross 准入拒绝。全部指标只带 role 标签，桶边界固定。Crashpad 可显式启用，并将报告保存在关闭上传的本地数据库。转储按最旧优先裁剪到 `--crashpad-retention N`（默认 20，`0` 表示关闭裁剪），在启动时与运行期每分钟各执行一次，裁剪过程可由 `mistlane_crashpad_reports` 与 `mistlane_crashpad_reports_pruned_total` 观测；内存 profiler 评估与目标环境过载演练仍待补齐。CPU 采样路线已定，实测开销见 [profiler 工作流](./profiling)。不会因节点暂时未就绪就自动把有状态房间转移到别的 crossServer。这些诊断能提供过载证据，但仍需目标环境压测才能得出容量结论。
 
 
 角色转移、归属保存与地图加载边界见[玩家、场景与跨服模型](./player-scene-model.md)；已定的回传与唯一写入权设计见[跨服回传与唯一写入权协议](./cross-return-protocol.md)。

@@ -41,5 +41,51 @@ void crashpad_minidump(const fs::path& handler) {
     // The handler outlives the sample on purpose; do not leak it.
     if (group>0) ::kill(-group,SIGKILL);
 }
+// Uploads stay disabled, so nothing else ever drains the database: retention
+// must. Three dumps survive into a node started with a cap of two, and the
+// startup prune has to bring the directory back to two.
+void crashpad_retention(const fs::path& handler) {
+    require(fs::is_regular_file(handler),"provide --crashpad-handler FILE for the crashpad suite");
+    const auto sample=self().parent_path()/"mistlane-crash-sample";
+    require(fs::is_regular_file(sample),"build mistlane-crash-sample for the crashpad suite");
+    Context c; write(c.path("echo.lua"),echo);
+    const auto database=c.path("reports");
+    const auto dumps=[&] {
+        std::size_t count=0;
+        if (!fs::is_directory(database)) return count;
+        for (auto entry : fs::recursive_directory_iterator(database)) {
+            if (!entry.is_regular_file()) continue;
+            std::ifstream stream(entry.path(),std::ios::binary); char magic[4]{};
+            stream.read(magic,sizeof(magic));
+            if (std::string(magic,magic+sizeof(magic))=="MDMP"
+                && fs::file_size(entry.path())>4096) ++count;
+        }
+        return count;
+    };
+    for (int index=0; index<3; ++index) {
+        auto& victim=c.spawn({sample.string(),"--crashpad-handler",handler.string(),
+            "--crashpad-database",database.string()});
+        // The handler must outlive the sample to finish and complete the dump.
+        victim.reap_descendants(false);
+        const pid_t group=victim.group();
+        eventually([&] { return dumps()>static_cast<std::size_t>(index); },10s,
+            "crashpad database never received a minidump");
+        require(victim.wait()==128+SIGSEGV,"crash sample did not die from SIGSEGV");
+        // Let the handler finish writing the dump before the group kill; the prune
+        // sweep counts pending reports too, so its state does not gate this.
+        std::this_thread::sleep_for(200ms);
+        if (group>0) ::kill(-group,SIGKILL);
+    }
+    require(dumps()==3u,"expected three crash dumps, saw "+std::to_string(dumps()));
+    const auto listen=port();
+    auto& node=c.node("gameServer",listen,{"--script",c.path("echo.lua").string(),
+        "--crashpad-handler",handler.string(),"--crashpad-database",database.string(),
+        "--crashpad-retention","2"});
+    // The prune runs in the Diagnostics constructor, which finishes before the
+    // "ready" line the node helper waits for, so this is already settled.
+    require(dumps()<=2u,"retention cap did not prune dumps: "+std::to_string(dumps())+" remain");
+    equal(tcp(listen)->request("crashpad"),"crashpad");
+    node.signal(SIGTERM); require(node.wait()==0,"retention-enabled gameServer shutdown failed");
+}
 
 }

@@ -644,6 +644,9 @@ private:
                 catch (const std::exception& e) { std::cerr << "tick failed: " << e.what() << '\n'; }
             }
             diagnostics_->refresh_process_memory();
+            // Dumps arrive from crashes, not from ticks, so the sweep is a
+            // minute-granular modulo: zero per-tick cost, still bounded disk.
+            if (++tick_count_ % 600u == 0u) diagnostics_->prune_crashpad_reports();
             tick();
         });
     }
@@ -742,6 +745,7 @@ private:
     std::exception_ptr startup_error_;
     bool ready_ = false, admitting_ = true;
     unsigned over_ticks_ = 0, healthy_ticks_ = 0;
+    unsigned tick_count_ = 0;
     double last_lag_seconds_ = 0;
     bool stopping_ = false, web_mode_ = false;
 };

@@ -12,6 +12,7 @@
 #include <crashpad/client/crash_report_database.h>
 #include <crashpad/client/crashpad_client.h>
 #include <crashpad/client/settings.h>
+#include <crashpad/util/misc/metrics.h>
 
 #include <algorithm>
 #include <filesystem>
@@ -20,6 +21,7 @@
 #include <stdexcept>
 #include <cstdint>
 #include <unistd.h>
+#include <vector>
 
 namespace mistlane {
 Diagnostics::Diagnostics(const Config& config) {
@@ -45,6 +47,12 @@ Diagnostics::Diagnostics(const Config& config) {
             .Help("Resident memory reported by procfs.").Labels(labels).Register(*registry_).Add({});
         rejected_ = &prometheus::BuildCounter().Name("mistlane_admission_rejections_total")
             .Help("Sessions rejected by admission control.").Labels(labels).Register(*registry_).Add({});
+        crashpad_reports_ = &prometheus::BuildGauge().Name("mistlane_crashpad_reports")
+            .Help("Local crash dumps kept under the retention cap.")
+            .Labels(labels).Register(*registry_).Add({});
+        crashpad_pruned_ = &prometheus::BuildCounter().Name("mistlane_crashpad_reports_pruned_total")
+            .Help("Local crash dumps deleted to hold the retention cap.")
+            .Labels(labels).Register(*registry_).Add({});
         // The result set is a closed list of verdict words, so one family with
         // a result label stays low-cardinality.
         auto& record_family = prometheus::BuildCounter().Name("mistlane_record_results_total")
@@ -87,6 +95,7 @@ Diagnostics::Diagnostics(const Config& config) {
         exposer_->RegisterCollectable(registry_);
     }
 
+    retention_ = config.crashpad_retention;
     if (!config.crashpad_handler.empty()) {
         namespace fs = std::filesystem;
         const fs::path database_path(config.crashpad_database);
@@ -103,7 +112,46 @@ Diagnostics::Diagnostics(const Config& config) {
             base::FilePath(metrics_path.string()), "", {{"role", config.role}, {"product", "mistlane"}},
             {}, true, false);
         if (!started) throw std::runtime_error("cannot start Crashpad handler");
+        // A node restarting into an already over-cap database must not wait a
+        // full prune interval before it frees disk again.
+        prune_crashpad_reports();
     }
+}
+
+// Uploads stay disabled, so nothing else ever drains the Crashpad database:
+// without a cap it only grows on a long-lived node. This build's handler even
+// leaves uploads-disabled reports in pending instead of skipping them to
+// completed, so the prune set is every report on disk, not just the completed
+// ones. Pending reports are pushed through SkipReportUpload (the documented
+// way to mark a report finished under disabled uploads) before deletion so the
+// database state machine stays consistent; if the handler already moved one,
+// that call fails harmlessly and the delete still answers.
+void Diagnostics::prune_crashpad_reports() {
+    if (!crashpad_database_ || retention_ == 0) return;
+    struct sweep { time_t created; const crashpad::UUID* uuid; bool pending; };
+    const auto ok = crashpad::CrashReportDatabase::OperationStatus::kNoError;
+    std::vector<sweep> reports;
+    // The uuid pointers below index into these two vectors, so both must stay
+    // alive until the sweep finishes.
+    std::vector<crashpad::CrashReportDatabase::Report> pending, completed;
+    if (crashpad_database_->GetPendingReports(&pending) == ok)
+        for (const auto& report : pending) reports.push_back({report.creation_time, &report.uuid, true});
+    if (crashpad_database_->GetCompletedReports(&completed) == ok)
+        for (const auto& report : completed) reports.push_back({report.creation_time, &report.uuid, false});
+    if (crashpad_reports_) crashpad_reports_->Set(static_cast<double>(reports.size()));
+    if (reports.size() <= retention_) return;
+    std::stable_sort(reports.begin(), reports.end(),
+        [](const sweep& a, const sweep& b) { return a.created < b.created; });
+    const std::size_t excess = reports.size() - retention_;
+    std::size_t pruned = 0;
+    for (std::size_t i = 0; i < excess; ++i) {
+        if (reports[i].pending)
+            crashpad_database_->SkipReportUpload(*reports[i].uuid,
+                crashpad::Metrics::CrashSkippedReason::kUploadsDisabled);
+        if (crashpad_database_->DeleteReport(*reports[i].uuid) == ok) ++pruned;
+    }
+    if (crashpad_pruned_) crashpad_pruned_->Increment(pruned);
+    if (crashpad_reports_) crashpad_reports_->Set(static_cast<double>(reports.size() - pruned));
 }
 
 Diagnostics::~Diagnostics() = default;

@@ -50,10 +50,17 @@ public:
     void upstream_timeout();
     void observe_event_loop_lag(std::chrono::steady_clock::duration lag);
     void refresh_process_memory();
+    // Bounded local dumps: with uploads disabled nothing else ever drains the
+    // Crashpad database, so reports are deleted oldest-first until at most
+    // Config::crashpad_retention remain (pending ones are marked completed via
+    // SkipReportUpload before deletion). 0 disables pruning. Runs on the
+    // event-loop thread, from startup and once a minute from the node tick.
+    void prune_crashpad_reports();
 
 private:
     std::unique_ptr<crashpad::CrashpadClient> crashpad_client_;
     std::unique_ptr<crashpad::CrashReportDatabase> crashpad_database_;
+    unsigned retention_ = 20;
     std::shared_ptr<prometheus::Registry> registry_;
     std::unique_ptr<prometheus::Exposer> exposer_;
     prometheus::Gauge* ready_ = nullptr;
@@ -63,6 +70,8 @@ private:
     prometheus::Gauge* event_loop_lag_max_ = nullptr;
     prometheus::Gauge* process_rss_ = nullptr;
     prometheus::Counter* rejected_ = nullptr;
+    prometheus::Gauge* crashpad_reports_ = nullptr;
+    prometheus::Counter* crashpad_pruned_ = nullptr;
     std::map<std::string, prometheus::Counter*> record_results_;
     std::map<std::string, prometheus::Counter*> entity_results_;
     // Named script gauges; the family is created lazily on the first set so a

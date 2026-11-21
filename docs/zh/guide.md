@@ -201,7 +201,7 @@ EOF
 
 - 首个非空行必须是版本标记 `# mistlane-config 1`；缺失即拒绝，避免把任意 shell env 文件（包括缺少该标记的 `config/instances/*.env` 模板）悄悄当作配置。
 - 其余行为 `KEY=VALUE`。空行与 `#` 注释忽略，空值跳过，重复键报错，未知键以「文件:行号」拒绝。
-- 键为 CLI 选项的大写形式（`ROLE`、`ROUTING`、`LISTEN`、`TRANSPORT`、`SCRIPT`、`CONTRACT`、逗号分隔的 `UPSTREAMS`、`ROUTE_EPOCH`、`SERVICE_TOKEN`、`UPSTREAM_TOKEN`、`SERVICE_NAME`、`UPSTREAM_MULTIPLEX`、逗号分隔的 `LISTENERS`、`DATA`、`COORDINATOR`、`NAMESPACE`、`SCOPE`、`JOURNAL`、`CERT`、`KEY`、`REDIS`、`METRICS_LISTEN`、`PROBE_LISTEN`、`OVERLOAD_RATIO`、`READY_HYSTERESIS`、`MAX_CONNECTIONS`、`MEMORY_BUDGET_MIB`、`MAX_ROOM_SESSIONS`、`MAX_GROUP_SESSIONS`、`MAX_SHARD_SESSIONS`、`CRASHPAD_HANDLER`、`CRASHPAD_DATABASE`），另有 `ROOT`。
+- 键为 CLI 选项的大写形式（`ROLE`、`ROUTING`、`LISTEN`、`TRANSPORT`、`SCRIPT`、`CONTRACT`、逗号分隔的 `UPSTREAMS`、`ROUTE_EPOCH`、`SERVICE_TOKEN`、`UPSTREAM_TOKEN`、`SERVICE_NAME`、`UPSTREAM_MULTIPLEX`、逗号分隔的 `LISTENERS`、`DATA`、`COORDINATOR`、`NAMESPACE`、`SCOPE`、`JOURNAL`、`CERT`、`KEY`、`REDIS`、`METRICS_LISTEN`、`PROBE_LISTEN`、`OVERLOAD_RATIO`、`READY_HYSTERESIS`、`MAX_CONNECTIONS`、`MEMORY_BUDGET_MIB`、`MAX_ROOM_SESSIONS`、`MAX_GROUP_SESSIONS`、`MAX_SHARD_SESSIONS`、`CRASHPAD_HANDLER`、`CRASHPAD_DATABASE`、`CRASHPAD_RETENTION`），另有 `ROOT`。
 - 同一次运行的优先级：文件值 < 非空的 `MISTLANE_<KEY>` 环境变量 < `--config` 之后给出的显式参数。
 - `SCRIPT`、`CONTRACT`、`JOURNAL`、`CERT`、`KEY`、`CRASHPAD_HANDLER`、`CRASHPAD_DATABASE` 的相对路径按配置文件所在目录解析；设置 `ROOT` 时改按 `ROOT`（其本身相对配置文件所在目录）。这与 shell 启动器按项目根目录解析不同。要让生成的 `config/instances/*.env` 模板直接走 `--config`，需先在文件首行补版本标记并加 `ROOT=../..`，其 `SCRIPT`/`CERT` 路径才会像启动器一样解析。
 - 机密仍应放在部署方管理的环境（`MISTLANE_*` 或 systemd `LoadCredential=`），不提交到文件。
@@ -294,7 +294,7 @@ python3 tools/export.py
 
 可选 dump 管线的部署约定：
 
-- handler 与服务端放在同一文件系统并显式传入：`--crashpad-handler PREFIX/bin/crashpad_handler --crashpad-database /var/lib/mistlane/crashes`。数据库指向按保留策略定容的本地目录；上传保持关闭，数据不出机器。
+- handler 与服务端放在同一文件系统并显式传入：`--crashpad-handler PREFIX/bin/crashpad_handler --crashpad-database /var/lib/mistlane/crashes`。该本地目录按 `--crashpad-retention N`（默认 20）定容：节点在启动时与运行期每分钟把转储按最旧优先裁剪到上限，目录因此不会无限增长；`0` 表示关闭裁剪。上传保持关闭，数据不出机器。
 - Linux 崩溃抓取依赖 `ptrace`（handler 需要检查崩溃进程）。容器运行时必须允许它：Docker 默认 seccomp profile 在受支持的内核上放行 `ptrace`，但加固、无特权或自定义 AppArmor/seccomp profile 可能拒绝。`ptrace` 被拒时节点照常启动与服务，只是不会写 minidump——在该环境依赖 dump 前先用一次受控崩溃验证整条链路。
 - 仓库自带演练二进制：`mistlane-crash-sample`（与 `mistlane` 一起构建安装）用 `--crashpad-handler FILE --crashpad-database DIR` 接好同一套本地管线后主动解引用空指针。原生 `crashpad.minidump` 用例断言数据库落出带 `MDMP` 魔数的真实 minidump、样例进程因 `SIGSEGV` 退出。
 

@@ -80,6 +80,7 @@ void business_bot();
 void bots_smoke();
 void crashpad_startup(const fs::path&);
 void crashpad_minidump(const fs::path&);
+void crashpad_retention(const fs::path&);
 void redis_lua_api();
 void redis_tls();
 void mysql_pool();
@@ -202,6 +203,7 @@ int run_tests(int argc, char** argv) {
         {"bots.smoke","cli",test::bots_smoke},
         {"crashpad.startup","crashpad",[&] {test::crashpad_startup(handler);},true},
         {"crashpad.minidump","crashpad",[&] {test::crashpad_minidump(handler);},true},
+        {"crashpad.retention","crashpad",[&] {test::crashpad_retention(handler);},true},
         {"redis.lua","redis",test::redis_lua_api,true},
         {"redis.tls","redis",test::redis_tls,true},
         {"mysql.pool","mysql",test::mysql_pool,true},
