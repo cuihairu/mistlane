@@ -1,0 +1,66 @@
+{
+  "contract": "avatar-reconnect-cutover",
+  "version": "2026-11-22",
+  "subject": "Avatar disconnect/reconnect double-lane and daily cutover contract",
+  "oracle": "docs/avatar-lifecycle.md (PL-1); this refines PL-1's `suspended` into two explicit sub-states and adds the daily-cutover barrier events/hooks",
+  "suspended_sub_states": [
+    {
+      "state": "suspended-waiting",
+      "rule": "grace open, in-memory state retained, fast-lane eligible; reattach inside the grace window returns to active without a reload",
+      "exits": ["reattach (fast) -> active", "grace expired -> suspended-expiring"]
+    },
+    {
+      "state": "suspended-expiring",
+      "rule": "cleanup armed, only the slow lane remains, flush in progress; reattach is refused (AVATAR_SUSPENDED), the timeout cleanup chain runs",
+      "exits": ["flush durable -> reclaiming -> closed", "cleanup done -> closed"]
+    }
+  ],
+  "reconnect_double_lane": {
+    "fast_lane": {
+      "condition": "reattach within grace AND hosting generation still current AND no intervening writer AND in-memory state retained",
+      "result": "suspended-waiting -> active, no reload, no tombstone",
+      "catch_up": "if the durable cursor advanced while suspended (save/timer ran), catch up via PropertySync baseline + gapless deltas, or replay the ordered change journal (oplog), before the avatar resumes"
+    },
+    "slow_lane": {
+      "condition": "grace expired OR generation changed OR in-memory state lost",
+      "result": "suspended-waiting -> suspended-expiring -> reclaiming -> closed -> loading -> active (reload from durable record; generation advances only if a transfer intervened)",
+      "never": "a reconnect never resurrects a closed avatar; re-entry always goes through loading"
+    }
+  },
+  "three_reconnect_paths": [
+    {
+      "name": "fast_reattach",
+      "diagram": "docs/avatar-reconnect-cutover.md#1-fast-lane-reattach",
+      "steps": ["detect reconnect", "verdict: grace open + generation current + no intervening writer", "reattach auth (session identity + entry ticket)", "catch-up (snapshot+delta or oplog) if needed", "suspended-waiting -> active, no reload"]
+    },
+    {
+      "name": "grace_expired_reload",
+      "diagram": "docs/avatar-reconnect-cutover.md#2-slow-lane-reload",
+      "steps": ["grace expired", "suspended-expiring: flush final save durable", "timeout cleanup chain (leave broadcast, ref release, recycle bin, tombstone)", "closed -> loading -> active (reload from durable)"]
+    },
+    {
+      "name": "kick_on_relogin",
+      "diagram": "docs/avatar-reconnect-cutover.md#3-kick-on-relogin",
+      "steps": ["new session logs in while avatar active", "old session evicted (avatar_leave)", "old avatar -> suspended-waiting (or refused if mid-transfer)", "new session reattaches (fast lane); never two active writable avatars"]
+    }
+  ],
+  "daily_cutover": {
+    "trigger_surface": ["wall-clock day boundary", "configured schedule", "operator command", "maintenance window"],
+    "three_layer_touch_order": [
+      {"layer": 1, "name": "avatar", "detail": "per-avatar: freeze handlers/ticks, avatar_save (write barrier, durable ACK), onAvatarDailyReset(context), resume"},
+      {"layer": 2, "name": "scene", "detail": "per-instance: onDailyReset(context) for instance state, only after every avatar in the instance flushed"},
+      {"layer": 3, "name": "node", "detail": "node-level maintenance barrier release / daily tick, only after all avatars and instances flushed"}
+    ],
+    "touch_guarantee": "bottom-up: avatar layer before scene layer before node layer; each layer's write barrier completes before the next begins; within a layer, deterministic order by identity",
+    "write_barrier": "the flush (avatar_save durable ACK) is the barrier; a hook failure after the flush does not roll it back or re-dirty the flushed state",
+    "failure_compensation": [
+      {"interruption": "save fails at the avatar layer", "compensation": "retry within budget; barrier held; no partial cutover published; surface to operator"},
+      {"interruption": "hook fails at the avatar layer", "compensation": "logged; the flush is the barrier and already durable; the cutover proceeds (the hook is post-barrier)"},
+      {"interruption": "node-layer barrier not released", "compensation": "no layer advances; a partial cutover is never published; recovery resumes the barrier"}
+    ],
+    "hook_signatures": {
+      "onAvatarDailyReset": "(context) -> nothing; called per active/visiting avatar after its avatar_save flushed durable; failure is logged and the flush stands",
+      "onDailyReset": "(context) -> nothing; called per scene instance after every avatar in it flushed; failure is logged and retried within the barrier"
+    }
+  }
+}

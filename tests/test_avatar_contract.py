@@ -15,6 +15,7 @@ import sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CONTRACT = os.path.join(ROOT, "contracts", "avatar-spawn-destroy.json")
+RECONNECT = os.path.join(ROOT, "contracts", "avatar-reconnect-cutover.json")
 
 PIN = {
     "identity": ["origin_realm", "character_id", "hosting_generation"],
@@ -83,10 +84,45 @@ def main():
     for rule in ("half-publish", "tombstone an unacknowledged change", "free the object mid-obligation"):
         check(any(rule in n for n in never), f"mid_life_reclaim.never missing rule: {rule}")
 
-    print(f"OK: avatar spawn/destroy contract pinned: "
-          f"{len(PIN['destroy_obligations'])} obligations, "
-          f"{len(PIN['four_paths'])} paths, "
-          f"{len(PIN['compensation_interruptions'])} compensations")
+    # --- Reconnect / daily-cutover contract ---------------------------------
+    rc = json.load(open(RECONNECT, encoding="utf-8"))
+    check(rc["contract"] == "avatar-reconnect-cutover", f"rc contract={rc['contract']}")
+
+    # Suspended sub-states, exact names.
+    subs = [s["state"] for s in rc["suspended_sub_states"]]
+    check(subs == ["suspended-waiting", "suspended-expiring"], f"sub_states={subs}")
+
+    # Double-lane verdicts carry the four fast-lane conditions and the slow-lane reload.
+    fast = rc["reconnect_double_lane"]["fast_lane"]["condition"]
+    for cond in ("grace", "generation still current", "no intervening writer", "in-memory state retained"):
+        check(cond in fast, f"fast-lane condition missing: {cond}")
+    slow = rc["reconnect_double_lane"]["slow_lane"]["result"]
+    check("loading -> active" in slow, "slow lane does not reload through loading")
+
+    # Three reconnect paths, named exactly, each with steps.
+    rpaths = [p["name"] for p in rc["three_reconnect_paths"]]
+    check(rpaths == ["fast_reattach", "grace_expired_reload", "kick_on_relogin"], f"reconnect paths={rpaths}")
+    for p in rc["three_reconnect_paths"]:
+        check(p["diagram"] and p["steps"], f"path {p['name']} missing diagram reference or steps")
+
+    # Daily cutover: trigger surface non-empty, three layers in bottom-up order.
+    check(rc["daily_cutover"]["trigger_surface"], "daily cutover has no trigger surface")
+    layers = [l["layer"] for l in rc["daily_cutover"]["three_layer_touch_order"]]
+    check(layers == [1, 2, 3], f"layer order={layers}")
+    names = [l["name"] for l in rc["daily_cutover"]["three_layer_touch_order"]]
+    check(names == ["avatar", "scene", "node"], f"layer names={names}")
+
+    # Hook signatures present and failure compensation covers the three classes.
+    for hook in ("onAvatarDailyReset", "onDailyReset"):
+        check(hook in rc["daily_cutover"]["hook_signatures"], f"missing hook {hook}")
+    for want in ("save fails", "hook fails", "barrier not released"):
+        check(any(want in x["interruption"] for x in rc["daily_cutover"]["failure_compensation"]),
+              f"cutover compensation missing: {want}")
+
+    print(f"OK: avatar contracts pinned: "
+          f"{len(PIN['destroy_obligations'])} obligations / {len(PIN['four_paths'])} paths, "
+          f"{len(subs)} suspended sub-states / {len(rpaths)} reconnect paths, "
+          f"{len(names)} cutover layers / {len(rc['daily_cutover']['hook_signatures'])} cutover hooks")
     return 0
 
 
