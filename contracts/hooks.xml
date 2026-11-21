@@ -1,0 +1,63 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- SPDX-License-Identifier: Apache-2.0
+
+  Single hook registry, seed scope. Authored contract in the same XML idiom as
+  contracts/lifecycle.xml: explicit names, closed vocabularies, unknown
+  elements or attribute values are errors, never defaults. The hook-registry
+  slice expands this file with every hook from the avatar lifecycle, reconnect
+  and daily-reset, and spawn/destroy pages and adds the validator that refuses
+  an orphan hook (a hook naming no legal oracle state or edge).
+
+  Attributes (closed vocabularies):
+    level     : process | object
+    states    : the avatar-lifecycle oracle states in which the hook is legal,
+                space separated, drawn from the closed set
+                loading active suspended reconnecting transferring visiting
+                closing closed purged; empty only for a process-level hook
+    thread    : asio (one VM per node, serial on the Asio thread; hooks never
+                interleave, so reentrancy is excluded by construction)
+    failure   : refuse | logged | abort
+                refuse - the caller's request is refused, nothing published
+                logged - the failure is logged, the original consequence stands
+                abort  - the operation this hook belongs to is aborted
+    returns   : the result shape the script must produce
+    reentrant : always no (serial VM; a message handler cannot trigger a
+                lifecycle transition synchronously)
+
+  Scope here: the cross-server lifecycle's event surface. Nothing else is
+  registered yet; an absent hook is "not yet registered", not "does not exist".
+-->
+<HookRegistry version="1" scope="cross-visit">
+  <!-- Admission decision, above the existing hard quotas. A refusal here is a
+       typed MLC1 ERR and the participant never becomes a writer. -->
+  <Hook name="onCrossVisitAdmit" level="object" states="loading" thread="asio" failure="refuse" returns="verdict" reentrant="no">
+    <Timing>Once per join attempt, after the quota gates, before lease acquisition.</Timing>
+    <Signature><Arg name="context" kind="participant-context"/></Signature>
+    <Returns kind="verdict" values="allow|queue|reject"/>
+    <Error>An error answers reject(INVALID); never a silent allow.</Error>
+  </Hook>
+  <!-- The visit becomes active: lease taken and snapshot materialized. -->
+  <Hook name="onCrossVisitStart" level="object" states="visiting" thread="asio" failure="abort" returns="none" reentrant="no">
+    <Timing>After onCrossVisitAdmit allowed, and after avatar_transfer_in at this host.</Timing>
+    <Signature><Arg name="context" kind="participant-context"/></Signature>
+    <Error>Aborts the visit: the lease is relinquished and the join is refused.</Error>
+  </Hook>
+  <!-- Every started visit ends exactly once. -->
+  <Hook name="onCrossVisitEnd" level="object" states="transferring closed purged" thread="asio" failure="logged" returns="none" reentrant="no">
+    <Timing>Exactly once per started visit, after the final flush decision.</Timing>
+    <Signature><Arg name="context" kind="participant-context"/><Arg name="outcome" kind="released|abandoned"/></Signature>
+    <Error>Logged; never blocks the release.</Error>
+  </Hook>
+  <!-- This host took a lease: no durable write under it may precede this hook. -->
+  <Hook name="onLeaseTaken" level="object" states="visiting" thread="asio" failure="abort" returns="none" reentrant="no">
+    <Timing>Before any durable write under the new generation, and before onCrossVisitStart.</Timing>
+    <Signature><Arg name="context" kind="participant-context"/><Arg name="generation" kind="uint32"/></Signature>
+    <Error>Relinquishes the lease and aborts the visit.</Error>
+  </Hook>
+  <!-- This host's lease was taken over or revoked: it stops writing either way. -->
+  <Hook name="onLeaseLost" level="object" states="visiting closed purged" thread="asio" failure="logged" returns="none" reentrant="no">
+    <Timing>After the last durable write under the old generation, and before any onLeaseTaken for a newer generation at this host.</Timing>
+    <Signature><Arg name="context" kind="participant-context"/><Arg name="generation" kind="uint32"/></Signature>
+    <Error>Logged; the loss stands.</Error>
+  </Hook>
+</HookRegistry>
