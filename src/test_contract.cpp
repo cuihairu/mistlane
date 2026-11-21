@@ -1612,12 +1612,37 @@ void entity_runtime_properties() {
             pushed[0].second.deltas[0].property_id == 1,
             "a write on the second entity leaked to the first");
 
+    // The script-facing view: a Lua proxy handed the runtime's owning handle
+    // reads and writes the live store, and the proxy's anchor keeps that store
+    // valid past the destroy that detaches it from its channel.
+    {
+        lua_State* L = luaL_newstate();
+        require(L != nullptr, "cannot open a probe lua state");
+        luaL_openlibs(L);
+        const auto owned = runtime.property_store(target);
+        require(owned && owned.get() == store,
+                "property_store did not hand out the owning handle");
+        require(push_entity_properties(L, owned), "the anchored property binding refused");
+        lua_setglobal(L, "props");
+        require(luaL_dostring(L, "assert(props.level == 5 and props.gold == 200)") == LUA_OK,
+                "the proxy did not read the store's live values");
+        require(luaL_dostring(L, "props.gold = 42") == LUA_OK, "the proxy refused a valid write");
+        require(std::get<std::int64_t>(store->get("gold")->data) == 42,
+                "a Lua write did not reach the runtime store");
+        require(luaL_dostring(L, "assert(props.gold == 42)") == LUA_OK,
+                "the proxy lost its write after a round-trip");
+        // The proxy outlives the destroy: the store is anchored, not dangling.
+        require(runtime.destroy(target), "the anchored spawn did not destroy");
+        require(luaL_dostring(L, "assert(props.gold == 42)") == LUA_OK,
+                "a proxy did not survive its entity's destroy");
+        require(!runtime.flush_properties(target), "a detached store still reported a stream");
+        lua_close(L);
+    }
+
     // Destroy tears the stream down and the address no longer accepts observers.
-    require(runtime.destroy(target), "the declared spawn did not destroy");
     require(runtime.properties(target) == nullptr, "destroy kept the store");
     require(!runtime.observe(target, "owner2", true), "observe on a destroyed entity was accepted");
-    require(!runtime.flush_properties(target), "flush on a destroyed entity reported a stream");
-    std::cout << "entity.runtime.properties: per-entity store, audience filter, push sink [PASS]\n";
+    std::cout << "entity.runtime.properties: per-entity store, audience filter, push sink, lua proxy [PASS]\n";
 }
 void entity_perf() {
     const EntityContract contract(R"(<Contracts><Types>

@@ -93,6 +93,13 @@ public:
    const auto it = stores_.find(address(ref));
    return it == stores_.end() ? nullptr : it->second.get();
  }
+ // The owning handle to the same store, for callers that must keep a handle
+ // valid past this runtime's destroy (a Lua property proxy anchors on it, so a
+ // script-held proxy outlives its entity instead of dangling).
+ std::shared_ptr<PropertyStore> property_store(const EntityTarget& ref) {
+   const auto it = stores_.find(address(ref));
+   return it == stores_.end() ? nullptr : it->second;
+ }
  // Observer admission and departure on one entity's property stream: visibility
  // is per property (the channel filters SERVER_ONLY and, for guests, OWN_CLIENT).
  bool observe(const EntityTarget& ref, const std::string& id, bool is_owner) {

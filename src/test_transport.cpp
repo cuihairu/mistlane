@@ -13,7 +13,11 @@ void entity_transport() {
         "<Returns><Field name=\"ok\" id=\"0\" type=\"UINT16\"/></Returns></Method>"
         "<Method name=\"missing\" id=\"6\" mode=\"request\" caller=\"server\">"
         "<Returns><Field name=\"ok\" id=\"0\" type=\"UINT16\"/></Returns></Method>"
-        "</ServerMethods></Entity></Contracts>";
+        "</ServerMethods>"
+        "<Properties>"
+        "<level id=\"1\" type=\"UINT16\" flags=\"OWN_CLIENT\" default=\"1\"/>"
+        "<gold id=\"2\" type=\"INT32\" flags=\"ALL_CLIENTS\" default=\"0\"/>"
+        "</Properties></Entity></Contracts>";
     Context c;
     const auto def = c.path("avatar.def");
     write(def, xml);
@@ -21,7 +25,18 @@ void entity_transport() {
     write(script, R"(local service = {}
 function service.message(payload)
     if payload == "spawn" then
-        return mistlane.entity.spawn(1, 1, 3, 42) and "spawned" or "duplicate"
+        local spawned = mistlane.entity.spawn(1, 1, 3, 42)
+        -- The script-facing property view of the spawned address: a live proxy
+        -- over the runtime store (reads and writes round-trip), and nil for an
+        -- address this node never spawned.
+        local props = mistlane.entity.properties(1, 1, 3, 42)
+        assert(props ~= nil, "spawned entity has no property view")
+        assert(props.level == 1, "the property default is not visible to the script")
+        props.gold = 9
+        assert(props.gold == 9, "a property write did not round-trip")
+        assert(mistlane.entity.properties(1, 1, 3, 43) == nil,
+            "an unspawned address returned a property view")
+        return spawned and "spawned" or "duplicate"
     end
     if payload == "badspawn" then
         -- Negative and overflowing ids must be refused, not wrapped to a

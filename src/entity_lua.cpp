@@ -22,6 +22,10 @@ struct ProxyRef {
     TreePath path;
     bool is_array = false;
     bool flat = false;
+    // Keeps the runtime-owned store alive for as long as a script proxy holds
+    // it, even after the entity is destroyed (the store then detaches from its
+    // channel, so further writes journal but never flush).
+    std::shared_ptr<PropertyStore> anchor;
 };
 
 ProxyRef* proxy(lua_State* state, int index) {
@@ -170,9 +174,11 @@ int array_append(lua_State* state);
 int array_remove(lua_State* state);
 
 // A fresh userdata over one location; the metatable is already registered.
-void push_node(lua_State* state, PropertyStore* store, std::string property, TreePath path, bool is_array) {
+// The parent's anchor threads through, so any nested proxy outlives a store
+// its entity no longer owns.
+void push_node(lua_State* state, ProxyRef& parent, std::string property, TreePath path, bool is_array) {
     auto* ref = static_cast<ProxyRef*>(lua_newuserdatauv(state, sizeof(ProxyRef), 0));
-    new (ref) ProxyRef{store, std::move(property), std::move(path), is_array, false};
+    new (ref) ProxyRef{parent.store, std::move(property), std::move(path), is_array, false, parent.anchor};
     luaL_getmetatable(state, kProxyMeta);
     lua_setmetatable(state, -2);
 }
@@ -189,8 +195,8 @@ int index_root(lua_State* state, ProxyRef& ref) {
         return luaL_error(state, "property '%s' is not a declared property on entity %s",
                           name.c_str(), ref.store->entity().name.c_str());
     // Containers come back as live proxies, not copied tables.
-    if (prop->type == "ARRAY") { push_node(state, ref.store, name, {}, true); return 1; }
-    if (!scalar_type(prop->type)) { push_node(state, ref.store, name, {}, false); return 1; }
+    if (prop->type == "ARRAY") { push_node(state, ref, name, {}, true); return 1; }
+    if (!scalar_type(prop->type)) { push_node(state, ref, name, {}, false); return 1; }
     push_entity_value(state, *ref.store->get(name));
     return 1;
 }
@@ -213,7 +219,7 @@ int index_array(lua_State* state, ProxyRef& ref) {
     if (!value) { lua_pushnil(state); return 1; }  // absent cells read as nil, like tables
     const auto shape = ref.store->shape_at(ref.property, path);
     if (shape.ok && !scalar_type(shape.type))
-        push_node(state, ref.store, ref.property, std::move(path), shape.type == "ARRAY");
+        push_node(state, ref, ref.property, std::move(path), shape.type == "ARRAY");
     else
         push_entity_value(state, *value);
     return 1;
@@ -224,8 +230,8 @@ int index_struct(lua_State* state, ProxyRef& ref) {
     path.push_back(TreeStep{false, key_of(state), 0});
     const auto shape = ref.store->shape_at(ref.property, path);
     if (!shape.ok) return luaL_error(state, "%s", ref.store->error().c_str());
-    if (shape.type == "ARRAY") { push_node(state, ref.store, ref.property, std::move(path), true); return 1; }
-    if (!scalar_type(shape.type)) { push_node(state, ref.store, ref.property, std::move(path), false); return 1; }
+    if (shape.type == "ARRAY") { push_node(state, ref, ref.property, std::move(path), true); return 1; }
+    if (!scalar_type(shape.type)) { push_node(state, ref, ref.property, std::move(path), false); return 1; }
     const auto* value = ref.store->get_path(ref.property, path);
     if (!value) return luaL_error(state, "%s", ref.store->error().c_str());
     push_entity_value(state, *value);
@@ -414,9 +420,11 @@ int gc_proxy(lua_State* state) {
     if (auto* ref = static_cast<ProxyRef*>(lua_touserdata(state, 1))) ref->~ProxyRef();
     return 0;
 }
-}
 
-bool push_entity_properties(lua_State* state, PropertyStore* store) {
+// The shared root construction: refusal check, metatable registration, and the
+// root userdata. anchor is empty for a borrowed store, or a shared_ptr for a
+// runtime-owned one (nested proxies thread it through push_node).
+bool push_root(lua_State* state, PropertyStore* store, std::shared_ptr<PropertyStore> anchor) {
     // A declared property named like a binding method would be shadowed by
     // the method; refuse the binding instead of hiding the property.
     for (const auto& p : store->entity().properties)
@@ -430,9 +438,19 @@ bool push_entity_properties(lua_State* state, PropertyStore* store) {
     }
     lua_pop(state, 1);
     auto* ref = static_cast<ProxyRef*>(lua_newuserdatauv(state, sizeof(ProxyRef), 0));
-    new (ref) ProxyRef{store, "", {}, false, true};
+    new (ref) ProxyRef{store, "", {}, false, true, std::move(anchor)};
     luaL_getmetatable(state, kProxyMeta);
     lua_setmetatable(state, -2);
     return true;
+}
+}
+
+bool push_entity_properties(lua_State* state, PropertyStore* store) {
+    return push_root(state, store, nullptr);
+}
+
+bool push_entity_properties(lua_State* state, const std::shared_ptr<PropertyStore>& store) {
+    if (!store) return false;
+    return push_root(state, store.get(), store);
 }
 }

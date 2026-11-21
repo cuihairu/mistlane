@@ -69,6 +69,7 @@ void LuaService::push_entity_api(lua_State* l, EntityRuntime* runtime) {
     lua_newtable(l);
     lua_pushlightuserdata(l, runtime); lua_pushcclosure(l, entity_spawn, 1); lua_setfield(l, -2, "spawn");
     lua_pushlightuserdata(l, runtime); lua_pushcclosure(l, entity_destroy, 1); lua_setfield(l, -2, "destroy");
+    lua_pushlightuserdata(l, runtime); lua_pushcclosure(l, entity_properties, 1); lua_setfield(l, -2, "properties");
     lua_setfield(l, -2, "entity"); lua_setglobal(l, "mistlane");
 }
 void LuaService::push_ticket_api(lua_State* l, LuaService* service) {
@@ -241,6 +242,25 @@ int LuaService::entity_destroy(lua_State* l) {
         return luaL_error(l, "entity.destroy expects scope, type, incarnation, entity_id integers");
     lua_pushboolean(l, runtime->destroy({scope, type, incarnation,
         static_cast<std::int64_t>(lua_tointeger(l, 4))}) ? 1 : 0);
+    return 1;
+}
+// mistlane.entity.properties(scope, type, incarnation, entity_id) -> props|nil:
+// the server-side view of one live entity's declared properties — the same
+// proxy entity methods address. Nil when the address has no store: unrouted,
+// destroyed, or an undeclared entity type. A proxy a script keeps past a
+// destroy stays readable, but its store is detached from the entity's channel,
+// so later writes journal and never leave the node.
+int LuaService::entity_properties(lua_State* l) {
+    auto* runtime = static_cast<EntityRuntime*>(lua_touserdata(l, lua_upvalueindex(1)));
+    std::uint32_t scope, type, incarnation;
+    if (!lua_u32(l, 1, scope) || !lua_u32(l, 2, type) || !lua_u32(l, 3, incarnation)
+            || !lua_isinteger(l, 4))
+        return luaL_error(l, "entity.properties expects scope, type, incarnation, entity_id integers");
+    const auto store = runtime->property_store({scope, type, incarnation,
+        static_cast<std::int64_t>(lua_tointeger(l, 4))});
+    if (!store) { lua_pushnil(l); return 1; }
+    if (!push_entity_properties(l, store))
+        return luaL_error(l, "a declared property name collides with a property proxy method");
     return 1;
 }
 // Entity method implementations are the script's `entities` table:
