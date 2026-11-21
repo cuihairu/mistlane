@@ -106,6 +106,11 @@ if(BUILD_TESTING)
       "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/sproto_sdk_golden.mjs"
       "${CMAKE_CURRENT_BINARY_DIR}/sproto-fixture/avatar.bindings.js")
   endif()
+  find_program(MISTLANE_PYTHON3_EXECUTABLE python3)
+  if(MISTLANE_PYTHON3_EXECUTABLE)
+    add_test(NAME mistlane_protocol_recovery COMMAND "${MISTLANE_PYTHON3_EXECUTABLE}"
+      "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_protocol_recovery.py")
+  endif()
   add_test(NAME mistlane_sproto_lua_roundtrip COMMAND mistlane-sproto-probe roundtrip
     "${CMAKE_CURRENT_BINARY_DIR}/sproto-fixture/avatar.sproto")
   add_test(NAME mistlane_sproto_dispatch COMMAND mistlane-sproto-probe dispatch

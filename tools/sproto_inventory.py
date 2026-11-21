@@ -26,6 +26,8 @@ def parse_schema(path):
     """Parse the sproto_dump output into protocols and types."""
     protos, types, section, cur = {}, {}, None, None
     for ln in open(path, encoding="utf-8", errors="replace"):
+        if ln.startswith("#"):  # comment block (schema header); not a type/protocol header
+            continue
         if ln.startswith("=== "):
             section = "protocols" if "protocol" in ln else "types"
             continue
