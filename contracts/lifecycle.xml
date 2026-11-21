@@ -1,0 +1,88 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- SPDX-License-Identifier: Apache-2.0
+
+  Runtime create/destroy lifecycle contract. This is an authored, machine-
+  consumable contract in the entity-contract chain's XML idiom: explicit ids,
+  closed vocabularies, unknown elements or attributes are an error, never a
+  default. It does not extend the .def property/method contract; it declares,
+  per entity type, how an instance comes to exist (Create) and how it is torn
+  down (Destroy), and the semantics of each are the design note
+  docs/spawn-destroy-contract.md.
+
+  Vocabulary (closed; a value outside the set is refused):
+    Create source   : load | spawn
+                      load  - materialized by the load path from a durable
+                              record (Avatar); never caller-invokable
+                      spawn - allocated fresh from contract defaults
+    Create persist  : record | first-dirty | none
+                      record     - the existence record is durable before
+                                   the entity publishes (needs ACK durable)
+                      first-dirty- durable on the first dirty flush or final save
+                      none       - pure in-memory ephemeral
+    Create caller   : space-separated subset of framework | script | service
+                      framework - the framework itself (scene prepare, transfer
+                                  materialization, load)
+                      script    - application Lua on the hosting node
+                      service   - an authorized internal service (MLS1 leg);
+                                  a plain client leg is always FORBIDDEN
+                      (empty only for source=load)
+    Create publish  : post-load | post-materialize
+                      post-load        - publish (AOI enter broadcast) only after
+                                         load_ok; a failed load publishes nothing
+                      post-materialize - publish after identity and defaults are
+                                         materialized, before handlers accept
+    Destroy mode    : ordered | forced
+                      ordered - the close path: stop entry, flush final-save,
+                                AOI leave, release references, keep or delete
+                                the record per tombstone (avatar-lifecycle
+                                "closing -> closed")
+                      forced  - bounded best-effort flush under a budget,
+                                then AOI leave and release; the durable record
+                                is deleted or tombstoned (avatar-lifecycle
+                                "purged"); a mid-lifecycle destroy (entity
+                                destroyed while active) is always forced
+    Destroy flush   : final-save | bounded-flush | none
+    Destroy aoi     : leave-broadcast | none
+                      none is valid only for an entity that never had interest
+                      presence (non-spatial, non-observed)
+    Destroy refs    : invalidate | none
+                      invalidate - bump the incarnation tombstone so a late
+                                   EntityRef answers STALE, never misdelivers
+    Destroy recycle : none | bin
+                      bin - defer the record-delete into a recycle bin with a
+                            retention window; recovery within the window
+                            re-spawns from the bin, never resurrects in place
+    Destroy tombstone : record-keep | record-delete | runtime
+                      record-keep  - the durable record survives (re-loadable);
+                                     only legal for mode=ordered on a load
+                                     sourced entity
+                      record-delete- the record is deleted or tombstoned durably
+                      runtime      - no durable record existed (persist=none);
+                                     nothing to delete
+
+  Cross-attribute rules (a violation is a contract error):
+    source=load   -> caller empty and persist=record
+    recycle=bin   -> tombstone=record-delete and flush != none
+    aoi=none      -> the entity is non-spatial (no interest presence)
+    mode=ordered  -> flush=final-save and (tombstone=record-keep or record-delete)
+    mode=forced   -> flush=bounded-flush or none
+-->
+<LifecycleContracts version="1">
+  <!-- Avatar id=1 (examples/contracts/avatar.def): created only by the load
+       path; a runtime spawn of an Avatar is a contract violation (one active
+       writable Avatar per character). Ordered destroy = logout close (record
+       kept for reload, avatar-lifecycle "closed"); forced destroy = runtime
+       delete (kick with record deletion, avatar-lifecycle "purged"). -->
+  <Entity name="Avatar" id="1">
+    <Create source="load" persist="record" caller="" publish="post-load"/>
+    <Destroy mode="ordered" flush="final-save" aoi="leave-broadcast" refs="invalidate" recycle="none" tombstone="record-keep"/>
+    <Destroy mode="forced" flush="bounded-flush" aoi="leave-broadcast" refs="invalidate" recycle="none" tombstone="record-delete"/>
+  </Entity>
+  <!-- Player id=2 (examples/contracts/business.def): a runtime spawn (script or
+       authorized service), durable on the first dirty flush; a mid-lifecycle
+       destroy is forced with a record delete. -->
+  <Entity name="Player" id="2">
+    <Create source="spawn" persist="first-dirty" caller="framework script service" publish="post-materialize"/>
+    <Destroy mode="forced" flush="bounded-flush" aoi="leave-broadcast" refs="invalidate" recycle="none" tombstone="record-delete"/>
+  </Entity>
+</LifecycleContracts>

@@ -112,6 +112,7 @@ export default defineConfig({
         { text: 'Big maps: assessment and requirements', link: '/big-map' },
         { text: 'Avatar runtime contract', link: '/avatar-runtime' },
         { text: 'Avatar lifecycle and oracle', link: '/avatar-lifecycle' },
+        { text: 'Spawn and destroy runtime contract', link: '/spawn-destroy-contract' },
         { text: 'Entity contracts and generation', link: '/entity-contract' },
         { text: 'Legacy and modern comparison', link: '/architecture-comparison' },
         { text: 'Migration status', link: '/migration-status' },
