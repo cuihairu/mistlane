@@ -165,6 +165,8 @@ MISTLANE_BIN=/path/to/mistlane ./ops/cluster.sh start gameServer gateway-ws
 
 For WSS, set `CERT` and `KEY` in `config/instances/gateway-wss.env` to absolute paths or paths relative to the project root, then start `gateway-wss`. The launcher checks both files and forwards them as `--cert`/`--key`; it does not generate or commit a private key. The systemd instance is `mistlane@gateway-wss.service`.
 
+For the container deployment workflow — a runtime image that wraps the binary, a compose example and the validation drill — see [Deployment workflow](./deployment.md).
+
 ### Instance configuration fields
 
 Each `config/instances/<name>.env` file is sourced as shell assignments by `ops/run-instance.sh`, so treat it as trusted deployment configuration written by the project owner, not as untrusted input. The launcher consumes exactly these fields; anything else in the file is ignored.

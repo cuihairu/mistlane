@@ -496,6 +496,25 @@ void transport_tcp() {
     require(metric_value(failure.body, "mistlane_upstream_errors_total{role=\"gateway\"}") >= 1,
         "upstream connect failure not counted");
 }
+// Server-side endpoint addresses accept a hostname, not only a numeric
+// literal: the client already resolves names, and the listener bind and the
+// gateway upstream now do too. Container-network service names and localhost
+// both ride this path (see src/node_internal.hpp parse_address).
+void transport_hostname() {
+    Context c;
+    const auto script = c.path("echo.lua");
+    write(script, echo);
+    const auto gameserver=port(), gateway=port();
+    // Listener bound by hostname, not a literal.
+    auto& server = c.spawn({self().string(), "--role", "gameServer",
+        "--listen", "localhost:" + std::to_string(gameserver), "--script", script.string()});
+    server.ready();
+    // Upstream named by hostname, not a literal.
+    c.node("gateway", gateway, {"--upstream", "localhost:" + std::to_string(gameserver)});
+    auto client = tcp(gateway);
+    for (const auto& payload : std::vector<std::string>{"hello", "", std::string("\0\xff", 2)})
+        equal(client->request(payload), payload);
+}
 void transport_websocket() {
     Context c; c.cert(); write(c.path("echo.lua"), echo);
     const auto gameServer = port(), forwarder = port();

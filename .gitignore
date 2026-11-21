@@ -70,6 +70,8 @@ Testing/
 # Mistlane build and release artifacts
 /build*/
 /dist/
+# Binary staged into the container image build context by tools/container_smoke.sh
+/deploy/bin/
 __pycache__/
 *.log
 /.vcpkg/

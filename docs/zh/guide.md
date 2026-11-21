@@ -165,6 +165,8 @@ MISTLANE_BIN=/path/to/mistlane ./ops/cluster.sh start gameServer gateway-ws
 
 WSS 在 `config/instances/gateway-wss.env` 中设置 `CERT` 和 `KEY`，可填绝对路径或相对项目根目录的路径，然后启动 `gateway-wss`。脚本会检查证书文件并传给 `--cert`/`--key`；不会生成或提交私钥。systemd 对应实例为 `mistlane@gateway-wss.service`。
 
+容器部署工作流——包装二进制的运行时镜像、compose 示例与验证钻取——见[部署工作流](./deployment.md)。
+
 ### 实例配置字段
 
 `config/instances/<name>.env` 由 `ops/run-instance.sh` 以 shell 赋值方式 source，属于项目所有者手写的受信部署配置，不是不受信输入。启动器只消费下列字段；文件中的其他变量一律忽略。

@@ -67,7 +67,7 @@ target_link_libraries(mistlane-mysql-probe PRIVATE mistlane_mysql)
 include(CTest)
 if(BUILD_TESTING)
   foreach(test_case IN ITEMS core.contracts contract.tool sproto.golden rpc.lifecycle core.roles transport.tcp transport.websocket transport.http transport.listeners
-      transport.push transport.correlate transport.identity transport.multiplex coordinator.registry
+      transport.push transport.correlate transport.identity transport.multiplex transport.hostname coordinator.registry
       entity.envelope
       entity.properties
       entity.tree

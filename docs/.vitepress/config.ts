@@ -90,7 +90,8 @@ export default defineConfig({
         { text: '类 BigWorld 协议体系演化', link: '/zh/bigworld-like-protocol' },
         { text: '业务场景 bot 与内置仪表盘', link: '/zh/business-bot' },
         { text: '依赖管理', link: '/zh/dependencies' },
-        { text: '验证记录', link: '/zh/validation' }
+        { text: '验证记录', link: '/zh/validation' },
+        { text: '部署工作流', link: '/zh/deployment' }
       ] }, { text: '分析', items: [
         { text: '实体库表映射与设计取向', link: '/zh/entity-db-mapping-and-philosophy' },
         { text: '实体同步与持久化', link: '/zh/entity-sync-persistence' },
@@ -124,7 +125,8 @@ export default defineConfig({
         { text: 'Business scenario bot and dashboard', link: '/business-bot' },
         { text: 'BigWorld-like protocol evolution', link: '/bigworld-like-protocol' },
         { text: 'Dependencies', link: '/dependencies' },
-        { text: 'Validation', link: '/validation' }
+        { text: 'Validation', link: '/validation' },
+        { text: 'Deployment workflow', link: '/deployment' }
       ] }, { text: 'Analysis', items: [
         { text: 'Entity DB mapping and philosophy', link: '/entity-db-mapping-and-philosophy' },
         { text: 'Entity sync and persistence', link: '/entity-sync-persistence' },

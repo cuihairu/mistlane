@@ -1,0 +1,36 @@
+# Local cluster example: one gameServer and the session-routing gateway in front
+# of it. This is a deployment example, not a container-orchestration decision —
+# the framework's docs record that lease/fencing and orchestration choices are
+# still open (docs/deployment.md, "Not covered yet").
+#
+# Build the image first: the smoke drill stages the binary and builds
+# mistlane:dev (tools/container_smoke.sh), or replace `image` with a published
+# image and drop the `build:` stanza.
+name: mistlane
+
+services:
+  gameServer:
+    build:
+      context: .
+    image: mistlane:dev
+    command: [gameServer]
+    restart: on-failure
+    stop_grace_period: 30s
+    ports:
+      - "7102:7102"
+
+  gateway:
+    image: mistlane:dev
+    command: [gateway]
+    restart: on-failure
+    stop_grace_period: 30s
+    depends_on:
+      gameServer:
+        condition: service_healthy
+    volumes:
+      # Override only the upstream field: inside one container the scaffold
+      # default 127.0.0.1:7102 is the node itself, in compose it is the
+      # gameServer service name resolved on the compose network.
+      - ./compose/instances/gateway.env:/opt/mistlane/config/instances/gateway.env:ro
+    ports:
+      - "7100:7100"

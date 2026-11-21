@@ -32,6 +32,7 @@ void transport_push();
 void transport_correlate();
 void transport_identity();
 void transport_multiplex();
+void transport_hostname();
 void coordinator_registry();
 void coordinator_placement();
 void coordinator_routes();
@@ -155,6 +156,7 @@ int run_tests(int argc, char** argv) {
         {"transport.correlate","transport",test::transport_correlate},
         {"transport.identity","transport",test::transport_identity},
         {"transport.multiplex","transport",test::transport_multiplex},
+        {"transport.hostname","transport",test::transport_hostname},
         {"coordinator.registry","coordinator",test::coordinator_registry},
         {"coordinator.placement","coordinator",test::coordinator_placement},
         {"coordinator.routes","coordinator",test::coordinator_routes},
