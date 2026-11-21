@@ -28,4 +28,4 @@
 
 ## 授权模型（观察）
 
-`HegelService:handleClientMsg` 按协议 id 解析处理器（`ph[h.type]`），再按 `h.aid` 查找角色；仅当角色存在才调用处理器。逐处理器权限检查**未集中**——各处理器自行检查，故逐消息授权仍是逐项审计（见[玩家、场景与跨服模型](./player-scene-model.md#协议、方法定义与抽象前置条件)）。此处记录的是观察到的身份模型，不是已完成的权限审计。
+`HegelService:handleClientMsg` 按协议 id 解析处理器（`ph[h.type]`），再按 `h.aid` 查找角色；仅当角色存在才调用处理器。逐处理器权限检查**未集中**——各处理器自行检查。该模型的逐项审计已交付：[协议逐消息权限审计](./protocol-permissions.md) 解析全部 361 个 client-request 处理器并标记 24 个 payload 作用域候选。身份模型本身见[玩家、场景与跨服模型](./player-scene-model.md#协议、方法定义与抽象前置条件)。

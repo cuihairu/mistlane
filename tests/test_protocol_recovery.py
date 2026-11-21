@@ -26,6 +26,7 @@ from sproto_inventory import parse_schema  # noqa: E402
 
 SCHEMA = os.path.join(ROOT, "contracts", "fogs-sproto-schema.txt")
 INVENTORY = os.path.join(ROOT, "contracts", "fogs-proto-inventory.json")
+AUDIT = os.path.join(ROOT, "contracts", "fogs-permission-audit.json")
 
 # Published invariants (docs/protocol-contract-recovery.md, docs/protocol-inventory.md).
 PIN = {
@@ -132,9 +133,31 @@ def main():
         if not entry["request_type"] or entry["request_type"] == "(null)":
             check("server-push" in d, f"{name}: no request type but no server-push dir")
 
+    # --- Permission-audit registry -------------------------------------------
+    audit = json.load(open(AUDIT, encoding="utf-8"))
+    asum = audit["summary"]
+    check(asum["client_request_messages"] == 361, f"audit client_request={asum['client_request_messages']}")
+    check(asum["resolved"] == 361, f"audit resolved={asum['resolved']}")
+    check(asum["unresolved"] == 0, f"audit unresolved={asum['unresolved']}")
+    check(asum["payload_subject"] == 26, f"audit payload_subject={asum['payload_subject']}")
+    ctx = asum["by_char_context"]
+    check(ctx.get("c") == 252 and ctx.get("aid") == 107 and ctx.get("h") == 2,
+          f"audit char_context={ctx}")
+    # Every client-request message has exactly one audit row; rows reference known messages.
+    audited = {}
+    for r in audit["handlers"]:
+        audited.setdefault(r["message"], []).append(r["world"])
+        if r["resolved"]:
+            check(r["file"] and r["char_context"] is not None,
+                  f"audit row {r['message']} missing resolution")
+    client_msgs = [p["name"] for p in inv["protocols"] if p["client_handlers"]]
+    check(set(client_msgs) == set(audited), "audit messages != inventory client-request set")
+
     print(f"OK: {PIN['protocols']} protocols / {PIN['types']} types / {PIN['fields']} fields; "
           f"{PIN['handler_protocols']} handled / {PIN['error_codes']} error codes; "
-          f"{len(PIN['unresolved_handlers'])} unresolved")
+          f"{len(PIN['unresolved_handlers'])} unresolved; "
+          f"audit {asum['resolved']}/{asum['client_request_messages']} resolved, "
+          f"{asum['payload_subject']} payload-scoped")
     return 0
 
 
