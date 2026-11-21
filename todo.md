@@ -31,7 +31,7 @@
 - [ ] 定义 login、data 和可选 apiServer 的服务契约及接线；保留数据归属，禁止订单固化承载进程地址（部分完成）（BLOCKED）— 跳过：login/data/apiServer 契约与接线已定义并部分实现（docs/service-contracts.md；MLD1 记录端点、MLS1 身份、MLA1 持久化接受、entry-ticket 已实现），但登录完整进入流程（data-issued generation 授权与 host 持久化写入授权）与 Avatar 运行时接线仍未实现，且依赖跨服移交完成。复核注记（2026-11-06）：所缺条件仍缺——docs/service-contracts.md 明示 data-issued generation 授权、host 持久化写入授权仍待实现（仅契约），Avatar 运行时接线未实现，保持 BLOCKED
   - [x] 将现有可复用转发/Lua 执行/跨服准入迁入目标职责，CLI 与文档以当前实现为准，不保留旧别名
     证据：2026-10-19
-- [ ] 同步角色校验、Lua ServiceContext、脚手架、帮助、指标标签、测试与中英文文档；验证正常登录、双向消息、同进程切场景、跨进程/跨服移交、回调与多监听，运行时验收后再勾选（部分完成）（BLOCKED）— 跳过：跨进程/跨服移交与回调尚未实现，无法做运行时验收。复核注记（2026-11-06）：所缺条件仍缺——跨进程/跨服移交与回调仍未实现，无法做运行时验收，保持 BLOCKED
+- [ ] 同步角色校验、Lua ServiceContext、脚手架、帮助、指标标签、测试与中英文文档；验证正常登录、双向消息、同进程切场景、跨进程/跨服移交、回调与多监听，运行时验收后再勾选（部分完成）（BLOCKED）— 跳过：跨进程/跨服移交与回调尚未实现，无法做运行时验收。复核注记（2026-11-06）：所缺条件仍缺——跨进程/跨服移交与回调仍未实现，无法做运行时验收，保持 BLOCKED。复核注记（2026-11-21）：帮助与配置键同步面已现测无漂移——CLI 35 个解析旗标全部出现在 usage 文本（含新增 `--crashpad-retention`），无 stale 旗标；原生配置键表 33 键 + `ROOT` 与 docs/guide.md、docs/zh/guide.md 三处枚举完全一致（`CRASHPAD_RETENTION` 已同步，中英同表，commit 777e628）；`config.file`/`scaffold.init`/`bots.smoke` 等 72 用例全绿。仍缺：跨进程/跨服移交与回调的运行时验收（依赖 Avatar 运行时链），保持 BLOCKED
 
 - [x] 补齐 Session/Avatar、旧跨服回传保存、C++/Lua 实际分工、地图三层数据与大地图边界分析；game-fogs 原始
 - [x] 设计地图定义、只读空间数据缓存与可变 Scene 的生命周期；定义准备完成/失败/超时、常驻/临时场景清理、静态数据引用与释放；进入场景或迁移 Avatar 不重复传输/加载整张地图
