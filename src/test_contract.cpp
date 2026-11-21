@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
+#include "mistlane/entity_sync_wire.hpp"
 #include "test_common.hpp"
 namespace mistlane::test {
 void rpc_lifecycle() {
@@ -1308,9 +1309,191 @@ std::size_t wire_bytes(const EntityValue& value) {
     return std::holds_alternative<bool>(value.data) ? 1 : 8;
 }
 std::size_t delta_bytes(const SyncDelta& delta) {
-    std::size_t steps = 0;
-    for (const auto& step : delta.path) steps += step.by_index ? 4 : 2;
+    // The wire form is self-describing: a u8 path length, then per step a u8
+    // tag (0 field / 1 index) plus a u16 field id or u32 index.
+    std::size_t steps = 1;
+    for (const auto& step : delta.path) steps += step.by_index ? 1 + 4 : 1 + 2;
     return 4 + steps + 1 + 4 + (delta.kind == SyncDelta::Kind::REMOVE ? 0 : wire_bytes(delta.value));
+}
+// Byte-level wire codec for observer sync streams (the sending side of the
+// client PropertySync receiver). The encoded stream must follow exactly the
+// byte accounting the perf fixture pins (wire_bytes/delta_bytes): a u32
+// property id, a u8 path length then per path step a u8 tag with a u16 field
+// id or u32 index, a u8 kind, a u32 position and fixed-width values, with a
+// batch's head sequence carried once.
+void entity_sync_wire() {
+    const EntityContract contract(R"(<Contracts><Types>
+        <Item><itemId id="0" type="UINT32"/><count id="1" type="UINT32" default="2"/></Item>
+        <Inventory><capacity id="0" type="UINT16" default="10"/><items id="1" type="ARRAY" of="Item"/></Inventory>
+        </Types>
+        <Entity name="Avatar" id="1">
+          <Properties>
+            <level id="1" type="UINT16" default="1" flags="OWN_CLIENT"/>
+            <gold id="2" type="INT32" default="-5" flags="ALL_CLIENTS"/>
+            <active id="3" type="BOOL" default="true"/>
+            <tags id="4" type="ARRAY" of="UINT32" flags="ALL_CLIENTS"/>
+            <bag id="5" type="Item" flags="ALL_CLIENTS"/>
+            <inventory id="6" type="Inventory"/>
+            <name id="7" type="STRING" flags="ALL_CLIENTS"/>
+          </Properties>
+        </Entity></Contracts>)");
+    const SyncWireCodec codec(contract, 1);
+    const auto field = [](const char* name) { return TreeStep{false, name, 0}; };
+    const auto index = [](std::size_t at) { return TreeStep{true, std::string(), at}; };
+
+    // Baseline roundtrip: a visible baseline encodes, decodes to the same
+    // bytes (canonical fixpoint) and establishes a fresh replica.
+    {
+        PropertyStore store(contract, 1);
+        store.set("level", std::int64_t{5});
+        store.set("gold", std::int64_t{100});
+        store.set("active", true);
+        store.set("tags", EntityArray{std::int64_t{1}, std::int64_t{2}, std::int64_t{3}});
+        store.set("bag", EntityObject{{"itemId", std::int64_t{7}}, {"count", std::int64_t{9}}});
+        store.set("inventory", EntityObject{{"capacity", std::int64_t{77}},
+                                            {"items", EntityArray{EntityObject{{"itemId", std::int64_t{1}},
+                                                                               {"count", std::int64_t{1}}}}}});
+        PropertyChannel channel(&store);
+        require(channel.observe("owner", true), "owner entry refused");
+        const auto delivered = channel.deliver();
+        require(delivered.size() == 1 && delivered[0].kind == SyncMessage::Kind::BASELINE,
+                "entry did not deliver one baseline");
+        require(delivered[0].baseline.count("inventory") == 0, "owner view leaked a private property");
+        const auto bytes = codec.encode(delivered[0]);
+        require(bytes.has_value(), "baseline did not encode");
+        std::size_t expected = 1 + 4;  // kind + count
+        for (const auto& entry : delivered[0].baseline) expected += 4 + wire_bytes(entry.second);
+        require(bytes->size() == expected, "baseline size drifted from the pinned accounting");
+        SyncMessage decoded;
+        std::string reason;
+        require(codec.decode(*bytes, decoded, reason), "baseline did not decode: " + reason);
+        const auto reencoded = codec.encode(decoded);
+        require(reencoded && *reencoded == *bytes, "baseline decode was not a canonical fixpoint");
+        SyncReceiver owner(contract, 1);
+        owner.rebaseline(decoded.baseline);
+        require(std::get<std::int64_t>(owner.replica().get("level")->data) == 5 &&
+                std::get<std::int64_t>(owner.replica().get("gold")->data) == 100 &&
+                std::get<bool>(owner.replica().get("active")->data) == true,
+                "decoded baseline did not establish the replica");
+        // The private property keeps its default in the replica: the wire never
+        // carried the store's 77-capacity one-item inventory.
+        const auto* leaked = std::get_if<EntityObject>(&owner.replica().get("inventory")->data);
+        require(leaked != nullptr &&
+                std::get<std::int64_t>(leaked->find("capacity")->second.data) == 10 &&
+                std::get_if<EntityArray>(&leaked->find("items")->second.data)->empty(),
+                "decoded baseline leaked a private property");
+        std::cout << "entity.sync.wire baseline: canonical fixpoint, replica established [PASS]\n";
+    }
+
+    // Delta roundtrip: a nested single-item write travels as one delta whose
+    // wire bytes equal the pinned per-delta accounting, decodes with the head
+    // sequence recomputed per delta and applies to a fresh replica.
+    {
+        PropertyStore store(contract, 1);
+        store.set("bag", EntityObject{{"itemId", std::int64_t{7}}, {"count", std::int64_t{9}}});
+        PropertyChannel channel(&store);
+        require(channel.observe("owner", true), "owner entry refused");
+        require(channel.deliver().size() == 1, "entry baseline missing");
+        store.set_path("bag", {field("itemId")}, std::int64_t{11});
+        const auto drained = channel.deliver();
+        require(drained.size() == 1 && drained[0].kind == SyncMessage::Kind::DELTAS,
+                "a write did not journal one delta batch");
+        const std::uint64_t head = drained[0].sequence;
+        const auto bytes = codec.encode(drained[0]);
+        require(bytes.has_value(), "delta batch did not encode");
+        // The pinned accounting: kind (1) + head sequence (8) + count (4) +
+        // the per-delta wire_bytes accounting, and nothing else.
+        std::size_t expected = 1 + 8 + 4;
+        for (const auto& delta : drained[0].deltas) expected += delta_bytes(delta);
+        require(bytes->size() == expected, "delta batch size drifted from the pinned accounting");
+        SyncMessage decoded;
+        std::string reason;
+        require(codec.decode(*bytes, decoded, reason), "delta batch did not decode: " + reason);
+        require(decoded.kind == SyncMessage::Kind::DELTAS && decoded.sequence == head &&
+                decoded.deltas.size() == 1, "decoded batch lost its head sequence or count");
+        const auto& delta = decoded.deltas[0];
+        require(delta.kind == SyncDelta::Kind::SET && delta.property_id == 5 &&
+                delta.path.size() == 1 && !delta.path[0].by_index && delta.path[0].field_id == 0 &&
+                delta.sequence == head, "decoded delta lost its wire path or sequence");
+        require(std::get<std::int64_t>(delta.value.data) == 11, "decoded delta lost its value");
+        const auto reencoded = codec.encode(decoded);
+        require(reencoded && *reencoded == *bytes, "delta decode was not a canonical fixpoint");
+        SyncReceiver owner(contract, 1);
+        owner.rebaseline(store.client_view(true));
+        require(owner.apply(decoded.deltas), "decoded delta batch was refused by the replica");
+        std::cout << "entity.sync.wire delta: pinned accounting, canonical fixpoint, replica applied [PASS]\n";
+    }
+
+    // Array delta (insert at a path through a struct) — an index step and an
+    // insert position round-trip; the value shape is the array element.
+    {
+        PropertyStore store(contract, 1);
+        store.set("tags", EntityArray{std::int64_t{1}});
+        PropertyChannel channel(&store);
+        require(channel.observe("owner", true), "owner entry refused");
+        require(channel.deliver().size() == 1, "entry baseline missing");
+        store.insert_at("tags", {}, 1, std::int64_t{9});
+        const auto drained = channel.deliver();
+        require(drained.size() == 1 && drained[0].deltas.size() == 1 &&
+                drained[0].deltas[0].kind == SyncDelta::Kind::INSERT &&
+                drained[0].deltas[0].position == 1, "the array insert did not journal one delta");
+        const auto bytes = codec.encode(drained[0]);
+        require(bytes.has_value(), "array delta did not encode");
+        SyncMessage decoded;
+        std::string reason;
+        require(codec.decode(*bytes, decoded, reason), "array delta did not decode: " + reason);
+        require(decoded.deltas[0].kind == SyncDelta::Kind::INSERT &&
+                decoded.deltas[0].position == 1 &&
+                decoded.deltas[0].path.empty() &&
+                std::get<std::int64_t>(decoded.deltas[0].value.data) == 9,
+                "array insert delta lost its position or value");
+        std::cout << "entity.sync.wire insert: position and element value [PASS]\n";
+    }
+
+    // Malformed streams: truncation at every byte, unknown ids, trailing
+    // bytes, an oversized string length and an impossible path are all refused
+    // with a reason — never a partial read.
+    {
+        PropertyStore store(contract, 1);
+        store.set("level", std::int64_t{5});
+        PropertyChannel channel(&store);
+        require(channel.observe("owner", true), "owner entry refused");
+        const auto delivered = channel.deliver();
+        const auto bytes = codec.encode(delivered[0]);
+        require(bytes.has_value(), "malformed fixture did not encode");
+        SyncMessage decoded;
+        std::string reason;
+        for (std::size_t cut = 0; cut < bytes->size(); ++cut) {
+            require(!codec.decode(std::string_view(*bytes).substr(0, cut), decoded, reason),
+                    "a truncated stream was accepted at cut " + std::to_string(cut));
+        }
+        require(!codec.decode(*bytes + "x", decoded, reason), "trailing bytes were accepted");
+        // Unknown baseline property id: patch the first property id to 0xFFFF.
+        std::string tampered = *bytes;
+        tampered[5] = static_cast<char>(0xFF);
+        tampered[6] = static_cast<char>(0xFF);
+        tampered[7] = static_cast<char>(0xFF);
+        tampered[8] = static_cast<char>(0xFF);
+        require(!codec.decode(tampered, decoded, reason), "an unknown property id was accepted");
+        // Oversized string length: a STRING length that cannot fit the payload.
+        PropertyStore s2(contract, 1);
+        s2.set("name", std::string("hello"));
+        PropertyChannel c2(&s2);
+        require(c2.observe("owner", true), "owner entry refused");
+        const auto g = codec.encode(c2.deliver()[0]);
+        require(g.has_value(), "string baseline did not encode");
+        std::string huge = *g;
+        // The string value's u32 length sits four bytes before the payload.
+        const auto at = huge.find("hello");
+        require(at != std::string::npos, "the string value is missing from the baseline");
+        const std::size_t len_at = at - 4;
+        huge[len_at] = static_cast<char>(0xFF);
+        huge[len_at + 1] = static_cast<char>(0xFF);
+        huge[len_at + 2] = static_cast<char>(0xFF);
+        huge[len_at + 3] = static_cast<char>(0xFF);
+        require(!codec.decode(huge, decoded, reason), "an oversized string length was accepted");
+        std::cout << "entity.sync.wire malformed: truncation, unknown id, trailing, oversized [PASS]\n";
+    }
 }
 void entity_perf() {
     const EntityContract contract(R"(<Contracts><Types>

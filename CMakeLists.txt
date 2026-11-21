@@ -72,6 +72,7 @@ if(BUILD_TESTING)
       entity.properties
       entity.tree
       entity.sync
+      entity.sync.wire
       entity.rpc
       entity.endpoint
       entity.transport

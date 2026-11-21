@@ -14,6 +14,7 @@ void entity_envelope();
 void entity_properties();
 void entity_tree();
 void entity_sync();
+void entity_sync_wire();
 void entity_rpc();
 void entity_endpoint();
 void entity_transport();
@@ -138,6 +139,7 @@ int run_tests(int argc, char** argv) {
         {"entity.properties","contract",test::entity_properties},
         {"entity.tree","contract",test::entity_tree},
         {"entity.sync","contract",test::entity_sync},
+        {"entity.sync.wire","contract",test::entity_sync_wire},
         {"entity.rpc","contract",test::entity_rpc},
         {"entity.endpoint","contract",test::entity_endpoint},
         {"entity.transport","contract",test::entity_transport},
