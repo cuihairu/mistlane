@@ -182,7 +182,7 @@ What this does not claim: the claims are still per process and volatile, so a ti
 
 - The invocation key uses `scope/type_id/entity_id/incarnation`; `EntityRef` uses that same address tuple. `hosting_generation` is an ownership fence, not entity incarnation (`entity-contract.md:243–254`).
 - `realm` / “origin realm” / “home region or group” refer to the data ownership domain; `scope` is coordinator placement scope. They must not be treated as interchangeable (`cross-return-protocol.md:11`, `architecture.md:70`).
-- `RECEIVED` means endpoint accepted into volatile process memory; `ACK durable` means home data committed durable storage. They are explicitly different (`cross-return-protocol.md:58`, `service-contracts.md:36–41`).
+- `RECEIVED` means endpoint accepted into volatile process memory; `ACK durable` means home data committed durable storage. They are explicitly different (`cross-return-protocol.md:46,62`, `service-contracts.md:36–41`).
 - Transport correlation (`MLC2`) and entity `correlation_id` are intentionally independent; protocol errors remain surface-specific rather than sharing EntityError codes (`entity-contract.md:237–275`).
 
 ## Remaining implementation gates by todo item

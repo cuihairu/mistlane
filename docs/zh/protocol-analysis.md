@@ -182,7 +182,7 @@ apiServer 上的 `--journal FILE` 选择持久受理后端（`ApiSqliteAcceptanc
 
 - 调用地址为 `scope/type_id/entity_id/incarnation`；`EntityRef` 使用相同元组。`hosting_generation` 是归属栅栏，不是实体 incarnation（`entity-contract.md:243–254`）。
 - `realm` / “来源区服” / “归属区服或组”指数据归属域；`scope` 是 coordinator 分配作用域，不能混用（`cross-return-protocol.md:11`、`architecture.md:70`）。
-- `RECEIVED` 表示端点已收入进程内存；`ACK durable` 表示归属 data 已提交持久存储，二者明确定义不同（`cross-return-protocol.md:58`、`service-contracts.md:36–41`）。
+- `RECEIVED` 表示端点已收入进程内存；`ACK durable` 表示归属 data 已提交持久存储，二者明确定义不同（`cross-return-protocol.md:46,62`、`service-contracts.md:36–41`）。
 - 传输关联（`MLC2`）与实体 `correlation_id` 有意独立；协议错误按各自表面区分，不共用 EntityError 码（`entity-contract.md:237–275`）。
 
 ## 按 todo 归口的剩余实现闸门
