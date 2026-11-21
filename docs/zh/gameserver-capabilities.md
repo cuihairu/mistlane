@@ -8,7 +8,7 @@
 |---|---|---|---|
 | C++ 外壳是宿主，不是领域 | `d_hegel/ServerMain.cpp`：配置文件加 `--index` 进程序号、日志配置、RAII MySQL 初始化、单 `io_service` 上的 `FogsProcess`、信号驱动的优雅停止 | 通用 | Mistlane 原则上保持同一拆分：单进程、C++ 承载、Lua 领域 |
 | 仅 gateway 接入 | `d_hegel/HegelServer.cpp::handleAccept/onRegister`：接入的连接经 `LuaCallHandler::registerConn` 注册，按 gateway id 存入 `gates_`，后续每帧经 `pushRpcMsg` 推入单个 Lua VM | 通用 | 当前 Mistlane gameServer 直接接受客户端并以 MLR1 上行；仅网关接入是部署形态，不是能力缺口 |
-| 单个 C++ tick 驱动全部 Lua 时间 | `HegelServer::startTick/doTick` 调 `LuaCallHandler::onTick`，后者以墙钟毫秒调用 `L_doTick` 全局函数；间隔由 Lua `C_startTimer` 指定（`game/Util/Timer.lua` 默认 1000 ms） | 通用 | Mistlane 运行固定 100 ms、无参数的 `tick()` 钩子（见[账本](../migration-status.md#legacy-lua-callback-audit)）；两者都是单驱动设计 |
+| 单个 C++ tick 驱动全部 Lua 时间 | `HegelServer::startTick/doTick` 调 `LuaCallHandler::onTick`，后者以墙钟毫秒调用 `L_doTick` 全局函数；间隔由 Lua `C_startTimer` 指定（`game/Util/Timer.lua` 默认 1000 ms） | 通用 | Mistlane 运行固定 100 ms、无参数的 `tick()` 钩子（见[迁移账本](./migration-status.md#旧-lua-回调核对)）；两者都是单驱动设计 |
 | 约 20 个 C API 绑定 | `d_hegel/CAPI.cpp`：listen、timer、死循环监控、connect server、UDP client、地图加载/信息/卸载、寻路与坐标换算（`generatePath`/`isStraightReachable` 已注册，`generateHighWay` 被注释）、MD5、时钟、运营日志 | 混合 | Mistlane 以模块表（`mistlane.*`）取代全局函数；地图/导航绑定不存在，也不从旧签名推导 |
 
 Lua 侧承载全部领域：`game/Hegel/` 下 60+ 个玩法模块目录（战斗、帮会、宠物、任务、商店、竞技场等）加上框架目录（`Scene`、`GameScene`、`Server`、`Rpc`、`Async`、`Util`）。玩法目录整体排除在迁移之外。
@@ -26,7 +26,7 @@ Lua 侧承载全部领域：`game/Hegel/` 下 60+ 个玩法模块目录（战斗
 
 ## 计时
 
-旧 gameServer 只有一个进程级驱动：C++ tick 调 `L_doTick(ms)`，全部 Lua 调度在 `game/Util/Timer.lua` 的 `TimerQueue` 上——两层结构（min-heap 加 5 秒内桶数组、10 万任务上限、惰性删除、`xx1` 哨兵值移除出错的重复任务）已在[迁移账本](../migration-status.md)比对过。账本未记录的部分：
+旧 gameServer 只有一个进程级驱动：C++ tick 调 `L_doTick(ms)`，全部 Lua 调度在 `game/Util/Timer.lua` 的 `TimerQueue` 上——两层结构（min-heap 加 5 秒内桶数组、10 万任务上限、惰性删除、`xx1` 哨兵值移除出错的重复任务）已在[迁移账本](./migration-status.md)比对过。账本未记录的部分：
 
 - **场景级 tick 并未运行。** `SceneManager.startTimer()` 内只剩被注释的 `--Timer.setInterval(SceneManager.updateState, 100)`；`SceneManager.updateState` 没有其他调用者。代码形态暗示的每场景 100 ms 节奏从未生效。
 - **每场景唯一的定时器是位置同步。** `Scene:init` 以 `UPDATE_INTERVAL = 1000` 启动 `Timer.setInterval(self.syncChar, UPDATE_INTERVAL, self)`，且仅在模板设置 `isSync` 时；`Scene:clear` 会连同场景自身的定时器表一并移除。

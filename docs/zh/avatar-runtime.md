@@ -1,6 +1,6 @@
 # Avatar 运行时：会话、生命周期钩子、迁移与加载保存
 
-状态：已定设计（2026-10-19）。当前框架有会话、帧协议、握手层与每个 gameServer/crossServer 一个串行调用的 Lua VM，但没有 Avatar 类型（`grep -rniE "\b(struct|class)\s+(Scene|Map|Entity|Avatar|Chunk)" include/ src/` 排除测试零命中）——本页不改变任何 CLI 行为，下面描述的运行行为均未实现、未经验证。本页把[模型页](./player-scene-model.md)列为抽取目标的内容（"钩子需要线程/错误/重入/超时契约与迁移期间的规则"）落成契约，为 coordinator 协调的移交切片提供前置设计；职责边界仍是[进程职责页](./process-roles.md)。持久归属与唯一写入权归[跨服回传协议](./cross-return-protocol.md)；实例准备状态归[场景生命周期](./scene-lifecycle.md)；属性 schema、脏追踪与增量同步归[实体契约链](./entity-contract.md)且继续延后。任何新 Avatar API 的实现被客户端协议契约恢复（账本 88-91）门控。
+状态：已定设计（2026-10-19）。当前框架有会话、帧协议、握手层与每个 gameServer/crossServer 一个串行调用的 Lua VM，但没有 Avatar 类型（`grep -rniE "\b(struct|class)\s+(Scene|Map|Entity|Avatar|Chunk)" include/ src/` 排除测试零命中）——本页不改变任何 CLI 行为，下面描述的运行行为均未实现、未经验证。本页把[模型页](./player-scene-model.md)列为抽取目标的内容（"钩子需要线程/错误/重入/超时契约与迁移期间的规则"）落成契约，为 coordinator 协调的移交切片提供前置设计；职责边界仍是[进程职责页](./process-roles.md)。持久归属与唯一写入权归[跨服回传协议](./cross-return-protocol.md)；实例准备状态归[场景生命周期](./scene-lifecycle.md)；属性 schema、脏追踪与增量同步归[实体契约链](./entity-contract.md)且继续延后。任何新 Avatar API 的实现被客户端协议契约恢复（账本中的协议契约恢复条目）门控。
 
 ## 基线：框架现在有什么
 
@@ -110,7 +110,7 @@ stateDiagram-v2
 ## 本页故意未决定
 
 - 属性 schema、脏追踪、增量同步与快照编码：实体契约链，其取代了更早的 Avatar-only 范围并继续延后。
-- 客户端协议、绑定与方法暴露：被协议契约恢复（账本 88-91）门控；game-fogs 没有 `.sproto` 文本源，只有编译产物 `sproto.spb` 与 `Protocol.lua` 名字表。
+- 客户端协议、绑定与方法暴露：被协议契约恢复（账本中的协议契约恢复条目）门控；game-fogs 没有 `.sproto` 文本源，只有编译产物 `sproto.spb` 与 `Protocol.lua` 名字表。
 - 确切钩子名与签名：在代码实现时固定；上面的参数、顺序与失败语义才是契约。
 - 宽限期、tick 预算与保存节奏：实现时实测。
 - crossServer 发送侧的有界重试队列与只读转换：回传协议切片，等持久化链。

@@ -20,24 +20,24 @@
 
 ## 老 game-fogs 到 Mistlane 的演化
 
-老客户端链路见[玩家与场景模型](./player-scene-model.md#protocol-and-method-contracts-before-abstraction)：`game/Data/Data.lua` 加载二进制 `game/proto/sproto.spb`；`game/lib/sp.lua` 编解码；`game/proto/Protocol.lua` 将名称映射到编号；`PacketHandler` 注册暴露给客户端的处理器。原始 `.sproto` 文本源及可复现生成链路尚未找到。此处从老链路已有事实映射到 Mistlane，不把生成二进制当作源契约。
+老客户端链路见[玩家与场景模型](./player-scene-model.md#协议、方法定义与抽象前置条件)：`game/Data/Data.lua` 加载二进制 `game/proto/sproto.spb`；`game/lib/sp.lua` 编解码；`game/proto/Protocol.lua` 将名称映射到编号；`PacketHandler` 注册暴露给客户端的处理器。原始 `.sproto` 文本源及可复现生成链路尚未找到。此处从老链路已有事实映射到 Mistlane，不把生成二进制当作源契约。
 
 | 类 BigWorld 组成/老项目证据 | Mistlane 证据与现状 | 分类 |
 |---|---|---|
-| 实体定义；KBEngine `.def`/XML 与 game-fogs 未恢复的 sproto schema | XML 实体/类型契约校验 ID，生成项目 XSD、发布锁和确定性的 `.sproto` schema；尚无运行时接线。[实体契约](./entity-contract.md#one-contract) | **已演化** — 已有明确的实体源契约；这不是恢复出的老 schema。 |
-| 消息目录与二进制 codec；game-fogs `.spb` + `sp.lua` | 已有 sproto schema 生成和 fixture 黄金向量；尚无标准 sproto 运行时/codec 接入。[生成产物](./entity-contract.md#generated-artifacts)、[老链路](./player-scene-model.md#protocol-and-method-contracts-before-abstraction) | **演化中** — schema 生成已存在；运行时执行尚无。 |
-| 数据包帧/网络适配 | Mistlane 有 TCP 长度帧、WS 载荷映射、HTTP 监听器，以及分别定义的 MLC2/MLS1/MLM1 控制层。这些是传输/运行时契约，不是 sproto RPC 接入。[协议分析](./protocol-analysis.md#protocol-surface-inventory)、[架构](./architecture.md#execution-and-connection-model) | **演化中** — 通用传输已有；codec 分发、协商和客户端协议链路未有。 |
-| Login/Gate/Base/Cell 消息转发；老项目 Gate 路由与 handler 分发 | Mistlane 有 gateway、login/data 角色、MLR1 注册/分配/路由和 crossServer 转发；没有完整实体调用链或等价 Base/Cell 拆分。[进程职责](./process-roles.md#current-implementation)、[架构对照](./architecture-comparison.md) | **演化中** — 服务路由存在，但未复现老 handler 语义和完整实体调用。 |
-| 观察者/AOI 属性同步；老项目 `SC_CharDataUpdate=4005` 与手工 dirty 行为 | 实体属性复制有设计，但没有 Avatar 运行时、接收者集合、变更追踪或 sproto 通知。[实体契约](./entity-contract.md#automatic-property-replication)、[老链路](./player-scene-model.md#protocol-and-method-contracts-before-abstraction) | **演化中** — 目标语义已有文档；运行时缺失。 |
+| 实体定义；KBEngine `.def`/XML 与 game-fogs 未恢复的 sproto schema | XML 实体/类型契约校验 ID，生成项目 XSD、发布锁和确定性的 `.sproto` schema；尚无运行时接线。[实体契约](./entity-contract.md#一份契约示例) | **已演化** — 已有明确的实体源契约；这不是恢复出的老 schema。 |
+| 消息目录与二进制 codec；game-fogs `.spb` + `sp.lua` | 已有 sproto schema 生成和 fixture 黄金向量；尚无标准 sproto 运行时/codec 接入。[生成产物](./entity-contract.md#生成什么)、[老链路](./player-scene-model.md#协议、方法定义与抽象前置条件) | **演化中** — schema 生成已存在；运行时执行尚无。 |
+| 数据包帧/网络适配 | Mistlane 有 TCP 长度帧、WS 载荷映射、HTTP 监听器，以及分别定义的 MLC2/MLS1/MLM1 控制层。这些是传输/运行时契约，不是 sproto RPC 接入。[协议分析](./protocol-analysis.md#协议面全景)、[架构](./architecture.md#执行与连接模型) | **演化中** — 通用传输已有；codec 分发、协商和客户端协议链路未有。 |
+| Login/Gate/Base/Cell 消息转发；老项目 Gate 路由与 handler 分发 | Mistlane 有 gateway、login/data 角色、MLR1 注册/分配/路由和 crossServer 转发；没有完整实体调用链或等价 Base/Cell 拆分。[进程职责](./process-roles.md#当前代码与迁移边界)、[架构对照](./architecture-comparison.md) | **演化中** — 服务路由存在，但未复现老 handler 语义和完整实体调用。 |
+| 观察者/AOI 属性同步；老项目 `SC_CharDataUpdate=4005` 与手工 dirty 行为 | 实体属性复制有设计，但没有 Avatar 运行时、接收者集合、变更追踪或 sproto 通知。[实体契约](./entity-contract.md#自动属性同步)、[老链路](./player-scene-model.md#协议、方法定义与抽象前置条件) | **演化中** — 目标语义已有文档；运行时缺失。 |
 | 跨服/世界归属与迁移 | 存在 MLC1 静态亲和/准入、MLR1 目录和部分 MLD1 回传端点；归属租约和实体转移状态机不存在。[跨服](./cross-server.md)、[跨服回传](./cross-return-protocol.md) | **演化中** — 传输/控制/数据零件部分存在；完整分配、迁移和归属协议尚无。 |
-| 客户端 SDK 生成与消息/实体绑定同步 | JavaScript/C# SDK 是提案 bundle 输出，没有 generator 或可运行客户端绑定。老生成的 `Protocol.lua` 不能还原源定义。[生成产物](./entity-contract.md#generated-artifacts)、[账本 88–91](./avatar-runtime.md#deliberately-not-decided-here) | **未演化** — 没有 SDK 生成发布链路。 |
-| 服务端/客户端定义的兼容发布流程 | 原型已有显式 ID 与 release lock；协议字节向量、schema 兼容 diff 和客户端/运行时一致性仍未完成。[协议分析，缺口 7](./protocol-analysis.md#-gaps) | **演化中** — 契约检查已有部分，互操作协议发布闸门没有。 |
+| 客户端 SDK 生成与消息/实体绑定同步 | JavaScript/C# SDK 是提案 bundle 输出，没有 generator 或可运行客户端绑定。老生成的 `Protocol.lua` 不能还原源定义。[生成产物](./entity-contract.md#生成什么)、[账本中的协议契约恢复条目](./avatar-runtime.md#本页故意未决定) | **未演化** — 没有 SDK 生成发布链路。 |
+| 服务端/客户端定义的兼容发布流程 | 原型已有显式 ID 与 release lock；协议字节向量、schema 兼容 diff 和客户端/运行时一致性仍未完成。[协议分析，缺口 7](./protocol-analysis.md#缺口) | **演化中** — 契约检查已有部分，互操作协议发布闸门没有。 |
 
 计数：**已演化 1，演化中 6，未演化 1**。“已演化”表示 Mistlane 已有承担类似契约职责的产物，不表示复刻老行为或线兼容。前一份跨文档审计中的其他细节、矛盾和缺口仍以[协议分析](./protocol-analysis.md)为准。
 
 ## sproto 实现路线
 
-决策：实体/RPC 消息编码使用 sproto。XML `.def` 和类型文件继续作为手写契约，sproto 是生成物。按[实体契约](./entity-contract.md#design-choice)，规划中的 Server bundle 包含 sproto schema、Lua bindings 和 digests。当前构建生成经过校验的确定性 schema、XSD、release lock 和 digest，并有仅供测试的 Lua codec 原型；实体运行时和 SDK 生成仍未实现。
+决策：实体/RPC 消息编码使用 sproto。XML `.def` 和类型文件继续作为手写契约，sproto 是生成物。按[实体契约](./entity-contract.md#设计选择)，规划中的 Server bundle 包含 sproto schema、Lua bindings 和 digests。当前构建生成经过校验的确定性 schema、XSD、release lock 和 digest，并有仅供测试的 Lua codec 原型；实体运行时和 SDK 生成仍未实现。
 
 | 阶段 | 具体工作 | 验收证据形态 |
 |---|---|---|
@@ -56,7 +56,7 @@
 
 阶段 3 已将 Lua 上游 sproto 请求解码结果接入 C++ `EntityDispatcher`，并实现 fixture 驱动实体路由：重复投递、实体不存在和 incarnation 过期都有确定结果。生成绑定含按字段生成的 C++ 参数结构体；schema 与 bindings 两次生成后逐字节比较。运行时仍限进程内，不负责网络 socket 或持久化实体。
 
-阶段 4 已有进程内 RPC 生命周期 harness：按 caller correlation id 配对、由注入的单调时钟触发超时、丢弃迟到响应、拒绝重复响应、断连时取消在途请求。它是确定性状态机测试，不是生产传输实现。协议对照见 [entity-contract envelope 与错误词表](./entity-contract.md#invocation-envelope-and-error-protocol-decided-unimplemented)：`docs/entity-contract.md:241–252` 为 envelope，`:258–273` 为闭合错误，`:275` 为校验顺序。对应行为：超时=`TIMEOUT`、断连=`CANCELLED`、过期目标=`STALE`、重复投递/响应=`CONFLICT`。
+阶段 4 已有进程内 RPC 生命周期 harness：按 caller correlation id 配对、由注入的单调时钟触发超时、丢弃迟到响应、拒绝重复响应、断连时取消在途请求。它是确定性状态机测试，不是生产传输实现。协议对照见 [entity-contract envelope 与错误词表](./entity-contract.md#调用-envelope-与错误协议-已代决-规范进程内编解码已实现)：`docs/entity-contract.md:241–252` 为 envelope，`:258–273` 为闭合错误，`:275` 为校验顺序。对应行为：超时=`TIMEOUT`、断连=`CANCELLED`、过期目标=`STALE`、重复投递/响应=`CONFLICT`。
 
 阶段 5–6 已按当前原型边界实现。阶段 5 生成 JavaScript JSDoc entity/参数类型和无依赖标量 sproto 编码器，以及 C# record 类型和标量编码器；两侧是最小 SDK，不是完整客户端运行库。`Avatar.level=1` 在 C++ 参考、生成的 JavaScript 和以 .NET 10 编译运行的 C# 中均编码为 `020001000400`。未增加第三方依赖。阶段 6 增加 `mistlane contract compat OLD.lock NEW.lock`，报告 `ADDED`、`REMOVED`、`TYPE_CHANGED`；新增兼容，删除和映射变化返回非零。`contract.tool` 覆盖兼容新增、删除与类型变化。
 
