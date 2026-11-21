@@ -105,6 +105,8 @@ if(BUILD_TESTING)
     add_test(NAME mistlane_sproto_sdk_js_golden COMMAND "${MISTLANE_NODE_EXECUTABLE}"
       "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/sproto_sdk_golden.mjs"
       "${CMAKE_CURRENT_BINARY_DIR}/sproto-fixture/avatar.bindings.js")
+    add_test(NAME mistlane_hook_registry COMMAND "${MISTLANE_NODE_EXECUTABLE}"
+      "${CMAKE_CURRENT_SOURCE_DIR}/tools/check-hook-registry.mjs")
   endif()
   find_program(MISTLANE_PYTHON3_EXECUTABLE python3)
   if(MISTLANE_PYTHON3_EXECUTABLE)
