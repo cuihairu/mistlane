@@ -1,7 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
 #include "mistlane/entity_dispatch.hpp"
+#include "mistlane/entity_sync.hpp"
+#include <functional>
 #include <map>
+#include <memory>
 #include <optional>
 #include <set>
 #include <tuple>
@@ -11,11 +14,25 @@ namespace mistlane {
 // repeated delivery is rejected by the invocation correlation key.
 class EntityRuntime {
 public:
+ // Property sync push sink: one call per message drained from an entity's
+ // observer channel. The transport wiring serializes through SyncWireCodec.
+ using PropertyPush = std::function<void(const EntityTarget&, const SyncMessage&)>;
  explicit EntityRuntime(const EntityContract& contract) : dispatcher_(contract) {}
  EntityDispatcher& dispatcher() { return dispatcher_; }
  bool spawn(EntityTarget ref, std::uint32_t hosting_generation = 1) {
    if (!ref.scope || !ref.type_id || !ref.entity_id || !ref.incarnation || !hosting_generation) return false;
-   return entities_.emplace(address(ref), hosting_generation).second;
+   if (!entities_.emplace(address(ref), hosting_generation).second) return false;
+   // A declared entity also gets its controlled property store and observer
+   // channel; an undeclared type keeps the fence-only behavior (dispatch
+   // answers it), so existing spawn semantics are unchanged.
+   for (const auto& entity : dispatcher_.contract().entities()) {
+     if (entity.id != ref.type_id) continue;
+     auto store = std::make_shared<PropertyStore>(dispatcher_.contract(), ref.type_id);
+     stores_.emplace(address(ref), store);
+     channels_.emplace(address(ref), store.get());
+     break;
+   }
+   return true;
  }
  EntityDispatchResult deliver(const EntityInvocation& call, std::uint64_t correlation_id) {
    if (!correlation_id) return fail(EntityError::INVALID);
@@ -62,10 +79,39 @@ public:
  bool destroy(EntityTarget ref) {
    const auto a = address(ref);
    if (entities_.erase(a) == 0) return false;
+   channels_.erase(a);
+   stores_.erase(a);
    // Drop correlation tombstones for this exact incarnation so a re-spawn of
    // the same address starts with a clean dedupe table instead of growing
    // without bound on a long-lived node.
    std::erase_if(delivered_, [a](const auto& row) { return row.first == a; });
+   return true;
+ }
+ // The controlled store of one live entity, seeded with its declared defaults.
+ // Null for an unrouted, destroyed or undeclared address.
+ PropertyStore* properties(const EntityTarget& ref) {
+   const auto it = stores_.find(address(ref));
+   return it == stores_.end() ? nullptr : it->second.get();
+ }
+ // Observer admission and departure on one entity's property stream: visibility
+ // is per property (the channel filters SERVER_ONLY and, for guests, OWN_CLIENT).
+ bool observe(const EntityTarget& ref, const std::string& id, bool is_owner) {
+   const auto it = channels_.find(address(ref));
+   return it != channels_.end() && it->second.observe(id, is_owner);
+ }
+ bool depart(const EntityTarget& ref, const std::string& id) {
+   const auto it = channels_.find(address(ref));
+   return it != channels_.end() && it->second.depart(id);
+ }
+ void set_property_push(PropertyPush push) { push_ = std::move(push); }
+ // Drain one entity's journal and emit every message through the sink. False
+ // when the address has no property stream. Without a sink nothing drains —
+ // dropping deltas into nowhere would strand observers on gapped sequences.
+ bool flush_properties(const EntityTarget& ref) {
+   const auto it = channels_.find(address(ref));
+   if (it == channels_.end()) return false;
+   if (push_)
+     for (const auto& message : it->second.deliver()) push_(ref, message);
    return true;
  }
 private:
@@ -79,6 +125,9 @@ private:
  EntityDispatcher dispatcher_;
  std::map<Address,std::uint32_t> entities_;
  std::set<std::pair<Address,std::uint64_t>> delivered_;
+ std::map<Address,std::shared_ptr<PropertyStore>> stores_;
+ std::map<Address,PropertyChannel> channels_;
+ PropertyPush push_;
 };
 
 // Single-threaded RPC lifecycle model driven by a monotonic clock supplied by tests.

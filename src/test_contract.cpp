@@ -1495,6 +1495,130 @@ void entity_sync_wire() {
         std::cout << "entity.sync.wire malformed: truncation, unknown id, trailing, oversized [PASS]\n";
     }
 }
+
+// Runtime-owned per-entity property stores and observer streams: a declared
+// spawn seeds the store with defaults and a fresh channel, writes journal
+// deltas that flush through the push sink filtered by audience (SERVER_ONLY
+// never leaves, OWN_CLIENT reaches owners only), a second entity is isolated,
+// and destroy tears the stream down. An undeclared spawn stays fence-only.
+void entity_runtime_properties() {
+    const EntityContract contract(R"(<Contracts><Types>
+        <Item><itemId id="0" type="UINT32"/><count id="1" type="UINT32" default="2"/></Item>
+        </Types>
+        <Entity name="Avatar" id="1">
+          <Properties>
+            <level id="1" type="UINT16" default="1" flags="OWN_CLIENT"/>
+            <gold id="2" type="INT32" default="-5" flags="ALL_CLIENTS"/>
+            <secret id="3" type="INT64" default="7" flags="SERVER_ONLY"/>
+            <bag id="4" type="Item" flags="ALL_CLIENTS"/>
+          </Properties>
+        </Entity></Contracts>)");
+    EntityRuntime runtime(contract);
+    const EntityTarget target{1, 1, 7, 1};  // scope 1, Avatar, entity_id 7, incarnation 1
+    const auto same = [](const EntityTarget& a, const EntityTarget& b) {
+        return a.scope == b.scope && a.type_id == b.type_id &&
+               a.entity_id == b.entity_id && a.incarnation == b.incarnation;
+    };
+
+    // An undeclared type spawns fence-only: no store, no stream, no observer.
+    const EntityTarget unknown{1, 99, 1, 5};
+    require(runtime.spawn(unknown), "an undeclared spawn was refused");
+    require(runtime.properties(unknown) == nullptr, "an undeclared spawn grew a property store");
+    require(!runtime.observe(unknown, "obs", false), "an undeclared spawn took an observer");
+    require(!runtime.flush_properties(unknown), "an undeclared spawn reported a property stream");
+    require(runtime.destroy(unknown), "the undeclared spawn did not destroy");
+
+    // Every drained message arrives through the push sink; the test records
+    // each (address, message) pair.
+    std::vector<std::pair<EntityTarget, SyncMessage>> pushed;
+    runtime.set_property_push([&](const EntityTarget& t, const SyncMessage& m) { pushed.push_back({t, m}); });
+
+    // A declared spawn seeds the store with the contract defaults.
+    require(runtime.spawn(target), "a declared spawn was refused");
+    auto* store = runtime.properties(target);
+    require(store != nullptr, "a declared spawn has no property store");
+    require(std::get<std::int64_t>(store->get("level")->data) == 1 &&
+            std::get<std::int64_t>(store->get("gold")->data) == -5,
+            "the store did not seed the declared defaults");
+    require(runtime.flush_properties(target), "an unobserved spawn has no stream");
+    require(pushed.empty(), "a spawn with no observer pushed a message");
+
+    // Entry: each observer gets exactly one baseline carrying only what its
+    // audience may see; the guest never sees OWN_CLIENT, nobody sees SERVER_ONLY.
+    require(runtime.observe(target, "owner", true), "owner observe refused");
+    require(runtime.observe(target, "guest", false), "guest observe refused");
+    require(!runtime.observe(target, "owner", true), "a duplicate observe was accepted");
+    require(runtime.flush_properties(target), "entry flush refused");
+    require(pushed.size() == 2 && same(pushed[0].first, target) && same(pushed[1].first, target),
+            "entry did not push one baseline per observer");
+    require(pushed[0].second.kind == SyncMessage::Kind::BASELINE &&
+            pushed[1].second.kind == SyncMessage::Kind::BASELINE, "entry pushed a non-baseline");
+    const auto& guest = pushed[0].second.baseline;   // map order: guest before owner
+    const auto& owner = pushed[1].second.baseline;
+    require(owner.count("level") && owner.count("gold") && owner.count("bag"),
+            "the owner baseline lost a visible property");
+    require(!guest.count("level") && guest.count("gold") && guest.count("bag"),
+            "the guest baseline crossed the OWN_CLIENT boundary");
+    require(!owner.count("secret") && !guest.count("secret"), "a SERVER_ONLY property left the server");
+
+    // Writes journal deltas: the owner sees OWN_CLIENT+ALL_CLIENTS, the guest
+    // only ALL_CLIENTS, and SERVER_ONLY never reaches either.
+    store->set("level", std::int64_t{5});
+    store->set("gold", std::int64_t{100});
+    store->set("secret", std::int64_t{42});
+    store->set_path("bag", {TreeStep{false, "itemId", 0}}, std::int64_t{9});
+    pushed.clear();
+    require(runtime.flush_properties(target), "delta flush refused");
+    require(pushed.size() == 2, "writes did not push one batch per observer");
+    require(pushed[0].second.kind == SyncMessage::Kind::DELTAS &&
+            pushed[1].second.kind == SyncMessage::Kind::DELTAS, "writes pushed a non-delta");
+    const auto& guest_deltas = pushed[0].second.deltas;
+    const auto& owner_deltas = pushed[1].second.deltas;
+    require(owner_deltas.size() == 3, "the owner batch lost a visible delta");
+    require(guest_deltas.size() == 2, "the guest batch crossed OWN_CLIENT");
+    for (const auto& d : owner_deltas)
+        require(d.property_id != 3, "a SERVER_ONLY delta reached the owner");
+    require(owner_deltas[0].sequence == 1 && owner_deltas[1].sequence == 2 &&
+            owner_deltas[2].sequence == 3, "the owner batch is not gapless");
+    require(guest_deltas[0].sequence == 1 && guest_deltas[1].sequence == 2,
+            "the guest batch is not gapless");
+    for (const auto& d : guest_deltas)
+        require(d.property_id == 2 || d.property_id == 4, "a guest delta is not ALL_CLIENTS");
+
+    // Departure stops the stream; a second entity's store is isolated.
+    require(runtime.depart(target, "guest"), "guest depart refused");
+    require(!runtime.depart(target, "guest"), "a second depart was accepted");
+    store->set("gold", std::int64_t{200});
+    pushed.clear();
+    require(runtime.flush_properties(target), "flush after depart refused");
+    require(pushed.size() == 1 && pushed[0].second.deltas.size() == 1 &&
+            pushed[0].second.deltas[0].property_id == 2 && pushed[0].second.deltas[0].sequence == 4,
+            "departure did not leave a single owner stream");
+    const EntityTarget other{1, 1, 8, 1};
+    require(runtime.spawn(other), "a second spawn was refused");
+    auto* other_store = runtime.properties(other);
+    require(other_store && other_store != store, "a second spawn shared a store");
+    require(std::get<std::int64_t>(other_store->get("level")->data) == 1,
+            "the second store did not seed its own defaults");
+    require(runtime.observe(other, "owner", true), "the second entity took no observer");
+    pushed.clear();
+    require(runtime.flush_properties(other), "the second entity entry flush refused");
+    require(pushed.size() == 1 && pushed[0].second.kind == SyncMessage::Kind::BASELINE,
+            "the second entity did not deliver its entry baseline");
+    pushed.clear();
+    other_store->set("level", std::int64_t{9});
+    require(runtime.flush_properties(other), "the second entity flush refused");
+    require(pushed.size() == 1 && same(pushed[0].first, other) && pushed[0].second.deltas.size() == 1 &&
+            pushed[0].second.deltas[0].property_id == 1,
+            "a write on the second entity leaked to the first");
+
+    // Destroy tears the stream down and the address no longer accepts observers.
+    require(runtime.destroy(target), "the declared spawn did not destroy");
+    require(runtime.properties(target) == nullptr, "destroy kept the store");
+    require(!runtime.observe(target, "owner2", true), "observe on a destroyed entity was accepted");
+    require(!runtime.flush_properties(target), "flush on a destroyed entity reported a stream");
+    std::cout << "entity.runtime.properties: per-entity store, audience filter, push sink [PASS]\n";
+}
 void entity_perf() {
     const EntityContract contract(R"(<Contracts><Types>
         <Item><itemId id="0" type="UINT32"/><count id="1" type="UINT32" default="1"/></Item>

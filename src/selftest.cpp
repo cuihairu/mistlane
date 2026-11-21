@@ -15,6 +15,7 @@ void entity_properties();
 void entity_tree();
 void entity_sync();
 void entity_sync_wire();
+void entity_runtime_properties();
 void entity_rpc();
 void entity_endpoint();
 void entity_transport();
@@ -140,6 +141,7 @@ int run_tests(int argc, char** argv) {
         {"entity.tree","contract",test::entity_tree},
         {"entity.sync","contract",test::entity_sync},
         {"entity.sync.wire","contract",test::entity_sync_wire},
+        {"entity.runtime.properties","contract",test::entity_runtime_properties},
         {"entity.rpc","contract",test::entity_rpc},
         {"entity.endpoint","contract",test::entity_endpoint},
         {"entity.transport","contract",test::entity_transport},
