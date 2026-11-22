@@ -544,6 +544,28 @@ private:
             }
         }
         if ((config_.is_cross_gateway() || config_.role == "crossServer") && !joined_) {
+            // The cross path carries an internal identity too: a peer calling
+            // into a cross realm presents MLS1 before it joins. The crossServer
+            // owns the token and is the authenticator; the cross gateway only
+            // relays the frame it saw, answering the peer so the handshake can
+            // finish before the join arrives.
+            std::string role, instance, token;
+            if (config_.is_cross_gateway() && payload.starts_with("MLS1")
+                    && service_fields(payload, role, instance, token)) {
+                pending_identity_ = payload;
+                return reply("MLS1 OK");
+            }
+            if (config_.role == "crossServer" && payload.starts_with("MLS1")) {
+                if (config_.service_token.empty()) return refuse_service("MLS1", "UNEXPECTED");
+                if (!service_fields(payload, role, instance, token)) return refuse_service("MLS1", "INVALID");
+                // Constant-time token check, like the plain service window: the
+                // secret is not a timing oracle for a probing peer.
+                if (token.size() != config_.service_token.size()
+                        || CRYPTO_memcmp(token.data(), config_.service_token.data(), token.size()) != 0)
+                    return refuse_service("MLS1", "TOKEN");
+                service_ok_ = true; // the leg attributes as an internal caller
+                return reply("MLS1 OK");
+            }
             try {
                 // The registry gave this session its identity at start (used by
                 // Lua's ctx.session and entity owner binding); rebuilding the
@@ -785,6 +807,15 @@ private:
             deadline(10); // the verdict is bounded, not the session
             forward_upstream(service_hello(config_));
         }
+        if (config_.is_cross_gateway() && !pending_identity_.empty() && !awaiting_mls1_) {
+            // A peer that presented MLS1 before joining has it relayed ahead of
+            // the join, so the crossServer settles the identity before it ever
+            // sees a business frame. The verdict gates the session exactly like
+            // the plain gateway's own handshake.
+            awaiting_mls1_ = true;
+            deadline(10); // the verdict is bounded, not the session
+            forward_upstream(std::exchange(pending_identity_, {}));
+        }
         forward_upstream(std::move(payload));
     }
     // Only the gateway leg sees the MLS1 verdict: success settles into the
@@ -978,6 +1009,9 @@ private:
     // routed_ replaces "first frame": MLS1 and MLC2 stay valid until the first
     // business payload routes, so MLC2 can stack on an accepted MLS1 session.
     bool routed_ = false, correlated_ = false, service_ok_ = false, awaiting_mls1_ = false;
+    // A peer's MLS1 identity frame seen before a cross gateway joins: it rides
+    // ahead of the join so the crossServer's token decides the leg's caller.
+    std::string pending_identity_;
     std::function<void(Session*)> on_close_;
     std::function<void(std::shared_ptr<Channel>)> mux_upgrade_;
     TokenBucket bucket_;

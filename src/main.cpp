@@ -461,8 +461,10 @@ int main(int argc, char** argv) {
         }
         // Cross routing keeps its own MLC1 join as the identity; accepting the
         // token flags there would silently skip the handshake instead of
-        // surfacing the misconfiguration.
-        if (!config.service_token.empty() && (config.routing == "cross" || config.role == "crossServer"))
+        // surfacing the misconfiguration. A crossServer is the exception on the
+        // accepting side: an internal peer's MLS1 rides the cross path ahead of
+        // the join, and the crossServer's token is what authenticates it.
+        if (!config.service_token.empty() && config.routing == "cross")
             throw std::invalid_argument("--service-token does not apply to cross routing");
         if (!config.upstream_token.empty() && config.routing == "cross")
             throw std::invalid_argument("--upstream-token does not apply to cross routing");

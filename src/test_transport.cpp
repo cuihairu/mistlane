@@ -748,6 +748,109 @@ return service)");
     std::cout << "entity.cross.correlation reuse: same outer id twice, no host conflict [PASS]\n";
 }
 
+// The cross path carries an internal identity: a peer calling into a cross
+// realm presents MLS1 to the cross gateway before it joins. The gateway is not
+// the authenticator — it relays the frame it saw, ahead of the join, and the
+// crossServer's own token settles the leg, so a forwarded internal leg
+// attributes as caller="server" and reaches a server-declared method. A peer
+// that presents no identity still joins and stays a client leg, FORBIDDEN the
+// same method: the identity is an upgrade a cross gateway cannot grant.
+void entity_cross_caller() {
+    const std::string xml =
+        "<Contracts><Entity name=\"Avatar\" id=\"1\"><ServerMethods>"
+        "<Method name=\"get\" id=\"2\" mode=\"request\" caller=\"server\">"
+        "<Arg name=\"account\" id=\"0\" type=\"INT32\"/>"
+        "<Returns><Field name=\"level\" id=\"1\" type=\"UINT16\"/></Returns></Method>"
+        "</ServerMethods></Entity></Contracts>";
+    Context c;
+    const auto def = c.path("avatar.def");
+    write(def, xml);
+    const auto script = c.path("avatar.lua");
+    write(script, R"(local service = {}
+function service.message(payload)
+    if payload == "spawn" then
+        return mistlane.entity.spawn(1, 1, 3, 42) and "spawned" or "duplicate"
+    end
+    return "echo:"..payload
+end
+service.entities = {
+    Avatar = {
+        get = function(args, ctx)
+            assert(args.account == 4)
+            assert(ctx.caller_kind == "server")
+            return { level = 7 }
+        end,
+    },
+}
+return service)");
+    const auto shard = port(), ingress = port();
+    c.node("crossServer", shard, {"--script", script.string(), "--contract", def.string(),
+        "--service-token", "s3cret"});
+    c.cross_gateway(ingress, {"--upstream", endpoint(shard)});
+
+    EntityContract contract(xml);
+    SprotoCodec codec(contract);
+    const ContractMethod* get = nullptr;
+    for (const auto& e : contract.entities())
+        for (const auto& m : e.server_methods)
+            if (m.name == "get") get = &m;
+    require(get != nullptr, "test contract lost the get method");
+    const auto payload = [&](std::int64_t value) -> std::string {
+        auto encoded = codec.encode_returns(get->args, {{"account", value}});
+        require(encoded.has_value(), "test arg encode failed");
+        return *encoded;
+    };
+    const auto frame = [](std::uint64_t correlation, std::uint32_t generation,
+                          const std::string& body) {
+        return "MLE1" + encode_entity_envelope({1, 1, 3, 42, kEntitySideServer,
+            static_cast<std::uint16_t>(2), correlation, generation, 0, body});
+    };
+    const auto reply_of = [](const std::string& body) -> EntityReply {
+        require(body.size() >= 12 && body.starts_with("MLE1"), "expected an MLE1 reply frame");
+        const auto decoded = decode_entity_reply(std::string_view(body).substr(12));
+        require(decoded.has_value(), "reply body did not decode");
+        return *decoded;
+    };
+    const auto correlation_of = [](const std::string& body) {
+        require(body.size() >= 12, "reply frame too short");
+        std::uint64_t value = 0;
+        for (std::size_t i = 4; i < 12; ++i) value = value << 8 | static_cast<unsigned char>(body[i]);
+        return value;
+    };
+    const auto join = [](cli::Client& peer, const std::string& room) {
+        equal(peer.request("MLC1 1 arena g " + room + " ch hero gen 7 ret arena g " + room), "MLC1 OK 1");
+    };
+    const auto ok_of = [&](const std::string& body) {
+        require(!reply_of(body).is_error, "cross server call was not answered OK");
+        EntityValues decoded;
+        std::string reason;
+        require(codec.decode_args(get->returns, reply_of(body).payload, decoded, reason) && reason.empty()
+                && std::get<std::int64_t>(decoded.at("level").data) == 7,
+            "the cross server call was not resolved to server");
+    };
+
+    // An internal peer identifies before joining: the identity leaves ahead of
+    // the join, so the crossServer settles the leg before it sees the MLC1.
+    auto peer = tcp(ingress);
+    equal(peer->request("MLS1 gameServer game-1 s3cret"), "MLS1 OK");
+    join(*peer, "r1");
+    equal(peer->request("spawn"), "spawned");
+    const auto ok = peer->request(frame(42, 1, payload(4)));
+    require(correlation_of(ok) == 42, "the outer correlation was not echoed");
+    ok_of(ok);
+    std::cout << "entity.cross.caller internal: an identified peer reaches a server method [PASS]\n";
+
+    // A peer that presents no identity still joins, but stays a client leg: the
+    // same server method is FORBIDDEN, so MLS1 is an upgrade, not a bypass.
+    auto client = tcp(ingress);
+    join(*client, "r2");
+    const auto denied = client->request(frame(43, 1, payload(4)));
+    require(correlation_of(denied) == 43 && reply_of(denied).is_error
+            && reply_of(denied).error == EntityError::FORBIDDEN,
+        "an unidentified cross peer was not FORBIDDEN a server method");
+    std::cout << "entity.cross.caller client: an unidentified peer stays a client leg [PASS]\n";
+}
+
 
 // The gateway fronts the contract host's trusted leg: a plain client reaches
 // caller="server" methods through the relay, and the relay swaps the client's
