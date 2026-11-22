@@ -286,6 +286,22 @@ public:
         for (const auto& key : expired) find(key)->state = AvatarState::Reclaiming;
     }
 
+    // Reclaim completion sweep (the node tick's second pass, after tick()):
+    // every reclaiming avatar runs the ordered reclaim — the final avatar_save
+    // (the single forced-save entry; docs/avatar-lifecycle.md segment 6) and
+    // then closed. A failed final save keeps the avatar in reclaiming (retried
+    // on the next sweep, E_SAVE_FAIL per the migration table); the operator
+    // sees the failure through the save hook's own logging. This is the
+    // framework driving the reclaim to completion, not the model-test manual
+    // reclaim_done — the model's tick() only moves suspended to reclaiming so
+    // the per-step contract stays testable.
+    void sweep_reclaims() {
+        std::vector<AvatarKey> reclaiming;
+        for (const auto& [key, e] : avatars_)
+            if (e.state == AvatarState::Reclaiming) reclaiming.push_back(key);
+        for (const auto& key : reclaiming) reclaim_done(key);
+    }
+
     // avatar_save: the single forced-save entry, valid in active, suspended,
     // visiting and reclaiming. In reclaiming the save must be durable before
     // closed; a failure stays in reclaiming (retry or surfaced).

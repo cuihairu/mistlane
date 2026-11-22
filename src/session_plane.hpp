@@ -454,13 +454,23 @@ public:
         closed_ = true;
         timer_.cancel();
         client_->close();
-        // A bound cross visit ends with the session: the avatar closes here
-        // (best-effort save, onCrossVisitEnd, closed) — abnormal termination,
-        // not a graceful return, which is a later slice's MLD1 flow. After a
-        // reload the service_ reference points at the new VM, whose runtime has
-        // no such avatar, so this is a no-op (the old VM retired it already).
+        // A bound avatar ends with the session. A home avatar detaches (active
+        // -> suspended, the grace window opens: a reconnect within grace
+        // reattaches without a reload, and the node tick reclaims after grace);
+        // a cross visit closes here (best-effort save, onCrossVisitEnd, closed)
+        // — abnormal termination, not a graceful return, which is a later
+        // slice's MLD1 flow. After a reload the service_ reference points at the
+        // new VM, whose runtime has no such avatar, so this is a no-op (the old
+        // VM retired it already).
         if (avatar_key_) {
-            if (AvatarRuntime* runtime = service_->avatar_runtime()) runtime->close_visit(*avatar_key_);
+            if (AvatarRuntime* runtime = service_->avatar_runtime()) {
+                if (avatar_home_) {
+                    const auto session_id = context_.session ? context_.session : connection_;
+                    runtime->detach(*avatar_key_, session_id);
+                } else {
+                    runtime->close_visit(*avatar_key_);
+                }
+            }
         }
         if (upstream_) upstream_->close();
         if (link_) link_->detach(mux_id_);
@@ -603,25 +613,42 @@ private:
                     ? cross_shard(context_, config_.upstreams.size()) : 0;
                 auto error = admission_.acquire(this, context_, index);
                 if (!error.empty()) return reject(error);
-                // The crossServer is the avatar host for a cross visit: an
-                // admitted join whose participant origin is elsewhere creates
-                // the character's visiting avatar here (the lease face) and
-                // binds the session to it. A refused creation refuses the join
-                // — entry is never accepted without a live avatar to host it.
-                // A home join (realm == origin realm) is the login/data slice
-                // (it needs the MLD1 record endpoint); it joins today without
-                // hosting an avatar.
-                if (config_.role == "crossServer" && !context_.character.empty()
-                        && context_.realm != context_.return_realm) {
+                // The crossServer is the avatar host: an admitted join with a
+                // participant context hosts the character here. A participant
+                // from elsewhere (realm != origin realm) is a cross visit —
+                // the character's visiting avatar (the lease face) is created
+                // and the session bound to it; a refused creation refuses the
+                // join, entry is never accepted without a live avatar. A
+                // participant entering its own realm is the home login path:
+                // the home load runs avatar_load and stops in loading, then the
+                // session attach drives the avatar_enter edge to active (the
+                // join IS the entry); a live avatar (a reconnect within grace,
+                // or a stale session the stop has not swept yet) attaches
+                // instead of reloading, and a state that cannot host the join
+                // (visiting/transferring/reclaiming) refuses it.
+                if (config_.role == "crossServer" && !context_.character.empty()) {
                     if (AvatarRuntime* runtime = service_->avatar_runtime()) {
                         const AvatarKey key{context_.return_realm, context_.character, context_.generation};
                         const auto session_id = context_.session ? context_.session : connection_;
-                        const auto admitted = runtime->admit_visit(key, session_id, kAvatarGraceMs);
-                        if (!admitted.ok()) {
-                            std::cerr << "cross visit refused on join: " << admitted.reason << '\n';
-                            return reject("AVATAR");
+                        if (context_.realm == context_.return_realm) {
+                            auto admitted = runtime->load(key, kAvatarGraceMs, LoadSource::Home);
+                            if (admitted.ok() || admitted.code == AvatarError::Exists)
+                                admitted = runtime->attach(key, session_id);
+                            if (!admitted.ok()) {
+                                std::cerr << "home join refused on attach: " << admitted.reason << '\n';
+                                return reject("AVATAR");
+                            }
+                            avatar_home_ = true;
+                            avatar_key_ = key;
+                        } else {
+                            const auto admitted = runtime->admit_visit(key, session_id, kAvatarGraceMs);
+                            if (!admitted.ok()) {
+                                std::cerr << "cross visit refused on join: " << admitted.reason << '\n';
+                                return reject("AVATAR");
+                            }
+                            avatar_home_ = false;
+                            avatar_key_ = key;
                         }
-                        avatar_key_ = key;
                     }
                 }
                 joined_ = true;
@@ -1038,6 +1065,9 @@ private:
     // points at the new VM, whose runtime has no such avatar, so a late detach
     // is a no-op (the old VM's retirement already saved and closed it).
     std::optional<AvatarKey> avatar_key_;
+    // Which face the bound avatar is: a home join detaches on disconnect
+    // (grace window opens), a cross visit closes (abnormal termination).
+    bool avatar_home_ = false;
     // Default grace for an admitted avatar, until the configuration names it
     // (docs/avatar-runtime.md: grace periods are measured at implementation).
     // A cross visit never suspends — the session end closes the visit — so this

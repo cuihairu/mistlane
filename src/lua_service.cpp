@@ -216,8 +216,11 @@ void LuaService::callback(const char* name) {
 void LuaService::tick() {
     if (!started_ || stopped_) return;
     // The framework layer ticks before the script's own tick, so an avatar's
-    // business step sees the state the framework just settled.
-    if (avatar_enabled_) avatar_runtime_.tick();
+    // business step sees the state the framework just settled. The reclaim
+    // sweep runs after the grace-expiry pass: a suspended avatar whose grace
+    // ended moves to reclaiming and then the ordered reclaim (final save,
+    // closed) completes in the same tick, so an offline avatar does not linger.
+    if (avatar_enabled_) { avatar_runtime_.tick(); avatar_runtime_.sweep_reclaims(); }
     callback("tick");
 }
 void LuaService::start() { if (!started_) { started_ = true; callback("start"); } }

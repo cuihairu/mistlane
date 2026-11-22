@@ -1,6 +1,6 @@
 # Avatar full lifecycle: segments, oracle state machine and relationships
 
-Status: decided design (2026-11-22). No end-to-end Avatar runtime exists in the framework today (the seven-state oracle model is implemented and pinned by the avatar.lifecycle model test, its Lua hook surface is wired through the service VM and pinned by the avatar.lua test, and the cross-visit entry edge — `admit_visit`, `close_visit` and the node retirement face — is implemented and pinned by the avatar.session test, so a crossServer join now creates a real `visiting` avatar — the [runtime page](./avatar-runtime.md) names the files; the home login path and the return/transfer chain remain later slices)
+Status: decided design (2026-11-22). No end-to-end Avatar runtime exists in the framework today (the seven-state oracle model is implemented and pinned by the avatar.lifecycle model test, its Lua hook surface is wired through the service VM and pinned by the avatar.lua test, and the cross-visit entry edge — `admit_visit`, `close_visit` and the node retirement face — is implemented and pinned by the avatar.session test, so a crossServer join now creates a real `visiting` avatar; the home login path is also wired — a join entering its own realm (realm == return_realm) creates the `active` avatar (avatar_load then avatar_enter), the disconnect suspends it (the grace window opens), a reconnect within grace reattaches to active without a reload, and the node tick runs the ordered reclaim (final save, closed) after grace — pinned by the avatar.home test — the [runtime page](./avatar-runtime.md) names the files; the return/transfer chain remains a later slice)
 (`grep -rniE "\b(struct|class)\s+(Avatar|Charactor|Player)\b" include/ src/` returns nothing),
 so nothing on this page changes CLI behavior and no runtime below is implemented or
 validated. This page is the **unified** lifecycle contract the [Avatar runtime](./avatar-runtime.md)
@@ -334,9 +334,10 @@ recorded here for a maintainer to resolve.
 - **Mermaid:** all nine diagrams (eight segments + the state machine) render; `docs:check`
   covers renderability, desktop/mobile, light/dark and expansion.
 - **Runtime acceptance:** none today — no end-to-end Avatar runtime exists; the seven-state oracle
-  model is implemented and model-tested (avatar.lifecycle) but session/Lua/transport wiring is a
-  later slice. Validation records must not claim avatar behavior (unchanged from the
-  avatar-runtime page).
+  model is implemented and model-tested (avatar.lifecycle), the home join and cross-visit
+  session/Lua/transport wiring is implemented and pinned (avatar.home, avatar.session), but the
+  return/transfer chain is a later slice. Validation records must not claim the full avatar
+  behavior (unchanged from the avatar-runtime page).
 
 Related: [Avatar runtime](./avatar-runtime.md), [cross return and single-writer protocol](./cross-return-protocol.md),
 [scene lifecycle](./scene-lifecycle.md), [players, scenes and cross-region execution](./player-scene-model.md).

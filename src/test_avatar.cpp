@@ -213,6 +213,38 @@ void avatar_lifecycle() {
         std::cout << "avatar.lifecycle grace_expiry: reclaiming, save-fail retry, closed [PASS]\n";
     }
 
+    // --- Reclaim sweep completes the ordered reclaim --------------------------
+    {
+        RecordingHooks hooks;
+        FakeClock clock;
+        AvatarRuntime runtime(hooks, clock.fn());
+        require(runtime.load(key, 100).ok() && runtime.attach(key, 7).ok(), "setup failed");
+        runtime.detach(key, 7);
+        clock.now += std::chrono::milliseconds(150);
+        runtime.tick();  // grace expired -> reclaiming
+        require(runtime.state(key) == AvatarState::Reclaiming, "grace expiry did not move to reclaiming");
+        runtime.sweep_reclaims();
+        require(runtime.state(key) == AvatarState::Closed, "the sweep did not close the reclaimed avatar");
+        require(hooks.count("save") >= 1, "the final save did not run");
+        std::cout << "avatar.lifecycle reclaim_sweep: final save then closed [PASS]\n";
+    }
+    {
+        RecordingHooks hooks;
+        FakeClock clock;
+        AvatarRuntime runtime(hooks, clock.fn());
+        require(runtime.load(key, 100).ok() && runtime.attach(key, 7).ok(), "setup failed");
+        runtime.detach(key, 7);
+        clock.now += std::chrono::milliseconds(150);
+        runtime.tick();
+        hooks.fail_save = true;
+        runtime.sweep_reclaims();
+        require(runtime.state(key) == AvatarState::Reclaiming, "E_SAVE_FAIL left reclaiming");
+        hooks.fail_save = false;
+        runtime.sweep_reclaims();
+        require(runtime.state(key) == AvatarState::Closed, "the retry sweep did not close");
+        std::cout << "avatar.lifecycle reclaim_sweep: save-fail retry [PASS]\n";
+    }
+
     // --- Transfer out / abort / accepted reload -------------------------------
     {
         RecordingHooks hooks;
@@ -626,5 +658,146 @@ return {
     node.signal(SIGTERM);
     require(node.wait() == 0, "crossServer graceful shutdown failed");
     std::cout << "avatar.session: crossServer join -> visiting avatar, business, disconnect, reload [PASS]\n";
+}
+
+// The home login path on the avatar-host session: a join whose participant
+// enters its own realm (realm == return_realm) hosts the character's home
+// avatar — avatar_load then avatar_enter drive the join to active (bound),
+// business frames flow while it is live, a refused load or a denied entry
+// rejects the join, the disconnect detaches the avatar (avatar_leave then
+// avatar_detach, the grace window opens), and a reconnect within grace
+// reattaches to active without a reload.
+void avatar_home() {
+    Context c;
+    const auto script = c.path("avatar_home.lua");
+    write(script, R"avatar(local calls = {}
+local function note(name) calls[#calls+1] = name end
+return {
+  message = function(payload, ctx)
+    if payload == "who" then return ctx.character .. "," .. tostring(ctx.generation) end
+    return table.concat(calls, "|")
+  end,
+  avatar_load = function(context, state)
+    note("load:" .. context.character)
+    if context.character == "refused" then return nil end
+    return { name = context.character, generation = context.generation }
+  end,
+  avatar_enter = function(context, avatar)
+    note("enter:" .. avatar.name)
+    return context.character ~= "denied"
+  end,
+  avatar_tick = function(context, avatar) note("tick:" .. avatar.name) end,
+  avatar_save = function(context, avatar) note("save:" .. avatar.name) return true end,
+  avatar_leave = function(context, avatar) note("leave:" .. avatar.name) end,
+  avatar_detach = function(context, avatar) note("detach:" .. avatar.name) end,
+}
+)avatar");
+    const auto cross = port();
+    auto& node = c.node("crossServer", cross, {"--script", script.string()});
+    const auto send_frame = [](RawSocket& raw, std::string_view payload) {
+        std::string frame(4, '\0');
+        auto length = static_cast<std::uint32_t>(payload.size());
+        for (int i = 3; i >= 0; --i) { frame[i] = static_cast<char>(length & 255); length >>= 8; }
+        raw.send(frame+std::string(payload));
+    };
+    const auto read_frame = [](RawSocket& raw) {
+        std::size_t length = 0;
+        for (unsigned char ch : raw.receive(4)) length = (length << 8) | ch;
+        return raw.receive(length);
+    };
+    // The home join declares the participant entering its own realm: the same
+    // origin and return realm. Anonymous joins keep working (no avatar).
+    const auto join = [&](RawSocket& raw, std::string_view character) {
+        if (character.empty()) {
+            send_frame(raw, "MLC1 1 home g r1");
+            return read_frame(raw);
+        }
+        send_frame(raw, "MLC1 1 home g r1 ch " + std::string(character) + " gen 5 ret home g r1");
+        return read_frame(raw);
+    };
+    const auto trace = [&](RawSocket& raw) {
+        send_frame(raw, "read");
+        return read_frame(raw);
+    };
+    const auto has = [](std::string_view haystack, std::string_view needle) {
+        return haystack.find(needle) != std::string_view::npos;
+    };
+
+    // The home join loads and enters: active and bound. Business frames carry
+    // the participant (the home face runs avatar_enter, unlike a cross visit).
+    {
+        RawSocket raw(cross);
+        equal(join(raw, "hero"), "MLC1 OK 1");
+        const auto seen = trace(raw);
+        require(has(seen, "load:hero") && has(seen, "enter:hero"),
+                "the home join loaded and entered the avatar");
+        send_frame(raw, "who");
+        equal(read_frame(raw), "hero,5");
+    }
+    // The disconnect detaches: the trace shows leave then detach (the grace
+    // window opens), read through a second joined session because the trace
+    // lives in the shared VM and the teardown is async.
+    {
+        RawSocket raw(cross);
+        equal(join(raw, "observer"), "MLC1 OK 1");
+        eventually([&] {
+            send_frame(raw, "read");
+            return has(read_frame(raw), "detach:hero");
+        }, 5s, "the disconnect did not run avatar_leave then avatar_detach");
+    }
+    // A reconnect within grace reattaches to active without a reload: the
+    // character's load and enter each ran once (the first join); the reattach
+    // adds none, and the session carries the character again.
+    {
+        RawSocket raw(cross);
+        equal(join(raw, "hero"), "MLC1 OK 1");
+        const auto seen = trace(raw);
+        require(has(seen, "detach:hero"), "the detach is missing from the trace");
+        const auto count = [&](std::string_view needle) {
+            std::size_t n = 0;
+            for (std::size_t pos = seen.find(needle); pos != std::string::npos;
+                 pos = seen.find(needle, pos + needle.size())) ++n;
+            return n;
+        };
+        require(count("load:hero") == 1 && count("enter:hero") == 1,
+                "the reconnect reloaded or re-entered the avatar");
+        send_frame(raw, "who");
+        equal(read_frame(raw), "hero,5");
+    }
+    // A refused load (nil avatar_load) and a denied entry (avatar_enter false)
+    // reject the join — entry is never accepted without a live avatar.
+    {
+        RawSocket raw(cross);
+        const auto reply = join(raw, "refused");
+        require(reply.starts_with("MLC1 ERR "), "a failed avatar_load refused the join");
+    }
+    {
+        RawSocket raw(cross);
+        const auto reply = join(raw, "denied");
+        require(reply.starts_with("MLC1 ERR "), "a denied avatar_enter refused the join");
+    }
+    // An anonymous join keeps working and hosts no avatar: it adds no load or
+    // enter to the (shared, accumulating) trace.
+    {
+        const auto count = [&](std::string_view haystack, std::string_view needle) {
+            std::size_t n = 0;
+            for (std::size_t pos = haystack.find(needle); pos != std::string::npos;
+                 pos = haystack.find(needle, pos + needle.size())) ++n;
+            return n;
+        };
+        RawSocket before(cross);
+        equal(join(before, "probe"), "MLC1 OK 1");
+        const auto prior = trace(before);
+        RawSocket raw(cross);
+        equal(join(raw, ""), "MLC1 OK 1");
+        send_frame(raw, "read");
+        const auto seen = read_frame(raw);
+        require(count(seen, "load:") == count(prior, "load:")
+                    && count(seen, "enter:") == count(prior, "enter:"),
+                "an anonymous join hosted an avatar");
+    }
+    node.signal(SIGTERM);
+    require(node.wait() == 0, "crossServer graceful shutdown failed");
+    std::cout << "avatar.home: home join -> active avatar, business, disconnect, grace reattach [PASS]\n";
 }
 } // namespace mistlane::test
