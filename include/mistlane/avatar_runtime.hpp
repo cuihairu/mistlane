@@ -104,8 +104,10 @@ class AvatarHooks {
 public:
     virtual ~AvatarHooks() = default;
     // avatar_load (context, state) -> avatar table. Valid in loading; entry to
-    // active only on success, failure -> closed, no visible avatar.
-    virtual bool on_load(const AvatarKey&, std::string& avatar_ref) = 0;
+    // active only on success, failure -> closed, no visible avatar. `state` is
+    // the loaded record (opaque bytes the home LOAD returned) or empty when no
+    // record has landed yet.
+    virtual bool on_load(const AvatarKey&, std::string_view state, std::string& avatar_ref) = 0;
     // avatar_enter (context). Valid at the loading -> active edge; entry
     // refused with an explicit reason.
     virtual bool on_enter(const AvatarKey&, const std::string& avatar_ref, std::string& reason) = 0;
@@ -176,7 +178,8 @@ public:
     // already holds a live avatar (any state but closed) is refused — one
     // active per character. Home loads stop in loading until attach(); a
     // transfer-in load completes to active (unbound) via avatar_transfer_in.
-    Result load(AvatarKey key, std::uint64_t grace_ms, LoadSource source = LoadSource::Home) {
+    Result load(AvatarKey key, std::uint64_t grace_ms, LoadSource source = LoadSource::Home,
+                std::string_view state = {}) {
         if (!key.valid()) return {AvatarError::InvalidIdentity, "invalid avatar identity"};
         for (const auto& [k, x] : avatars_)
             if (k.realm == key.realm && k.character == key.character && x.state != AvatarState::Closed)
@@ -187,7 +190,7 @@ public:
         e.grace_ms = grace_ms;
         e.source = source;
         avatars_.emplace(key, std::move(e));
-        return finish_load(key);
+        return finish_load(key, state);
     }
 
     // Cross admission + visiting create, one step (docs/cross-server-lifecycle.md
@@ -505,11 +508,12 @@ private:
     // avatar_load, then the load-source completion: a transfer-in load runs
     // avatar_transfer_in and lands active (unbound); a home load stops in
     // loading (loaded, not yet entered) and waits for the session attach. A
-    // failure closes without publishing.
-    Result finish_load(AvatarKey key) {
+    // failure closes without publishing. `state` is the loaded record handed to
+    // avatar_load (empty when none landed).
+    Result finish_load(AvatarKey key, std::string_view state = {}) {
         Entry* e = find(key);
         std::string ref;
-        if (!hooks_.on_load(key, ref)) {
+        if (!hooks_.on_load(key, state, ref)) {
             e->state = AvatarState::Closed;
             return {AvatarError::LoadFailed, "avatar_load failed: no avatar published"};
         }

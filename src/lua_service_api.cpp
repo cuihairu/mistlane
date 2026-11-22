@@ -615,7 +615,8 @@ void push_avatar_ref(lua_State* l, const std::string& ref) {
 } // namespace
 LuaService::AvatarHookOutcome LuaService::avatar_hook(const char* name, const AvatarKey& key,
                                                       const std::string& ref, bool with_avatar,
-                                                      std::string_view reason, bool store_avatar) {
+                                                      std::string_view reason, bool store_avatar,
+                                                      std::string_view state) {
     AvatarHookOutcome out;
     StackGuard guard(state_);
     lua_pushcfunction(state_, traceback);
@@ -631,7 +632,13 @@ LuaService::AvatarHookOutcome LuaService::avatar_hook(const char* name, const Av
     push_avatar_context(state_, key);
     if (with_avatar) push_avatar_ref(state_, ref);
     if (!reason.empty()) lua_pushlstring(state_, reason.data(), reason.size());
-    const int arguments = 1 + (with_avatar ? 1 : 0) + (reason.empty() ? 0 : 1);
+    int arguments = 1 + (with_avatar ? 1 : 0) + (reason.empty() ? 0 : 1);
+    // avatar_load's state argument: the loaded record, or nothing (nil) when
+    // no record landed — an omitted Lua argument reads as nil either way.
+    if (!state.empty()) {
+        lua_pushlstring(state_, state.data(), state.size());
+        ++arguments;
+    }
     if (protected_call(state_, arguments, LUA_MULTRET, guard.top+1) != LUA_OK) {
         const auto* message = lua_tostring(state_, -1);
         std::cerr << "avatar hook " << name << " failed: "
@@ -656,10 +663,11 @@ LuaService::AvatarHookOutcome LuaService::avatar_hook(const char* name, const Av
     }
     return out;
 }
-bool LuaService::on_load(const AvatarKey& key, std::string& avatar_ref) {
-    // avatar_load(context, state): state is nil until persisted-record loading
-    // lands — this slice publishes whatever the script returns as the avatar.
-    const auto result = avatar_hook("avatar_load", key, {}, false, {}, true);
+bool LuaService::on_load(const AvatarKey& key, std::string_view state, std::string& avatar_ref) {
+    // avatar_load(context, state): state is the loaded record (opaque bytes the
+    // home LOAD returned), or nil when none landed; the script publishes
+    // whatever it returns as the avatar.
+    const auto result = avatar_hook("avatar_load", key, {}, false, {}, true, state);
     if (!result.present || result.raised || !result.truthy) return false;
     avatar_ref = result.ref;
     return true;

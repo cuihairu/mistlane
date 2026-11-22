@@ -65,7 +65,7 @@ stateDiagram-v2
 
 | 钩子 | 何时调用 | 参数 → 返回 | 出错或超时 |
 |---|---|---|---|
-| `avatar_load` | 本宿主从加载的记录创建 Avatar | `(context, state)` → avatar 表；记录加载落地前 `state` 为 nil | 加载失败：不发布 Avatar，带原因拒绝进入 |
+| `avatar_load` | 本宿主从加载的记录创建 Avatar | `(context, state)` → avatar 表；`state` 是加载到的记录（`MLD1 STATE` 载荷，不透明字节串），宿主侧记录读取落地后非 nil，之前为 nil | 加载失败：不发布 Avatar，带原因拒绝进入 |
 | `avatar_enter` | 会话绑定到 active Avatar | `(context, avatar)` → `true`，或 `false, reason` | 以该原因拒绝进入 |
 | `avatar_leave` | 会话解除绑定（登出、迁出） | `(context, avatar)` → 无 | 记日志；绝不阻塞解除绑定 |
 | `avatar_tick` | 节点 tick，仅 active Avatar | `(context, avatar)` → 无 | 记日志；Avatar 保留（与 `tick` 一致） |

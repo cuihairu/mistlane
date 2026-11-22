@@ -12,8 +12,8 @@ struct RecordingHooks final : AvatarHooks {
     bool fail_load = false, fail_enter = false, fail_save = false;
     bool fail_transfer_out = false, fail_transfer_in = false;
     std::string ref = "avatar-table";
-    bool on_load(const AvatarKey&, std::string& out) override {
-        calls.push_back("load");
+    bool on_load(const AvatarKey&, std::string_view state, std::string& out) override {
+        calls.push_back(state.empty() ? "load" : "load:" + std::string(state));
         out = ref;
         return !fail_load;
     }
@@ -98,6 +98,21 @@ void avatar_lifecycle() {
         r = runtime.save(key);
         require(r.ok(), "active save refused: " + r.reason);
         std::cout << "avatar.lifecycle home_load: load -> enter -> active, already-attached refused [PASS]\n";
+    }
+
+    // --- Loaded record reaches avatar_load -----------------------------------
+    {
+        RecordingHooks hooks;
+        FakeClock clock;
+        AvatarRuntime runtime(hooks, clock.fn());
+        auto r = runtime.load(key, 100, LoadSource::Home, "hp=10 mp=5");
+        require(r.ok(), "record load refused: " + r.reason);
+        require(hooks.saw("load:hp=10 mp=5"), "avatar_load did not receive the loaded record");
+        // An empty state stays the record-less load.
+        r = runtime.load(other, 100);
+        require(r.ok(), "recordless load refused: " + r.reason);
+        require(hooks.saw("load"), "a recordless load passed a non-empty state");
+        std::cout << "avatar.lifecycle load_state: record reaches avatar_load [PASS]\n";
     }
 
     // --- Load failure: no visible avatar ------------------------------------
@@ -390,8 +405,9 @@ end
 return {
   message = function() return table.concat(calls, '|') end,
   avatar_load = function(context, state)
-    assert(state == nil, "avatar_load state is nil until record loading lands")
-    note('load:' .. context.character)
+    assert(state == nil or type(state) == 'string', "avatar_load state is a string or nil")
+    note(state ~= nil and ('load:' .. context.character .. ':' .. state)
+         or ('load:' .. context.character))
     if context.character == 'ghost' then return nil end
     return { name = context.character, generation = context.generation }
   end,
@@ -451,6 +467,15 @@ return {
     require(runtime.load(other, 60000).code == AvatarError::Ok, "second avatar load");
     require(runtime.attach(other, 43).code == AvatarError::Ok, "second avatar attach");
     require(runtime.active_count() == 2, "two active avatars");
+
+    // A loaded record reaches avatar_load as the state string; a recordless
+    // load passes nil.
+    {
+        const AvatarKey recorded{"realm-a", "recorded", 1};
+        require(runtime.load(recorded, 60000, LoadSource::Home, "hp=10").code == AvatarError::Ok,
+                "recorded avatar load");
+        require(contains("load:recorded:hp=10"), "avatar_load did not receive the record");
+    }
 
     // The forced save is the single save entry and runs from the model.
     require(runtime.save(hero).code == AvatarError::Ok, "avatar save");

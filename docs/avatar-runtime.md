@@ -65,7 +65,7 @@ These hooks are additions to the existing module contract; `message`/`http` keep
 
 | Hook | Called when | Arguments → result | On error or timeout |
 |---|---|---|---|
-| `avatar_load` | An avatar is created at this host from a loaded record | `(context, state)` → avatar table; `state` is nil until record loading lands | Load failed: no avatar is published, entry is refused with the cause |
+| `avatar_load` | An avatar is created at this host from a loaded record | `(context, state)` → avatar table; `state` is the loaded record (the `MLD1 STATE` payload, an opaque byte string) once the host's record fetch lands, nil until then | Load failed: no avatar is published, entry is refused with the cause |
 | `avatar_enter` | A session attaches to an active avatar | `(context, avatar)` → `true`, or `false, reason` | Entry refused with that reason |
 | `avatar_leave` | A session detaches (logout, evacuation) | `(context, avatar)` → nothing | Logged; never blocks the detach |
 | `avatar_tick` | Node tick, active avatars only | `(context, avatar)` → nothing | Logged; the avatar stays (matches `tick` semantics) |

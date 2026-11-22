@@ -184,8 +184,9 @@ private:
         std::string ref;      // avatar_load: the encoded avatar table handle
     };
     AvatarHookOutcome avatar_hook(const char* name, const AvatarKey& key, const std::string& ref,
-                                  bool with_avatar, std::string_view reason, bool store_avatar);
-    bool on_load(const AvatarKey& key, std::string& avatar_ref) override;
+                                  bool with_avatar, std::string_view reason, bool store_avatar,
+                                  std::string_view state = {});
+    bool on_load(const AvatarKey& key, std::string_view state, std::string& avatar_ref) override;
     bool on_enter(const AvatarKey& key, const std::string& avatar_ref, std::string& reason) override;
     void on_leave(const AvatarKey& key, const std::string& avatar_ref) override;
     void on_tick(const AvatarKey& key, const std::string& avatar_ref) override;
