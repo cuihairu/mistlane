@@ -3,7 +3,8 @@
 // bindings: encodes the same locked vectors as the Lua/C++/JS goldens and
 // asserts byte-identical output, then decodes them back exactly (including the
 // negative wide value the vendored upstream decoder corrupts), and refuses
-// malformed wire, invalid UTF-8 and unsupported field kinds.
+// malformed wire, invalid UTF-8 and unsupported field kinds. It also decodes
+// the pinned MLP1 server-push property frames against the same byte reference.
 //
 // Owner-run golden (the build requires no .NET toolchain): compile this file
 // together with the generated avatar.bindings.cs, e.g.
@@ -430,6 +431,101 @@ internal static class Program
             throw new InvalidOperationException("unexpected handler stream");
         Console.WriteLine("CS_PROPERTY_SYNC baseline defaults, delta batches, atomic rollback and resync [PASS]");
     }
+    private static byte[] Take(byte[] bytes, int count)
+    {
+        var outBytes = new byte[count];
+        Array.Copy(bytes, outBytes, count);
+        return outBytes;
+    }
+    private static void AssertPush()
+    {
+        // Server-push property frames: the MLP1 wire form the node emits on a
+        // session (docs/entity-contract.md, entity.push). The pinned bytes are
+        // the C++ SyncWireCodec + property_push_frame output for scope=1,
+        // Avatar(1), incarnation=1, entity=42; the SDK decoder must read them
+        // exactly, recompute each delta sequence as head+i, feed PropertySync,
+        // and refuse malformed frames instead of misapplying them.
+        // Flat baseline: level=1 score=7 exp=100 tags=[1,2,3] active=true name="rei" blob=[0,255].
+        var baselineFrame = Unhex("4d4c5031000000010000000100000001000000000000002a0000000007000000010000000000000001000000030000000000000007000000040000000000000064000000050000000300000000000000010000000000000002000000000000000300000007010000000800000003726569000000090000000200ff");
+        var header = PropertyPushCodec.Decode(baselineFrame);
+        if (header == null || header.Value.Kind != "baseline" || header.Value.Scope != 1
+            || header.Value.TypeId != 1 || header.Value.Incarnation != 1 || header.Value.EntityId != 42)
+            throw new InvalidOperationException("push header lost");
+        var sync = new PropertySync("Avatar");
+        if (sync.Accept(baselineFrame) == null) throw new InvalidOperationException("push baseline refused");
+        if (!Equals(sync.Get("level"), 1L) || !Equals(sync.Get("score"), 7L) || !Equals(sync.Get("exp"), 100L)
+            || !Equals(sync.Get("active"), true) || (string)sync.Get("name") != "rei"
+            || !((byte[])sync.Get("blob")).SequenceEqual(new byte[] { 0, 255 })
+            || ((List<long>)sync.Get("tags")).Count != 3
+            || !Equals(((Dictionary<string, object>)sync.Get("inventory"))["capacity"], 0L))
+            throw new InvalidOperationException("push baseline not applied");
+        // Delta batch: SET exp(4)=200 then INSERT tags(5)@0=9, head sequence 1.
+        var deltaFrame = Unhex("4d4c5031000000010000000100000001000000000000002a010000000000000001000000020000000400000000000000000000000000c8000000050001000000000000000000000009");
+        var delta = PropertyPushCodec.Decode(deltaFrame);
+        var deltaBatch = delta?.Deltas;
+        if (delta == null || delta.Value.Kind != "deltas" || delta.Value.Sequence != 1
+            || deltaBatch == null || deltaBatch.Count != 2
+            || deltaBatch[0].Sequence != 1 || deltaBatch[1].Sequence != 2
+            || deltaBatch[0].PropertyId != 4 || deltaBatch[0].Kind != "SET"
+            || !Equals(deltaBatch[0].Value, 200L)
+            || deltaBatch[1].PropertyId != 5 || deltaBatch[1].Kind != "INSERT"
+            || !Equals(deltaBatch[1].Value, 9L))
+            throw new InvalidOperationException("push delta decode lost fields");
+        if (sync.Accept(deltaFrame) == null || !Equals(sync.Get("exp"), 200L)
+            || ((List<long>)sync.Get("tags"))[0] != 9L || sync.Sequence != 2)
+            throw new InvalidOperationException("push delta not applied");
+        // Struct values and a struct field path: baseline carries inventory,
+        // the delta walks path [capacity] and [items] on it.
+        var structFrame = Unhex("4d4c5031000000010000000100000001000000000000002a0000000002000000010000000000000001000000020000000000000000004d0001000000010000000000000000000100010000000000000001");
+        var sync2 = new PropertySync("Avatar");
+        if (sync2.Accept(structFrame) == null) throw new InvalidOperationException("push struct baseline refused");
+        var inv2 = (Dictionary<string, object>)sync2.Get("inventory");
+        var items2 = (List<object>)inv2["items"];
+        var item2 = (Dictionary<string, object>)items2[0];
+        if (!Equals(inv2["capacity"], 77L) || items2.Count != 1
+            || !Equals(item2["itemId"], 1L) || !Equals(item2["count"], 1L))
+            throw new InvalidOperationException("push struct baseline not applied");
+        var structDeltaBytes = Unhex("4d4c5031000000010000000100000001000000000000002a0100000000000000010000000200000002010000000000000000000000000000001e000000020100000101000000000000000000000000000500010000000000000001");
+        var structDelta = PropertyPushCodec.Decode(structDeltaBytes);
+        var structBatch = structDelta?.Deltas;
+        if (structDelta == null || structBatch == null || structBatch.Count != 2
+            || structBatch[0].Path.Count != 1 || structBatch[0].Path[0].FieldId != 0
+            || structBatch[1].Path[0].FieldId != 1
+            || !Equals(structBatch[0].Value, 30L))
+            throw new InvalidOperationException("push struct delta decode lost path");
+        var itemValue = (Dictionary<string, object>)structBatch[1].Value;
+        if (!Equals(itemValue["itemId"], 5L) || !Equals(itemValue["count"], 1L))
+            throw new InvalidOperationException("push struct delta lost the element value");
+        var sync3 = new PropertySync("Avatar");
+        sync3.Accept(structFrame);
+        if (sync3.Accept(structDeltaBytes) == null) throw new InvalidOperationException("push struct delta refused");
+        var inv3 = (Dictionary<string, object>)sync3.Get("inventory");
+        var items3 = (List<object>)inv3["items"];
+        if (!Equals(inv3["capacity"], 30L) || items3.Count != 2
+            || !Equals(((Dictionary<string, object>)items3[0])["itemId"], 5L)
+            || !Equals(((Dictionary<string, object>)items3[1])["itemId"], 1L))
+            throw new InvalidOperationException("push struct delta not applied");
+        // Malformed frames refuse closed: wrong marker, truncation at the
+        // header, truncation in the body, trailing bytes, an unknown entity
+        // type, and null. A replayed batch still decodes but the gapless
+        // replica refuses it, so a frame is never applied twice.
+        var marker = (byte[])baselineFrame.Clone();
+        marker[0] = 88;
+        if (PropertyPushCodec.Decode(marker) != null) throw new InvalidOperationException("bad marker accepted");
+        if (PropertyPushCodec.Decode(Take(baselineFrame, 24)) != null) throw new InvalidOperationException("truncated header accepted");
+        if (PropertyPushCodec.Decode(Take(baselineFrame, baselineFrame.Length - 1)) != null) throw new InvalidOperationException("truncated body accepted");
+        var trailing = new byte[baselineFrame.Length + 1];
+        Array.Copy(baselineFrame, trailing, baselineFrame.Length);
+        if (PropertyPushCodec.Decode(trailing) != null) throw new InvalidOperationException("trailing bytes accepted");
+        var unknown = (byte[])baselineFrame.Clone();
+        unknown[8] = 99;
+        if (PropertyPushCodec.Decode(unknown) != null) throw new InvalidOperationException("unknown entity type accepted");
+        if (PropertyPushCodec.Decode(Array.Empty<byte>()) != null) throw new InvalidOperationException("empty frame accepted");
+        if (PropertyPushCodec.Decode(null) != null) throw new InvalidOperationException("null frame accepted");
+        if (sync.Accept(deltaFrame) == null) throw new InvalidOperationException("replayed frame did not decode");
+        if (!sync.Stale) throw new InvalidOperationException("replay did not trip the stale flag");
+        Console.WriteLine("CS_PROPERTY_PUSH pinned MLP1 vectors, struct paths and malformed refusals [PASS]");
+    }
     public static int Main()
     {
         AssertVectors();
@@ -439,6 +535,7 @@ internal static class Program
         AssertEnvelope();
         AssertFacade();
         AssertSync();
+        AssertPush();
         Console.WriteLine("CS_SPROTO_SDK_OK scalar+struct+arrays+bool/string/bytes vectors and decode match the locked bytes");
         return 0;
     }

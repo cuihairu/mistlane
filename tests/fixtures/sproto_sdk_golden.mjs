@@ -4,7 +4,7 @@ import { pathToFileURL } from 'node:url';
 const modulePath = process.argv[2];
 if (!modulePath) throw new Error('usage: node tests/fixtures/sproto_sdk_golden.mjs GENERATED.bindings.js');
 const { encodeRecord, decodeRecord, sprotoFields, encodeEnvelope, decodeEnvelope, encodeReply, decodeReply,
-  entityTypes, entityMethods, EntityRpcQueue, EntityClient, PropertySync } = await import(pathToFileURL(modulePath));
+  entityTypes, entityMethods, EntityRpcQueue, EntityClient, PropertySync, decodePropertyPush } = await import(pathToFileURL(modulePath));
 const hex = (bytes) => [...bytes].map((byte) => byte.toString(16).padStart(2, '0')).join('');
 const utf8 = (text) => new TextEncoder().encode(text);
 const unhex = (text) => Uint8Array.from(text.match(/../g), (pair) => parseInt(pair, 16));
@@ -371,3 +371,72 @@ console.log('JS_ENTITY_CLIENT bounded queue, facade calls/notify/retry and malfo
   if (seen.join('|') !== 'exp:SET:99|tags:INSERT:0|tags:REMOVE:1') throw new Error('unexpected handler stream');
 }
 console.log('JS_PROPERTY_SYNC baseline defaults, delta batches, atomic rollback and resync [PASS]');
+{
+  // Server-push property frames: the MLP1 wire form the node emits on a
+  // session (docs/entity-contract.md, entity.push). The pinned bytes are the
+  // C++ SyncWireCodec + property_push_frame output for scope=1, Avatar(1),
+  // incarnation=1, entity=42; the SDK decoder must read them exactly, recompute
+  // each delta sequence as head+i, feed PropertySync, and refuse malformed
+  // frames instead of misapplying them.
+  // Flat baseline: level=1 score=7 exp=100 tags=[1,2,3] active=true name="rei" blob=[0,255].
+  const baselineFrame = unhex('4d4c5031000000010000000100000001000000000000002a0000000007000000010000000000000001000000030000000000000007000000040000000000000064000000050000000300000000000000010000000000000002000000000000000300000007010000000800000003726569000000090000000200ff');
+  const header = decodePropertyPush(baselineFrame);
+  if (!header || header.kind !== 'baseline' || header.scope !== 1 || header.type_id !== 1
+    || header.incarnation !== 1 || header.entity_id !== 42n) throw new Error('push header lost');
+  const sync = new PropertySync('Avatar');
+  if (sync.accept(baselineFrame) === null) throw new Error('push baseline refused');
+  if (sync.get('level') !== 1n || sync.get('score') !== 7n || sync.get('exp') !== 100n
+    || sync.get('active') !== true || sync.get('name') !== 'rei'
+    || !(sync.get('blob') instanceof Uint8Array) || sync.get('blob')[1] !== 255
+    || !(sync.get('tags').length === 3 && sync.get('tags')[2] === 3n)
+    || sync.get('inventory').capacity !== 0n) throw new Error('push baseline not applied');
+  // Delta batch: SET exp(4)=200 then INSERT tags(5)@0=9, head sequence 1.
+  const deltaFrame = unhex('4d4c5031000000010000000100000001000000000000002a010000000000000001000000020000000400000000000000000000000000c8000000050001000000000000000000000009');
+  const delta = decodePropertyPush(deltaFrame);
+  if (!delta || delta.kind !== 'deltas' || delta.sequence !== 1 || delta.deltas.length !== 2
+    || delta.deltas[0].sequence !== 1 || delta.deltas[1].sequence !== 2
+    || delta.deltas[0].property_id !== 4 || delta.deltas[0].kind !== 'SET' || delta.deltas[0].value !== 200n
+    || delta.deltas[1].property_id !== 5 || delta.deltas[1].kind !== 'INSERT' || delta.deltas[1].value !== 9n)
+    throw new Error('push delta decode lost fields');
+  if (sync.accept(deltaFrame) === null || sync.get('exp') !== 200n || sync.get('tags')[0] !== 9n
+    || sync.sequence !== 2) throw new Error('push delta not applied');
+  // Struct values and a struct field path: baseline carries inventory,
+  // the delta walks path [capacity] and [items] on it.
+  const structFrame = unhex('4d4c5031000000010000000100000001000000000000002a0000000002000000010000000000000001000000020000000000000000004d0001000000010000000000000000000100010000000000000001');
+  const sync2 = new PropertySync('Avatar');
+  if (sync2.accept(structFrame) === null || sync2.get('inventory').capacity !== 77n
+    || !(sync2.get('inventory').items.length === 1 && sync2.get('inventory').items[0].itemId === 1n
+      && sync2.get('inventory').items[0].count === 1n)) throw new Error('push struct baseline not applied');
+  const structDelta = decodePropertyPush(unhex('4d4c5031000000010000000100000001000000000000002a0100000000000000010000000200000002010000000000000000000000000000001e000000020100000101000000000000000000000000000500010000000000000001'));
+  if (!structDelta || structDelta.deltas.length !== 2
+    || JSON.stringify(structDelta.deltas[0].path) !== JSON.stringify([{ field_id: 0 }])
+    || JSON.stringify(structDelta.deltas[1].path) !== JSON.stringify([{ field_id: 1 }])
+    || structDelta.deltas[0].value !== 30n
+    || structDelta.deltas[1].value.itemId !== 5n || structDelta.deltas[1].value.count !== 1n)
+    throw new Error('push struct delta decode lost path');
+  const sync3 = new PropertySync('Avatar');
+  sync3.accept(structFrame);
+  if (sync3.accept(unhex('4d4c5031000000010000000100000001000000000000002a0100000000000000010000000200000002010000000000000000000000000000001e000000020100000101000000000000000000000000000500010000000000000001')) === null
+    || sync3.get('inventory').capacity !== 30n
+    || !(sync3.get('inventory').items.length === 2 && sync3.get('inventory').items[0].itemId === 5n
+      && sync3.get('inventory').items[1].itemId === 1n)) throw new Error('push struct delta not applied');
+  // Malformed frames refuse closed: wrong marker, truncation at the header,
+  // truncation in the body, trailing bytes, an unknown entity type, and a
+  // non-bytes argument. A decoded frame also round trips through accept.
+  const marker = baselineFrame.slice(); marker[0] = 88;
+  if (decodePropertyPush(marker) !== null) throw new Error('bad marker accepted');
+  if (decodePropertyPush(baselineFrame.slice(0, 20)) !== null) throw new Error('truncated header accepted');
+  if (decodePropertyPush(baselineFrame.slice(0, baselineFrame.length - 1)) !== null) throw new Error('truncated body accepted');
+  const trailing = new Uint8Array(baselineFrame.length + 1);
+  trailing.set(baselineFrame); trailing[baselineFrame.length] = 0;
+  if (decodePropertyPush(trailing) !== null) throw new Error('trailing bytes accepted');
+  const unknown = baselineFrame.slice(); unknown[8] = 99;
+  if (decodePropertyPush(unknown) !== null) throw new Error('unknown entity type accepted');
+  if (decodePropertyPush(new Uint8Array(0)) !== null) throw new Error('empty frame accepted');
+  if (decodePropertyPush('not bytes') !== null) throw new Error('non-bytes accepted');
+  // A replayed batch still decodes but the gapless replica refuses it: the
+  // frame is never silently applied twice.
+  if (sync.accept(deltaFrame) === null) throw new Error('replayed frame did not decode');
+  if (sync.stale !== true) throw new Error('replay did not trip the stale flag');
+}
+console.log('JS_PROPERTY_PUSH pinned MLP1 vectors, struct paths and malformed refusals [PASS]');
