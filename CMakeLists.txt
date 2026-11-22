@@ -30,7 +30,7 @@ target_compile_options(mistlane_net PRIVATE -Wall -Wextra -Wpedantic)
 file(READ "${CMAKE_CURRENT_SOURCE_DIR}/lua/mistlane/min_heap.lua" MISTLANE_HEAP_SOURCE)
 configure_file(src/test_resources.hpp.in generated/test_resources.hpp @ONLY)
 add_executable(mistlane src/main.cpp src/scaffold.cpp src/contract_tool.cpp src/cli_client.cpp src/bot.cpp
-  src/selftest.cpp src/test_core.cpp src/test_contract.cpp src/test_transport.cpp src/test_coordinator.cpp
+  src/selftest.cpp src/test_avatar.cpp src/test_core.cpp src/test_contract.cpp src/test_transport.cpp src/test_coordinator.cpp
   src/test_lua.cpp src/test_cross.cpp src/test_probe.cpp src/test_config.cpp src/test_scaffold.cpp
   src/test_cli.cpp src/test_bots.cpp src/test_crashpad.cpp src/test_api.cpp src/test_databases.cpp src/lua_tests.cpp)
 target_include_directories(mistlane PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/generated")
@@ -90,6 +90,7 @@ if(BUILD_TESTING)
       entity.owner.bind
       entity.route
       entity.cross.correlation
+      avatar.lifecycle
       entity.perf
       coordinator.placement coordinator.routes coordinator.placement.schema coordinator.placement.journal coordinator.migration.commit coordinator.migration.abort
       coordinator.migration.recover coordinator.migration.stale coordinator.migration.order

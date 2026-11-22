@@ -10,6 +10,7 @@ void core_contracts();
 void contract_tool();
 void sproto_golden();
 void rpc_lifecycle();
+void avatar_lifecycle();
 void entity_envelope();
 void entity_properties();
 void entity_tree();
@@ -146,6 +147,7 @@ int run_tests(int argc, char** argv) {
         {"contract.tool","contract",test::contract_tool},
         {"sproto.golden","contract",test::sproto_golden},
         {"rpc.lifecycle","contract",test::rpc_lifecycle},
+        {"avatar.lifecycle","contract",test::avatar_lifecycle},
         {"entity.envelope","contract",test::entity_envelope},
         {"entity.properties","contract",test::entity_properties},
         {"entity.tree","contract",test::entity_tree},
