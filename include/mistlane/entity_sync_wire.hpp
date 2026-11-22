@@ -373,4 +373,50 @@ private:
     const EntityContract& contract_;
     const ContractEntity* entity_;
 };
+
+// One server-push property frame: MLP1 | scope | type | incarnation | entity |
+// SyncWireCodec bytes. The marker keeps property traffic out of the MLE1
+// invocation path (and out of plain script frames); the codec tail is the same
+// self-describing bytes a receiver feeds to its property replica.
+inline std::optional<std::string> property_push_frame(const EntityContract& contract,
+                                                      const EntityTarget& target,
+                                                      const SyncMessage& message,
+                                                      std::string& reason) {
+    const SyncWireCodec codec(contract, target.type_id);
+    auto body = codec.encode(message);
+    if (!body) { reason = "property message did not encode"; return std::nullopt; }
+    const auto put = [](std::string& out, std::uint64_t v, unsigned bytes) {
+        for (unsigned i = bytes; i > 0; --i)
+            out.push_back(static_cast<char>((v >> ((i - 1) * 8)) & 0xFF));
+    };
+    std::string out = "MLP1";
+    put(out, target.scope, 4);
+    put(out, target.type_id, 4);
+    put(out, target.incarnation, 4);
+    put(out, static_cast<std::uint64_t>(target.entity_id), 8);
+    out += *body;
+    return out;
+}
+
+// Parse a pushed frame back into its target and message; false plus a reason on
+// a non-property frame, a truncated header or a codec-level refusal.
+inline bool decode_property_push(const EntityContract& contract, std::string_view frame,
+                                 EntityTarget& target, SyncMessage& message, std::string& reason) {
+    // The field header is scope | type | incarnation | entity (the MLP1 marker
+    // precedes it); the codec tail starts right after the entity id.
+    constexpr std::size_t header = 4 + 4 + 4 + 8;
+    if (!frame.starts_with("MLP1")) { reason = "not a property push frame"; return false; }
+    if (frame.size() < 4 + header) { reason = "property push frame is truncated"; return false; }
+    const auto take = [&](std::size_t at, unsigned bytes) {
+        std::uint64_t v = 0;
+        for (unsigned i = 0; i < bytes; ++i) v = (v << 8) | static_cast<unsigned char>(frame[at + i]);
+        return v;
+    };
+    target.scope = static_cast<std::uint32_t>(take(4, 4));
+    target.type_id = static_cast<std::uint32_t>(take(8, 4));
+    target.incarnation = static_cast<std::uint32_t>(take(12, 4));
+    target.entity_id = static_cast<std::int64_t>(take(16, 8));
+    const SyncWireCodec codec(contract, target.type_id);
+    return codec.decode(frame.substr(4 + header), message, reason);
+}
 }

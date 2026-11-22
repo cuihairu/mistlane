@@ -140,6 +140,9 @@ private:
     static int entity_spawn(lua_State*);
     static int entity_destroy(lua_State*);
     static int entity_properties(lua_State*);
+    static int entity_observe(lua_State*);
+    static int entity_depart(lua_State*);
+    static int entity_flush(lua_State*);
     static void push_entity_api(lua_State*, EntityRuntime*);
     static int ticket_issue(lua_State*);
     static void push_ticket_api(lua_State*, LuaService*);

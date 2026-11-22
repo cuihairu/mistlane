@@ -78,6 +78,7 @@ if(BUILD_TESTING)
       entity.endpoint
       entity.transport
       entity.transport.gateway
+      entity.push
       entity.codec
       entity.snapshot
       entity.gateway

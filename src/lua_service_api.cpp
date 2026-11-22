@@ -70,6 +70,9 @@ void LuaService::push_entity_api(lua_State* l, EntityRuntime* runtime) {
     lua_pushlightuserdata(l, runtime); lua_pushcclosure(l, entity_spawn, 1); lua_setfield(l, -2, "spawn");
     lua_pushlightuserdata(l, runtime); lua_pushcclosure(l, entity_destroy, 1); lua_setfield(l, -2, "destroy");
     lua_pushlightuserdata(l, runtime); lua_pushcclosure(l, entity_properties, 1); lua_setfield(l, -2, "properties");
+    lua_pushlightuserdata(l, runtime); lua_pushcclosure(l, entity_observe, 1); lua_setfield(l, -2, "observe");
+    lua_pushlightuserdata(l, runtime); lua_pushcclosure(l, entity_depart, 1); lua_setfield(l, -2, "depart");
+    lua_pushlightuserdata(l, runtime); lua_pushcclosure(l, entity_flush, 1); lua_setfield(l, -2, "flush");
     lua_setfield(l, -2, "entity"); lua_setglobal(l, "mistlane");
 }
 void LuaService::push_ticket_api(lua_State* l, LuaService* service) {
@@ -261,6 +264,52 @@ int LuaService::entity_properties(lua_State* l) {
     if (!store) { lua_pushnil(l); return 1; }
     if (!push_entity_properties(l, store))
         return luaL_error(l, "a declared property name collides with a property proxy method");
+    return 1;
+}
+// The server-side push wiring (docs/entity-contract.md): a session subscribes
+// to one entity's property stream by its id, and writes after the subscription
+// drain through the runtime's push sink — which the node routes to that
+// session as MLP1 frames. observe's last argument is the owner flag: ownership
+// attribution is a separate open design concern, so the caller states it here.
+int LuaService::entity_observe(lua_State* l) {
+    auto* runtime = static_cast<EntityRuntime*>(lua_touserdata(l, lua_upvalueindex(1)));
+    std::uint32_t scope, type, incarnation;
+    if (!lua_u32(l, 1, scope) || !lua_u32(l, 2, type) || !lua_u32(l, 3, incarnation)
+            || !lua_isinteger(l, 4) || !lua_isinteger(l, 5))
+        return luaL_error(l, "entity.observe expects scope, type, incarnation, entity_id, session_id integers");
+    const auto entity_id = static_cast<std::int64_t>(lua_tointeger(l, 4));
+    const auto session_id = static_cast<std::int64_t>(lua_tointeger(l, 5));
+    if (session_id <= 0) return luaL_error(l, "entity.observe session_id must be positive");
+    const bool is_owner = !lua_isnoneornil(l, 6) && lua_toboolean(l, 6) != 0;
+    lua_pushboolean(l, runtime->observe({scope, type, incarnation, entity_id},
+                                        std::to_string(session_id), is_owner) ? 1 : 0);
+    return 1;
+}
+// mistlane.entity.depart(scope, type, incarnation, entity_id, session_id) ->
+// bool: leaves the property stream; a departed session gets no further pushes.
+int LuaService::entity_depart(lua_State* l) {
+    auto* runtime = static_cast<EntityRuntime*>(lua_touserdata(l, lua_upvalueindex(1)));
+    std::uint32_t scope, type, incarnation;
+    if (!lua_u32(l, 1, scope) || !lua_u32(l, 2, type) || !lua_u32(l, 3, incarnation)
+            || !lua_isinteger(l, 4) || !lua_isinteger(l, 5))
+        return luaL_error(l, "entity.depart expects scope, type, incarnation, entity_id, session_id integers");
+    const auto session_id = static_cast<std::int64_t>(lua_tointeger(l, 5));
+    if (session_id <= 0) return luaL_error(l, "entity.depart session_id must be positive");
+    lua_pushboolean(l, runtime->depart({scope, type, incarnation,
+        static_cast<std::int64_t>(lua_tointeger(l, 4))}, std::to_string(session_id)) ? 1 : 0);
+    return 1;
+}
+// mistlane.entity.flush(scope, type, incarnation, entity_id) -> bool: drains
+// the entity's journal through the push sink (each delivery goes to its
+// observer's session). False when the address has no property stream.
+int LuaService::entity_flush(lua_State* l) {
+    auto* runtime = static_cast<EntityRuntime*>(lua_touserdata(l, lua_upvalueindex(1)));
+    std::uint32_t scope, type, incarnation;
+    if (!lua_u32(l, 1, scope) || !lua_u32(l, 2, type) || !lua_u32(l, 3, incarnation)
+            || !lua_isinteger(l, 4))
+        return luaL_error(l, "entity.flush expects scope, type, incarnation, entity_id integers");
+    lua_pushboolean(l, runtime->flush_properties({scope, type, incarnation,
+        static_cast<std::int64_t>(lua_tointeger(l, 4))}) ? 1 : 0);
     return 1;
 }
 // Entity method implementations are the script's `entities` table:

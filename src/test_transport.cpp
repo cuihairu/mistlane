@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "test_common.hpp"
+#include "mistlane/entity_sync_wire.hpp"
 namespace mistlane::test {
 void entity_transport() {
     const std::string xml =
@@ -184,6 +185,149 @@ return service)");
     require(samples.body.find("result=\"malformed\"") != std::string::npos, "no malformed entity verdict recorded");
     require(samples.body.find("result=\"forbidden\"") != std::string::npos, "no forbidden entity verdict recorded");
     std::cout << "entity.transport metrics: bounded result labels recorded [PASS]\n";
+}
+
+
+// The server-side property push rides a live session as MLP1 frames: a
+// subscriber's entry drain delivers a baseline plus the changes it covers, a
+// later write drains as another delta batch to the same observer, departure
+// silences the stream (a write after it leaves no frame), and a subscriber
+// whose session dies is reaped on the next drain so its slot is free again.
+void entity_push() {
+    const std::string xml =
+        "<Contracts><Entity name=\"Avatar\" id=\"1\"><ServerMethods>"
+        "<Method name=\"get\" id=\"2\" mode=\"request\" caller=\"server\">"
+        "<Arg name=\"account\" id=\"0\" type=\"INT32\"/>"
+        "<Returns><Field name=\"level\" id=\"1\" type=\"UINT16\"/></Returns></Method>"
+        "</ServerMethods>"
+        "<Properties>"
+        "<level id=\"1\" type=\"UINT16\" flags=\"OWN_CLIENT\" default=\"1\"/>"
+        "<gold id=\"2\" type=\"INT32\" flags=\"ALL_CLIENTS\" default=\"0\"/>"
+        "</Properties></Entity></Contracts>";
+    Context c;
+    const auto def = c.path("avatar.def");
+    write(def, xml);
+    const auto script = c.path("avatar.lua");
+    write(script, R"(local service = {}
+local spawned, observed = false, 0
+function service.message(payload, ctx)
+    if payload == "subscribe" then
+        -- The first subscriber owns the spawn; later ones ride the same store.
+        if not spawned then
+            assert(mistlane.entity.spawn(1, 1, 3, 42), "spawn failed")
+            spawned = true
+        end
+        observed = ctx.session
+        local ok = mistlane.entity.observe(1, 1, 3, 42, observed, true)
+        -- A write after the subscription, drained by the same flush: the
+        -- observer receives a baseline over the current view plus a delta.
+        local props = mistlane.entity.properties(1, 1, 3, 42)
+        props.gold = 123
+        assert(mistlane.entity.flush(1, 1, 3, 42), "flush failed")
+        return ok and "subscribed" or "duplicate"
+    end
+    if payload == "push" then
+        local props = mistlane.entity.properties(1, 1, 3, 42)
+        props.gold = props.gold + 5
+        assert(mistlane.entity.flush(1, 1, 3, 42), "flush failed")
+        return "pushed"
+    end
+    if payload == "depart" then
+        -- A departed observer gets no push: the write after departure drains
+        -- into an empty audience, so only the reply leaves the node.
+        assert(mistlane.entity.depart(1, 1, 3, 42, ctx.session), "depart failed")
+        local props = mistlane.entity.properties(1, 1, 3, 42)
+        props.gold = 999
+        assert(mistlane.entity.flush(1, 1, 3, 42), "flush failed")
+        return "departed"
+    end
+    if payload == "reap" then
+        -- The subscribing session is gone: this drain's sink reaps the dead
+        -- observer, freeing its slot for a fresh subscription.
+        local props = mistlane.entity.properties(1, 1, 3, 42)
+        props.gold = 500
+        assert(mistlane.entity.flush(1, 1, 3, 42), "flush failed")
+        return mistlane.entity.observe(1, 1, 3, 42, observed, true) and "reaped" or "stale"
+    end
+    return "echo:"..payload
+end
+return service)");
+    const auto listen = port();
+    c.node("gameServer", listen, {"--script", script.string(), "--contract", def.string()});
+
+    EntityContract contract(xml);
+    const auto decode_push = [&](const std::string& frame, EntityTarget& target, SyncMessage& message) {
+        std::string reason;
+        require(decode_property_push(contract, frame, target, message, reason), reason.c_str());
+    };
+    const auto as_int = [](const EntityValue& value) { return std::get<std::int64_t>(value.data); };
+    const auto send_frame = [](RawSocket& raw, const std::string& body) {
+        std::string header(4, '\0');
+        const auto length = static_cast<std::uint32_t>(body.size());
+        for (unsigned i = 0; i < 4; ++i) header[i] = static_cast<char>(length >> (24 - i*8));
+        raw.send(header + body);
+    };
+    const auto read_frame = [](RawSocket& raw) {
+        std::string header = raw.receive(4);
+        std::uint32_t length = 0;
+        for (unsigned i = 0; i < 4; ++i) length = length << 8 | static_cast<unsigned char>(header[i]);
+        return raw.receive(length);
+    };
+    const auto target_of = [&](const std::string& frame, SyncMessage& message) {
+        EntityTarget target;
+        decode_push(frame, target, message);
+        return target;
+    };
+
+    // A live session subscribes to a spawned entity, writes a property and
+    // drains: the first frame is the visible baseline, the second the change.
+    RawSocket a(listen);
+    send_frame(a, "subscribe");
+    SyncMessage message;
+    const EntityTarget target = target_of(read_frame(a), message);
+    require(target.scope == 1 && target.type_id == 1 && target.incarnation == 3 && target.entity_id == 42,
+        "property push targeted the wrong address");
+    require(message.kind == SyncMessage::Kind::BASELINE
+            && as_int(message.baseline.at("level")) == 1 && as_int(message.baseline.at("gold")) == 123,
+        "baseline did not carry the owner's current view");
+    const EntityTarget delta_target = target_of(read_frame(a), message);
+    require(delta_target.entity_id == 42 && message.kind == SyncMessage::Kind::DELTAS
+            && message.deltas.size() == 1 && message.deltas[0].property_id == 2
+            && message.deltas[0].kind == SyncDelta::Kind::SET && message.deltas[0].path.empty()
+            && as_int(message.deltas[0].value) == 123,
+        "the property change did not ride the stream as one SET");
+    equal(read_frame(a), "subscribed");
+    std::cout << "entity.push subscribe: baseline + delta MLP1 to the live session [PASS]\n";
+
+    // A later write drains as another delta batch to the same observer.
+    send_frame(a, "push");
+    (void)target_of(read_frame(a), message);
+    require(message.kind == SyncMessage::Kind::DELTAS && message.deltas.size() == 1
+            && message.deltas[0].property_id == 2 && as_int(message.deltas[0].value) == 128,
+        "a follow-up write did not reach the observer");
+    equal(read_frame(a), "pushed");
+    std::cout << "entity.push push: follow-up delta reaches the observer [PASS]\n";
+
+    // Departure silences the stream: the write is drained into no audience.
+    send_frame(a, "depart");
+    equal(read_frame(a), "departed");
+    std::cout << "entity.push depart: a departed observer gets no frame [PASS]\n";
+
+    // A subscriber that never departs leaves an orphan when its session dies;
+    // the next drain reaps it so the slot is free for a fresh subscription.
+    {
+        RawSocket b(listen);
+        send_frame(b, "subscribe");
+        (void)target_of(read_frame(b), message);
+        (void)target_of(read_frame(b), message);
+        equal(read_frame(b), "subscribed");
+    } // B's socket closes here: its observer outlives the session and is orphaned.
+    RawSocket witness(listen);
+    send_frame(witness, "ping");
+    equal(read_frame(witness), "echo:ping");
+    send_frame(witness, "reap");
+    equal(read_frame(witness), "reaped");
+    std::cout << "entity.push reap: a dead observer is reaped on the next drain [PASS]\n";
 }
 
 

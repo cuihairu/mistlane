@@ -14,6 +14,7 @@
 #include "mistlane/entity_contract.hpp"
 #include "mistlane/entity_codec.hpp"
 #include "mistlane/entity_endpoint.hpp"
+#include "mistlane/entity_sync_wire.hpp"
 #include "mistlane/dashboard.hpp"
 #include "node_internal.hpp"
 #include "observability.hpp"
@@ -330,6 +331,28 @@ public:
             entity_contract_ = std::make_unique<EntityContract>(text.str(), type_resolver);
             entity_codec_ = std::make_unique<SprotoCodec>(*entity_contract_);
             entity_endpoint_ = std::make_unique<EntityEndpoint>(*entity_contract_, entity_codec_.get());
+            // Property pushes are a framework frame (MLP1), routed to whichever
+            // session the script subscribed by id; the runtime's sink is what
+            // closes the send-side wiring. A vanished session drops the frame
+            // and is retired from the stream so dead observers never pile up.
+            // session_send lives on the public sink interface (the concrete
+            // GameSessions hides it behind a private override), so the push
+            // routes through the same adapter Lua's mistlane.session uses.
+            if (game_sessions_) {
+                GameSessionSink* sink = game_sessions_.get();
+                entity_endpoint_->runtime().set_property_push(
+                    [this, sink](const EntityTarget& target, const std::string& observer, const SyncMessage& message) {
+                        std::string reason;
+                        const auto frame = property_push_frame(*entity_contract_, target, message, reason);
+                        if (!frame) { std::cerr << "property push dropped: " << reason << '\n'; return; }
+                        char* end = nullptr;
+                        const auto id = std::strtoull(observer.c_str(), &end, 10);
+                        if (!end || *end != '\0' || end == observer.c_str()) return;
+                        const std::string verdict = sink->session_send(id, *frame);
+                        if (verdict == "unknown session id")
+                            entity_endpoint_->runtime().depart(target, observer);
+                    });
+            }
             std::cout << "contract " << path.string() << " loaded" << std::endl;
         }
         // The plain gateway is the entity relay: it maps outer transport
