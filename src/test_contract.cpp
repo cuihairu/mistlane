@@ -1530,8 +1530,11 @@ void entity_runtime_properties() {
 
     // Every drained message arrives through the push sink; the test records
     // each (address, message) pair.
-    std::vector<std::pair<EntityTarget, SyncMessage>> pushed;
-    runtime.set_property_push([&](const EntityTarget& t, const SyncMessage& m) { pushed.push_back({t, m}); });
+    struct Pushed { EntityTarget target; std::string observer; SyncMessage message; };
+    std::vector<Pushed> pushed;
+    runtime.set_property_push([&](const EntityTarget& t, const std::string& who, const SyncMessage& m) {
+        pushed.push_back({t, who, m});
+    });
 
     // A declared spawn seeds the store with the contract defaults.
     require(runtime.spawn(target), "a declared spawn was refused");
@@ -1549,12 +1552,14 @@ void entity_runtime_properties() {
     require(runtime.observe(target, "guest", false), "guest observe refused");
     require(!runtime.observe(target, "owner", true), "a duplicate observe was accepted");
     require(runtime.flush_properties(target), "entry flush refused");
-    require(pushed.size() == 2 && same(pushed[0].first, target) && same(pushed[1].first, target),
+    require(pushed.size() == 2 && same(pushed[0].target, target) && same(pushed[1].target, target),
             "entry did not push one baseline per observer");
-    require(pushed[0].second.kind == SyncMessage::Kind::BASELINE &&
-            pushed[1].second.kind == SyncMessage::Kind::BASELINE, "entry pushed a non-baseline");
-    const auto& guest = pushed[0].second.baseline;   // map order: guest before owner
-    const auto& owner = pushed[1].second.baseline;
+    require(pushed[0].observer == "guest" && pushed[1].observer == "owner",
+            "the drain did not name its observers");
+    require(pushed[0].message.kind == SyncMessage::Kind::BASELINE &&
+            pushed[1].message.kind == SyncMessage::Kind::BASELINE, "entry pushed a non-baseline");
+    const auto& guest = pushed[0].message.baseline;   // map order: guest before owner
+    const auto& owner = pushed[1].message.baseline;
     require(owner.count("level") && owner.count("gold") && owner.count("bag"),
             "the owner baseline lost a visible property");
     require(!guest.count("level") && guest.count("gold") && guest.count("bag"),
@@ -1570,10 +1575,12 @@ void entity_runtime_properties() {
     pushed.clear();
     require(runtime.flush_properties(target), "delta flush refused");
     require(pushed.size() == 2, "writes did not push one batch per observer");
-    require(pushed[0].second.kind == SyncMessage::Kind::DELTAS &&
-            pushed[1].second.kind == SyncMessage::Kind::DELTAS, "writes pushed a non-delta");
-    const auto& guest_deltas = pushed[0].second.deltas;
-    const auto& owner_deltas = pushed[1].second.deltas;
+    require(pushed[0].observer == "guest" && pushed[1].observer == "owner",
+            "the delta drain did not name its observers");
+    require(pushed[0].message.kind == SyncMessage::Kind::DELTAS &&
+            pushed[1].message.kind == SyncMessage::Kind::DELTAS, "writes pushed a non-delta");
+    const auto& guest_deltas = pushed[0].message.deltas;
+    const auto& owner_deltas = pushed[1].message.deltas;
     require(owner_deltas.size() == 3, "the owner batch lost a visible delta");
     require(guest_deltas.size() == 2, "the guest batch crossed OWN_CLIENT");
     for (const auto& d : owner_deltas)
@@ -1591,8 +1598,9 @@ void entity_runtime_properties() {
     store->set("gold", std::int64_t{200});
     pushed.clear();
     require(runtime.flush_properties(target), "flush after depart refused");
-    require(pushed.size() == 1 && pushed[0].second.deltas.size() == 1 &&
-            pushed[0].second.deltas[0].property_id == 2 && pushed[0].second.deltas[0].sequence == 4,
+    require(pushed.size() == 1 && pushed[0].observer == "owner" &&
+            pushed[0].message.deltas.size() == 1 &&
+            pushed[0].message.deltas[0].property_id == 2 && pushed[0].message.deltas[0].sequence == 4,
             "departure did not leave a single owner stream");
     const EntityTarget other{1, 1, 8, 1};
     require(runtime.spawn(other), "a second spawn was refused");
@@ -1603,13 +1611,13 @@ void entity_runtime_properties() {
     require(runtime.observe(other, "owner", true), "the second entity took no observer");
     pushed.clear();
     require(runtime.flush_properties(other), "the second entity entry flush refused");
-    require(pushed.size() == 1 && pushed[0].second.kind == SyncMessage::Kind::BASELINE,
+    require(pushed.size() == 1 && pushed[0].message.kind == SyncMessage::Kind::BASELINE,
             "the second entity did not deliver its entry baseline");
     pushed.clear();
     other_store->set("level", std::int64_t{9});
     require(runtime.flush_properties(other), "the second entity flush refused");
-    require(pushed.size() == 1 && same(pushed[0].first, other) && pushed[0].second.deltas.size() == 1 &&
-            pushed[0].second.deltas[0].property_id == 1,
+    require(pushed.size() == 1 && same(pushed[0].target, other) && pushed[0].message.deltas.size() == 1 &&
+            pushed[0].message.deltas[0].property_id == 1,
             "a write on the second entity leaked to the first");
 
     // The script-facing view: a Lua proxy handed the runtime's owning handle

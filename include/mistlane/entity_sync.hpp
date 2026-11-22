@@ -47,6 +47,15 @@ struct SyncMessage {
     std::vector<SyncDelta> deltas;
 };
 
+// One message addressed to one observer's stream. The identity rides with the
+// message rather than the sender ordering it: a drained batch is one entry per
+// audience, and only the id tells a transport which of the node's sessions owns
+// the bytes.
+struct PropertyDelivery {
+    std::string observer;
+    SyncMessage message;
+};
+
 // One receiver's replica: it replays the deltas that reached it into its own
 // controlled store, so a delta that could never ride the wire can never be
 // stored. Batches apply atomically — any sequence gap, unknown id or
@@ -176,12 +185,14 @@ public:
     }
     bool listening(const std::string& id) const { return audience_.count(id) != 0; }
 
-    // Drain the store journal once: pending baselines first, then one delta
-    // batch per observer carrying only what that audience may see. Changes
-    // from before an observer's entry are history their baseline already
-    // covers, so they are never re-delivered.
-    std::vector<SyncMessage> deliver() {
-        std::vector<SyncMessage> out;
+    // Drain the store journal once, naming each observer: pending baselines
+    // first, then one delta batch per observer carrying only what that audience
+    // may see. Changes from before an observer's entry are history their baseline
+    // already covers, so they are never re-delivered. Every entry names its
+    // observer, so a transport can address the bytes without re-deriving the
+    // audience.
+    std::vector<PropertyDelivery> deliver_tagged() {
+        std::vector<PropertyDelivery> out;
         const auto changes = store_->take_changes();
         const std::uint64_t first = taken_;
         taken_ += changes.size();
@@ -189,9 +200,10 @@ public:
             const std::size_t waiting = pending_.count(it->first) ? pending_[it->first] : 0;
             pending_.erase(it->first);
             for (std::size_t i = 0; i < waiting; ++i) {
-                SyncMessage baseline;
-                baseline.baseline = store_->client_view(it->second.is_owner);
-                out.push_back(std::move(baseline));
+                PropertyDelivery delivery;
+                delivery.observer = it->first;
+                delivery.message.baseline = store_->client_view(it->second.is_owner);
+                out.push_back(std::move(delivery));
             }
             SyncMessage batch;
             batch.kind = SyncMessage::Kind::DELTAS;
@@ -201,8 +213,22 @@ public:
                 if (batch.deltas.empty()) batch.sequence = it->second.next;
                 batch.deltas.push_back(to_delta(changes[i], it->second.next++));
             }
-            if (!batch.deltas.empty()) out.push_back(std::move(batch));
+            if (!batch.deltas.empty()) {
+                PropertyDelivery delivery;
+                delivery.observer = it->first;
+                delivery.message = std::move(batch);
+                out.push_back(std::move(delivery));
+            }
         }
+        return out;
+    }
+
+    // The same drain without the observer tags, for in-process consumers that
+    // never route a frame and so do not need to know who owns a message.
+    std::vector<SyncMessage> deliver() {
+        const auto tagged = deliver_tagged();
+        std::vector<SyncMessage> out;
+        for (auto& entry : tagged) out.push_back(std::move(entry.message));
         return out;
     }
 

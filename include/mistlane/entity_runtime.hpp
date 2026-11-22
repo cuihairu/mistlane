@@ -16,7 +16,9 @@ class EntityRuntime {
 public:
  // Property sync push sink: one call per message drained from an entity's
  // observer channel. The transport wiring serializes through SyncWireCodec.
- using PropertyPush = std::function<void(const EntityTarget&, const SyncMessage&)>;
+ // One drained message plus the observer it is addressed to: the transport
+ // routes the encoded frame by observer id without re-deriving the audience.
+ using PropertyPush = std::function<void(const EntityTarget&, const std::string& observer, const SyncMessage&)>;
  explicit EntityRuntime(const EntityContract& contract) : dispatcher_(contract) {}
  EntityDispatcher& dispatcher() { return dispatcher_; }
  bool spawn(EntityTarget ref, std::uint32_t hosting_generation = 1) {
@@ -118,7 +120,8 @@ public:
    const auto it = channels_.find(address(ref));
    if (it == channels_.end()) return false;
    if (push_)
-     for (const auto& message : it->second.deliver()) push_(ref, message);
+     for (const auto& delivery : it->second.deliver_tagged())
+       push_(ref, delivery.observer, delivery.message);
    return true;
  }
 private:
