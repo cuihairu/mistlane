@@ -137,7 +137,7 @@ socket.onopen = () => socket.send(new TextEncoder().encode('hello mistlane'))
 
 默认每个 gateway 会话独占一条上游 TCP 连接；gateway 也可以让同一 upstream 的全部会话共享一条连接：在 `--upstream-token` 之外加 `--upstream-multiplex on`（该开关要求令牌，仅作用于会话路由的 gateway——cross 路由和其他角色带此参数直接拒绝启动）。`MLS1` 握手通过后 gateway 发送 `MLM1`，服务端回复 `MLM1 OK`，此后这条链路上的每帧变为 `u32 id | payload`（big-endian）：每个客户端会话拥有一个从 1 起的 id，未知 id 由服务端按正常准入上限生成逻辑会话，id 0 承载 `CLOSE <id>` 文本控制、任一侧均可用其关闭一条逻辑链路。payload 上限相应减少 4 个 id 字节。关联仍按逻辑会话独立——客户端发送 `MLC2` 时，握手只发生在自己 id 的载荷内，与专用连接完全一致。客户端永远不会自己发送 `MLM1`：作为首帧会得到 `MLM1 ERR UNEXPECTED` 并被关闭。
 
-配了多个 `--upstream` 时，复用 gateway 还可以把具体实体钉在持有它的那个上游上：`--entity-route SCOPE:TYPE:INCARNATION:ENTITY=INDEX`（可重复）把该实体地址的 MLE1 帧转发给 `INDEX` 位上游，因此即使某会话按轮询加入的是另一宿主，请求仍到达生成实体的宿主。未命中时保持该会话的轮询上游、由那个宿主应答 `UNROUTED`，因此未命中绝不错投。该开关要求 `--upstream-multiplex` 且仅作用于 gateway；不带它时每个会话一律使用自己的轮询上游。协调器发布的动态路由表仍是独立切片。
+配了多个 `--upstream` 时，复用 gateway 还可以把具体实体钉在持有它的那个上游上：`--entity-route SCOPE:TYPE:INCARNATION:ENTITY=INDEX`（可重复）把该实体地址的 MLE1 帧转发给 `INDEX` 位上游，因此即使某会话按轮询加入的是另一宿主，请求仍到达生成实体的宿主。未命中时保持该会话的轮询上游、由那个宿主应答 `UNROUTED`，因此未命中绝不错投。该开关要求 `--upstream-multiplex` 且仅作用于 gateway；不带它时每个会话一律使用自己的轮询上游。协调器发布的动态路由表已于 2026-11-23 落地：注册的宿主在自身控制腿上于实体 spawn/destroy 时发送 `MLR1 HOST SET`/`REMOVE`，协调器按该成员自己注册的监听地址记录端点（从不取客户端自报值），连接了协调器的复用网关约每秒拉取 `MLR1 HOST LIST` 并重建同一张有界表、跳过任何 `--upstream` 未指向的端点——详见[实体契约](./entity-contract.md)。
 
 ### 进程注册表（MLR1）
 

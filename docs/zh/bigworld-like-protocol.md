@@ -37,7 +37,7 @@
 
 ## sproto 实现路线
 
-决策：实体/RPC 消息编码使用 sproto。XML `.def` 和类型文件继续作为手写契约，sproto 是生成物。按[实体契约](./entity-contract.md#设计选择)，规划中的 Server bundle 包含 sproto schema、Lua bindings 和 digests。当前构建生成经过校验的确定性 schema、XSD、release lock 和 digest，并有仅供测试的 Lua codec 原型；实体运行时和 SDK 生成仍未实现。
+决策：实体/RPC 消息编码使用 sproto。XML `.def` 和类型文件继续作为手写契约，sproto 是生成物。按[实体契约](./entity-contract.md#设计选择)，规划中的 Server bundle 包含 sproto schema、Lua bindings 和 digests。当前构建生成经过校验的确定性 schema、XSD、release lock 和 digest，并有仅供测试的 Lua codec 原型；实体运行时与生成的 JS/C# SDK 已随后落地（见下方状态与证据）。
 
 | 阶段 | 具体工作 | 验收证据形态 |
 |---|---|---|
@@ -54,13 +54,13 @@
 
 阶段 1 已实现。阶段 2 对当前 fixture 已完成：`mistlane contract build` 校验 XML 并生成确定性 `.sproto`；vendored 上游 parser 可解析；上游 Lua 绑定编码为标准线上字节，并以固定 hex 黄金向量校验后再解码。独立的 `sproto.golden` 仍是项目内部 TLV，未冒充 sproto 字节。`examples/contracts/avatar.def` 是新构造的 fixture，并非恢复出的 game-fogs 源文件。
 
-阶段 3 已将 Lua 上游 sproto 请求解码结果接入 C++ `EntityDispatcher`，并实现 fixture 驱动实体路由：重复投递、实体不存在和 incarnation 过期都有确定结果。生成绑定含按字段生成的 C++ 参数结构体；schema 与 bindings 两次生成后逐字节比较。运行时仍限进程内，不负责网络 socket 或持久化实体。
+阶段 3 已将 Lua 上游 sproto 请求解码结果接入 C++ `EntityDispatcher`，并实现 fixture 驱动实体路由：重复投递、实体不存在和 incarnation 过期都有确定结果。生成绑定含按字段生成的 C++ 参数结构体；schema 与 bindings 两次生成后逐字节比较。运行时如今两者都持有：`--contract` 宿主先于脚本经 `EntityEndpoint` 应答 `MLE1` 帧（2026-10-29 落地），配 `--journal` 的实体宿主把每实体强制保存行落进 SQLite 存储、带周期遍历与停机保存（2026-11-22 落地）。
 
-阶段 4 已有进程内 RPC 生命周期 harness：按 caller correlation id 配对、由注入的单调时钟触发超时、丢弃迟到响应、拒绝重复响应、断连时取消在途请求。它是确定性状态机测试，不是生产传输实现。协议对照见 [entity-contract envelope 与错误词表](./entity-contract.md#调用-envelope-与错误协议-已代决-规范进程内编解码已实现)：`docs/entity-contract.md:241–252` 为 envelope，`:258–273` 为闭合错误，`:275` 为校验顺序。对应行为：超时=`TIMEOUT`、断连=`CANCELLED`、过期目标=`STALE`、重复投递/响应=`CONFLICT`。
+阶段 4 已有进程内 RPC 生命周期 harness：按 caller correlation id 配对、由注入的单调时钟触发超时、丢弃迟到响应、拒绝重复响应、断连时取消在途请求。它是确定性状态机测试；生产传输绑定（`--contract` 宿主先于脚本应答 `MLE1`）已于 2026-10-29 落地，deadline/cancel 传播已于 2026-11-22 落地。协议对照见 [entity-contract envelope 与错误词表](./entity-contract.md#调用-envelope-与错误协议-已代决-规范进程内编解码已实现)：`docs/entity-contract.md:241–252` 为 envelope，`:258–273` 为闭合错误，`:275` 为校验顺序。对应行为：超时=`TIMEOUT`、断连=`CANCELLED`、过期目标=`STALE`、重复投递/响应=`CONFLICT`。
 
 阶段 5–6 已按当前原型边界实现。阶段 5 生成 JavaScript JSDoc entity/参数类型和无依赖标量 sproto 编码器，以及 C# record 类型和标量编码器；两侧是最小 SDK，不是完整客户端运行库。`Avatar.level=1` 在 C++ 参考、生成的 JavaScript 和以 .NET 10 编译运行的 C# 中均编码为 `020001000400`。未增加第三方依赖。阶段 6 增加 `mistlane contract compat OLD.lock NEW.lock`，报告 `ADDED`、`REMOVED`、`TYPE_CHANGED`；新增兼容，删除和映射变化返回非零。`contract.tool` 覆盖兼容新增、删除与类型变化。
 
-仍未实现：完整生产级 JS/C# codec 与 SDK runtime；在线网络契约加载与分发；真实网络 deadline/cancel 传播；hosting-generation 栅栏；运行时持久化与迁移；自动属性变更跟踪、同步/AOI；生产容量和故障恢复。RPC harness 仍在进程内。证据见 `contract.tool`、`mistlane_sproto_sdk_cpp_golden`、`mistlane_sproto_sdk_js_golden`、`rpc.lifecycle` 与 `mistlane_sproto_dispatch`。
+上述阶段之后已落地：在线网络契约加载与分发（`--contract`，先于脚本的 `MLE1`，2026-10-29）；JS/C# envelope/应答 codec 与按方法 record 编码器（两侧 SDK golden）；真实网络 deadline/cancel 传播（期限侧 `entity.envelope`、断连侧 `CANCELLED`）；hosting-generation 栅栏（运行时围栏失配即答 `STALE`）；运行时持久化（带周期与停机保存的 SQLite `entity_state` 存储）；自动属性变更跟踪与同步（`MLP1` 线上推送与客户端 `PropertySync`）；以及生产容量行为（有界 `RpcQueue` 与关联表的 `CAPACITY` 拒绝）。仍开放：Avatar 运行时交接（运行时持久化的迁移与恢复）、生产登录/归属绑定调用方与 hosting-generation 内部调用方（两者都阻塞在登录/Avatar 运行时）、完整生产级 SDK runtime（生成的 JS/C# 输出仍是最小 SDK 接口）。证据见 `contract.tool`、`mistlane_sproto_sdk_cpp_golden`、`mistlane_sproto_sdk_js_golden`、`rpc.lifecycle` 与 `mistlane_sproto_dispatch`。
 
 ## 范围与排除项
 

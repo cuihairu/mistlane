@@ -11,7 +11,7 @@
 | 路由与跨服 | `MLC1` 是 gateway 跨服路由/准入握手，可选携带全有或全无的参与者后缀（`ch`、`gen`、`ret`）。它选择静态房间/组亲和与准入，不等于动态角色分配或迁移。`PROBE1` 提供就绪/过载检查。 | [cross-server.md](./cross-server.md)、[cross-return-protocol.md 参与者与返回上下文](./cross-return-protocol.md#参与者与返回上下文)、[architecture-comparison.md:53–60](./architecture-comparison.md) |
 | coordinator 控制面 | `MLR1` 在带命名空间的作用域内提供成员注册、心跳、QUERY/PLACE 和 ROUTE SET/GET。注册携带就绪/负载；现有路由记录指向当前已注册成员。类型化迁移事务模型由同一注册表链路上的 `MLR1 MIG` OWNER/PREPARE/EVENT/COMMIT/ABORT/RETIRE/STATUS 驱动（MLS1 门禁、按请求 ID 幂等、注册表驱动的退役）；状态仍仅存于内存，无共享归属权威。 | [process-roles.md 当前代码与迁移边界](./process-roles.md#当前代码与迁移边界) |
 | 回传与数据 | `MLD1 LOAD/SUBMIT/FENCE` 是 `data` 上的帧式 TCP 端点；它执行 generation 栅栏、按 `(realm, character)` 连续序号及重复回执。`FENCE` 冻结最终游标并把旧 generation 墓碑化；`RECEIVED` 只是进程内回执；带 `--journal FILE` 才有存储后端的 `ACK durable` 并跨重启恢复（含最终游标 pin），无存储时端点不声明持久。每参与者有序发送队列已接线：以 `--data IP:PORT` 启动的 crossServer 运行重试发送端，按序号提交，并在收到 `ACK durable` 后才移除该变更（发送端崩溃恢复与回传完成仍开放）。 | [cross-return-protocol.md 回传与持久化确认](./cross-return-protocol.md#回传与持久化确认-mld1)、[service-contracts.md data](./service-contracts.md#data)、[validation.md MLD1 行](./validation.md) |
-| 实体契约与同步 | XML `.def` 已生成 XSD/lock/digest、sproto 及 C++/JS/C# 原型绑定，`contract compat` 比较发布锁。已有上游线向量、派发器与进程内实体/RPC 夹具。服务端真实传输绑定（`--contract` 节点在脚本之前应答 `MLE1` 帧，脚本 `entities` 表绑定到派发器）于 2026-10-29 落地，普通网关关联号改写（`gateway` 节点经有界表把客户端外层传输关联号换成全新内层实体 id，表满或重复时不经转发直接答 `CAPACITY`）于 2026-10-30 落地；生产 codec、跨网关关联号改写与宿主路由、属性复制与持久化仍开放（缺口 7）。 | [entity-contract.md](./entity-contract.md)、[实现证据](./bigworld-like-protocol.md#已实现状态与证据)、[validation.md 契约/SDK 行](./validation.md) |
+| 实体契约与同步 | XML `.def` 已生成 XSD/lock/digest、sproto 及 C++/JS/C# 原型绑定，`contract compat` 比较发布锁。已有上游线向量、派发器与进程内实体/RPC 夹具。服务端真实传输绑定（`--contract` 节点在脚本之前应答 `MLE1` 帧，脚本 `entities` 表绑定到派发器）于 2026-10-29 落地，普通网关关联号改写（`gateway` 节点经有界表把客户端外层传输关联号换成全新内层实体 id，表满或重复时不经转发直接答 `CAPACITY`）于 2026-10-30 落地；生成的 JS/C# codec、跨网关关联号改写、宿主路由（静态与协调器发布）、属性复制与运行时持久化均已落地（见本行实现证据链接）——余下缺口是 Avatar 运行时交接（缺口 7）。 | [entity-contract.md](./entity-contract.md)、[实现证据](./bigworld-like-protocol.md#已实现状态与证据)、[validation.md 契约/SDK 行](./validation.md) |
 | 服务契约 | `login` 是面向客户端的脚本角色与 MLR1 分配客户端；`data` 是归属侧记录端点；可选 `apiServer` 是外部 HTTP 入口。MLS1 是服务链路身份。login 凭据已决定为 HMAC-SHA256；MLT1 的 C++ 签发/验证原语已实现、凭据随 `MLC1` 的 `tk` 尾缀上行，`MISTLANE_TICKET_SECRETS` 下的 login 节点经 `mistlane.ticket.issue` 签发，同密钥的 crossServer 在握手上验证并写 `context.verified`。 | [service-contracts.md](./service-contracts.md)、[process-roles.md 跨服的数据归属](./process-roles.md#跨服的数据归属) |
 | HTTP 与错误边界 | HTTP gateway 将请求/上游结果映射为 HTTP 状态；apiServer hooks 与 WebSocket callbacks 定义请求/会话级错误处理。EntityError 是另一套封闭 RPC 错误词表。MLR1/MLD1/MLS1/MLC1 错误各自属于协议，不能视为共享的 EntityError 枚举。 | [http.md 服务端与 Lua HTTP handlers](./http.md)、[entity-contract.md 调用 envelope 与错误协议](./entity-contract.md#调用-envelope-与错误协议-已代决-规范进程内编解码已实现) |
 
@@ -189,10 +189,10 @@ apiServer 上的 `--journal FILE` 选择持久受理后端（`ApiSqliteAcceptanc
 
 | Todo 范围 | 保留工作 | 审计编号 |
 |---|---|---|
-| crossServer 回传与唯一写入权 | 归属持久事务/ACK/重放、可恢复发送源、有界队列/只读/最终回服接线、共享租约权威与 Avatar 集成 | 矛盾 4 的恢复部分；缺口 3/4 |
-| login/data/apiServer | 宿主凭据验证与区服秘钥配置、持久凭据声明表与 home-data 授权消息；MLA1 回调协议（签名/防重放/受理/归属已建模、HTTP 传输与持久受理已接通、MLT1 凭据原语已实现并绑定到 `MLC1` 的 `tk` 尾缀、轮换/撤销已决定并测试）的多进程重放声明与归属事实来源 | 缺口 2（运行时归 4）、4/6 |
+| crossServer 回传与唯一写入权 | 可恢复发送源（发送方崩溃即丢失其进程内队列）与 Avatar 运行时集成；归属持久事务/ACK/重放、有界队列/只读/最终回服接线与共享租约权威已实现 | 矛盾 4 的恢复部分；缺口 3/4 |
+| login/data/apiServer | 持久凭据声明表与 home-data 授权消息；MLA1 回调协议（签名/防重放/受理/归属已建模、HTTP 传输与持久受理已接通、MLT1 凭据原语已实现并绑定到 `MLC1` 的 `tk` 尾缀、宿主凭据验证与区服秘钥配置已实现、轮换/撤销已决定并测试）的多进程重放声明与归属事实来源 | 缺口 2（运行时归 4）、4/6 |
 | coordinator 归属/迁移 | MLS1 之外的对端认证、真实路由/Avatar 运行时接线，以及跨服务崩溃/重复测试 | 缺口 5（类型协议、模型、持久 home 游标/墓碑、注册表链路 `MLR1 MIG` 动词（含注册表驱动退役）、栅栏后接管模型及其线上动词、持久场景/放置归属已实现；运行时证据仍缺） |
-| 实体实现链 | 完整 envelope/error/EntityRef 向量与 bundle-load 闸门、生产 codec/网络运行时、嵌套复制与持久化 | 缺口 7 |
+| 实体实现链 | Avatar 运行时（持有 socket 与持久化实体的网络运行时）、完整生产级 SDK runtime 与 hosting-generation 内部调用方；完整 envelope/error/EntityRef 向量、bundle-load 闸门、生成的 codec、嵌套复制与运行时持久化已实现 | 缺口 7 |
 
 以上均为保留闸门，不是新增实现声明。每个部分/未解项必须连同上面的原因与解锁条件阅读；历史 todo 叙述不能覆盖当前代码证据。
 
