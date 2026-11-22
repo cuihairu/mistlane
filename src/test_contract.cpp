@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
+#include "mistlane/entity_save.hpp"
 #include "mistlane/entity_state.hpp"
 #include "mistlane/entity_sync_wire.hpp"
 #include "test_common.hpp"
@@ -1408,6 +1409,132 @@ void entity_state_store() {
         require(converted.ok && converted.defaulted.size() == 1 && converted.defaulted[0] == "mails",
                 "a grown contract did not default its new persistent property");
         std::cout << "entity.state.store restore: reopen re-establishes, version conversion [PASS]\n";
+    }
+}
+
+// The periodic-save driver turns "a record is dirty" into the single forced-save
+// entry on a period, under an injected clock: the first tick fires immediately,
+// a tick inside the period attempts nothing, an unconfirmed save is skipped as
+// in-flight, a store without a hosting assignment is skipped as not_ready, a
+// throwing backend is counted failed with dirty surviving for a retry, and
+// remove() unregisters a store.
+void entity_save_periodic() {
+    const EntityContract contract(R"(<Contracts><Types>
+        <Item><itemId id="0" type="UINT32"/><count id="1" type="UINT32" default="2"/></Item>
+        </Types>
+        <Entity name="Avatar" id="1">
+          <Properties>
+            <level id="1" type="UINT16" default="1" persistent="true"/>
+            <gold id="2" type="UINT32" persistent="true"/>
+            <bag id="3" type="Item" persistent="true"/>
+            <title id="4" type="STRING"/>
+          </Properties>
+        </Entity></Contracts>)");
+    const EntityTarget target{1, 1, 3, 42};
+    SprotoCodec codec(contract);
+    Context c;
+    MigrationJournal backend(c.path("save.sqlite").string());
+
+    std::uint64_t now = 0;
+    PeriodicSaveDriver::Clock clk = [&] { return now; };
+    {
+        PropertyStore store(contract, 1);
+        PersistentStore persist(store);
+        EntityStateStore owned(target, persist, &codec, &backend);
+        require(persist.assume(5), "generation assignment refused");
+        PeriodicSaveDriver driver(1000, clk);
+        driver.add(&owned);
+        require(driver.registered() == 1, "the store did not register");
+        require(persist.set("level", EntityValue(std::int64_t{9})), "persistent write failed");
+        require(persist.dirty(), "the write did not mark the record dirty");
+        auto first = driver.tick();
+        require(first.attempted == 1 && first.landed == 1 && !persist.dirty(),
+                "the first tick did not land the dirty record");
+        require(persist.set("gold", EntityValue(std::int64_t{7})), "post-save write failed");
+        now = 500;
+        auto early = driver.tick();
+        require(early.attempted == 0 && persist.dirty(),
+                "a tick inside the period attempted a save");
+        now = 1000;
+        auto later = driver.tick();
+        require(later.attempted == 1 && later.landed == 1 && !persist.dirty()
+                && persist.committed_revision() == 2, "the period-elapsed tick did not land");
+        auto clean = driver.tick();
+        require(clean.attempted == 0 && clean.landed == 0, "a clean record was re-saved");
+        std::cout << "entity.save.periodic cadence: immediate first tick, period throttle [PASS]\n";
+    }
+
+    {
+        PropertyStore store(contract, 1);
+        PersistentStore persist(store);
+        EntityStateStore owned(target, persist, &codec, &backend);
+        require(persist.assume(5) && persist.set("gold", EntityValue(std::int64_t{8})),
+                "in-flight-path setup failed");
+        const auto opened = persist.save(5, persist.revision());
+        require(opened.ok, "opening the in-flight save failed");
+        std::uint64_t tick_now = 0;
+        PeriodicSaveDriver::Clock tick_clk = [&] { return tick_now; };
+        PeriodicSaveDriver driver(0, tick_clk);
+        driver.add(&owned);
+        auto busy = driver.tick();
+        require(busy.attempted == 1 && busy.in_flight == 1 && persist.dirty(),
+                "an unconfirmed save was not skipped as in-flight");
+        require(persist.confirm(opened.receipt.save_id), "the in-flight save could not confirm");
+        require(persist.set("gold", EntityValue(std::int64_t{9})), "post-confirm write failed");
+        auto after = driver.tick();
+        require(after.attempted == 1 && after.landed == 1 && !persist.dirty(),
+                "a save that became confirmable did not land");
+        std::cout << "entity.save.periodic in_flight: one unconfirmed save, retried after confirm [PASS]\n";
+    }
+
+    {
+        PropertyStore store(contract, 1);
+        PersistentStore persist(store);
+        EntityStateStore owned(target, persist, &codec, &backend);
+        require(persist.set("level", EntityValue(std::int64_t{4})), "pending write failed");
+        std::uint64_t tick_now = 0;
+        PeriodicSaveDriver::Clock tick_clk = [&] { return tick_now; };
+        PeriodicSaveDriver driver(0, tick_clk);
+        driver.add(&owned);
+        auto skipped = driver.tick();
+        require(skipped.attempted == 1 && skipped.not_ready == 1 && persist.dirty(),
+                "a store without an assignment was not skipped as not_ready");
+        require(persist.assume(5), "a late assignment was refused");
+        auto landed = driver.tick();
+        require(landed.attempted == 1 && landed.landed == 1 && !persist.dirty(),
+                "a store that was later assigned did not land");
+        std::cout << "entity.save.periodic not_ready: skipped until a hosting assignment [PASS]\n";
+    }
+
+    {
+        struct FailingBackend : EntityStateBackend {
+            void save_state(const EntityStateSnapshot&) override { throw std::runtime_error("backend down"); }
+            std::vector<EntityStateSnapshot> restore_states() const override { return {}; }
+        } down;
+        MigrationJournal retry_backend(c.path("save-retry.sqlite").string());
+        PropertyStore store(contract, 1);
+        PersistentStore persist(store);
+        EntityStateStore failed(target, persist, &codec, &down);
+        require(persist.assume(5) && persist.set("level", EntityValue(std::int64_t{6})),
+                "retry-path setup failed");
+        std::uint64_t tick_now = 0;
+        PeriodicSaveDriver::Clock tick_clk = [&] { return tick_now; };
+        PeriodicSaveDriver driver(0, tick_clk);
+        driver.add(&failed);
+        auto bad = driver.tick();
+        require(bad.attempted == 1 && bad.failed == 1 && persist.dirty(),
+                "a failed persist was not counted or lost its dirty flag");
+        EntityStateStore recovered(target, persist, &codec, &retry_backend);
+        driver.remove(&failed);
+        driver.add(&recovered);
+        auto good = driver.tick();
+        require(good.attempted == 1 && good.landed == 1 && !persist.dirty(),
+                "a retry after a failed persist did not land");
+        driver.remove(&recovered);
+        auto gone = driver.tick();
+        require(gone.attempted == 0 && driver.registered() == 0,
+                "a removed store was still attempted");
+        std::cout << "entity.save.periodic retry: failed persist stays dirty, retry lands [PASS]\n";
     }
 }
 // Big-bag single-item modification — the property design's cost question.

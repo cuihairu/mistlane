@@ -26,6 +26,7 @@ void entity_snapshot();
 void entity_gateway();
 void entity_persist();
 void entity_state_store();
+void entity_save_periodic();
 void entity_perf();
 void role_names();
 void transport_tcp();
@@ -154,6 +155,7 @@ int run_tests(int argc, char** argv) {
         {"entity.gateway","contract",test::entity_gateway},
         {"entity.persist","contract",test::entity_persist},
         {"entity.state.store","contract",test::entity_state_store},
+        {"entity.save.periodic","contract",test::entity_save_periodic},
         {"entity.perf","contract",test::entity_perf},
         {"core.roles","core",test::role_names},
         {"transport.tcp","transport",test::transport_tcp},
