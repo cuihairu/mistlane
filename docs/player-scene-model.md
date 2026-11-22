@@ -4,7 +4,7 @@ This page separates game-fogs source observations, Mistlane's target contracts a
 
 ## Session, Avatar and data ownership
 
-A Session owns the client connection, connection state and current-host route in gateway. Avatar denotes the player data/behavior object in the active gameServer or crossServer. The old type is Lua Charactor; Mistlane does not yet implement a corresponding C++ Avatar type.
+A Session owns the client connection, connection state and current-host route in gateway. Avatar denotes the player data/behavior object in the active gameServer or crossServer. The old type is Lua Charactor; Mistlane implements the framework-side Avatar runtime model (include/mistlane/avatar_runtime.hpp, the seven-state oracle, pinned by the avatar.lifecycle model test) but no script-backed per-avatar object yet.
 
 ```mermaid
 flowchart TB

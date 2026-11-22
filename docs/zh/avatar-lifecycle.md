@@ -1,6 +1,6 @@
 # Avatar 全生命周期：分段、预言机状态机与关系
 
-状态：已定设计（2026-11-22）。框架当前没有 Avatar 类型（`grep -rniE "\b(struct|class)\s+(Avatar|Charactor|Player)\b" include/ src/` 零命中），本页不改变任何 CLI 行为，下面描述的运行行为均未实现、未经验证。本页是[Avatar 运行时](./avatar-runtime.md)的五态、[跨服回传协议](./cross-return-protocol.md)的租约态与[场景生命周期](./scene-lifecycle.md)的实例态各自覆盖一部分的**统一**生命周期契约；它记录三者哪里一致、哪里分歧，以及一个可机械判定的预言机长什么样。本页**不改**那三页——冲突以勘误表（下文）记录，交由维护者处置。英文页：[English](../avatar-lifecycle.md)。
+状态：已定设计（2026-11-22）。框架当前没有端到端 Avatar 运行时——七态预言机模型已实现（include/mistlane/avatar_runtime.hpp，由 avatar.lifecycle 模型测试钉住），会话/Lua/传输接线为后续切片——本页不改变任何 CLI 行为，下面描述的运行行为仍未端到端实现、未经验证。本页是[Avatar 运行时](./avatar-runtime.md)的五态、[跨服回传协议](./cross-return-protocol.md)的租约态与[场景生命周期](./scene-lifecycle.md)的实例态各自覆盖一部分的**统一**生命周期契约；它记录三者哪里一致、哪里分歧，以及一个可机械判定的预言机长什么样。本页**不改**那三页——冲突以勘误表（下文）记录，交由维护者处置。英文页：[English](../avatar-lifecycle.md)。
 
 ## 为什么需要一页
 
@@ -283,6 +283,6 @@ E_SPAWN, E_DESTROY, E_DAILY_CUTOVER, E_SAVE_FAIL, E_LOAD_FAIL, E_OPERATOR_CLOSE`
 
 - **机械可判定：**转移函数按拒绝规则全定义——任意事件序列终止于某态或具名拒绝。可检视验证，即账本验收（"状态机可机械判定任意事件序列"）。
 - **Mermaid：**九个图（八段 + 状态机）全渲染；`docs:check` 覆盖可渲染、桌面/移动、明暗与展开。
-- **运行时验收：**今天无——无 Avatar 类型。验证记录不得声称 avatar 行为（与 avatar-runtime 页一致）。
+- **运行时验收：**今天无——无端到端 Avatar 运行时；七态预言机模型已实现并经模型测试（avatar.lifecycle），但会话/Lua/传输接线是后续切片。验证记录不得声称 avatar 行为（与 avatar-runtime 页一致）。
 
 相关：[Avatar 运行时](./avatar-runtime.md)、[跨服回传与唯一写入权协议](./cross-return-protocol.md)、[场景生命周期](./scene-lifecycle.md)、[玩家、场景与跨服模型](./player-scene-model.md)。

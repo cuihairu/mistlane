@@ -1,6 +1,6 @@
 # Avatar full lifecycle: segments, oracle state machine and relationships
 
-Status: decided design (2026-11-22). No Avatar type exists in the framework today
+Status: decided design (2026-11-22). No end-to-end Avatar runtime exists in the framework today (the seven-state oracle model is implemented as include/mistlane/avatar_runtime.hpp and pinned by the avatar.lifecycle model test; session, Lua and transport wiring are later slices)
 (`grep -rniE "\b(struct|class)\s+(Avatar|Charactor|Player)\b" include/ src/` returns nothing),
 so nothing on this page changes CLI behavior and no runtime below is implemented or
 validated. This page is the **unified** lifecycle contract the [Avatar runtime](./avatar-runtime.md)
@@ -329,8 +329,10 @@ recorded here for a maintainer to resolve.
   ledger's acceptance ("状态机可机械判定任意事件序列").
 - **Mermaid:** all nine diagrams (eight segments + the state machine) render; `docs:check`
   covers renderability, desktop/mobile, light/dark and expansion.
-- **Runtime acceptance:** none today — no Avatar type exists. Validation records must not claim
-  avatar behavior (unchanged from the avatar-runtime page).
+- **Runtime acceptance:** none today — no end-to-end Avatar runtime exists; the seven-state oracle
+  model is implemented and model-tested (avatar.lifecycle) but session/Lua/transport wiring is a
+  later slice. Validation records must not claim avatar behavior (unchanged from the
+  avatar-runtime page).
 
 Related: [Avatar runtime](./avatar-runtime.md), [cross return and single-writer protocol](./cross-return-protocol.md),
 [scene lifecycle](./scene-lifecycle.md), [players, scenes and cross-region execution](./player-scene-model.md).

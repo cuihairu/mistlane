@@ -1,6 +1,6 @@
 # Avatar 重连与日切契约
 
-状态：已定设计（2026-11-22）。无 Avatar 类型，本页不改变任何 CLI 行为，下面描述的运行行为均未实现、未经验证。本页是账本的 PL-3：重连双泳道（检测判定/宽限期/reattach 鉴权/状态追平/超时清理链/顶号）、`suspended` 子态显式化，以及日切（触发面/三层触碰顺序/写入屏障/失败补偿/`onDailyReset`+`onAvatarDailyReset` 签名与顺序保证）。它是对[生命周期预言机](./avatar-lifecycle.md)的细化——PL-1 的 `suspended` 展开为两个显式子态，日切屏障获得钩子。机器可读形态：`contracts/avatar-reconnect-cutover.json`。英文页：[English](../avatar-reconnect-cutover.md)。
+状态：已定设计（2026-11-22）。无端到端 Avatar 运行时（七态预言机模型已实现并经模型测试；会话与传输接线为后续切片），本页不改变任何 CLI 行为，下面描述的运行行为仍未端到端实现、未经验证。本页是账本的 PL-3：重连双泳道（检测判定/宽限期/reattach 鉴权/状态追平/超时清理链/顶号）、`suspended` 子态显式化，以及日切（触发面/三层触碰顺序/写入屏障/失败补偿/`onDailyReset`+`onAvatarDailyReset` 签名与顺序保证）。它是对[生命周期预言机](./avatar-lifecycle.md)的细化——PL-1 的 `suspended` 展开为两个显式子态，日切屏障获得钩子。机器可读形态：`contracts/avatar-reconnect-cutover.json`。英文页：[English](../avatar-reconnect-cutover.md)。
 
 ## 重连双泳道
 
@@ -152,6 +152,6 @@ sequenceDiagram
 
 - **可机器校验：** `contracts/avatar-reconnect-cutover.json` 钉住子态、双泳道判定、三条重连路径、三层触碰顺序与失败补偿；夹具断言不变量，漂移即测试失败。
 - **Mermaid：** 四张验收图（三重连路径 + 日切）渲染；`docs:check` 覆盖可渲染、桌面/移动、明暗与展开。
-- **运行时验收：** 今天无——无 Avatar 类型。
+- **运行时验收：** 今天无——无端到端 Avatar 运行时；预言机模型已经模型测试（avatar.lifecycle），但接线尚未。
 
 相关：[Avatar 生命周期](./avatar-lifecycle.md)、[Avatar 创建/回收契约](./avatar-spawn-destroy.md)、[Avatar 运行时](./avatar-runtime.md)、[跨服回传与唯一写入权协议](./cross-return-protocol.md)、[实体契约与代码生成](./entity-contract.md)。

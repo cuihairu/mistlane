@@ -1,6 +1,6 @@
 # Avatar reconnect and daily cutover contract
 
-Status: decided design (2026-11-22). No Avatar type exists, so nothing here changes CLI
+Status: decided design (2026-11-22). No end-to-end Avatar runtime exists yet (the seven-state oracle model is implemented and model-tested; session and transport wiring are later slices), so nothing here changes CLI
 behavior and no runtime below is implemented or validated. This page is the ledger's PL-3:
 the reconnect double-lane (detection verdict, grace window, reattach auth, catch-up, timeout
 cleanup chain, kick-on-relogin), the explicit `suspended` sub-states, and the daily cutover
@@ -188,7 +188,8 @@ rows, and the transition rows for `suspended` expand:
   compensation; the fixture asserts the invariants so drift fails the test.
 - **Mermaid:** the four acceptance diagrams (three reconnect paths + daily cutover) render;
   `docs:check` covers renderability, desktop/mobile, light/dark and expansion.
-- **Runtime acceptance:** none today — no Avatar type exists.
+- **Runtime acceptance:** none today — no end-to-end Avatar runtime exists; the oracle model is
+  model-tested (avatar.lifecycle) but wiring is not.
 
 Related: [Avatar lifecycle](./avatar-lifecycle.md), [Avatar spawn/destroy contract](./avatar-spawn-destroy.md),
 [Avatar runtime](./avatar-runtime.md), [cross return and single-writer protocol](./cross-return-protocol.md),

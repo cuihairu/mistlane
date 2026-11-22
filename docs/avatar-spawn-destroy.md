@@ -1,6 +1,6 @@
 # Avatar spawn/destroy runtime contract
 
-Status: decided design (2026-11-22). No Avatar type exists, so nothing here changes CLI
+Status: decided design (2026-11-22). No end-to-end Avatar runtime exists yet (the seven-state oracle model is implemented and model-tested; session and transport wiring are later slices), so nothing here changes CLI
 behavior and no runtime below is implemented or validated. This page is the object
 create/reclaim contract the ledger names (PL-2): creator authority, required fields and
 defaults, persistence semantics, AOI broadcast edges, the destroy obligation list, mid-life
@@ -180,7 +180,8 @@ sequenceDiagram
   drift fails the test.
 - **Mermaid:** the four acceptance diagrams render; `docs:check` covers renderability,
   desktop/mobile, light/dark and expansion.
-- **Runtime acceptance:** none today — no Avatar type exists.
+- **Runtime acceptance:** none today — no end-to-end Avatar runtime exists; the oracle model is
+  model-tested (avatar.lifecycle) but wiring is not.
 
 Related: [Avatar lifecycle](./avatar-lifecycle.md), [Avatar runtime](./avatar-runtime.md),
 [scene lifecycle](./scene-lifecycle.md), [cross return and single-writer protocol](./cross-return-protocol.md).

@@ -1,6 +1,6 @@
 # Avatar 创建/回收运行时契约
 
-状态：已定设计（2026-11-22）。无 Avatar 类型，本页不改变任何 CLI 行为，下面描述的运行行为均未实现、未经验证。本页是账本所点（PL-2）的对象创建/回收契约：创建者权限、必填字段与默认值、持久化语义、AOI 广播边沿、销毁义务清单、中途回收与四路径验收。它是[生命周期预言机](./avatar-lifecycle.md)的义务对应页——那页定*状态*，本页定创建与回收*必须做什么*。机器可读形态：`contracts/avatar-spawn-destroy.json`。英文页：[English](../avatar-spawn-destroy.md)。
+状态：已定设计（2026-11-22）。无端到端 Avatar 运行时（七态预言机模型已实现并经模型测试；会话与传输接线为后续切片），本页不改变任何 CLI 行为，下面描述的运行行为仍未端到端实现、未经验证。本页是账本所点（PL-2）的对象创建/回收契约：创建者权限、必填字段与默认值、持久化语义、AOI 广播边沿、销毁义务清单、中途回收与四路径验收。它是[生命周期预言机](./avatar-lifecycle.md)的义务对应页——那页定*状态*，本页定创建与回收*必须做什么*。机器可读形态：`contracts/avatar-spawn-destroy.json`。英文页：[English](../avatar-spawn-destroy.md)。
 
 ## 创建者权限
 
@@ -146,6 +146,6 @@ sequenceDiagram
 
 - **可机器校验：** `contracts/avatar-spawn-destroy.json` 钉住义务顺序、必填字段与默认值、四路径与失败补偿；夹具 `tests/test_avatar_contract.py`（ctest `mistlane_avatar_contract`）断言不变量（义务顺序、四路径、补偿覆盖、中途回收 never 规则），意外漂移即测试失败。
 - **Mermaid：** 四张验收图渲染；`docs:check` 覆盖可渲染、桌面/移动、明暗与展开。
-- **运行时验收：** 今天无——无 Avatar 类型。
+- **运行时验收：** 今天无——无端到端 Avatar 运行时；预言机模型已经模型测试（avatar.lifecycle），但接线尚未。
 
 相关：[Avatar 生命周期](./avatar-lifecycle.md)、[Avatar 运行时](./avatar-runtime.md)、[场景生命周期](./scene-lifecycle.md)、[跨服回传与唯一写入权协议](./cross-return-protocol.md)。

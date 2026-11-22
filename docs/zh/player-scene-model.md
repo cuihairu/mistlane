@@ -4,7 +4,7 @@
 
 ## Session、Avatar 与数据归属
 
-Session 管理客户端连接、状态及当前承载路由，位于 gateway。Avatar 表示承载玩家数据与行为的游戏对象，位于当前 gameServer 或 crossServer；旧代码实际叫 Lua Charactor，尚无已实现的 Mistlane C++ Avatar 类型。
+Session 管理客户端连接、状态及当前承载路由，位于 gateway。Avatar 表示承载玩家数据与行为的游戏对象，位于当前 gameServer 或 crossServer；旧代码实际叫 Lua Charactor；Mistlane 已实现框架侧 Avatar 运行时模型（include/mistlane/avatar_runtime.hpp，七态预言机，由 avatar.lifecycle 模型测试钉住），但尚无脚本承载的逐角色对象。
 
 ```mermaid
 flowchart TB

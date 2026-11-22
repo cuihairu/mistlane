@@ -1,6 +1,6 @@
 # Avatar 运行时：会话、生命周期钩子、迁移与加载保存
 
-状态：已定设计（2026-10-19）。当前框架有会话、帧协议、握手层与每个 gameServer/crossServer 一个串行调用的 Lua VM，但没有 Avatar 类型（`grep -rniE "\b(struct|class)\s+(Scene|Map|Entity|Avatar|Chunk)\b" include/ src/` 零命中）——本页不改变任何 CLI 行为，下面描述的运行行为均未实现、未经验证。本页把[模型页](./player-scene-model.md)列为抽取目标的内容（"钩子需要线程/错误/重入/超时契约与迁移期间的规则"）落成契约，为 coordinator 协调的移交切片提供前置设计；职责边界仍是[进程职责页](./process-roles.md)。持久归属与唯一写入权归[跨服回传协议](./cross-return-protocol.md)；实例准备状态归[场景生命周期](./scene-lifecycle.md)；属性 schema、脏追踪与增量同步归[实体契约链](./entity-contract.md)且继续延后。任何新 Avatar API 的实现被客户端协议契约恢复（账本中的协议契约恢复条目）门控。
+状态：已定设计（2026-10-19）。当前框架有会话、帧协议、握手层与每个 gameServer/crossServer 一个串行调用的 Lua VM，但没有端到端 Avatar 运行时——七态预言机模型已实现（include/mistlane/avatar_runtime.hpp，由 avatar.lifecycle 模型测试钉住），采用[生命周期页](./avatar-lifecycle.md)的扩态集（其勘误 C1–C2），会话/Lua/传输接线与运行时验收仍是后续切片——本页不改变任何 CLI 行为，下面描述的运行行为仍未端到端实现、未经验证。本页把[模型页](./player-scene-model.md)列为抽取目标的内容（"钩子需要线程/错误/重入/超时契约与迁移期间的规则"）落成契约，为 coordinator 协调的移交切片提供前置设计；职责边界仍是[进程职责页](./process-roles.md)。持久归属与唯一写入权归[跨服回传协议](./cross-return-protocol.md)；实例准备状态归[场景生命周期](./scene-lifecycle.md)；属性 schema、脏追踪与增量同步归[实体契约链](./entity-contract.md)且继续延后。任何新 Avatar API 的实现被客户端协议契约恢复（账本中的协议契约恢复条目）门控。
 
 ## 基线：框架现在有什么
 
@@ -13,7 +13,7 @@
 | 节点钩子 | `init`/`start`/`message`/`http`/`tick`/`stop`/`shutdown` 与 websocket 三件套；**没有玩家连接/断开钩子** |
 | 重载 | SIGHUP 装载候选 VM、切换、经 `stop`/`shutdown` 退役旧 VM；重载重置模块状态且不导出任何东西 |
 | 承载 | `mistlane.place(role, namespace?, scope?, callback)` 查询 coordinator 注册表 |
-| Avatar | 不存在。没有角色对象、没有加载路径、没有保存入口、没有迁移 |
+| Avatar | 模型已实现（七态预言机，avatar.lifecycle 模型测试钉住），但无端到端运行时：没有角色对象、没有加载路径、没有保存入口、没有迁移 |
 
 只有 `message` 的节点拥有的是请求处理，不是角色运行时。这个空白正是本页存在的原因：生命周期、状态所有权与迁移需要各自的契约。
 
@@ -117,6 +117,6 @@ stateDiagram-v2
 
 ## 验证
 
-目前无验证：没有 Avatar 类型，因此本页没有测试，也没有运行验收。验证记录不得据此声称任何 Avatar 行为。实现后的验收是账本点名的运行时验证：正常登录、有界双向消息、同进程切场景、跨进程/跨服移交与回传、回调与多监听——整条链，不是子集。
+七态预言机模型已实现并有模型测试（avatar.lifecycle）。运行时验收仍无：正常登录、有界双向消息、同进程切场景、跨进程/跨服移交与回传、回调与多监听——整条链——都还没有会话/Lua/传输接线，因此验证记录仍不得声称任何 Avatar 行为。
 
 相关：[玩家、场景与跨服模型](./player-scene-model.md)、[跨服回传与唯一写入权协议](./cross-return-protocol.md)、[场景生命周期](./scene-lifecycle.md)、[实体契约与代码生成](./entity-contract.md)、[Lua 与生命周期](./lua.md)。
