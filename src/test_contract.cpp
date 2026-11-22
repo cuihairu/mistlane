@@ -817,6 +817,107 @@ void entity_endpoint() {
     std::cout << "entity.endpoint notify: handled and answered nothing, failure surfaced [PASS]\n";
 }
 
+// Owner attribution: the runtime records which trusted session may assert an
+// entity's owner-declared methods, and both the in-process deliver path and the
+// transport endpoint resolve it — a client never claims an owner field, it is
+// matched against the trusted session identity.
+void entity_owner() {
+    const EntityContract contract(R"(<Contracts><Entity name="Hero" id="1">
+        <ServerMethods>
+          <Method name="claim" id="1" mode="request" caller="owner">
+            <Returns><Field name="granted" id="0" type="BOOL"/></Returns>
+          </Method>
+          <Method name="admin" id="2" mode="request" caller="server">
+            <Returns><Field name="ok" id="0" type="BOOL"/></Returns>
+          </Method>
+        </ServerMethods>
+        <ClientMethods>
+          <Method name="enter" id="1" mode="notify" audience="owner"/>
+        </ClientMethods>
+      </Entity></Contracts>)");
+    EntityRuntime runtime(contract);
+    const EntityTarget target{1, 1, 3, 42};
+    std::string claimant;
+    runtime.dispatcher().bind("Hero", "server", 1,
+        [&](const EntityCaller& caller, const EntityTarget&, const EntityValues&) {
+            claimant = caller.kind; // which kind the owner handler observed
+            return EntityValues{{"granted", true}};
+        });
+    runtime.dispatcher().bind("Hero", "server", 2,
+        [](const EntityCaller&, const EntityTarget&, const EntityValues&) { return EntityValues{{"ok", true}}; });
+    runtime.dispatcher().bind("Hero", "client", 1,
+        [](const EntityCaller&, const EntityTarget&, const EntityValues&) { return EntityValues{}; });
+    require(runtime.spawn(target), "owner test spawn failed");
+
+    // Attribution rules: a live entity takes a nonzero session; an absent
+    // entity and a zero session are both refused.
+    require(runtime.set_owner(target, 42), "owner binding was refused");
+    require(runtime.owner(target) == 42, "owner attribution was not recorded");
+    require(!runtime.set_owner(target, 0), "a zero session claimed ownership");
+    require(!runtime.set_owner({1, 1, 9, 9}, 5), "ownership was claimed for an unrouted entity");
+    std::cout << "entity.owner attribution: live entity takes a nonzero session, refusals held [PASS]\n";
+
+    // Resolution is by trusted session id, never by a claimed field: only the
+    // bound session is upgraded to owner; a server leg and a guest are not.
+    require(runtime.resolve_caller(target, {"server", 9}).kind == "server", "a server leg was upgraded");
+    require(runtime.resolve_caller(target, {"client", 43}).kind == "client", "a guest session was upgraded");
+    require(runtime.resolve_caller(target, {"client", 42}).kind == "owner", "the owning session was not upgraded");
+    require(runtime.resolve_caller(target, {"client", 0}).kind == "client", "a zero session id was upgraded");
+    std::cout << "entity.owner resolve_caller: trusted session only, guests and servers unchanged [PASS]\n";
+
+    // The owner-declared server method is reachable by its owner and denied to
+    // a guest, to an internal server leg, and to the owner of the *server*
+    // method's kind.
+    require(runtime.deliver(EntityInvocation{target, {"client", 42}, "server", 1, true, {}}, 1).ok,
+            "the owner session was denied its owner method");
+    require(claimant == "owner", "the owner handler did not observe the owner kind");
+    require(runtime.deliver(EntityInvocation{target, {"client", 43}, "server", 1, true, {}}, 2).error ==
+                EntityError::FORBIDDEN, "a guest session was allowed an owner method");
+    require(runtime.deliver(EntityInvocation{target, {"server", 9}, "server", 1, true, {}}, 3).error ==
+                EntityError::FORBIDDEN, "an internal server leg was allowed an owner method");
+    require(runtime.deliver(EntityInvocation{target, {"server", 9}, "server", 2, true, {}}, 4).ok,
+            "a server caller was denied the server method");
+    require(runtime.deliver(EntityInvocation{target, {"client", 42}, "server", 2, true, {}}, 5).error ==
+                EntityError::FORBIDDEN, "the owner was allowed the server-only method");
+    std::cout << "entity.owner methods: owner reaches owner, guest and server do not [PASS]\n";
+
+    // The same resolution applies to the client side (audience is always owner).
+    require(runtime.deliver(EntityInvocation{target, {"client", 42}, "client", 1, true, {}}, 6).ok,
+            "the owner session was denied its client method");
+    require(runtime.deliver(EntityInvocation{target, {"client", 43}, "client", 1, true, {}}, 7).error ==
+                EntityError::FORBIDDEN, "a guest session was allowed a client method");
+    std::cout << "entity.owner client side: owner reaches owner-audience, guest does not [PASS]\n";
+
+    // Destroy clears the binding with the entity: a re-spawned incarnation
+    // starts unowned, and the former owner's session no longer upgrades.
+    require(runtime.destroy(target), "destroy refused a live entity");
+    require(runtime.owner(target) == 0, "ownership survived destroy");
+    require(runtime.resolve_caller(target, {"client", 42}).kind == "client",
+            "a dead entity still upgraded its former owner");
+    std::cout << "entity.owner destroy: ownership cleared with the entity [PASS]\n";
+
+    // Transport wiring: the endpoint resolves the trusted session against the
+    // same owner table before the fence, so an unattributed client is FORBIDDEN
+    // an owner-audience notify and the bound one is not.
+    EntityEndpoint endpoint(contract);
+    require(endpoint.runtime().spawn(target, 5), "endpoint owner spawn failed");
+    endpoint.runtime().dispatcher().bind("Hero", "client", 1,
+        [](const EntityCaller&, const EntityTarget&, const EntityValues&) { return EntityValues{}; });
+    const auto client_notify = [&]() {
+        return "MLE1" + encode_entity_envelope({1, 1, 3, 42, kEntitySideClient,
+            1, 0, 0, 0, {}});
+    };
+    std::string result;
+    auto denied = endpoint.handle(client_notify(), {"client", 42}, result);
+    require(denied.has_value() && denied->empty() && result == "notify-error",
+            "an unattributed client was not FORBIDDEN a client method");
+    require(endpoint.runtime().set_owner(target, 42), "endpoint owner binding refused");
+    auto granted = endpoint.handle(client_notify(), {"client", 42}, result);
+    require(granted.has_value() && granted->empty() && result == "notify",
+            "the attributed client was denied its client method");
+    std::cout << "entity.owner endpoint: trusted session resolved before the fence [PASS]\n";
+}
+
 void entity_codec() {
     // The schema-driven sproto codec byte-locks against the same vectors the
     // vendored upstream encoder produces (src/sproto_probe.cpp sdk-vector mode

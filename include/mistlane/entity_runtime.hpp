@@ -20,7 +20,10 @@ namespace mistlane {
 // store (so a script write marks the record dirty only when it lands on a
 // persistent property) and an EntityStateStore bound to the node's backend,
 // registered with a PeriodicSaveDriver the node ticks. Persistence is opt-in
-// per node; without it spawn behaves exactly as before.
+// per node; without it spawn behaves exactly as before. Owner attribution
+// (set_owner/resolve_caller) records which trusted session may assert an
+// entity's owner-declared methods — the transport endpoint and the in-process
+// deliver path both resolve it, so a client never claims an owner field.
 class EntityRuntime {
 public:
  // Property sync push sink: one call per message drained from an entity's
@@ -69,8 +72,39 @@ public:
  }
  EntityDispatchResult deliver(const EntityInvocation& call, std::uint64_t correlation_id) {
    if (!correlation_id) return fail(EntityError::INVALID);
-   if (const auto fenced = fence(call, correlation_id)) return fail(*fenced);
-   return dispatcher_.dispatch(call);
+   // The in-process path resolves owner attribution exactly like the transport
+   // endpoint does, so an owner-declared method is reachable here too.
+   EntityInvocation resolved = call;
+   resolved.caller = resolve_caller(call.target, call.caller);
+   if (const auto fenced = fence(resolved, correlation_id)) return fail(*fenced);
+   return dispatcher_.dispatch(resolved);
+ }
+ // Owner attribution: the trusted session that may assert an entity's
+ // owner-declared methods. Set by the side that binds a session to its entity
+ // (a login/home binding); never read from an invocation — a client leg
+ // claims no owner field, it is matched against the trusted session identity.
+ // Zero refuses, and so does an address that is not a live entity here.
+ bool set_owner(const EntityTarget& ref, std::uint64_t session_id) {
+   const auto a = address(ref);
+   if (!entities_.contains(a) || !session_id) return false;
+   owners_[a] = session_id;
+   return true;
+ }
+ // The owning session of one entity; 0 when none is attributed (or the entity
+ // is gone — destroy clears the binding with its entity).
+ std::uint64_t owner(const EntityTarget& ref) const {
+   const auto it = owners_.find(address(ref));
+   return it == owners_.end() ? 0 : it->second;
+ }
+ // The caller kind the trusted connection may assert for this target: a
+ // client leg whose session owns the entity is upgraded to "owner", so
+ // owner-declared methods are reachable without the client ever claiming it.
+ // Everything else passes through unchanged — a server leg stays "server",
+ // and a session that does not own the entity stays a plain client.
+ EntityCaller resolve_caller(const EntityTarget& target, const EntityCaller& caller) const {
+   const auto owned = owner(target);
+   if (caller.kind == "client" && owned && caller.id == owned) return {"owner", caller.id};
+   return caller;
  }
  // Hosting fence without dispatching: routes the target, asserts the entity's
  // current ownership generation and registers the correlation slot for a
@@ -112,6 +146,7 @@ public:
  bool destroy(EntityTarget ref) {
    const auto a = address(ref);
    if (entities_.erase(a) == 0) return false;
+   owners_.erase(a); // ownership dies with the entity
    channels_.erase(a);
    stores_.erase(a);
    // The record leaves the periodic driver with its entity. A dirty record is
@@ -199,6 +234,10 @@ private:
  static constexpr std::size_t correlation_cap = 4096, correlation_evict = 256;
  EntityDispatcher dispatcher_;
  std::map<Address,std::uint32_t> entities_;
+ // Owner attribution: the trusted session bound to one entity. A client leg
+ // never reports its owner — the runtime matches the caller's session id
+ // against this table (see resolve_caller).
+ std::map<Address,std::uint64_t> owners_;
  std::set<std::pair<Address,std::uint64_t>> delivered_;
  std::map<Address,std::shared_ptr<PropertyStore>> stores_;
  std::map<Address,PropertyChannel> channels_;

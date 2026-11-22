@@ -76,6 +76,7 @@ if(BUILD_TESTING)
       entity.runtime.properties
       entity.rpc
       entity.endpoint
+      entity.owner
       entity.transport
       entity.transport.gateway
       entity.push

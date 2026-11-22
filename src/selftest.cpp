@@ -18,6 +18,7 @@ void entity_sync_wire();
 void entity_runtime_properties();
 void entity_rpc();
 void entity_endpoint();
+void entity_owner();
 void entity_transport();
 void entity_transport_gateway();
 void entity_push();
@@ -148,6 +149,7 @@ int run_tests(int argc, char** argv) {
         {"entity.runtime.properties","contract",test::entity_runtime_properties},
         {"entity.rpc","contract",test::entity_rpc},
         {"entity.endpoint","contract",test::entity_endpoint},
+        {"entity.owner","contract",test::entity_owner},
         {"entity.transport","contract",test::entity_transport},
         {"entity.transport.gateway","contract",test::entity_transport_gateway},
         {"entity.push","contract",test::entity_push},

@@ -46,6 +46,9 @@ public:
             return reply_frame(0, {true, EntityError::INVALID, "malformed envelope", {}});
         }
         EntityInvocation invocation = to_entity_invocation(*envelope, caller);
+        // Owner attribution: the trusted session identity is matched against the
+        // entity's owner, never a field the client reports (see EntityRuntime).
+        invocation.caller = runtime_.resolve_caller(invocation.target, invocation.caller);
         const bool notify = envelope->correlation_id == 0;
         if (const auto fenced = runtime_.fence(invocation, envelope->correlation_id)) {
             result = notify ? "notify-error" : label(*fenced);
