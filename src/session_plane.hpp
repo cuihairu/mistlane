@@ -20,6 +20,7 @@
 #include "mistlane/entity_codec.hpp"
 #include "mistlane/entity_endpoint.hpp"
 #include "mistlane/entity_gateway.hpp"
+#include "mistlane/entity_route.hpp"
 #include <cctype>
 #include <charconv>
 #include <deque>
@@ -90,6 +91,8 @@ constexpr std::size_t kEntityReplyCorrelationAt = 4;
 // traffic through such a session has its MLE1 marker at offset 4. Return the
 // marker offset (0 or 4) for entity traffic, else npos.
 constexpr std::size_t kEntityMlc2Prefix = 4;
+// The wire marker every entity frame begins with (after any MLC2 prefix).
+constexpr std::size_t kEntityMarkerLength = 4;
 inline std::size_t entity_frame_offset(std::string_view frame) {
     if (frame.starts_with("MLE1")) return 0;
     if (frame.size() >= kEntityMlc2Prefix
@@ -408,17 +411,23 @@ public:
             std::function<void(std::shared_ptr<Channel>)> mux_upgrade = {},
             bool internal = false, RecordStore* records = nullptr,
             const TicketVerifier* tickets = nullptr, EntityEndpoint* entities = nullptr,
-            GatewayEntityCorrelation* gateway = nullptr, std::uint64_t connection = 0)
+            GatewayEntityCorrelation* gateway = nullptr, std::uint64_t connection = 0,
+            const EntityHostRoutes* entity_routes = nullptr)
       : client_(std::move(client)), service_(service),
         timer_(client_->executor()), config_(config), admission_(admission), diagnostics_(diagnostics),
         registry_(registry), on_close_(std::move(on_close)), mux_upgrade_(std::move(mux_upgrade)),
         internal_(internal), records_(records), ticket_verifier_(tickets), entities_(entities),
         gateway_(gateway), connection_(connection) {
+        // The mux hub and the route table are borrowed pointers assigned here
+        // rather than in the init list: the hub decides the link, so the table
+        // is only meaningful on the path that has one. Declaration order already
+        // differs from the init list, so keep new borrowed state out of it.
+        entity_routes_ = entity_routes;
         if (upstream) {
             endpoint_ = tcp::endpoint(parse_address(upstream->address), upstream->port);
             // Multiplexing keeps one socket per upstream: the link owns the
             // connection and this session rides it under an assigned id.
-            if (mux_links) link_ = mux_links->get(*upstream, config_, diagnostics_);
+            if (mux_links) { mux_links_ = mux_links; link_ = mux_links->get(*upstream, config_, diagnostics_); }
             else upstream_ = std::make_shared<TcpChannel>(tcp::socket(client_->executor()));
         }
     }
@@ -447,6 +456,9 @@ public:
         client_->close();
         if (upstream_) upstream_->close();
         if (link_) link_->detach(mux_id_);
+        for (const auto& routed : route_links_)
+            routed.first->detach(routed.second);
+        route_links_.clear();
         if (gateway_) gateway_->drop(connection_); // no reply can match a gone client
         if (registry_ && context_.session) registry_->detach(context_.session);
         on_close_(this);
@@ -824,13 +836,50 @@ private:
             self->pump_client();
         });
     }
+    // Entity host routing: an MLE1 frame naming an entity the gateway's static
+    // route table knows leaves this session's round-robin link for the link to
+    // the upstream that owns the entity. MuxLinks keys its links by endpoint,
+    // so the routed link is the object the whole node shares for that upstream;
+    // it is attached here lazily under a fresh logical id, which the host's
+    // reply comes back on, and the frame's correlation passes through untouched
+    // (mux sessions carry no gateway_ swap). A miss keeps the primary link,
+    // where the host answers UNROUTED. Returns the link and id to send on.
+    std::optional<std::pair<std::shared_ptr<MuxLink>, std::uint32_t>> routed_link(const std::string& payload) {
+        if (!entity_routes_ || !mux_links_ || config_.upstreams.empty()) return std::nullopt;
+        const auto offset = entity_frame_offset(payload);
+        if (offset == std::string_view::npos) return std::nullopt;
+        // The envelope follows the MLE1 marker; decode_entity_envelope reads
+        // the header from the first byte it is given, so skip the marker.
+        const auto envelope = decode_entity_envelope(
+            std::string_view(payload).substr(offset + kEntityMarkerLength));
+        if (!envelope) return std::nullopt;
+        const EntityTarget target{envelope->scope, envelope->type_id, envelope->incarnation, envelope->entity_id};
+        const auto index = entity_routes_->route(target);
+        if (!index || *index >= config_.upstreams.size()) return std::nullopt;
+        auto link = mux_links_->get(config_.upstreams[*index], config_, diagnostics_);
+        const auto found = route_links_.find(link);
+        if (found != route_links_.end()) return std::make_pair(link, found->second);
+        const auto id = link->attach({
+            [self=shared_from_this()](std::string p) { self->forward_to_client(std::move(p)); },
+            [self=shared_from_this()] { self->stop(); }});
+        route_links_[link] = id;
+        return std::make_pair(std::move(link), id);
+    }
     // Shared upstream leg: the link adds this session's id and leaves any MLC2
     // id inside the payload, so correlation and multiplexing stay independent.
+    // A routed entity request rides the owning host's link instead of this
+    // session's round-robin one.
     void forward_link(std::string payload, std::uint64_t request) {
         if (request) payload = correlated_frame(request, payload);
+        std::shared_ptr<MuxLink> link = link_;
+        std::uint32_t id = mux_id_;
+        if (const auto routed = routed_link(payload)) {
+            link = routed->first;
+            id = routed->second;
+        }
         diagnostics_.add_message("tx");
         diagnostics_.add_payload_bytes("tx", payload.size());
-        link_->send(mux_id_, std::move(payload), [self=shared_from_this()](Error ec) {
+        link->send(id, std::move(payload), [self=shared_from_this()](Error ec) {
             if (self->closed_) return;
             if (ec) { self->diagnostics_.upstream_error(); return self->stop(); }
             self->pump_client();
@@ -887,6 +936,13 @@ private:
     std::shared_ptr<TcpChannel> upstream_;
     std::shared_ptr<MuxLink> link_;
     std::uint32_t mux_id_ = 0;
+    // Multiplexing hub and the static entity host-route table, both null on a
+    // non-multiplexing session. route_links_ holds the extra upstream links a
+    // routed entity request rode (keyed by link, valued by the logical id this
+    // session attached on it) so stop() can detach every one.
+    MuxLinks* mux_links_ = nullptr;
+    const EntityHostRoutes* entity_routes_ = nullptr;
+    std::unordered_map<std::shared_ptr<MuxLink>, std::uint32_t> route_links_;
     std::shared_ptr<LuaService>& service_;
     asio::steady_timer timer_;
     tcp::endpoint endpoint_;

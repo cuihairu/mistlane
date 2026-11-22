@@ -24,6 +24,7 @@ void entity_transport_gateway();
 void entity_push();
 void entity_save_runtime();
 void entity_owner_bind();
+void entity_route();
 void entity_codec();
 void entity_snapshot();
 void entity_gateway();
@@ -162,6 +163,7 @@ int run_tests(int argc, char** argv) {
         {"entity.save.periodic","contract",test::entity_save_periodic},
         {"entity.save.runtime","contract",test::entity_save_runtime},
         {"entity.owner.bind","contract",test::entity_owner_bind},
+        {"entity.route","contract",test::entity_route},
         {"entity.perf","contract",test::entity_perf},
         {"core.roles","core",test::role_names},
         {"transport.tcp","transport",test::transport_tcp},

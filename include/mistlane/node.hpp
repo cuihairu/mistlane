@@ -52,6 +52,18 @@ struct Config {
     // gate so each pass attempts every dirty record. A shutdown save always
     // runs at stop. Only meaningful with a contract.
     std::uint64_t entity_save_period_ms = 1000;
+    // One static entity host-route: the entity address -> position in the
+    // gateway's --upstream list. A multiplexing gateway forwards MLE1 frames
+    // for a routed address to that upstream so the request reaches the host
+    // that spawned the entity; a miss keeps the round-robin upstream (the host
+    // answers UNROUTED). Gateway-only; the coordinator-published dynamic table
+    // stays a separate slice.
+    struct EntityRoute {
+        std::uint32_t scope = 0, type_id = 0, incarnation = 0;
+        std::int64_t entity_id = 0;
+        std::size_t index = 0;
+    };
+    std::vector<EntityRoute> entity_routes;
     std::string script;
     Endpoint redis{"127.0.0.1", 6379};
     Endpoint metrics_listen{"127.0.0.1", 9090};

@@ -549,6 +549,110 @@ return service)");
     std::cout << "entity.owner.bind: an unattributed session stays FORBIDDEN [PASS]\n";
 }
 
+// Static entity host-routes on a multiplexing gateway (--entity-route): the
+// gateway fronts two contract hosts, and the entity the table routes to
+// upstream index 1 answers there even on a client session whose round-robin
+// join was upstream 0; an unrouted address keeps the round-robin upstream and
+// its host answers UNROUTED. The routed frame rides the owning upstream's
+// shared link under a fresh logical id, so the reply returns by logical
+// session and the client's correlation passes through untouched (mux sessions
+// carry no gateway rewrite).
+void entity_route() {
+    const std::string xml =
+        "<Contracts><Entity name=\"Avatar\" id=\"1\"><ServerMethods>"
+        "<Method name=\"get\" id=\"2\" mode=\"request\" caller=\"server\">"
+        "<Arg name=\"account\" id=\"0\" type=\"INT32\"/>"
+        "<Returns><Field name=\"level\" id=\"1\" type=\"UINT16\"/></Returns></Method>"
+        "</ServerMethods></Entity></Contracts>";
+    Context c;
+    const auto def = c.path("avatar.def");
+    write(def, xml);
+    const auto script = c.path("avatar.lua");
+    write(script, R"(local service = {}
+function service.message(payload)
+    if payload == "spawn" then
+        return mistlane.entity.spawn(1, 1, 3, 42) and "spawned" or "duplicate"
+    end
+    return "echo:"..payload
+end
+service.entities = {
+    Avatar = {
+        get = function(args, ctx)
+            assert(args.account == 4)
+            assert(ctx.caller_kind == "server")
+            return { level = 7 }
+        end,
+    },
+}
+return service)");
+    const auto hostA = port(), hostB = port(), relay = port();
+    c.node("gameServer", hostA,
+        {"--script", script.string(), "--contract", def.string(), "--service-token", "s3cret"});
+    c.node("gameServer", hostB,
+        {"--script", script.string(), "--contract", def.string(), "--service-token", "s3cret"});
+    c.node("gateway", relay, {"--upstream", endpoint(hostA), "--upstream", endpoint(hostB),
+        "--upstream-token", "s3cret", "--upstream-multiplex", "1",
+        "--entity-route", "1:1:3:42=1"});
+
+    EntityContract contract(xml);
+    SprotoCodec codec(contract);
+    const ContractMethod* get = nullptr;
+    for (const auto& e : contract.entities())
+        for (const auto& m : e.server_methods)
+            if (m.name == "get") get = &m;
+    require(get != nullptr, "test contract lost the get method");
+    const auto payload = [&](std::int64_t value) -> std::string {
+        auto encoded = codec.encode_returns(get->args, {{"account", value}});
+        require(encoded.has_value(), "test arg encode failed");
+        return *encoded;
+    };
+    const auto frame = [](std::uint64_t correlation, unsigned method, std::int64_t entity_id,
+                          std::uint32_t generation, const std::string& body) {
+        return "MLE1" + encode_entity_envelope({1, 1, 3, entity_id, kEntitySideServer,
+            static_cast<std::uint16_t>(method), correlation, generation, 0, body});
+    };
+    const auto reply_of = [](const std::string& body) -> EntityReply {
+        require(body.size() >= 12 && body.starts_with("MLE1"), "expected an MLE1 reply frame");
+        const auto decoded = decode_entity_reply(std::string_view(body).substr(12));
+        require(decoded.has_value(), "reply body did not decode");
+        return *decoded;
+    };
+    const auto correlation_of = [](const std::string& body) {
+        require(body.size() >= 12, "reply frame too short");
+        std::uint64_t value = 0;
+        for (std::size_t i = 4; i < 12; ++i) value = value << 8 | static_cast<unsigned char>(body[i]);
+        return value;
+    };
+
+    // Joins round-robin: the first session lands on upstream 0 (host A), the
+    // second on upstream 1 (host B). Only B spawns the routed entity, so the
+    // request below reaches the owning host only through the route table.
+    auto onA = tcp(relay);
+    auto onB = tcp(relay);
+    equal(onB->request("spawn"), "spawned");
+
+    // The routed entity answers through host B even though this session joined
+    // host A: the frame leaves the primary link for the routed upstream's link,
+    // and the reply returns by the routed logical id with the client's own
+    // correlation echoed.
+    auto ok = onA->request(frame(42, 2, 42, 1, payload(4)));
+    require(correlation_of(ok) == 42 && !reply_of(ok).is_error, "routed entity call was not answered OK");
+    EntityValues got;
+    std::string reason;
+    require(codec.decode_args(get->returns, reply_of(ok).payload, got, reason) && reason.empty()
+            && std::get<std::int64_t>(got.at("level").data) == 7, "typed return did not round-trip");
+    std::cout << "entity.route request: the owning host answered a session joined elsewhere [PASS]\n";
+
+    // An unrouted address keeps the session's round-robin upstream (host A),
+    // which never spawned it and answers UNROUTED: a miss never lands on a
+    // wrong host.
+    auto miss = onA->request(frame(43, 2, 9999, 1, payload(4)));
+    require(correlation_of(miss) == 43 && reply_of(miss).is_error
+            && reply_of(miss).error == EntityError::UNROUTED,
+        "an unrouted entity address did not stay on its round-robin host");
+    std::cout << "entity.route miss: unrouted address keeps the round-robin upstream [PASS]\n";
+}
+
 
 // The gateway fronts the contract host's trusted leg: a plain client reaches
 // caller="server" methods through the relay, and the relay swaps the client's

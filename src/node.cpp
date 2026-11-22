@@ -23,6 +23,7 @@
 #include "registry_service.hpp"
 #include "session_plane.hpp"
 #include "mistlane/entity_gateway.hpp"
+#include "mistlane/entity_route.hpp"
 #include <openssl/crypto.h>
 #include <utility>
 #include <boost/asio.hpp>
@@ -367,6 +368,17 @@ public:
         // The cross gateway speaks its own join protocol and is out of scope.
         if (config_.role == "gateway" && !config_.is_cross_gateway())
             gateway_correlation_ = std::make_unique<GatewayEntityCorrelation>();
+        // Static entity host-routes: the gateway forwards MLE1 frames for a
+        // routed entity address to the upstream that owns it. The CLI already
+        // refused a non-gateway, a non-multiplexing or an out-of-range route,
+        // so every entry lands (except past the table's bound, which a hostile
+        // count of --entity-route flags could hit; report rather than drop).
+        if (!config_.entity_routes.empty()) {
+            entity_routes_ = std::make_unique<EntityHostRoutes>();
+            for (const auto& r : config_.entity_routes)
+                if (!entity_routes_->set({r.scope, r.type_id, r.incarnation, r.entity_id}, r.index))
+                    std::cerr << "entity route table full; dropped a route" << std::endl;
+        }
         if (const char* secrets = std::getenv("MISTLANE_TICKET_SECRETS")) {
             // A host never loads a character on a bare claim: with secrets
             // configured the crossServer verifies the join's ticket before
@@ -538,7 +550,8 @@ private:
             entity_endpoint_.get(),
             // The correlation table belongs to the dedicated-socket upstream
             // path only; link sessions are keyed by their logical id instead.
-            config_.upstream_multiplex ? nullptr : gateway_correlation_.get(), next_connection_++);
+            config_.upstream_multiplex ? nullptr : gateway_correlation_.get(), next_connection_++,
+            entity_routes_.get());
         sessions_.insert(session);
         publish_active();
         session->start();
@@ -785,6 +798,9 @@ private:
     // Outer-to-inner entity correlation table, present only on a plain gateway.
     // Sessions borrow it; the node hands out per-session connection ids.
     std::unique_ptr<GatewayEntityCorrelation> gateway_correlation_;
+    // Static entity host-route table for the multiplexing gateway, built from
+    // --entity-route. Sessions borrow it for the mux-path routing consult.
+    std::unique_ptr<EntityHostRoutes> entity_routes_;
     std::uint64_t next_connection_ = 1;
     // MLT1 host verification on the crossServer join path. The claims are
     // volatile and per process, like the rest of the verifier's state.

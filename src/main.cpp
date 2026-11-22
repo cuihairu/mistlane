@@ -50,6 +50,48 @@ mistlane::Endpoint upstream(std::string_view text) {
     }
     return endpoint(text);
 }
+mistlane::Config::EntityRoute entity_route(std::string_view text) {
+    // "SCOPE:TYPE:INCARNATION:ENTITY=INDEX": the entity address whose requests
+    // a multiplexing gateway forwards to upstream position INDEX in its own
+    // --upstream list. All fields are integers; the entity id may be zero only
+    // in the sense that a spawned id is always positive, so a zero route is a
+    // valid-but-never-matching entry rather than an address the node invents.
+    const auto eq = text.find('=');
+    if (eq == text.npos) throw std::invalid_argument("expected SCOPE:TYPE:INCARNATION:ENTITY=INDEX");
+    const auto address = text.substr(0, eq);
+    const auto index = text.substr(eq+1);
+    std::size_t cursor = 0;
+    const auto field = [&]() -> std::string_view {
+        const auto next = address.find(':', cursor);
+        const auto end = next == address.npos ? address.size() : next;
+        const auto out = address.substr(cursor, end - cursor);
+        cursor = next == address.npos ? address.size() : next + 1;
+        return out;
+    };
+    const auto u32 = [](std::string_view value) -> std::uint32_t {
+        std::uint32_t n = 0;
+        auto [end, error] = std::from_chars(value.data(), value.data()+value.size(), n);
+        if (error != std::errc{} || end != value.data()+value.size())
+            throw std::invalid_argument("invalid route field: "+std::string(value));
+        return n;
+    };
+    mistlane::Config::EntityRoute route;
+    route.scope = u32(field());
+    route.type_id = u32(field());
+    route.incarnation = u32(field());
+    const auto entity_field = field();
+    std::int64_t entity = 0;
+    auto [end, error] = std::from_chars(entity_field.data(), entity_field.data()+entity_field.size(), entity);
+    if (error != std::errc{} || end != entity_field.data()+entity_field.size() || entity < 0)
+        throw std::invalid_argument("invalid route entity id: "+std::string(entity_field));
+    route.entity_id = entity;
+    std::size_t slot = 0;
+    auto [iend, ierror] = std::from_chars(index.data(), index.data()+index.size(), slot);
+    if (ierror != std::errc{} || iend != index.data()+index.size())
+        throw std::invalid_argument("invalid route upstream index: "+std::string(index));
+    route.index = slot;
+    return route;
+}
 double ratio(std::string_view text) {
     const std::string plain(text);
     std::size_t consumed = 0;
@@ -113,7 +155,7 @@ std::vector<std::pair<std::string, std::string>> config_flags(const std::filesys
         {"COORDINATOR","--coordinator",0,0,0}, {"NAMESPACE","--namespace",0,0,0},
         {"SCOPE","--scope",0,0,0}, {"DATA","--data",0,0,0}, {"JOURNAL","--journal",1,0,0},
         {"SCRIPT","--script",1,0,0}, {"CONTRACT","--contract",1,0,0},
-        {"UPSTREAMS","--upstream",0,1,0}, {"CERT","--cert",1,0,0},
+        {"UPSTREAMS","--upstream",0,1,0}, {"ENTITY_ROUTES","--entity-route",0,1,0}, {"CERT","--cert",1,0,0},
         {"KEY","--key",1,0,0}, {"LISTENERS","--listener",0,1,0}, {"REDIS","--redis",0,0,0},
         {"METRICS_LISTEN","--metrics-listen",0,0,0}, {"PROBE_LISTEN","--probe-listen",0,0,0},
         {"OVERLOAD_RATIO","--overload-ratio",0,0,0}, {"READY_HYSTERESIS","--ready-hysteresis",0,0,0},
@@ -235,6 +277,11 @@ int main(int argc, char** argv) {
                              "  gameServer/crossServer: --contract FILE (entity contract .def; the node\n"
                              "    then hosts the entity runtime and answers MLE1 frames on game sessions)\n"
                              "  gateway: --upstream IP:PORT (repeat for session round robin)\n"
+                             "    --entity-route SCOPE:TYPE:INCARNATION:ENTITY=INDEX (repeat; with\n"
+                             "      --upstream-multiplex the gateway forwards MLE1 frames for the\n"
+                             "      address to upstream INDEX, so an entity request reaches the host\n"
+                             "      that spawned it; a miss keeps the round-robin upstream and the\n"
+                             "      host answers UNROUTED)\n"
                              "  --routing session|cross (gateway only; default session)\n"
                              "  service identity (session routing only; cross keeps MLC1):\n"
                              "    --service-token TOKEN (accept only peers presenting MLS1),\n"
@@ -309,6 +356,7 @@ int main(int argc, char** argv) {
             else if (key == "--script") config.script = value;
             else if (key == "--contract") config.contract = value;
             else if (key == "--entity-save-period") config.entity_save_period_ms = number(value, 1000000000);
+            else if (key == "--entity-route") config.entity_routes.push_back(entity_route(value));
             else if (key == "--redis") { config.redis = endpoint(value); config.redis_enabled = true; }
             else if (key == "--metrics-listen") { config.metrics_listen = endpoint(value); config.metrics_enabled = true; }
             else if (key == "--dashboard-listen") { config.dashboard_listen = endpoint(value); config.dashboard_enabled = true; }
@@ -431,6 +479,21 @@ int main(int argc, char** argv) {
                 throw std::invalid_argument("--upstream-multiplex does not apply to cross routing");
             if (config.upstream_token.empty())
                 throw std::invalid_argument("--upstream-multiplex requires --upstream-token");
+        }
+        // Static entity host-routes are a multiplexing-gateway feature: they
+        // name a position in the gateway's own --upstream list, so a route is
+        // only meaningful when the gateway has that list and actually consults
+        // the table (the mux path). Without multiplexing the frame would keep
+        // the session's round-robin upstream and the flag would be silently
+        // ignored, so refuse the misconfiguration.
+        if (!config.entity_routes.empty()) {
+            if (config.role != "gateway")
+                throw std::invalid_argument("--entity-route applies to gateway only");
+            if (!config.upstream_multiplex)
+                throw std::invalid_argument("--entity-route requires --upstream-multiplex");
+            for (const auto& r : config.entity_routes)
+                if (r.index >= config.upstreams.size())
+                    throw std::invalid_argument("--entity-route index beyond --upstream list");
         }
         // The primary listener comes from --listen/--transport; --listener entries follow.
         mistlane::Listener primary;
