@@ -325,7 +325,7 @@ inventory 及其类型须先在契约中声明；上述为行为示意，不是�
 
 加载路径：data 读记录 → 按记录版本解码 → 执行显式数据迁移/补默认值 → 校验 → 在取得写入权的宿主创建 Entity → 调用加载钩子 → 发布就绪。新对象与加载已有对象分开，缺记录不能默默覆盖创建，损坏数据不能以默认值冒充成功。
 
-保存路径：引擎收集持久化变更 → 归属 data 按 generation/revision 条件写入 → 数据库提交确认 → 确认该批 revision。写入期间的新变化继续保留，不在发出消息时清空；冲突/超时/失败须明确反馈。周期保存与迁移/退出保存共用该机制。*进程内保存闸门已落地（2026-10-20）：*捕获/栅栏/确认一半已建模并以 `entity.persist` 单测（整体拒绝加载、契约新增属性补默认值、generation 单调前进）。持久化一半于 2026-11-22 落地：`EntityStateStore`（`include/mistlane/entity_state.hpp`）把同一组栅栏接入 `EntityStateBackend`，其 SQLite 实现为 `MigrationJournal` 的 `entity_state` 表——由 `entity.state.store` 锁定（已落地保存即确认、后端抛异常即中止在途回执、重开恢复栅栏值、契约新增属性补默认值）。
+保存路径：引擎收集持久化变更 → 归属 data 按 generation/revision 条件写入 → 数据库提交确认 → 确认该批 revision。写入期间的新变化继续保留，不在发出消息时清空；冲突/超时/失败须明确反馈。周期保存与迁移/退出保存共用该机制。*进程内保存闸门已落地（2026-10-20）：*捕获/栅栏/确认一半已建模并以 `entity.persist` 单测（整体拒绝加载、契约新增属性补默认值、generation 单调前进）。持久化一半于 2026-11-22 落地：`EntityStateStore`（`include/mistlane/entity_state.hpp`）把同一组栅栏接入 `EntityStateBackend`，其 SQLite 实现为 `MigrationJournal` 的 `entity_state` 表——由 `entity.state.store` 锁定（已落地保存即确认、后端抛异常即中止在途回执、重开恢复栅栏值、契约新增属性补默认值）。周期一半同日落地：`PeriodicSaveDriver`（`include/mistlane/entity_save.hpp`）在注入时钟的周期上把脏记录交回单一强制保存入口——首次 tick 立即触发、周期内不尝试保存、在途未确认按 in-flight 跳过、尚无 hosting 授权按 not_ready 跳过、失败的保存保持脏标记待下一周期重试——由 `entity.save.periodic` 锁定；由哪个 data 角色驱动它仍属运行时接线。
 
 业务只保留一个强制保存入口，不使用含糊的 sync。提议放在只读引擎命名空间：`mistlane.entities.writeToDB(entity, callback)`，避免占用业务实体的方法名；这是方案中的待实现 API。回调只确认调用时捕获的持久化 revision 已提交，之后的新修改不自动包含在该确认中。它不是客户端同步接口，也不是支付多表事务的替代品。
 
