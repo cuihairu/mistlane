@@ -89,6 +89,7 @@ if(BUILD_TESTING)
       entity.save.runtime
       entity.owner.bind
       entity.route
+      entity.cross.correlation
       entity.perf
       coordinator.placement coordinator.routes coordinator.placement.schema coordinator.placement.journal coordinator.migration.commit coordinator.migration.abort
       coordinator.migration.recover coordinator.migration.stale coordinator.migration.order

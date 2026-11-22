@@ -653,6 +653,101 @@ return service)");
     std::cout << "entity.route miss: unrouted address keeps the round-robin upstream [PASS]\n";
 }
 
+// The cross gateway is an entity relay too: an MLC1-joined client's entity
+// frame carries the same MLE1 envelope, and the gateway maps the client's outer
+// correlation onto a fresh inner entity id before the crossServer and back on
+// the reply. The contract allows no client-callable method (server methods are
+// owner/server-only), so the callable path on a cross leg is the owner method:
+// the client binds the spawned entity to its own session, the endpoint resolves
+// the leg to caller="owner", and the swap is pinned by reusing one outer
+// correlation for two requests — without the rewrite the crossServer's
+// duplicate fence (a correlation tombstone) would answer CONFLICT on the
+// second, with it each request rides a distinct inner id and both succeed.
+// The crossServer still attributes the gateway-forwarded leg as a client (the
+// cross path presents no MLS1 identity); that caller attribution is the
+// separate open gap, not this slice.
+void entity_cross_correlation() {
+    const std::string xml =
+        "<Contracts><Entity name=\"Avatar\" id=\"1\"><ServerMethods>"
+        "<Method name=\"claim\" id=\"1\" mode=\"request\" caller=\"owner\">"
+        "<Returns><Field name=\"ok\" id=\"0\" type=\"UINT16\"/></Returns></Method>"
+        "</ServerMethods></Entity></Contracts>";
+    Context c;
+    const auto def = c.path("avatar.def");
+    write(def, xml);
+    const auto script = c.path("avatar.lua");
+    write(script, R"(local service = {}
+function service.message(payload, ctx)
+    if payload == "bind" then
+        local spawned = mistlane.entity.spawn(1, 1, 3, 42)
+        if not spawned then return "duplicate" end
+        return mistlane.entity.set_owner(1, 1, 3, 42, ctx.session) and "bound" or "bind-failed"
+    end
+    return "echo:"..payload
+end
+service.entities = {
+    Avatar = {
+        claim = function(args, ctx)
+            return { ok = (ctx.caller_kind == "owner") and 7 or 0 }
+        end,
+    },
+}
+return service)");
+    const auto shard = port(), ingress = port();
+    c.node("crossServer", shard, {"--script", script.string(), "--contract", def.string()});
+    c.cross_gateway(ingress, {"--upstream", endpoint(shard)});
+
+    EntityContract contract(xml);
+    SprotoCodec codec(contract);
+    const ContractMethod* claim = nullptr;
+    for (const auto& e : contract.entities())
+        for (const auto& m : e.server_methods)
+            if (m.name == "claim") claim = &m;
+    require(claim != nullptr, "test contract lost the claim method");
+    const auto frame = [](std::uint64_t correlation, std::uint32_t generation) {
+        return "MLE1" + encode_entity_envelope({1, 1, 3, 42, kEntitySideServer,
+            static_cast<std::uint16_t>(1), correlation, generation, 0, {}});
+    };
+    const auto reply_of = [](const std::string& body) -> EntityReply {
+        require(body.size() >= 12 && body.starts_with("MLE1"), "expected an MLE1 reply frame");
+        const auto decoded = decode_entity_reply(std::string_view(body).substr(12));
+        require(decoded.has_value(), "reply body did not decode");
+        return *decoded;
+    };
+    const auto correlation_of = [](const std::string& body) {
+        require(body.size() >= 12, "reply frame too short");
+        std::uint64_t value = 0;
+        for (std::size_t i = 4; i < 12; ++i) value = value << 8 | static_cast<unsigned char>(body[i]);
+        return value;
+    };
+    const auto join = [](cli::Client& peer, const std::string& room) {
+        equal(peer.request("MLC1 1 arena g " + room + " ch hero gen 7 ret arena g " + room), "MLC1 OK 1");
+    };
+    const auto ok_of = [&](const std::string& body) {
+        require(correlation_of(body) == 42 && !reply_of(body).is_error, "cross owner call was not answered OK");
+        EntityValues decoded;
+        std::string reason;
+        require(codec.decode_args(claim->returns, reply_of(body).payload, decoded, reason) && reason.empty()
+                && std::get<std::int64_t>(decoded.at("ok").data) == 7,
+            "the cross owner call was not resolved to owner");
+    };
+
+    // A client joins through the cross gateway and binds the spawned entity to
+    // its own session; the owner method dispatches with the outer correlation
+    // echoed back after the gateway's inner-to-outer mapping.
+    auto first = tcp(ingress);
+    join(*first, "r1");
+    equal(first->request("bind"), "bound");
+    ok_of(first->request(frame(42, 1)));
+    std::cout << "entity.cross.correlation request: MLC1 client owner call, outer correlation echoed [PASS]\n";
+
+    // Reusing the same outer correlation for a second request must not collide
+    // on the crossServer's duplicate fence: the gateway hands each a distinct
+    // inner id. Without the rewrite the second call would answer CONFLICT.
+    ok_of(first->request(frame(42, 1)));
+    std::cout << "entity.cross.correlation reuse: same outer id twice, no host conflict [PASS]\n";
+}
+
 
 // The gateway fronts the contract host's trusted leg: a plain client reaches
 // caller="server" methods through the relay, and the relay swaps the client's

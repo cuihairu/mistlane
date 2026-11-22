@@ -545,7 +545,13 @@ private:
         }
         if ((config_.is_cross_gateway() || config_.role == "crossServer") && !joined_) {
             try {
+                // The registry gave this session its identity at start (used by
+                // Lua's ctx.session and entity owner binding); rebuilding the
+                // context from the wire would erase it, so carry it across —
+                // or the connection id on a role with no registry.
+                const auto session_id = context_.session ? context_.session : connection_;
                 context_ = cross_context(payload);
+                context_.session = session_id;
                 if (context_.epoch != config_.route_epoch) return reject("EPOCH");
                 if (ticket_verifier_ && context_.ticket) {
                     // The ticket keys to the participant's home realm, the

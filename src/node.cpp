@@ -363,10 +363,11 @@ public:
             }
             std::cout << "contract " << path.string() << " loaded" << std::endl;
         }
-        // The plain gateway is the entity relay: it maps outer transport
-        // correlations onto the inner entity ids for every session it fronts.
-        // The cross gateway speaks its own join protocol and is out of scope.
-        if (config_.role == "gateway" && !config_.is_cross_gateway())
+        // The gateway is the entity relay, plain or cross: it maps outer
+        // transport correlations onto the inner entity ids for every session it
+        // fronts. The cross gateway's join protocol (MLC1) is untouched — the
+        // swap only rewrites MLE1 entity frames once the join settles.
+        if (config_.role == "gateway")
             gateway_correlation_ = std::make_unique<GatewayEntityCorrelation>();
         // Static entity host-routes: the gateway forwards MLE1 frames for a
         // routed entity address to the upstream that owns it. The CLI already
