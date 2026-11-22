@@ -67,6 +67,7 @@ void entity_envelope() {
     auto wide_decoded = decode_entity_envelope(encode_entity_envelope(wide));
     require(wide_decoded && *wide_decoded == wide && wide_decoded->entity_id == -3, "extreme field values did not round trip");
     require(to_entity_invocation(*wide_decoded, {"client", 9}).side == "client", "client side did not map to invocation");
+    require(to_entity_invocation(*wide_decoded, {"client", 9}).deadline_ms == 0xffffffffu, "envelope deadline did not propagate to the invocation");
     std::cout << "entity.envelope extremes: i64 entity id and u64 correlation round trip [PASS]\n";
     auto returns = decode_entity_reply(encode_entity_reply({false, EntityError::INVALID, {}, "returns"}).value());
     require(returns && !returns->is_error && returns->payload == "returns", "returns reply did not round trip");
@@ -2144,6 +2145,38 @@ void contract_tool() {
     require(dispatched.ok, "request dispatch error code="+std::to_string(static_cast<int>(dispatched.error)));
     require(std::get<std::int64_t>(dispatched.response.at("level").data)==7,
             "request dispatch did not return typed handler response");
+    // The deadline is the caller's remaining monotonic budget in milliseconds:
+    // a handler that outlasts it answers TIMEOUT even though it completed,
+    // because a late answer is unusable (docs/entity-contract.md). Zero means
+    // no budget; the clock is injected, matching RpcHarness.
+    std::uint64_t ticks = 0;
+    EntityDispatcher timed{dispatch_contract, [&ticks] { return ticks; }};
+    timed.bind("Avatar", "server", 2, [&ticks](const EntityCaller&, const EntityTarget&, const EntityValues&) {
+        ticks += 150;
+        return EntityValues{{"level", std::int64_t{7}}};
+    });
+    EntityInvocation slow{{1,1,1,42},{"server",9},"server",2,true,{{"account",std::int64_t{1}}}};
+    slow.deadline_ms = 100;
+    ticks = 0;
+    require(timed.dispatch(slow).error == EntityError::TIMEOUT, "handler outlasting its budget answered ok");
+    std::cout << "sproto.dispatch deadline over_budget: TIMEOUT [PASS]\n";
+    slow.deadline_ms = 0;
+    ticks = 0;
+    require(timed.dispatch(slow).ok, "zero deadline (no budget) was enforced");
+    std::cout << "sproto.dispatch deadline no_budget: accepted [PASS]\n";
+    std::uint64_t fast_ticks = 0;
+    EntityDispatcher fast{dispatch_contract, [&fast_ticks] { return fast_ticks; }};
+    fast.bind("Avatar", "server", 2, [&fast_ticks](const EntityCaller&, const EntityTarget&, const EntityValues&) {
+        fast_ticks += 40;
+        return EntityValues{{"level", std::int64_t{7}}};
+    });
+    EntityInvocation quick{{1,1,1,42},{"server",9},"server",2,true,{{"account",std::int64_t{1}}}};
+    quick.deadline_ms = 100;
+    fast_ticks = 0;
+    const auto within = fast.dispatch(quick);
+    require(within.ok && std::get<std::int64_t>(within.response.at("level").data)==7,
+            "handler within its budget was refused");
+    std::cout << "sproto.dispatch deadline within_budget: ok [PASS]\n";
     // A failed build writes nothing, so a broken change cannot clobber a bundle.
     const auto before_broken = c.path("before-broken");
     require(c.command({self().string(), "contract", "build", "--out", before_broken.string(),

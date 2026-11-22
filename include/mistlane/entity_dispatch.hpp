@@ -2,6 +2,7 @@
 #pragma once
 #include "mistlane/entity_contract.hpp"
 #include <algorithm>
+#include <chrono>
 #include <cstdint>
 #include <functional>
 #include <limits>
@@ -27,7 +28,7 @@ struct EntityValue {
  EntityValue(EntityObject v) : data(std::move(v)) {}
 };
 using EntityValues = std::map<std::string, EntityValue>;
-struct EntityInvocation { EntityTarget target; EntityCaller caller; std::string side; unsigned method_id = 0; bool encoded_ok = true; EntityValues arguments; std::uint32_t hosting_generation = 0; };
+struct EntityInvocation { EntityTarget target; EntityCaller caller; std::string side; unsigned method_id = 0; bool encoded_ok = true; EntityValues arguments; std::uint32_t hosting_generation = 0; std::uint32_t deadline_ms = 0; };
 struct EntityDispatchResult { EntityError error = EntityError::INVALID; EntityValues response; bool ok = false; };
 
 // A deterministic in-process descriptor dispatcher. The transport sproto codec
@@ -35,7 +36,11 @@ struct EntityDispatchResult { EntityError error = EntityError::INVALID; EntityVa
 class EntityDispatcher {
 public:
  using Handler = std::function<EntityValues(const EntityCaller&, const EntityTarget&, const EntityValues&)>;
+ // Monotonic milliseconds clock a deadline is measured against. Steady by
+ // default; tests inject one so an expiry is exact, matching RpcHarness/RpcQueue.
+ using Clock = std::function<std::uint64_t()>;
  explicit EntityDispatcher(const EntityContract& contract) : contract_(contract) {}
+ explicit EntityDispatcher(const EntityContract& contract, Clock now_ms) : contract_(contract), now_ms_(std::move(now_ms)) {}
  const EntityContract& contract() const { return contract_; }
  void bind(std::string entity, std::string side, unsigned method, Handler handler) {
    handlers_[key(entity, side, method)] = std::move(handler);
@@ -69,7 +74,13 @@ public:
    const auto hit=handlers_.find(key(entity->name,call.side,method->id));
    if(hit==handlers_.end()) return fail(EntityError::NO_IMPLEMENTATION);
    if(!valid(method->args,call.arguments,contract_.structs())) return fail(EntityError::INVALID);
+   // The deadline is the caller's remaining monotonic budget in milliseconds
+   // (docs/entity-contract.md): a handler that outlasts it answers TIMEOUT
+   // even though it completed, because a late answer is unusable. Measured
+   // against an injected clock (steady by default), like RpcHarness.
+   const auto start=now_ms_();
    EntityDispatchResult result; result.response=hit->second(call.caller,call.target,call.arguments);
+   if(call.deadline_ms && now_ms_()-start>call.deadline_ms) return fail(EntityError::TIMEOUT);
    if ((method->mode == "notify" && !result.response.empty()) ||
        (method->mode == "request" && !valid(method->returns,result.response,contract_.structs()))) {
      return fail(EntityError::INVALID);
@@ -110,5 +121,7 @@ private:
    } return true;
  }
  const EntityContract& contract_; std::map<std::string,Handler> handlers_;
+ Clock now_ms_ = []{ return static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
+     std::chrono::steady_clock::now().time_since_epoch()).count()); };
 };
 }

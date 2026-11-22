@@ -92,6 +92,7 @@ inline EntityInvocation to_entity_invocation(const EntityEnvelope& envelope, Ent
     call.side = envelope.side == kEntitySideClient ? "client" : "server";
     call.method_id = envelope.method_id;
     call.hosting_generation = envelope.hosting_generation;
+    call.deadline_ms = envelope.deadline_ms;
     return call;
 }
 
