@@ -8,6 +8,7 @@
 #include <string>
 #include <string_view>
 #include <lua.hpp>
+#include "mistlane/avatar_runtime.hpp"
 #include "mistlane/cross.hpp"
 #include "mistlane/entity_runtime.hpp"
 #include "mistlane/http_service.hpp"
@@ -88,7 +89,16 @@ private:
     std::size_t outstanding_ = 0;
 };
 // One VM per node, only accessed from that node's io_context thread.
-class LuaService {
+//
+// LuaService also implements the Avatar hook surface (docs/avatar-runtime.md
+// "The Lua hook surface"): the service table's avatar_load/enter/leave/tick/
+// save/transfer_out/transfer_in/detach/fail functions are the framework's
+// callbacks at the avatar lifecycle edges. The script opts into avatars by
+// declaring avatar_load; without it avatar_runtime() returns null and the node
+// never drives a lifecycle for a session. The runtime is owned here so it is
+// replaced with the VM on a SIGHUP reload — reload is a node retirement, not
+// an avatar migration (docs/avatar-runtime.md), so avatars do not survive it.
+class LuaService : public AvatarHooks {
 public:
     struct AsyncContext { lua_State* state = nullptr; };
     explicit LuaService(const std::string& path, ServiceContext context = {}, std::shared_ptr<RedisRuntime> redis = {},
@@ -118,6 +128,10 @@ public:
     void stop();
     void tick();
     void shutdown();
+    // The script-backed avatar runtime of this VM, or null when the script did
+    // not declare avatar_load (the opt-in gate): a node drives load/attach/
+    // detach/save/reclaim from the session lifecycle only when this is non-null.
+    AvatarRuntime* avatar_runtime() { return avatar_enabled_ ? &avatar_runtime_ : nullptr; }
 private:
     static int stream_create_group(lua_State*);
     static int stream_publish(lua_State*);
@@ -158,6 +172,28 @@ private:
                                                   const EntityContract* shapes) const;
     void callback(const char* name);
     void check(int status);
+    // One avatar hook dispatch: calls module.<name>(context[, avatar][, reason])
+    // through the same traceback and instruction budget as every other
+    // callback, and decodes the results here so a hook never leaves a value on
+    // the stack for the caller to read after the stack guard unwinds.
+    struct AvatarHookOutcome {
+        bool present = false; // the service table names the hook
+        bool raised = false;  // the hook is malformed or raised a Lua error
+        bool truthy = false;  // truthiness of the first return value
+        std::string reason;   // second return value, when it is a string
+        std::string ref;      // avatar_load: the encoded avatar table handle
+    };
+    AvatarHookOutcome avatar_hook(const char* name, const AvatarKey& key, const std::string& ref,
+                                  bool with_avatar, std::string_view reason, bool store_avatar);
+    bool on_load(const AvatarKey& key, std::string& avatar_ref) override;
+    bool on_enter(const AvatarKey& key, const std::string& avatar_ref, std::string& reason) override;
+    void on_leave(const AvatarKey& key, const std::string& avatar_ref) override;
+    void on_tick(const AvatarKey& key, const std::string& avatar_ref) override;
+    bool on_save(const AvatarKey& key, const std::string& avatar_ref) override;
+    bool on_transfer_out(const AvatarKey& key, const std::string& avatar_ref) override;
+    bool on_transfer_in(const AvatarKey& key, const std::string& avatar_ref) override;
+    void on_detach(const AvatarKey& key, const std::string& avatar_ref) override;
+    void on_fail(const AvatarKey& key, const std::string& avatar_ref, std::string_view reason) override;
     lua_State* state_ = nullptr;
     int module_ = LUA_NOREF;
     ServiceContext context_;
@@ -171,5 +207,10 @@ private:
     bool started_ = false, stopped_ = false, shutdown_ = false;
     std::shared_ptr<AsyncContext> async_context_;
     std::shared_ptr<RedisRuntime> redis_;
+    // Declared last: the runtime only stores the hooks reference, and every
+    // other member is initialized before it. It is replaced with the VM on a
+    // reload (see the class comment), so its hooks always name the live state.
+    AvatarRuntime avatar_runtime_;
+    bool avatar_enabled_ = false;
 };
 }

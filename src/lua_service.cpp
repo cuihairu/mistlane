@@ -56,7 +56,7 @@ LuaService::LuaService(const std::string& path, ServiceContext context, std::sha
   : state_(luaL_newstate()), context_(std::move(context)), websocket_sink_(sink), session_sink_(sessions),
     placement_sink_(placement), entity_runtime_(entity_runtime), ticket_issuer_(ticket_issuer),
     return_sink_(return_sink), metrics_sink_(metrics_sink), async_context_(std::make_shared<AsyncContext>()),
-    redis_(std::move(redis)) {
+    redis_(std::move(redis)), avatar_runtime_(*this) {
     if (!state_) throw std::runtime_error("cannot create Lua state");
     async_context_->state = state_;
     try {
@@ -90,6 +90,14 @@ LuaService::LuaService(const std::string& path, ServiceContext context, std::sha
             lua_pop(state_, 1);
         }
         module_ = luaL_ref(state_, LUA_REGISTRYINDEX);
+        lua_settop(state_, 0);
+        // avatar_load is the avatar opt-in gate: a script that never declares it
+        // hosts no avatars at all, so the node skips the whole lifecycle instead
+        // of refusing every session join. Declaring it non-function is a broken
+        // surface, not an opt-out — avatar_load is driven as a hook either way.
+        lua_rawgeti(state_, LUA_REGISTRYINDEX, module_);
+        lua_getfield(state_, -1, "avatar_load");
+        avatar_enabled_ = lua_isfunction(state_, -1);
         lua_settop(state_, 0);
         callback("init");
     } catch (...) { async_context_->state = nullptr; lua_close(state_); state_ = nullptr; throw; }
@@ -199,7 +207,13 @@ void LuaService::callback(const char* name) {
     }
     check(protected_call(state_, arguments, 0, guard.top+1));
 }
-void LuaService::tick() { if (started_ && !stopped_) callback("tick"); }
+void LuaService::tick() {
+    if (!started_ || stopped_) return;
+    // The framework layer ticks before the script's own tick, so an avatar's
+    // business step sees the state the framework just settled.
+    if (avatar_enabled_) avatar_runtime_.tick();
+    callback("tick");
+}
 void LuaService::start() { if (!started_) { started_ = true; callback("start"); } }
 void LuaService::stop() { if (!stopped_) { stopped_ = true; callback("stop"); } }
 void LuaService::shutdown() {

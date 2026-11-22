@@ -581,6 +581,123 @@ void LuaService::websocket_close(std::uint64_t id) {
     // during stop, before LuaService::stop() runs.
     websocket_callback("websocket_close", id, {}, {});
 }
+// ---------------------------------------------------------------------------
+// Avatar hook surface (docs/avatar-runtime.md "The Lua hook surface"). The
+// runtime (owned by LuaService) calls these at the lifecycle edges; each one
+// dispatches the matching service-table function with the avatar identity and
+// the opaque avatar handle, and decodes the script's reply the way the model
+// expects. A missing hook is not an error — avatar_load is the opt-in gate and
+// a step the script does not declare simply has nothing to do — but a malformed
+// or raising hook fails closed: it is a broken surface, not a no-op. The
+// avatar handle is the registry ref of the table avatar_load returned, so the
+// same script-side avatar reaches every later hook.
+namespace {
+void push_avatar_context(lua_State* l, const AvatarKey& key) {
+    lua_createtable(l, 0, 3);
+    lua_pushlstring(l, key.realm.data(), key.realm.size()); lua_setfield(l, -2, "realm");
+    lua_pushlstring(l, key.character.data(), key.character.size()); lua_setfield(l, -2, "character");
+    lua_pushinteger(l, static_cast<lua_Integer>(key.generation)); lua_setfield(l, -2, "generation");
+}
+void push_avatar_ref(lua_State* l, const std::string& ref) {
+    // The runtime stores "r" plus the registry ref of the avatar table. A ref
+    // that is not one of ours is passed through as a plain string.
+    if (ref.size() > 1 && ref[0] == 'r') {
+        bool digits = true;
+        for (std::size_t i = 1; i < ref.size(); ++i)
+            if (!std::isdigit(static_cast<unsigned char>(ref[i]))) { digits = false; break; }
+        if (digits) {
+            lua_rawgeti(l, LUA_REGISTRYINDEX, static_cast<lua_Integer>(std::stoul(ref.substr(1))));
+            return;
+        }
+    }
+    lua_pushlstring(l, ref.data(), ref.size());
+}
+} // namespace
+LuaService::AvatarHookOutcome LuaService::avatar_hook(const char* name, const AvatarKey& key,
+                                                      const std::string& ref, bool with_avatar,
+                                                      std::string_view reason, bool store_avatar) {
+    AvatarHookOutcome out;
+    StackGuard guard(state_);
+    lua_pushcfunction(state_, traceback);
+    lua_rawgeti(state_, LUA_REGISTRYINDEX, module_);
+    lua_getfield(state_, -1, name);
+    if (lua_isnil(state_, -1)) return out; // the script did not declare this hook
+    out.present = true;
+    if (!lua_isfunction(state_, -1)) {
+        std::cerr << "avatar hook " << name << " must be a function\n";
+        out.raised = true;
+        return out;
+    }
+    push_avatar_context(state_, key);
+    if (with_avatar) push_avatar_ref(state_, ref);
+    if (!reason.empty()) lua_pushlstring(state_, reason.data(), reason.size());
+    const int arguments = 1 + (with_avatar ? 1 : 0) + (reason.empty() ? 0 : 1);
+    if (protected_call(state_, arguments, LUA_MULTRET, guard.top+1) != LUA_OK) {
+        const auto* message = lua_tostring(state_, -1);
+        std::cerr << "avatar hook " << name << " failed: "
+                  << (message ? message : "unknown Lua error") << '\n';
+        out.raised = true;
+        return out;
+    }
+    // The traceback handler and the module table stay below the results: pcall
+    // pops only the function and its arguments, so the first result lands at
+    // guard.top+3.
+    const int results = lua_gettop(state_) - guard.top - 2;
+    if (results >= 1) {
+        out.truthy = lua_toboolean(state_, guard.top+3) != 0;
+        if (store_avatar && !lua_isnil(state_, guard.top+3)) {
+            lua_pushvalue(state_, guard.top+3);
+            out.ref = "r" + std::to_string(luaL_ref(state_, LUA_REGISTRYINDEX));
+        } else if (!store_avatar && results >= 2 && lua_type(state_, guard.top+4) == LUA_TSTRING) {
+            std::size_t size = 0;
+            const auto* data = lua_tolstring(state_, guard.top+4, &size);
+            out.reason.assign(data, size);
+        }
+    }
+    return out;
+}
+bool LuaService::on_load(const AvatarKey& key, std::string& avatar_ref) {
+    // avatar_load(context, state): state is nil until persisted-record loading
+    // lands — this slice publishes whatever the script returns as the avatar.
+    const auto result = avatar_hook("avatar_load", key, {}, false, {}, true);
+    if (!result.present || result.raised || !result.truthy) return false;
+    avatar_ref = result.ref;
+    return true;
+}
+bool LuaService::on_enter(const AvatarKey& key, const std::string& avatar_ref, std::string& reason) {
+    const auto result = avatar_hook("avatar_enter", key, avatar_ref, true, {}, false);
+    if (!result.present) return true; // no entry condition declared
+    if (result.raised) return false;  // fail closed on a broken surface
+    if (!result.truthy) reason = result.reason.empty() ? "avatar_enter refused" : result.reason;
+    return result.truthy;
+}
+void LuaService::on_leave(const AvatarKey& key, const std::string& avatar_ref) {
+    avatar_hook("avatar_leave", key, avatar_ref, true, {}, false);
+}
+void LuaService::on_tick(const AvatarKey& key, const std::string& avatar_ref) {
+    avatar_hook("avatar_tick", key, avatar_ref, true, {}, false);
+}
+bool LuaService::on_save(const AvatarKey& key, const std::string& avatar_ref) {
+    const auto result = avatar_hook("avatar_save", key, avatar_ref, true, {}, false);
+    if (!result.present) return true; // nothing declared to save: vacuous success
+    return !result.raised && result.truthy;
+}
+bool LuaService::on_transfer_out(const AvatarKey& key, const std::string& avatar_ref) {
+    const auto result = avatar_hook("avatar_transfer_out", key, avatar_ref, true, {}, false);
+    if (!result.present) return true;
+    return !result.raised && result.truthy;
+}
+bool LuaService::on_transfer_in(const AvatarKey& key, const std::string& avatar_ref) {
+    const auto result = avatar_hook("avatar_transfer_in", key, avatar_ref, true, {}, false);
+    if (!result.present) return true;
+    return !result.raised && result.truthy;
+}
+void LuaService::on_detach(const AvatarKey& key, const std::string& avatar_ref) {
+    avatar_hook("avatar_detach", key, avatar_ref, true, {}, false);
+}
+void LuaService::on_fail(const AvatarKey& key, const std::string& avatar_ref, std::string_view reason) {
+    avatar_hook("avatar_fail", key, avatar_ref, true, reason, false);
+}
 namespace {
 LuaService* stream_service(lua_State* l) { return static_cast<LuaService*>(lua_touserdata(l, lua_upvalueindex(1))); }
 int callback_ref(lua_State* l) {

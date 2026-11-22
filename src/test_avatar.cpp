@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "mistlane/avatar_runtime.hpp"
+#include "mistlane/lua_service.hpp"
 #include "test_common.hpp"
 namespace mistlane::test {
 namespace {
@@ -329,5 +330,144 @@ void avatar_lifecycle() {
         require(hooks.saw("fail"), "avatar_fail did not run");
         std::cout << "avatar.lifecycle reclaim: destroy path, refusal codes, avatar_fail [PASS]\n";
     }
+}
+
+// The Lua hook surface: LuaService implements AvatarHooks and drives the
+// runtime's callbacks into the service table's avatar_* functions (docs/
+// avatar-runtime.md "The Lua hook surface"). This pins the bridge, not the
+// oracle — avatar.lifecycle already pins the seven-state transitions with a
+// recording sink. A script opts into avatars by declaring avatar_load; without
+// it avatar_runtime() is null and no lifecycle runs. Each scenario constructs
+// a fresh LuaService (a fresh VM) so module state never leaks between them.
+void avatar_lua() {
+    Context c;
+    const auto script = c.path("avatar.lua");
+    // The avatar table published by avatar_load is carried back into every
+    // later hook; the hooks assert the handle they receive agrees with the
+    // context, so a broken handle fails the scenario instead of passing. The
+    // character-conditioned branches drive the three failure modes: a nil load
+    // (no avatar published), a refused entry (explicit reason) and a raising
+    // hook (fail closed).
+    write(script, R"avatar(local calls = {}
+local function note(name) calls[#calls+1] = name end
+local function hook(name, context, avatar)
+  assert(avatar ~= nil and avatar.name == context.character
+         and avatar.generation == context.generation, "avatar handle and context must agree")
+  note(name .. ':' .. avatar.name)
+end
+return {
+  message = function() return table.concat(calls, '|') end,
+  avatar_load = function(context, state)
+    assert(state == nil, "avatar_load state is nil until record loading lands")
+    note('load:' .. context.character)
+    if context.character == 'ghost' then return nil end
+    return { name = context.character, generation = context.generation }
+  end,
+  avatar_enter = function(context, avatar)
+    if avatar.name == 'blocked' then return false, 'entry denied' end
+    if avatar.name == 'broken' then error('boom') end
+    hook('enter', context, avatar)
+    return true
+  end,
+  avatar_tick = function(context, avatar) hook('tick', context, avatar) end,
+  avatar_save = function(context, avatar) hook('save', context, avatar) return true end,
+  avatar_leave = function(context, avatar) hook('leave', context, avatar) end,
+  avatar_detach = function(context, avatar) hook('detach', context, avatar) end,
+  avatar_transfer_out = function(context, avatar) hook('transfer_out', context, avatar) return { level = 1 } end,
+  avatar_transfer_in = function(context, avatar) hook('transfer_in', context, avatar) return true end,
+  avatar_fail = function(context, avatar, reason) note('fail:' .. reason) end,
+}
+)avatar");
+    // avatar_load is the opt-in gate: a script without it hosts no avatars.
+    const auto plain = c.path("plain.lua");
+    write(plain, "return {message=function(p) return p end}");
+    {
+        LuaService plain_service(plain.string());
+        require(plain_service.avatar_runtime() == nullptr, "a script without avatar_load opts out of avatars");
+    }
+    LuaService service(script.string());
+    require(service.avatar_runtime() != nullptr, "avatar_load enables the avatar runtime");
+    auto& runtime = *service.avatar_runtime();
+    const auto seen = [&] { return service.message("read").value(); };
+    const auto contains = [&](std::string_view needle) { return seen().find(needle) != std::string::npos; };
+    const AvatarKey hero{"realm-a", "hero", 7};
+    const AvatarKey other{"realm-a", "rival", 3};
+
+    // A home load stops in loading until the session attach drives the
+    // avatar_enter edge; the load publishes the avatar table.
+    require(runtime.load(hero, 60000).code == AvatarError::Ok, "avatar load");
+    require(runtime.state(hero) == AvatarState::Loading, "home load stops in loading");
+    require(contains("load:hero"), "avatar_load ran");
+    require(runtime.attach(hero, 42).code == AvatarError::Ok, "avatar attach");
+    require(runtime.state(hero) == AvatarState::Active, "attach lands active");
+    require(contains("enter:hero"), "avatar_enter receives the avatar table");
+
+    // The node tick drives avatar_tick for active avatars.
+    service.start();
+    service.tick();
+    require(contains("tick:hero"), "avatar_tick fires on the node tick");
+
+    // A second character is independent; the same table reaches it.
+    require(runtime.load(other, 60000).code == AvatarError::Ok, "second avatar load");
+    require(runtime.attach(other, 43).code == AvatarError::Ok, "second avatar attach");
+    require(runtime.active_count() == 2, "two active avatars");
+
+    // The forced save is the single save entry and runs from the model.
+    require(runtime.save(hero).code == AvatarError::Ok, "avatar save");
+    require(contains("save:hero"), "avatar_save ran");
+
+    // A refused entry carries the script's reason and closes the avatar.
+    const AvatarKey blocked{"realm-a", "blocked", 1};
+    require(runtime.load(blocked, 60000).code == AvatarError::Ok, "blocked avatar load");
+    const auto refused = runtime.attach(blocked, 44);
+    require(refused.code == AvatarError::EnterRefused, "avatar_enter refusal");
+    equal(refused.reason, "entry denied");
+    require(runtime.state(blocked) == AvatarState::Closed, "a refused entry closes the avatar");
+
+    // A raising hook fails closed the same way: no visible avatar.
+    const AvatarKey broken{"realm-a", "broken", 1};
+    require(runtime.load(broken, 60000).code == AvatarError::Ok, "broken avatar load");
+    require(runtime.attach(broken, 45).code == AvatarError::EnterRefused,
+            "a raising avatar_enter fails closed");
+    require(runtime.state(broken) == AvatarState::Closed, "a raising entry closes the avatar");
+    require(!contains("enter:broken"), "a raising hook records nothing");
+
+    // A nil load publishes no avatar.
+    const AvatarKey ghost{"realm-a", "ghost", 1};
+    require(runtime.load(ghost, 60000).code == AvatarError::LoadFailed, "a nil avatar_load refuses");
+    require(runtime.state(ghost) == AvatarState::Closed, "a failed load publishes no visible avatar");
+    require(contains("load:ghost"), "avatar_load ran before returning nil");
+
+    // Detach runs leave then detach and suspends; reattach within grace
+    // returns to active without a reload or a second enter.
+    runtime.detach(hero, 42);
+    require(runtime.state(hero) == AvatarState::Suspended, "detach suspends");
+    require(contains("leave:hero") && contains("detach:hero"), "leave and detach ran");
+    const auto before = seen();
+    require(runtime.attach(hero, 42).code == AvatarError::Ok, "reattach within grace");
+    require(runtime.state(hero) == AvatarState::Active, "reattach returns active");
+    equal(seen(), before); // reattach within grace runs no hook
+
+    // Transfer: out snapshots and moves to transferring; the destination
+    // reload runs load again then transfer_in and lands active unbound.
+    require(runtime.transfer_out(hero).code == AvatarError::Ok, "avatar transfer out");
+    require(runtime.state(hero) == AvatarState::Transferring, "transfer out moves to transferring");
+    require(contains("transfer_out:hero"), "avatar_transfer_out ran");
+    require(runtime.transfer_accepted(hero).code == AvatarError::Ok, "avatar transfer accepted");
+    require(runtime.state(hero) == AvatarState::Active, "transfer in lands active");
+    require(runtime.source(hero) == LoadSource::TransferIn, "transfer in is a transfer-in load");
+    require(contains("transfer_in:hero"), "avatar_transfer_in ran");
+
+    // One live avatar per character: a second generation of the same
+    // character refuses while the first lives.
+    require(runtime.load(AvatarKey{"realm-a", "hero", 8}, 60000).code == AvatarError::Exists,
+            "a second generation of a live character refuses");
+
+    // Reclaim: the final save must succeed before closed.
+    require(runtime.reclaim(hero).code == AvatarError::Ok, "avatar reclaim");
+    require(runtime.reclaim_done(hero).code == AvatarError::Ok, "avatar reclaim done");
+    require(runtime.state(hero) == AvatarState::Closed, "reclaim done closes the avatar");
+    require(contains("save:hero"), "the final save ran");
+    std::cout << "avatar.lua: script-backed hook surface, opt-in gate, fail-closed refusal [PASS]\n";
 }
 } // namespace mistlane::test

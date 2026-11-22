@@ -1,6 +1,6 @@
 # Avatar runtime: sessions, lifecycle hooks, migration and load/save
 
-Status: decided design (2026-10-19). The framework today has sessions, framing, handshake layers and one Lua VM per gameServer/crossServer invoked serially, and no end-to-end Avatar runtime — the seven-state oracle model exists (include/mistlane/avatar_runtime.hpp, pinned by the avatar.lifecycle model test) and follows the expanded state set of the [lifecycle page](./avatar-lifecycle.md) (corrigenda C1–C2 recorded there), while session, Lua and transport wiring and runtime acceptance remain later slices — nothing on this page changes CLI behavior. It specifies the hook contract the [model page](./player-scene-model.md) names as an extraction target ("hooks need thread/error/reentrancy/timeout contracts and rules during transfer"), feeds the coordinator-coordinated transfer slices, and stays within the [process roles](./process-roles.md). Durability ownership and single-writer authority remain the [cross return protocol's](./cross-return-protocol.md); instance prepare states are the [scene lifecycle's](./scene-lifecycle.md); the property schema, dirty tracking and incremental sync are the [entity contract chain](./entity-contract.md) and stay deferred. Implementation of any new Avatar API is gated on the client protocol contract recovery (the protocol contract recovery item in the ledger).
+Status: decided design (2026-10-19). The framework today has sessions, framing, handshake layers and one Lua VM per gameServer/crossServer invoked serially, and no end-to-end Avatar runtime — the seven-state oracle model exists (include/mistlane/avatar_runtime.hpp, pinned by the avatar.lifecycle model test) and follows the expanded state set of the [lifecycle page](./avatar-lifecycle.md) (corrigenda C1–C2 recorded there), its Lua hook surface is wired through the service VM (LuaService implements the hook sink; the avatar.lua test pins the marshaling and the fail-closed refusals), while session and transport wiring and runtime acceptance remain later slices — nothing on this page changes CLI behavior. It specifies the hook contract the [model page](./player-scene-model.md) names as an extraction target ("hooks need thread/error/reentrancy/timeout contracts and rules during transfer"), feeds the coordinator-coordinated transfer slices, and stays within the [process roles](./process-roles.md). Durability ownership and single-writer authority remain the [cross return protocol's](./cross-return-protocol.md); instance prepare states are the [scene lifecycle's](./scene-lifecycle.md); the property schema, dirty tracking and incremental sync are the [entity contract chain](./entity-contract.md) and stay deferred. Implementation of any new Avatar API is gated on the client protocol contract recovery (the protocol contract recovery item in the ledger).
 
 ## Baseline: what the framework has today
 
@@ -61,19 +61,19 @@ stateDiagram-v2
 
 ## The Lua hook surface
 
-These hooks are additions to the existing module contract; `message`/`http` keep their roles unchanged. Hook names are provisional until implementation lands them in code — what this page fixes is the arguments, ordering and failure semantics.
+These hooks are additions to the existing module contract; `message`/`http` keep their roles unchanged. The names and signatures are fixed in code: LuaService implements this surface, and the `avatar.lua` model test pins the argument marshaling, the avatar handle carry-back and the fail-closed refusals. `avatar_load` is the opt-in gate — a script that does not declare it hosts no avatars and the node drives no lifecycle. A hook the script does not declare is not an error: the step simply has nothing to do. A malformed or raising hook fails closed. The framework carries the table `avatar_load` returned into every later hook as the `avatar` argument, so the same script-side avatar reaches each one.
 
 | Hook | Called when | Arguments → result | On error or timeout |
 |---|---|---|---|
-| `avatar_load` | An avatar is created at this host from a loaded record | `(context, state)` → avatar table | Load failed: no avatar is published, entry is refused with the cause |
-| `avatar_enter` | A session attaches to an active avatar | `(context)` → nothing | Entry refused with an explicit reason |
-| `avatar_leave` | A session detaches (logout, evacuation) | `(context)` → nothing | Logged; never blocks the detach |
-| `avatar_tick` | Node tick, active avatars only | `(context)` → nothing | Logged; the avatar stays (matches `tick` semantics) |
-| `avatar_save` | The single forced-save entry | `(context)` → state table | Save failed: surfaced to the operator; retry belongs to the sender queue, not the hook |
-| `avatar_transfer_out` | This host stops hosting | `(context)` → state snapshot | Transfer aborted; the avatar returns to `active` |
-| `avatar_transfer_in` | This host takes over hosting | `(context, state)` → nothing | The incoming avatar closes on this host; the source keeps its avatar |
-| `avatar_detach` | The session disconnected | `(context)` → nothing | Logged; the avatar goes `suspended` regardless |
-| `avatar_fail` | Any avatar hook failed or timed out | `(context, reason)` → nothing | Best effort: it may not run during a VM replacement |
+| `avatar_load` | An avatar is created at this host from a loaded record | `(context, state)` → avatar table; `state` is nil until record loading lands | Load failed: no avatar is published, entry is refused with the cause |
+| `avatar_enter` | A session attaches to an active avatar | `(context, avatar)` → `true`, or `false, reason` | Entry refused with that reason |
+| `avatar_leave` | A session detaches (logout, evacuation) | `(context, avatar)` → nothing | Logged; never blocks the detach |
+| `avatar_tick` | Node tick, active avatars only | `(context, avatar)` → nothing | Logged; the avatar stays (matches `tick` semantics) |
+| `avatar_save` | The single forced-save entry | `(context, avatar)` → state table | Save failed: surfaced to the operator; retry belongs to the sender queue, not the hook |
+| `avatar_transfer_out` | This host stops hosting | `(context, avatar)` → state snapshot | Transfer aborted; the avatar returns to `active` |
+| `avatar_transfer_in` | This host takes over hosting | `(context, avatar)` → nothing; the incoming `state` arrives with the transfer wiring | The incoming avatar closes on this host; the source keeps its avatar |
+| `avatar_detach` | The session disconnected | `(context, avatar)` → nothing | Logged; the avatar goes `suspended` regardless |
+| `avatar_fail` | Any avatar hook failed or timed out | `(context, avatar, reason)` → nothing | Best effort: it may not run during a VM replacement |
 
 Three properties are the point of this surface:
 
@@ -111,7 +111,7 @@ Reentrancy is excluded by construction, not by discipline: the VM is serial, so 
 
 - The property schema, dirty tracking, incremental sync and snapshot encoding: the entity contract chain, which supersedes the earlier Avatar-only scope and stays deferred.
 - The client protocol, bindings and method exposure: gated on the protocol contract recovery (the protocol contract recovery item in the ledger); game-fogs contains no `.sproto` source text, only the compiled `sproto.spb` and the `Protocol.lua` name table.
-- Exact hook names and signatures: fixed when implemented in code; the arguments, ordering and failure semantics above are the contract.
+- Hook names and signatures: fixed in code as of the service-VM hook bridge (the table above records the implemented shapes). What stays open is the `state` argument of `avatar_load`/`avatar_transfer_in` — the persisted record and the cross-process snapshot both need the MLD1 record endpoint and the transfer wiring, neither of which exists yet.
 - Grace periods, tick budgets and save cadences: measured at implementation.
 - The crossServer sender's bounded retry queue and read-only transition: return-protocol slices, waiting on the persistence chain.
 

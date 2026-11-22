@@ -1,6 +1,6 @@
 # Avatar full lifecycle: segments, oracle state machine and relationships
 
-Status: decided design (2026-11-22). No end-to-end Avatar runtime exists in the framework today (the seven-state oracle model is implemented as include/mistlane/avatar_runtime.hpp and pinned by the avatar.lifecycle model test; session, Lua and transport wiring are later slices)
+Status: decided design (2026-11-22). No end-to-end Avatar runtime exists in the framework today (the seven-state oracle model is implemented and pinned by the avatar.lifecycle model test, and its Lua hook surface is wired through the service VM and pinned by the avatar.lua test — the [runtime page](./avatar-runtime.md) names the files; session and transport wiring are later slices)
 (`grep -rniE "\b(struct|class)\s+(Avatar|Charactor|Player)\b" include/ src/` returns nothing),
 so nothing on this page changes CLI behavior and no runtime below is implemented or
 validated. This page is the **unified** lifecycle contract the [Avatar runtime](./avatar-runtime.md)

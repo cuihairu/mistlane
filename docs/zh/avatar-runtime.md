@@ -1,6 +1,6 @@
 # Avatar 运行时：会话、生命周期钩子、迁移与加载保存
 
-状态：已定设计（2026-10-19）。当前框架有会话、帧协议、握手层与每个 gameServer/crossServer 一个串行调用的 Lua VM，但没有端到端 Avatar 运行时——七态预言机模型已实现（include/mistlane/avatar_runtime.hpp，由 avatar.lifecycle 模型测试钉住），采用[生命周期页](./avatar-lifecycle.md)的扩态集（其勘误 C1–C2），会话/Lua/传输接线与运行时验收仍是后续切片——本页不改变任何 CLI 行为，下面描述的运行行为仍未端到端实现、未经验证。本页把[模型页](./player-scene-model.md)列为抽取目标的内容（"钩子需要线程/错误/重入/超时契约与迁移期间的规则"）落成契约，为 coordinator 协调的移交切片提供前置设计；职责边界仍是[进程职责页](./process-roles.md)。持久归属与唯一写入权归[跨服回传协议](./cross-return-protocol.md)；实例准备状态归[场景生命周期](./scene-lifecycle.md)；属性 schema、脏追踪与增量同步归[实体契约链](./entity-contract.md)且继续延后。任何新 Avatar API 的实现被客户端协议契约恢复（账本中的协议契约恢复条目）门控。
+状态：已定设计（2026-10-19）。当前框架有会话、帧协议、握手层与每个 gameServer/crossServer 一个串行调用的 Lua VM，但没有端到端 Avatar 运行时——七态预言机模型已实现（include/mistlane/avatar_runtime.hpp，由 avatar.lifecycle 模型测试钉住）并采用[生命周期页](./avatar-lifecycle.md)的扩态集（其勘误 C1–C2），其 Lua 钩子面已接入服务 VM（LuaService 实现钩子桥；avatar.lua 测试钉住参数封送与失败即拒），会话与传输接线及运行时验收仍是后续切片——本页不改变任何 CLI 行为，下面描述的运行行为仍未端到端实现、未经验证。本页把[模型页](./player-scene-model.md)列为抽取目标的内容（"钩子需要线程/错误/重入/超时契约与迁移期间的规则"）落成契约，为 coordinator 协调的移交切片提供前置设计；职责边界仍是[进程职责页](./process-roles.md)。持久归属与唯一写入权归[跨服回传协议](./cross-return-protocol.md)；实例准备状态归[场景生命周期](./scene-lifecycle.md)；属性 schema、脏追踪与增量同步归[实体契约链](./entity-contract.md)且继续延后。任何新 Avatar API 的实现被客户端协议契约恢复（账本中的协议契约恢复条目）门控。
 
 ## 基线：框架现在有什么
 
@@ -61,19 +61,19 @@ stateDiagram-v2
 
 ## Lua 钩子面
 
-这些钩子是现有模块契约的补充；`message`/`http` 职责不变。钩子名在实现落地前是暂定的——本页固定的是参数、顺序与失败语义。
+这些钩子是现有模块契约的补充；`message`/`http` 职责不变。钩子名与签名已在代码中固定：LuaService 实现本钩子面，avatar.lua 模型测试钉住参数封送、avatar 句柄回传与失败即拒。`avatar_load` 是准入开关——脚本未声明它则不承载任何 Avatar，节点也不驱动生命周期。脚本未声明的钩子不是错误：该步骤无事可做；格式错误或抛错的钩子失败即拒。框架把 `avatar_load` 返回的表作为 `avatar` 参数传给后续每个钩子，因此同一个脚本侧 Avatar 到达每一个钩子。
 
 | 钩子 | 何时调用 | 参数 → 返回 | 出错或超时 |
 |---|---|---|---|
-| `avatar_load` | 本宿主从加载的记录创建 Avatar | `(context, state)` → avatar 表 | 加载失败：不发布 Avatar，带原因拒绝进入 |
-| `avatar_enter` | 会话绑定到 active Avatar | `(context)` → 无 | 带显式原因拒绝进入 |
-| `avatar_leave` | 会话解除绑定（登出、迁出） | `(context)` → 无 | 记日志；绝不阻塞解除绑定 |
-| `avatar_tick` | 节点 tick，仅 active Avatar | `(context)` → 无 | 记日志；Avatar 保留（与 `tick` 一致） |
-| `avatar_save` | 唯一的强制保存入口 | `(context)` → state 表 | 保存失败：上报运维；重试属于发送队列而非钩子 |
-| `avatar_transfer_out` | 本宿主停止承载 | `(context)` → 状态快照 | 移交中止；Avatar 回到 `active` |
-| `avatar_transfer_in` | 本宿主接管承载 | `(context, state)` → 无 | 到达的 Avatar 在本宿主关闭；来源保留其 Avatar |
-| `avatar_detach` | 会话断开 | `(context)` → 无 | 记日志；Avatar 无论如何进入 `suspended` |
-| `avatar_fail` | 任一 Avatar 钩子失败或超时 | `(context, reason)` → 无 | 尽力而为：VM 替换期间可能不运行 |
+| `avatar_load` | 本宿主从加载的记录创建 Avatar | `(context, state)` → avatar 表；记录加载落地前 `state` 为 nil | 加载失败：不发布 Avatar，带原因拒绝进入 |
+| `avatar_enter` | 会话绑定到 active Avatar | `(context, avatar)` → `true`，或 `false, reason` | 以该原因拒绝进入 |
+| `avatar_leave` | 会话解除绑定（登出、迁出） | `(context, avatar)` → 无 | 记日志；绝不阻塞解除绑定 |
+| `avatar_tick` | 节点 tick，仅 active Avatar | `(context, avatar)` → 无 | 记日志；Avatar 保留（与 `tick` 一致） |
+| `avatar_save` | 唯一的强制保存入口 | `(context, avatar)` → state 表 | 保存失败：上报运维；重试属于发送队列而非钩子 |
+| `avatar_transfer_out` | 本宿主停止承载 | `(context, avatar)` → 状态快照 | 移交中止；Avatar 回到 `active` |
+| `avatar_transfer_in` | 本宿主接管承载 | `(context, avatar)` → 无；到达的 `state` 随移交接线到达 | 到达的 Avatar 在本宿主关闭；来源保留其 Avatar |
+| `avatar_detach` | 会话断开 | `(context, avatar)` → 无 | 记日志；Avatar 无论如何进入 `suspended` |
+| `avatar_fail` | 任一 Avatar 钩子失败或超时 | `(context, avatar, reason)` → 无 | 尽力而为：VM 替换期间可能不运行 |
 
 这张表面有三个要点：
 
@@ -111,7 +111,7 @@ stateDiagram-v2
 
 - 属性 schema、脏追踪、增量同步与快照编码：实体契约链，其取代了更早的 Avatar-only 范围并继续延后。
 - 客户端协议、绑定与方法暴露：被协议契约恢复（账本中的协议契约恢复条目）门控；game-fogs 没有 `.sproto` 文本源，只有编译产物 `sproto.spb` 与 `Protocol.lua` 名字表。
-- 确切钩子名与签名：在代码实现时固定；上面的参数、顺序与失败语义才是契约。
+- 钩子名与签名：随服务 VM 钩子桥在代码中固定（上表记录的是已实现形态）。仍开放的是 `avatar_load`/`avatar_transfer_in` 的 `state` 参数——持久记录与跨进程快照都依赖 MLD1 记录端点与移交接线，二者都尚未存在。
 - 宽限期、tick 预算与保存节奏：实现时实测。
 - crossServer 发送侧的有界重试队列与只读转换：回传协议切片，等持久化链。
 
