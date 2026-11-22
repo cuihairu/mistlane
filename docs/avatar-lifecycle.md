@@ -1,6 +1,6 @@
 # Avatar full lifecycle: segments, oracle state machine and relationships
 
-Status: decided design (2026-11-22). No end-to-end Avatar runtime exists in the framework today (the seven-state oracle model is implemented and pinned by the avatar.lifecycle model test, and its Lua hook surface is wired through the service VM and pinned by the avatar.lua test — the [runtime page](./avatar-runtime.md) names the files; session and transport wiring are later slices)
+Status: decided design (2026-11-22). No end-to-end Avatar runtime exists in the framework today (the seven-state oracle model is implemented and pinned by the avatar.lifecycle model test, its Lua hook surface is wired through the service VM and pinned by the avatar.lua test, and the cross-visit entry edge — `admit_visit`, `close_visit` and the node retirement face — is implemented and pinned by the avatar.session test, so a crossServer join now creates a real `visiting` avatar — the [runtime page](./avatar-runtime.md) names the files; the home login path and the return/transfer chain remain later slices)
 (`grep -rniE "\b(struct|class)\s+(Avatar|Charactor|Player)\b" include/ src/` returns nothing),
 so nothing on this page changes CLI behavior and no runtime below is implemented or
 validated. This page is the **unified** lifecycle contract the [Avatar runtime](./avatar-runtime.md)
@@ -210,7 +210,8 @@ Seven states. The expansion over the five-state page is argued directly below th
 ```mermaid
 stateDiagram-v2
   [*] --> loading : spawn
-  loading --> active : state loaded, entry accepted
+  loading --> active : state loaded, entry accepted (home, transfer-in)
+  loading --> visiting : cross-visit admission verified (admit_visit)
   loading --> closed : load failed
   active --> suspended : session detached
   suspended --> active : reattach within grace
@@ -235,8 +236,11 @@ stateDiagram-v2
 
 The expansion is **`visiting`** (cross participation, provisional lease, durable changes return
 via MLD1) and **`reclaiming`** (ordered reclaim before `closed`, superseding the `closing`
-label). `loading` is kept single but gains a **load source** attribute (`home` | `transfer-in`)
-that the transition function reads. Daily cutover is deliberately **not** a state (segment 7).
+label). `loading` is kept single but gains a **load source** attribute
+(`home` | `transfer-in` | `cross-visit`) that the transition function reads: the first two
+resolve into `active` after the entry edge, a cross-visit resolves into `visiting` (the lease
+face — the framework's verified admission, not `avatar_enter`, is the crossServer's entry
+gate). Daily cutover is deliberately **not** a state (segment 7).
 
 ## Authoritative migration table
 
@@ -245,7 +249,7 @@ rejection code, persistence obligation, sync visibility.
 
 | State | Entry threshold | Exits | Tunable hooks | Rejection code | Persistence obligation | Sync visibility |
 |---|---|---|---|---|---|---|
-| `loading` | Data request issued; no handler may target this character | load ok → `active`; load fail → `closed` | `avatar_load` | `AVATAR_LOADING` | None (no published avatar) | None |
+| `loading` | Data request issued; no handler may target this character | load ok → `active` (home, transfer-in); cross-visit → `visiting`; load fail → `closed` | `avatar_load` | `AVATAR_LOADING` | None (no published avatar) | None |
 | `active` | Home domain; hosting generation current; entry accepted | detach → `suspended`; transfer → `transferring`; cross accept → `visiting`; destroy → `reclaiming` | `avatar_enter` `avatar_tick` `avatar_save` | `AVATAR_ALREADY_ATTACHED` (duplicate attach) | Durable writes allowed; `avatar_save` is the only entry | Full (AOI) |
 | `suspended` | Session detached; grace open; pending save obligations still run | reattach → `active`; grace expired → `reclaiming` | `avatar_detach` | `AVATAR_SUSPENDED` | Pending saves still run | Detach broadcast only |
 | `visiting` | Cross admission verified (entry ticket); provisional lease granted | leave → `transferring`; return complete → `active` | `avatar_tick` (cross-local) | `AVATAR_VISITING` (durable write) | Cross-local only; durable changes return via MLD1 | Cross-scope AOI |
@@ -264,7 +268,7 @@ E_OPERATOR_CLOSE`. The oracle is `δ(state, event) → next | refuse(code)`, tot
 
 | State | Accepted events (→ next or refuse) |
 |---|---|
-| `loading` | `E_LOAD_FAIL → closed` · `E_ATTACH/E_ENTER → refuse(AVATAR_LOADING)` · load resolved → `active` |
+| `loading` | `E_LOAD_FAIL → closed` · `E_ATTACH/E_ENTER → refuse(AVATAR_LOADING)` · load resolved → `active` (home, transfer-in) · load resolved (source cross-visit) → `visiting` |
 | `active` | `E_DETACH → suspended` · `E_TRANSFER_REQ → transferring` · `E_CROSS_ACCEPT → visiting` · `E_DESTROY → reclaiming` · `E_ATTACH → refuse(AVATAR_ALREADY_ATTACHED)` · `E_DAILY_CUTOVER → active` (barrier) |
 | `suspended` | `E_REATTACH → active` · `E_GRACE_EXPIRED → reclaiming` · `E_OPERATOR_CLOSE → reclaiming` · `E_ATTACH → refuse(AVATAR_SUSPENDED)` |
 | `visiting` | `E_CROSS_LEAVE → transferring` · `E_RETURN_COMPLETE → active` · `E_DAILY_CUTOVER → visiting` (barrier) · durable write → `refuse(AVATAR_VISITING)` |
@@ -284,7 +288,7 @@ signature and failure semantics; this page only assigns which state each hook is
 
 | Hook | Valid in | Notes |
 |---|---|---|
-| `avatar_load` | `loading` | Entry to `active` only on success; failure → `closed`, no visible avatar |
+| `avatar_load` | `loading` | Entry to `active` (home, transfer-in) or `visiting` (cross-visit) only on success; failure → `closed`, no visible avatar |
 | `avatar_enter` | `loading → active` edge | Entry refused with explicit reason |
 | `avatar_leave` | `active → suspended`, `visiting → transferring` | Never blocks the detach |
 | `avatar_tick` | `active`, `visiting` | Cross-local only when `visiting` |

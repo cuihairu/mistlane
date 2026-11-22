@@ -104,6 +104,12 @@ LuaService::LuaService(const std::string& path, ServiceContext context, std::sha
 }
 LuaService::~LuaService() {
     if (!state_) return;
+    // A reload swaps the VM without running the scripted stop hook: the
+    // retirement face (best-effort avatar_save then close for every avatar)
+    // runs here, while the VM is still alive, before the module state is
+    // destroyed. stop() already retired on the graceful-shutdown path, so the
+    // guard keeps it a single flush.
+    if (!stopped_) retire_avatars();
     async_context_->state = nullptr;
     try { shutdown(); } catch (const std::exception& e) { std::cerr << "Lua cleanup failed: " << e.what() << '\n'; }
     lua_close(state_);
@@ -215,7 +221,18 @@ void LuaService::tick() {
     callback("tick");
 }
 void LuaService::start() { if (!started_) { started_ = true; callback("start"); } }
-void LuaService::stop() { if (!stopped_) { stopped_ = true; callback("stop"); } }
+void LuaService::stop() {
+    if (!stopped_) {
+        stopped_ = true;
+        callback("stop");
+        // Graceful shutdown: the scripted stop hook ran, then every avatar
+        // flushes (best-effort save) and closes before the VM goes away.
+        retire_avatars();
+    }
+}
+void LuaService::retire_avatars() {
+    if (avatar_enabled_) avatar_runtime_.retire_all();
+}
 void LuaService::shutdown() {
     if (shutdown_) return;
     try { stop(); } catch (const std::exception& e) { std::cerr << "Lua stop failed: " << e.what() << '\n'; }

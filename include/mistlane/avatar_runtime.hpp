@@ -89,8 +89,10 @@ inline const char* to_string(AvatarError e) {
 
 // Where a loading avatar came from (docs/avatar-lifecycle.md: the load source
 // attribute the transition function reads to decide whether a new generation
-// may resume after a tombstone).
-enum class LoadSource { Home, TransferIn };
+// may resume after a tombstone). Cross is a cross participation: the character
+// visits this host, so the load resolves into `visiting` (the lease face), not
+// `active` — the home authority stays at the origin realm.
+enum class LoadSource { Home, TransferIn, Cross };
 
 // The Lua hook surface (docs/avatar-runtime.md "The Lua hook surface",
 // unchanged in signature and failure semantics; docs/avatar-lifecycle.md
@@ -130,6 +132,18 @@ public:
     // not run during a VM replacement, and its own failure is logged with the
     // original standing.
     virtual void on_fail(const AvatarKey&, const std::string& avatar_ref, std::string_view reason) = 0;
+    // Cross-visit event hooks (docs/cross-server-lifecycle.md; the registry's
+    // event family, module-table functions). These are the crossServer's
+    // session-object face of the oracle, not oracle transitions — defaults are
+    // vacuous so a host that does not declare them behaves as today.
+    // onCrossVisitAdmit: after the network quotas and the verified ticket,
+    // before the lease is granted; a denial refuses the join (fail closed).
+    virtual bool on_cross_admit(const AvatarKey&) { return true; }
+    // onCrossVisitStart: the visiting avatar was created (notifies, never vetoes).
+    virtual void on_cross_start(const AvatarKey&) {}
+    // onCrossVisitEnd: the visiting avatar closed (returned or terminated);
+    // notifies, the close proceeds.
+    virtual void on_cross_end(const AvatarKey&) {}
 };
 
 // The framework-side avatar runtime implementing the seven-state oracle of
@@ -139,10 +153,13 @@ public:
 // state is refused with that state's rejection code and no state change. This
 // is the model half; session lifecycle, tick and stop wiring is a later slice.
 //
-// The loading -> active edge splits by load source: a home load runs
-// avatar_load and stops in loading (loaded, not yet entered) until the session
-// attaches; a transfer-in load runs avatar_load then avatar_transfer_in and is
-// active (unbound) — the destination hosts it host-to-host.
+// The loading resolution splits by load source: a home load runs avatar_load
+// and stops in loading (loaded, not yet entered) until the session attaches,
+// which drives the avatar_enter edge to active; a transfer-in load runs
+// avatar_load then avatar_transfer_in and is active (unbound) — the destination
+// hosts it host-to-host; a cross visit (admit_visit) runs the admission gate,
+// avatar_load, binds the joining session and lands visiting (the lease face —
+// no avatar_enter, the framework's verified admission is the entry gate).
 class AvatarRuntime {
 public:
     struct Result {
@@ -171,6 +188,27 @@ public:
         e.source = source;
         avatars_.emplace(key, std::move(e));
         return finish_load(key);
+    }
+
+    // Cross admission + visiting create, one step (docs/cross-server-lifecycle.md
+    // "Create"): after the network quotas and the verified ticket — both already
+    // settled by the session plane — the onCrossVisitAdmit gate runs (denied or
+    // raising refuses the join, fail closed), then avatar_load creates the
+    // visiting avatar, the joining session binds, and the avatar lands visiting
+    // (the lease face). onCrossVisitStart notifies after the create. No
+    // avatar_enter fires: the loading -> active edge is the home entry only. A
+    // failed load publishes nothing and refuses the join.
+    Result admit_visit(AvatarKey key, std::uint64_t session_id, std::uint64_t grace_ms) {
+        if (session_id == 0) return {AvatarError::NoSession, "no session id"};
+        if (!hooks_.on_cross_admit(key))
+            return {AvatarError::EnterRefused, "onCrossVisitAdmit denied the cross visit"};
+        auto loaded = load(key, grace_ms, LoadSource::Cross);
+        if (!loaded.ok()) return loaded;
+        Entry* e = find(key);
+        bind(e, session_id);
+        e->state = AvatarState::Visiting;
+        hooks_.on_cross_start(key);
+        return {AvatarError::Ok, ""};
     }
 
     // E_ATTACH: binds a session to an avatar. On loading this drives the
@@ -316,6 +354,23 @@ public:
         return {AvatarError::Ok, ""};
     }
 
+    // Abnormal crossServer termination (peer down, admission revoked, lease
+    // lost): the visiting avatar closes here with a best-effort save;
+    // onCrossVisitEnd notifies and the close proceeds. Unacknowledged changes
+    // carry no durability claim — the sender queue owns them. Valid only in
+    // visiting; a visiting avatar that already left cross scope belongs to the
+    // return flow.
+    Result close_visit(AvatarKey key) {
+        Entry* e = find(key);
+        if (!e) return {AvatarError::NoAvatar, "no avatar"};
+        if (e->state != AvatarState::Visiting)
+            return {state_refusal(e->state), std::string("avatar is ") + to_string(e->state)};
+        hooks_.on_save(key, e->ref); // best effort; a failure does not block the close
+        hooks_.on_cross_end(key);
+        e->state = AvatarState::Closed;
+        return {AvatarError::Ok, ""};
+    }
+
     // E_RETURN_COMPLETE: visiting -> active (the change-set was acknowledged).
     Result return_complete(AvatarKey key) {
         Entry* e = find(key);
@@ -347,6 +402,24 @@ public:
         if (!hooks_.on_save(key, e->ref)) return {AvatarError::SaveFailed, "final save failed; still reclaiming"};
         e->state = AvatarState::Closed;
         return {AvatarError::Ok, ""};
+    }
+
+    // Node retirement face (docs/avatar-runtime.md's reload rule): every avatar
+    // in a replaced or stopping VM gets a best-effort avatar_save (valid states
+    // only — a transferring avatar's final snapshot already left with
+    // avatar_transfer_out, and a loading avatar never published) and then
+    // closes. A visiting avatar that closes fires onCrossVisitEnd. This is the
+    // framework retiring the whole VM, not a per-state lifecycle transition, so
+    // no edge is driven; the dirty claim of an unsaved record belongs to the
+    // sender queue and the data side.
+    void retire_all() {
+        for (auto& [key, e] : avatars_) {
+            if (e.state == AvatarState::Active || e.state == AvatarState::Suspended ||
+                e.state == AvatarState::Visiting || e.state == AvatarState::Reclaiming)
+                hooks_.on_save(key, e.ref);
+            if (e.state == AvatarState::Visiting) hooks_.on_cross_end(key);
+            e.state = AvatarState::Closed;
+        }
     }
 
     // avatar_fail: best effort, valid in any state; the original consequence

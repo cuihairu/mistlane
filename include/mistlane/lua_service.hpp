@@ -194,6 +194,13 @@ private:
     bool on_transfer_in(const AvatarKey& key, const std::string& avatar_ref) override;
     void on_detach(const AvatarKey& key, const std::string& avatar_ref) override;
     void on_fail(const AvatarKey& key, const std::string& avatar_ref, std::string_view reason) override;
+    bool on_cross_admit(const AvatarKey& key) override;
+    void on_cross_start(const AvatarKey& key) override;
+    void on_cross_end(const AvatarKey& key) override;
+    // Node retirement: best-effort avatar_save then close for every avatar the
+    // VM owns, before the VM is destroyed (stop() and the destructor both reach
+    // it; idempotent). The scripted stop hook runs first, then the avatars flush.
+    void retire_avatars();
     lua_State* state_ = nullptr;
     int module_ = LUA_NOREF;
     ServiceContext context_;

@@ -12,6 +12,7 @@ void sproto_golden();
 void rpc_lifecycle();
 void avatar_lifecycle();
 void avatar_lua();
+void avatar_session();
 void entity_envelope();
 void entity_properties();
 void entity_tree();
@@ -150,6 +151,7 @@ int run_tests(int argc, char** argv) {
         {"rpc.lifecycle","contract",test::rpc_lifecycle},
         {"avatar.lifecycle","contract",test::avatar_lifecycle},
         {"avatar.lua","contract",test::avatar_lua},
+        {"avatar.session","contract",test::avatar_session},
         {"entity.envelope","contract",test::entity_envelope},
         {"entity.properties","contract",test::entity_properties},
         {"entity.tree","contract",test::entity_tree},

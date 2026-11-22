@@ -1,6 +1,6 @@
 # Avatar 运行时：会话、生命周期钩子、迁移与加载保存
 
-状态：已定设计（2026-10-19）。当前框架有会话、帧协议、握手层与每个 gameServer/crossServer 一个串行调用的 Lua VM，但没有端到端 Avatar 运行时——七态预言机模型已实现（include/mistlane/avatar_runtime.hpp，由 avatar.lifecycle 模型测试钉住）并采用[生命周期页](./avatar-lifecycle.md)的扩态集（其勘误 C1–C2），其 Lua 钩子面已接入服务 VM（LuaService 实现钩子桥；avatar.lua 测试钉住参数封送与失败即拒），会话与传输接线及运行时验收仍是后续切片——本页不改变任何 CLI 行为，下面描述的运行行为仍未端到端实现、未经验证。本页把[模型页](./player-scene-model.md)列为抽取目标的内容（"钩子需要线程/错误/重入/超时契约与迁移期间的规则"）落成契约，为 coordinator 协调的移交切片提供前置设计；职责边界仍是[进程职责页](./process-roles.md)。持久归属与唯一写入权归[跨服回传协议](./cross-return-protocol.md)；实例准备状态归[场景生命周期](./scene-lifecycle.md)；属性 schema、脏追踪与增量同步归[实体契约链](./entity-contract.md)且继续延后。任何新 Avatar API 的实现被客户端协议契约恢复（账本中的协议契约恢复条目）门控。
+状态：已定设计（2026-10-19）。当前框架有会话、帧协议、握手层与每个 gameServer/crossServer 一个串行调用的 Lua VM，但没有端到端 Avatar 运行时——七态预言机模型已实现（include/mistlane/avatar_runtime.hpp，由 avatar.lifecycle 模型测试钉住）并采用[生命周期页](./avatar-lifecycle.md)的扩态集（其勘误 C1–C2），其 Lua 钩子面已接入服务 VM（LuaService 实现钩子桥；avatar.lua 测试钉住参数封送与失败即拒），crossServer 会话接线已实现——跨服加入创建 visiting Avatar（admit_visit）、会话停止关闭它（close_visit）、重载退役 VM 拥有的全部 Avatar（retire_all），均由 avatar.session 测试钉住；归属登录路径、回传/移交链及运行时验收仍是后续切片——本页不改变任何 CLI 行为，下面描述的运行行为仍未端到端实现、未经验证。本页把[模型页](./player-scene-model.md)列为抽取目标的内容（"钩子需要线程/错误/重入/超时契约与迁移期间的规则"）落成契约，为 coordinator 协调的移交切片提供前置设计；职责边界仍是[进程职责页](./process-roles.md)。持久归属与唯一写入权归[跨服回传协议](./cross-return-protocol.md)；实例准备状态归[场景生命周期](./scene-lifecycle.md)；属性 schema、脏追踪与增量同步归[实体契约链](./entity-contract.md)且继续延后。任何新 Avatar API 的实现被客户端协议契约恢复（账本中的协议契约恢复条目）门控。
 
 ## 基线：框架现在有什么
 
@@ -10,10 +10,10 @@
 | 出向 | 有界 `mistlane.session.send`/`broadcast`（每通道 ~2 MiB、显式原因），推送保持回复顺序，关联（`MLC2`）回显 |
 | 身份层 | `MLS1` 服务身份、`MLM1` 上游复用——各自独立的可选层 |
 | Lua 执行 | 每节点一个 VM，在 Asio 线程串行调用；保护调用带指令数预算（约 100 万条）拦截失控循环；`message` 出错关会话，`tick` 出错记日志 |
-| 节点钩子 | `init`/`start`/`message`/`http`/`tick`/`stop`/`shutdown` 与 websocket 三件套；**没有玩家连接/断开钩子** |
+| 节点钩子 | `init`/`start`/`message`/`http`/`tick`/`stop`/`shutdown` 与 websocket 三件套；跨服访问现已触发 `onCrossVisitAdmit`/`Start`/`End`，但**归属玩家连接/断开钩子**尚不存在 |
 | 重载 | SIGHUP 装载候选 VM、切换、经 `stop`/`shutdown` 退役旧 VM；重载重置模块状态且不导出任何东西 |
 | 承载 | `mistlane.place(role, namespace?, scope?, callback)` 查询 coordinator 注册表 |
-| Avatar | 模型已实现（七态预言机，avatar.lifecycle 模型测试钉住），但无端到端运行时：没有角色对象、没有加载路径、没有保存入口、没有迁移 |
+| Avatar | 框架侧运行时已存在：七态、`avatar_load`/`avatar_enter`/`avatar_save`/`avatar_leave`/`avatar_tick`/`avatar_detach`/`avatar_fail`/`avatar_transfer_*` 钩子，以及跨服面（`admit_visit`、`close_visit`、`retire_all`）。无脚本可见 Avatar 对象、无归属登录路径、无迁移 |
 
 只有 `message` 的节点拥有的是请求处理，不是角色运行时。这个空白正是本页存在的原因：生命周期、状态所有权与迁移需要各自的契约。
 

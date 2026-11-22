@@ -1,6 +1,6 @@
 # Avatar 全生命周期：分段、预言机状态机与关系
 
-状态：已定设计（2026-11-22）。框架当前没有端到端 Avatar 运行时——七态预言机模型已实现并由 avatar.lifecycle 模型测试钉住，其 Lua 钩子面已接入服务 VM 并由 avatar.lua 测试钉住（文件名见 [Avatar 运行时页](./avatar-runtime.md)），会话与传输接线为后续切片——本页不改变任何 CLI 行为，下面描述的运行行为仍未端到端实现、未经验证。本页是[Avatar 运行时](./avatar-runtime.md)的五态、[跨服回传协议](./cross-return-protocol.md)的租约态与[场景生命周期](./scene-lifecycle.md)的实例态各自覆盖一部分的**统一**生命周期契约；它记录三者哪里一致、哪里分歧，以及一个可机械判定的预言机长什么样。本页**不改**那三页——冲突以勘误表（下文）记录，交由维护者处置。英文页：[English](../avatar-lifecycle.md)。
+状态：已定设计（2026-11-22）。框架当前没有端到端 Avatar 运行时——七态预言机模型已实现并由 avatar.lifecycle 模型测试钉住，其 Lua 钩子面已接入服务 VM 并由 avatar.lua 测试钉住，跨服进入边（`admit_visit`、`close_visit` 与节点退役面）已实现并由 avatar.session 测试钉住，故 crossServer 加入现在真的创建 `visiting` Avatar（文件名见 [Avatar 运行时页](./avatar-runtime.md)）；归属登录路径与回传/移交链仍为后续切片——本页不改变任何 CLI 行为，下面描述的运行行为仍未端到端实现、未经验证。本页是[Avatar 运行时](./avatar-runtime.md)的五态、[跨服回传协议](./cross-return-protocol.md)的租约态与[场景生命周期](./scene-lifecycle.md)的实例态各自覆盖一部分的**统一**生命周期契约；它记录三者哪里一致、哪里分歧，以及一个可机械判定的预言机长什么样。本页**不改**那三页——冲突以勘误表（下文）记录，交由维护者处置。英文页：[English](../avatar-lifecycle.md)。
 
 ## 为什么需要一页
 
@@ -176,7 +176,8 @@ sequenceDiagram
 ```mermaid
 stateDiagram-v2
   [*] --> loading : spawn
-  loading --> active : state loaded, entry accepted
+  loading --> active : state loaded, entry accepted (home, transfer-in)
+  loading --> visiting : cross-visit admission verified (admit_visit)
   loading --> closed : load failed
   active --> suspended : session detached
   suspended --> active : reattach within grace
@@ -199,7 +200,7 @@ stateDiagram-v2
 | 回收与运维关闭是不同序列 | `suspended → closing` 合并两者 | 有序回收（最终保存、场景释放、AOI 离场、引用释放）无法按路径钉死 |
 | 加载来源不同 | `loading` 把归属加载与移交进入等同 | 无法判定墓碑后新代可否续写 |
 
-扩态是 **`visiting`**（跨服参与、临时租约、持久变更经 MLD1 回传）与 **`reclaiming`**（`closed` 前的有序回收，取代 `closing` 标签）。`loading` 保持单态但获得**加载来源**属性（`home` | `transfer-in`），供转移函数读取。日切刻意**不**设态（第 7 段）。
+扩态是 **`visiting`**（跨服参与、临时租约、持久变更经 MLD1 回传）与 **`reclaiming`**（`closed` 前的有序回收，取代 `closing` 标签）。`loading` 保持单态但获得**加载来源**属性（`home` | `transfer-in` | `cross-visit`），供转移函数读取：前二者经进入边解析为 `active`，跨服进入解析为 `visiting`（租约面——框架的已验证准入，而非 `avatar_enter`，是 crossServer 的进入门）。日切刻意**不**设态（第 7 段）。
 
 ## 权威迁移表
 
@@ -207,7 +208,7 @@ stateDiagram-v2
 
 | 态 | 进入门槛 | 退出 | 可调钩子 | 拒绝码 | 持久义务 | 同步可见性 |
 |---|---|---|---|---|---|---|
-| `loading` | 已发数据请求；无 handler 可指向此角色 | 加载成功 → `active`；失败 → `closed` | `avatar_load` | `AVATAR_LOADING` | 无（未发布 Avatar） | 无 |
+| `loading` | 已发数据请求；无 handler 可指向此角色 | 加载成功 → `active`（home、transfer-in）；跨服进入 → `visiting`；失败 → `closed` | `avatar_load` | `AVATAR_LOADING` | 无（未发布 Avatar） | 无 |
 | `active` | 归属域；宿主代当前；进入被接受 | 断线 → `suspended`；传送 → `transferring`；跨服接受 → `visiting`；销毁 → `reclaiming` | `avatar_enter` `avatar_tick` `avatar_save` | `AVATAR_ALREADY_ATTACHED`（重复进入） | 允许持久写；`avatar_save` 唯一入口 | 全量（AOI） |
 | `suspended` | 会话已断；宽限开启；待存义务仍在跑 | 重连 → `active`；宽限到 → `reclaiming` | `avatar_detach` | `AVATAR_SUSPENDED` | 待存义务仍在跑 | 仅离场广播 |
 | `visiting` | 跨服准入已验证（入场票）；临时租约已授 | 离开 → `transferring`；回传完成 → `active` | `avatar_tick`（跨服本地） | `AVATAR_VISITING`（持久写） | 仅跨服本地；持久变更经 MLD1 回传 | 跨服作用域 AOI |
@@ -226,7 +227,7 @@ E_SPAWN, E_DESTROY, E_DAILY_CUTOVER, E_SAVE_FAIL, E_LOAD_FAIL, E_OPERATOR_CLOSE`
 
 | 态 | 接受的事件（→ 下一态或拒绝） |
 |---|---|
-| `loading` | `E_LOAD_FAIL → closed` · `E_ATTACH/E_ENTER → 拒绝(AVATAR_LOADING)` · 加载解析 → `active` |
+| `loading` | `E_LOAD_FAIL → closed` · `E_ATTACH/E_ENTER → 拒绝(AVATAR_LOADING)` · 加载解析 → `active`（home、transfer-in） · 加载解析（来源 cross-visit）→ `visiting` |
 | `active` | `E_DETACH → suspended` · `E_TRANSFER_REQ → transferring` · `E_CROSS_ACCEPT → visiting` · `E_DESTROY → reclaiming` · `E_ATTACH → 拒绝(AVATAR_ALREADY_ATTACHED)` · `E_DAILY_CUTOVER → active`（屏障） |
 | `suspended` | `E_REATTACH → active` · `E_GRACE_EXPIRED → reclaiming` · `E_OPERATOR_CLOSE → reclaiming` · `E_ATTACH → 拒绝(AVATAR_SUSPENDED)` |
 | `visiting` | `E_CROSS_LEAVE → transferring` · `E_RETURN_COMPLETE → active` · `E_DAILY_CUTOVER → visiting`（屏障） · 持久写 → `拒绝(AVATAR_VISITING)` |
@@ -242,7 +243,7 @@ E_SPAWN, E_DESTROY, E_DAILY_CUTOVER, E_SAVE_FAIL, E_LOAD_FAIL, E_OPERATOR_CLOSE`
 
 | 钩子 | 合法态 | 说明 |
 |---|---|---|
-| `avatar_load` | `loading` | 成功才入 `active`；失败 → `closed`，无可见 Avatar |
+| `avatar_load` | `loading` | 成功才入 `active`（home、transfer-in）或 `visiting`（跨服进入）；失败 → `closed`，无可见 Avatar |
 | `avatar_enter` | `loading → active` 边沿 | 以显式原因拒绝进入 |
 | `avatar_leave` | `active → suspended`、`visiting → transferring` | 永不阻塞断离 |
 | `avatar_tick` | `active`、`visiting` | `visiting` 时仅跨服本地 |

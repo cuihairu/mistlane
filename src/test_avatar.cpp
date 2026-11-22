@@ -376,6 +376,14 @@ return {
   avatar_transfer_out = function(context, avatar) hook('transfer_out', context, avatar) return { level = 1 } end,
   avatar_transfer_in = function(context, avatar) hook('transfer_in', context, avatar) return true end,
   avatar_fail = function(context, avatar, reason) note('fail:' .. reason) end,
+  -- Cross-visit event hooks are context-only (the registry's event family):
+  -- the gate admits, the start/end hooks notify and never veto.
+  onCrossVisitAdmit = function(context)
+    note('admit:' .. context.character)
+    return context.character ~= 'refused'
+  end,
+  onCrossVisitStart = function(context) note('start:' .. context.character) end,
+  onCrossVisitEnd = function(context) note('end:' .. context.character) end,
 }
 )avatar");
     // avatar_load is the opt-in gate: a script without it hosts no avatars.
@@ -468,6 +476,155 @@ return {
     require(runtime.reclaim_done(hero).code == AvatarError::Ok, "avatar reclaim done");
     require(runtime.state(hero) == AvatarState::Closed, "reclaim done closes the avatar");
     require(contains("save:hero"), "the final save ran");
-    std::cout << "avatar.lua: script-backed hook surface, opt-in gate, fail-closed refusal [PASS]\n";
+
+    // A cross visit: the admission gate runs, avatar_load creates the visiting
+    // avatar, the session binds and the avatar lands visiting — without
+    // avatar_enter, the lease face of the oracle.
+    const AvatarKey visitor{"home-realm", "wanderer", 5};
+    require(runtime.admit_visit(visitor, 50, 60000).code == AvatarError::Ok, "cross visit admitted");
+    require(runtime.state(visitor) == AvatarState::Visiting, "a cross visit lands visiting");
+    require(runtime.session_of(visitor) == 50, "the visiting avatar binds the session");
+    require(runtime.source(visitor) == LoadSource::Cross, "the load source is cross");
+    require(contains("admit:wanderer") && contains("load:wanderer") && contains("start:wanderer"),
+            "admit, load and start ran");
+    require(!contains("enter:wanderer"), "a cross visit never runs avatar_enter");
+
+    // A denied admit refuses the join and creates no avatar (fail closed).
+    const AvatarKey gate_refused{"home-realm", "refused", 5};
+    require(runtime.admit_visit(gate_refused, 51, 60000).code == AvatarError::EnterRefused,
+            "a denied admit refuses the cross visit");
+    require(runtime.state(gate_refused) == AvatarState::Closed, "a denied admit publishes nothing");
+    require(contains("admit:refused"), "the gate hook ran before the denial");
+
+    // Abnormal termination closes the visit with a best-effort save and the
+    // end notification, and the single-writer rule still holds afterwards.
+    require(runtime.close_visit(visitor).code == AvatarError::Ok, "cross visit closed");
+    require(runtime.state(visitor) == AvatarState::Closed, "the visit closes");
+    require(contains("save:wanderer") && contains("end:wanderer"), "save and end ran");
+    require(runtime.admit_visit(visitor, 52, 60000).code == AvatarError::Ok, "the character may rejoin");
+    require(runtime.load(visitor, 60000).code == AvatarError::Exists, "a live visit refuses a home load");
+
+    // Node retirement (reload / graceful stop): every live avatar gets a
+    // best-effort save then closes; a live visiting avatar also fires the end
+    // notification.
+    const AvatarKey survivor{"realm-a", "survivor", 2};
+    require(runtime.load(survivor, 60000).code == AvatarError::Ok, "survivor load");
+    require(runtime.attach(survivor, 53).code == AvatarError::Ok, "survivor attach");
+    const AvatarKey resident{"home-realm", "resident", 4};
+    require(runtime.admit_visit(resident, 54, 60000).code == AvatarError::Ok, "resident visit");
+    service.stop();
+    require(runtime.state(survivor) == AvatarState::Closed
+                && runtime.state(resident) == AvatarState::Closed,
+            "retirement closes every live avatar");
+    require(contains("save:survivor") && contains("save:resident"),
+            "retirement saves each live avatar");
+    require(contains("end:resident"), "retirement fires onCrossVisitEnd for a visiting avatar");
+    std::cout << "avatar.lua: script-backed hook surface, opt-in gate, fail-closed refusal, cross visit, "
+                 "retirement [PASS]\n";
+}
+
+// The session plane wiring: a crossServer join with a participant context
+// creates the visiting avatar at the host (gate, load, start), business frames
+// flow while the visit is live, the disconnect closes it (best-effort save and
+// the end notification), a refused admission rejects the join, and a reload
+// retires what the old VM owned so the fresh VM admits the character again.
+void avatar_session() {
+    Context c;
+    const auto script = c.path("avatar_session.lua");
+    write(script, R"avatar(local calls = {}
+local function note(name) calls[#calls+1] = name end
+return {
+  message = function(payload, ctx)
+    if payload == "who" then return ctx.character .. "," .. tostring(ctx.generation) end
+    return table.concat(calls, "|")
+  end,
+  avatar_load = function(context, state)
+    note("load:" .. context.character)
+    if context.character == "refused" then return nil end
+    return { name = context.character, generation = context.generation }
+  end,
+  avatar_tick = function(context, avatar) note("tick:" .. avatar.name) end,
+  avatar_save = function(context, avatar) note("save:" .. avatar.name) return true end,
+  avatar_leave = function(context, avatar) note("leave:" .. avatar.name) end,
+  onCrossVisitAdmit = function(context)
+    note("admit:" .. context.character)
+    return context.character ~= "refused"
+  end,
+  onCrossVisitStart = function(context) note("start:" .. context.character) end,
+  onCrossVisitEnd = function(context) note("end:" .. context.character) end,
+}
+)avatar");
+    const auto cross = port();
+    auto& node = c.node("crossServer", cross, {"--script", script.string()});
+    const auto send_frame = [](RawSocket& raw, std::string_view payload) {
+        std::string frame(4, '\0');
+        auto length = static_cast<std::uint32_t>(payload.size());
+        for (int i = 3; i >= 0; --i) { frame[i] = static_cast<char>(length & 255); length >>= 8; }
+        raw.send(frame+std::string(payload));
+    };
+    const auto read_frame = [](RawSocket& raw) {
+        std::size_t length = 0;
+        for (unsigned char ch : raw.receive(4)) length = (length << 8) | ch;
+        return raw.receive(length);
+    };
+    const auto join = [&](RawSocket& raw, std::string_view character) {
+        send_frame(raw, "MLC1 1 arena g r1 ch " + std::string(character) + " gen 5 ret home g r1");
+        return read_frame(raw);
+    };
+    const auto trace = [&](RawSocket& raw) {
+        send_frame(raw, "read");
+        return read_frame(raw);
+    };
+    const auto has = [](std::string_view haystack, std::string_view needle) {
+        return haystack.find(needle) != std::string_view::npos;
+    };
+
+    // A live visit: the join admits, loads and starts; business frames carry
+    // the participant; no avatar_enter (the lease face).
+    {
+        RawSocket raw(cross);
+        equal(join(raw, "wanderer"), "MLC1 OK 1");
+        const auto seen = trace(raw);
+        require(has(seen, "admit:wanderer") && has(seen, "load:wanderer") && has(seen, "start:wanderer"),
+                "the join admitted, loaded and started the visit");
+        require(!has(seen, "enter:"), "a cross visit never runs avatar_enter");
+        send_frame(raw, "who");
+        equal(read_frame(raw), "wanderer,5");
+    }
+    // The disconnect closes the visit: the same VM's trace now shows the save
+    // and the end notification (the teardown is async, so poll until it lands).
+    // The reader is a second, distinct character — every session on the host
+    // must join first, and the trace lives in the shared VM, not per session.
+    {
+        RawSocket raw(cross);
+        equal(join(raw, "observer"), "MLC1 OK 1");
+        eventually([&] {
+            send_frame(raw, "read");
+            return has(read_frame(raw), "save:wanderer");
+        }, 5s, "the disconnect did not save and close the visit");
+        require(has(trace(raw), "end:wanderer"), "the visit end notification ran");
+    }
+    // The character may rejoin after the close; a denied gate refuses its join.
+    {
+        RawSocket raw(cross);
+        equal(join(raw, "wanderer"), "MLC1 OK 1");
+    }
+    {
+        RawSocket raw(cross);
+        const auto reply = join(raw, "refused");
+        require(reply.starts_with("MLC1 ERR "), "a denied visit refuses the join");
+    }
+    // A reload retires the old VM's visit (save + end + closed), and the fresh
+    // VM admits the character again with an empty trace.
+    node.signal(SIGHUP);
+    node.ready("script reloaded");
+    {
+        RawSocket raw(cross);
+        equal(join(raw, "wanderer"), "MLC1 OK 1");
+        equal(trace(raw), "admit:wanderer|load:wanderer|start:wanderer");
+    }
+    node.signal(SIGTERM);
+    require(node.wait() == 0, "crossServer graceful shutdown failed");
+    std::cout << "avatar.session: crossServer join -> visiting avatar, business, disconnect, reload [PASS]\n";
 }
 } // namespace mistlane::test

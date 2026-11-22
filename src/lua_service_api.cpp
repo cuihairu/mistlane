@@ -698,6 +698,19 @@ void LuaService::on_detach(const AvatarKey& key, const std::string& avatar_ref) 
 void LuaService::on_fail(const AvatarKey& key, const std::string& avatar_ref, std::string_view reason) {
     avatar_hook("avatar_fail", key, avatar_ref, true, reason, false);
 }
+// Cross-visit event hooks (context-only signatures, the registry's event
+// family): absent means vacuous allow / nothing to notify; a malformed or
+// raising gate hook denies, fail closed, per the registry's failure rule.
+bool LuaService::on_cross_admit(const AvatarKey& key) {
+    const auto result = avatar_hook("onCrossVisitAdmit", key, {}, false, {}, false);
+    return !result.present || (!result.raised && result.truthy);
+}
+void LuaService::on_cross_start(const AvatarKey& key) {
+    avatar_hook("onCrossVisitStart", key, {}, false, {}, false);
+}
+void LuaService::on_cross_end(const AvatarKey& key) {
+    avatar_hook("onCrossVisitEnd", key, {}, false, {}, false);
+}
 namespace {
 LuaService* stream_service(lua_State* l) { return static_cast<LuaService*>(lua_touserdata(l, lua_upvalueindex(1))); }
 int callback_ref(lua_State* l) {
