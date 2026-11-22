@@ -143,6 +143,7 @@ private:
     static int entity_observe(lua_State*);
     static int entity_depart(lua_State*);
     static int entity_flush(lua_State*);
+    static int entity_set_owner(lua_State*);
     static int entity_state_inspect(lua_State*);
     static void push_entity_api(lua_State*, EntityRuntime*);
     static int ticket_issue(lua_State*);

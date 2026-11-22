@@ -604,9 +604,10 @@ private:
     }
     EntityCaller caller() const {
         // An MLS1-identified peer (or a mux logical) is an internal service;
-        // everything else is a client leg. Ownership attribution is a separate
-        // concern from the transport binding, so the caller carries the
-        // trusted session identity, never a self-reported owner field.
+        // everything else is a client leg. The caller carries the trusted
+        // session identity, never a self-reported owner field — the endpoint
+        // resolves ownership against the runtime's owner table
+        // (EntityRuntime::resolve_caller, attributed by entity.set_owner).
         return {(internal_ || service_ok_) ? "server" : "client", context_.session};
     }
     // Local script path: one Lua call per frame; a handler that returns nil

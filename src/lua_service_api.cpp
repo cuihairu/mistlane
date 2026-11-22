@@ -73,6 +73,7 @@ void LuaService::push_entity_api(lua_State* l, EntityRuntime* runtime) {
     lua_pushlightuserdata(l, runtime); lua_pushcclosure(l, entity_observe, 1); lua_setfield(l, -2, "observe");
     lua_pushlightuserdata(l, runtime); lua_pushcclosure(l, entity_depart, 1); lua_setfield(l, -2, "depart");
     lua_pushlightuserdata(l, runtime); lua_pushcclosure(l, entity_flush, 1); lua_setfield(l, -2, "flush");
+    lua_pushlightuserdata(l, runtime); lua_pushcclosure(l, entity_set_owner, 1); lua_setfield(l, -2, "set_owner");
     lua_pushlightuserdata(l, runtime); lua_pushcclosure(l, entity_state_inspect, 1); lua_setfield(l, -2, "state");
     lua_setfield(l, -2, "entity"); lua_setglobal(l, "mistlane");
 }
@@ -312,6 +313,24 @@ int LuaService::entity_flush(lua_State* l) {
         return luaL_error(l, "entity.flush expects scope, type, incarnation, entity_id integers");
     lua_pushboolean(l, runtime->flush_properties({scope, type, incarnation,
         static_cast<std::int64_t>(lua_tointeger(l, 4))}) ? 1 : 0);
+    return 1;
+}
+// mistlane.entity.set_owner(scope, type, incarnation, entity_id, session_id)
+// -> bool: attributes the session as the entity's owner — the side that binds
+// a client session to its entity calls this (a login/home binding), and a
+// client leg never claims it. False when the address is not a live entity or
+// session_id is not positive. The endpoint then resolves a matching client
+// leg to caller="owner" before the fence.
+int LuaService::entity_set_owner(lua_State* l) {
+    auto* runtime = static_cast<EntityRuntime*>(lua_touserdata(l, lua_upvalueindex(1)));
+    std::uint32_t scope, type, incarnation;
+    if (!lua_u32(l, 1, scope) || !lua_u32(l, 2, type) || !lua_u32(l, 3, incarnation)
+            || !lua_isinteger(l, 4) || !lua_isinteger(l, 5))
+        return luaL_error(l, "entity.set_owner expects scope, type, incarnation, entity_id, session_id integers");
+    const auto session_id = static_cast<std::int64_t>(lua_tointeger(l, 5));
+    if (session_id <= 0) return luaL_error(l, "entity.set_owner session_id must be positive");
+    lua_pushboolean(l, runtime->set_owner({scope, type, incarnation,
+        static_cast<std::int64_t>(lua_tointeger(l, 4))}, static_cast<std::uint64_t>(session_id)) ? 1 : 0);
     return 1;
 }
 // mistlane.entity.state(scope, type, incarnation, entity_id) ->

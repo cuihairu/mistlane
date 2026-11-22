@@ -87,6 +87,7 @@ if(BUILD_TESTING)
       entity.state.store
       entity.save.periodic
       entity.save.runtime
+      entity.owner.bind
       entity.perf
       coordinator.placement coordinator.routes coordinator.placement.schema coordinator.placement.journal coordinator.migration.commit coordinator.migration.abort
       coordinator.migration.recover coordinator.migration.stale coordinator.migration.order

@@ -450,6 +450,105 @@ return service)");
     }
 }
 
+// The script-side owner binding: a bind handler attributes its own session as
+// an entity's owner (mistlane.entity.set_owner(..., ctx.session)), and the
+// endpoint then resolves that session's MLE1 calls to caller="owner" before the
+// fence — an owner-declared method answers the bound session and stays
+// FORBIDDEN to a session that never bound.
+void entity_owner_bind() {
+    const std::string xml =
+        "<Contracts><Entity name=\"Avatar\" id=\"1\"><ServerMethods>"
+        "<Method name=\"claim\" id=\"1\" mode=\"request\" caller=\"owner\">"
+        "<Returns><Field name=\"ok\" id=\"0\" type=\"UINT16\"/></Returns></Method>"
+        "</ServerMethods></Entity></Contracts>";
+    Context c;
+    const auto def = c.path("avatar.def");
+    write(def, xml);
+    const auto script = c.path("avatar.lua");
+    write(script, R"(local service = {}
+service.entities = {
+    Avatar = {
+        claim = function(args, ctx)
+            -- The endpoint resolves the bound session to caller="owner" before
+            -- dispatch; a guest never reaches here (the fence answers it).
+            return { ok = (ctx.caller_kind == "owner") and 7 or 0 }
+        end,
+    },
+}
+function service.message(payload, ctx)
+    if payload == "bind" then
+        local spawned = mistlane.entity.spawn(1, 1, 3, 42)
+        if not spawned then return "duplicate" end
+        return mistlane.entity.set_owner(1, 1, 3, 42, ctx.session) and "bound" or "bind-failed"
+    end
+    return "echo:"..payload
+end
+return service)");
+    EntityContract contract(xml);
+    SprotoCodec codec(contract);
+    const ContractMethod* claim = nullptr;
+    for (const auto& e : contract.entities())
+        for (const auto& m : e.server_methods)
+            if (m.name == "claim") claim = &m;
+    require(claim != nullptr, "test contract lost the claim method");
+    const auto listen = port();
+    c.node("gameServer", listen, {"--script", script.string(), "--contract", def.string()});
+
+    const auto frame = [](std::uint64_t correlation, std::uint32_t method) {
+        return "MLE1" + encode_entity_envelope({1, 1, 3, 42, kEntitySideServer,
+            static_cast<std::uint16_t>(method), correlation, 0, 0, {}});
+    };
+    const auto reply_of = [](const std::string& body) -> EntityReply {
+        require(body.size() >= 12 && body.starts_with("MLE1"), "expected an MLE1 reply frame");
+        const auto decoded = decode_entity_reply(std::string_view(body).substr(12));
+        require(decoded.has_value(), "reply body did not decode");
+        return *decoded;
+    };
+    const auto correlation_of = [](const std::string& body) {
+        require(body.size() >= 12, "reply frame too short");
+        std::uint64_t value = 0;
+        for (std::size_t i = 4; i < 12; ++i) value = value << 8 | static_cast<unsigned char>(body[i]);
+        return value;
+    };
+    const auto send_frame = [](RawSocket& raw, const std::string& body) {
+        std::string header(4, '\0');
+        const auto length = static_cast<std::uint32_t>(body.size());
+        for (unsigned i = 0; i < 4; ++i) header[i] = static_cast<char>(length >> (24 - i*8));
+        raw.send(header + body);
+    };
+    const auto read_frame = [](RawSocket& raw) {
+        std::string header = raw.receive(4);
+        std::uint32_t length = 0;
+        for (unsigned i = 0; i < 4; ++i) length = length << 8 | static_cast<unsigned char>(header[i]);
+        return raw.receive(length);
+    };
+
+    // The bound session owns the entity: its owner call dispatches as "owner"
+    // and answers the typed return. A session that never bound is FORBIDDEN.
+    RawSocket a(listen);
+    send_frame(a, "bind");
+    equal(read_frame(a), "bound");
+    send_frame(a, frame(77, 1));
+    const auto ok = read_frame(a);
+    require(correlation_of(ok) == 77, "the owner call lost its correlation");
+    const auto granted = reply_of(ok);
+    require(!granted.is_error, "the bound session's owner call was refused");
+    EntityValues decoded;
+    std::string reason;
+    require(codec.decode_args(claim->returns, granted.payload, decoded, reason) && reason.empty()
+            && std::get<std::int64_t>(decoded.at("ok").data) == 7,
+        "the bound session was not resolved to owner for its owner method");
+    std::cout << "entity.owner.bind: attributed session calls its owner method as owner [PASS]\n";
+
+    RawSocket b(listen);
+    send_frame(b, frame(88, 1));
+    const auto denied = read_frame(b);
+    require(correlation_of(denied) == 88 && reply_of(denied).is_error
+            && reply_of(denied).error == EntityError::FORBIDDEN,
+        "a session that never bound was not FORBIDDEN an owner method");
+    std::cout << "entity.owner.bind: an unattributed session stays FORBIDDEN [PASS]\n";
+}
+
 
 // The gateway fronts the contract host's trusted leg: a plain client reaches
 // caller="server" methods through the relay, and the relay swaps the client's
