@@ -330,7 +330,14 @@ public:
             };
             entity_contract_ = std::make_unique<EntityContract>(text.str(), type_resolver);
             entity_codec_ = std::make_unique<SprotoCodec>(*entity_contract_);
-            entity_endpoint_ = std::make_unique<EntityEndpoint>(*entity_contract_, entity_codec_.get());
+            // An entity host with --journal keeps its forced-save rows in the
+            // same SQLite store the durable roles use; without it the chain
+            // still runs (records and revision fences stay in process), so a
+            // contract alone never disables persistence observability.
+            if (!config_.journal.empty())
+                entity_journal_ = std::make_unique<MigrationJournal>(config_.journal);
+            entity_endpoint_ = std::make_unique<EntityEndpoint>(*entity_contract_, entity_codec_.get(),
+                entity_codec_.get(), entity_journal_.get(), config_.entity_save_period_ms);
             // Property pushes are a framework frame (MLP1), routed to whichever
             // session the script subscribed by id; the runtime's sink is what
             // closes the send-side wiring. A vanished session drops the frame
@@ -666,6 +673,18 @@ private:
                 try { service_->tick(); }
                 catch (const std::exception& e) { std::cerr << "tick failed: " << e.what() << '\n'; }
             }
+            // The periodic forced-save pass runs on the same loop: a dirty
+            // record lands on its backend (in process, or the SQLite journal)
+            // within the configured period. A refused save is reported and
+            // retried on a later pass, never dropped.
+            if (entity_endpoint_) {
+                const auto saves = entity_endpoint_->runtime().tick_saves();
+                if (saves.refused())
+                    std::cerr << "entity saves refused: " << saves.refused() << " (in-flight "
+                              << saves.in_flight << ", conflict " << saves.conflict << ", stale "
+                              << saves.stale << ", not-ready " << saves.not_ready << ", failed "
+                              << saves.failed << ')' << '\n';
+            }
             diagnostics_->refresh_process_memory();
             // Dumps arrive from crashes, not from ticks, so the sweep is a
             // minute-granular modulo: zero per-tick cost, still bounded disk.
@@ -716,6 +735,15 @@ private:
             try { service_->shutdown(); }
             catch (const std::exception& e) { std::cerr << "shutdown failed: " << e.what() << '\n'; }
         }
+        // Shutdown save: the same single forced-save entry, period ignored,
+        // driven once while the entity runtime and its backend are still open.
+        // A stop never silently drops a refused save — the report names it.
+        if (entity_endpoint_) {
+            const auto saves = entity_endpoint_->runtime().shutdown_save();
+            if (saves.attempted || saves.refused())
+                std::cerr << "shutdown save: landed=" << saves.landed << " attempted=" << saves.attempted
+                          << " refused=" << saves.refused() << '\n';
+        }
         // Drain cancellation handlers before destroying Lua/Node state.
     }
     Config config_;
@@ -747,8 +775,10 @@ private:
     std::unique_ptr<ApiVerifier> api_verifier_;
     std::unique_ptr<ApiSurface> api_surface_;
     // Entity runtime (only when --contract is configured). Declaration order
-    // is lifetime order: the contract outlives the codec that borrows it and
-    // the endpoint that owns the runtime/dispatcher.
+    // is lifetime order: the journal outlives the runtime that borrows it as
+    // its save backend, and the contract outlives the codec that borrows it
+    // and the endpoint that owns the runtime/dispatcher.
+    std::unique_ptr<MigrationJournal> entity_journal_;
     std::unique_ptr<EntityContract> entity_contract_;
     std::unique_ptr<SprotoCodec> entity_codec_;
     std::unique_ptr<EntityEndpoint> entity_endpoint_;

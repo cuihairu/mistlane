@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
+#include "mistlane/entity_codec_iface.hpp"
 #include "mistlane/entity_envelope.hpp"
 #include "mistlane/entity_runtime.hpp"
 #include <optional>
@@ -8,23 +9,6 @@
 #include <utility>
 
 namespace mistlane {
-// Wire codec boundary between the endpoint and the schema-driven sproto
-// decoder/encoder. The codec is a separate slice; until one is attached the
-// endpoint serves declarations with no arguments and no returns and answers a
-// typed INVALID for anything that would need the codec.
-class EntityCodec {
-public:
-    virtual ~EntityCodec() = default;
-    // Decodes the wire payload into typed arguments for the method's declared
-    // argument shape; false plus a reason on malformed input, which the
-    // endpoint answers as the only error code allowed to carry a reason.
-    virtual bool decode_args(const ContractArgs& args, std::string_view payload,
-                             EntityValues& out, std::string& reason) const = 0;
-    // Encodes typed returns to the wire payload; nullopt when a declared
-    // return cannot be encoded.
-    virtual std::optional<std::string> encode_returns(const ContractArgs& returns,
-                                                      const EntityValues& values) const = 0;
-};
 
 // Hosting-side transport binding for entity invocations (docs/entity-contract.md,
 // "Invocation envelope and error protocol"): an invocation is a payload kind
@@ -41,8 +25,15 @@ public:
 // the frame: the transport supplies the trusted EntityCaller.
 class EntityEndpoint {
 public:
-    explicit EntityEndpoint(const EntityContract& contract, const EntityCodec* codec = nullptr)
-        : runtime_(contract), codec_(codec) {}
+    explicit EntityEndpoint(const EntityContract& contract, const EntityCodec* codec = nullptr,
+                            const SprotoCodec* persist_codec = nullptr,
+                            EntityStateBackend* persist_backend = nullptr,
+                            std::uint64_t save_period_ms = 0)
+        : runtime_(contract), codec_(codec) {
+        // The persistence chain is opt-in: a host that passes the persistent
+        // codec enables per-entity forced-save records under the node backend.
+        if (persist_codec) runtime_.set_persistence(persist_codec, persist_backend, save_period_ms);
+    }
     EntityRuntime& runtime() { return runtime_; }
     // Handles one frame: nullopt for non-entity traffic, an empty string for a
     // handled notify (no reply exists), else the MLE1 reply frame. The result

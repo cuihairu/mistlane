@@ -22,7 +22,9 @@ struct EntityStateSnapshot {
 // Storage boundary for the owning data side's entity state — the durable half
 // of the persistence item that no backend carried before. The SQLite backend
 // lives beside the coordinator journal and reuses its versioned-BLOB encoding;
-// an in-memory-only caller passes no backend and keeps everything in process.
+// an in-memory-only caller passes no backend and keeps everything in process
+// (save() then skips the durable step and confirms the receipt directly, so
+// the record lands in-process and the fence model is still exercised).
 class EntityStateBackend {
 public:
     virtual ~EntityStateBackend() = default;
@@ -55,12 +57,14 @@ public:
             outcome.reason = "snapshot not encodable";
             return outcome;
         }
-        try {
-            backend_->save_state({address_.scope, address_.type_id, address_.incarnation,
-                                  address_.entity_id, generation, expected_revision, *encoded});
-        } catch (...) {
-            persist_.abort(outcome.receipt.save_id);
-            throw;
+        if (backend_) {
+            try {
+                backend_->save_state({address_.scope, address_.type_id, address_.incarnation,
+                                      address_.entity_id, generation, expected_revision, *encoded});
+            } catch (...) {
+                persist_.abort(outcome.receipt.save_id);
+                throw;
+            }
         }
         if (!persist_.confirm(outcome.receipt.save_id)) {
             outcome.ok = false;

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "test_common.hpp"
 #include "mistlane/entity_sync_wire.hpp"
+#include <optional>
 namespace mistlane::test {
 void entity_transport() {
     const std::string xml =
@@ -328,6 +329,125 @@ return service)");
     send_frame(witness, "reap");
     equal(read_frame(witness), "reaped");
     std::cout << "entity.push reap: a dead observer is reaped on the next drain [PASS]\n";
+}
+
+
+// The runtime caller of the forced-save chain: a contract host owns one
+// PersistentStore and one EntityStateStore per live declared entity, and the
+// node drives the single save entry from its 100ms tick and from stop(). A
+// persistent property write is what marks a record dirty (a transient write
+// never does), the periodic pass lands it on the journal inside its period,
+// and a shutdown pass catches what the period missed — a host that stops
+// mid-dirty still ends with a landed row whose fences survive the hop to the
+// reopened journal.
+void entity_save_runtime() {
+    const std::string xml =
+        "<Contracts><Entity name=\"Avatar\" id=\"1\"><Properties>"
+        "<gold id=\"1\" type=\"INT32\" default=\"0\" persistent=\"true\"/>"
+        "<title id=\"2\" type=\"INT32\" default=\"0\"/>"
+        "</Properties></Entity></Contracts>";
+    Context c;
+    const auto def = c.path("avatar.def");
+    write(def, xml);
+    const auto script = c.path("avatar.lua");
+    write(script, R"(local service = {}
+local function state_text()
+    local st = mistlane.entity.state(1, 1, 3, 42)
+    if st == nil then return "absent" end
+    return string.format("%d,%d,%d,%s", st.generation, st.revision,
+                         st.committed_revision, tostring(st.dirty))
+end
+function service.message(payload)
+    if payload == "spawn" then
+        local spawned = mistlane.entity.spawn(1, 1, 3, 42)
+        if not spawned then return "duplicate" end
+        return (mistlane.entity.properties(1, 1, 3, 42) ~= nil) and "spawned" or "no-view"
+    end
+    if payload == "write" then
+        local props = mistlane.entity.properties(1, 1, 3, 42)
+        props.gold = 5   -- persistent: marks the record dirty
+        props.title = 9  -- transient: never touches the revision
+        return state_text()
+    end
+    if payload == "state" then return state_text() end
+    -- An unspawned address stays an absent surface instead of pretending to
+    -- be a clean record.
+    local st = mistlane.entity.state(1, 1, 3, 99)
+    return "other="..(st == nil and "absent" or "present")..":"..state_text()
+end
+return service)");
+    const EntityContract contract(xml);
+    SprotoCodec codec(contract);
+    // The host's journal, reopened by the test after the host stops: one row
+    // per address, fence values carried on it.
+    const auto row_of = [&](const fs::path& journal) -> std::optional<EntityStateSnapshot> {
+        MigrationJournal reopened(journal.string());
+        for (const auto& row : reopened.restore_states())
+            if (row.scope == 1 && row.type_id == 1 && row.incarnation == 3 && row.entity_id == 42)
+                return row;
+        return std::nullopt;
+    };
+    const auto launch = [&](unsigned listen, const fs::path& journal, const std::string& period) -> Child& {
+        std::vector<std::string> options{"--script", script.string(), "--contract", def.string(),
+            "--journal", journal.string(), "--entity-save-period", period,
+            "--service-token", "s3cret"};
+        return c.node("gameServer", listen, std::move(options));
+    };
+    const auto handshake = [](cli::Client& peer) {
+        equal(peer.request("MLS1 gameServer inst-1 s3cret"), "MLS1 OK");
+    };
+
+    // Periodic half: a 200ms period lands the dirty record while the node is
+    // still up, clearing the dirty flag the script reports.
+    {
+        const auto journal = c.path("entity-periodic.sqlite");
+        const auto listen = port();
+        auto& host = launch(listen, journal, "200");
+        auto peer = tcp(listen);
+        handshake(*peer);
+        equal(peer->request("spawn"), "spawned");
+        // One persistent write: revision advances to 1, nothing confirmed yet.
+        equal(peer->request("write"), "1,1,0,true");
+        // Dirty clears once the period lands the row (the poll reads the live
+        // record the periodic pass just confirmed).
+        eventually([&] { return peer->request("state") == "1,1,1,false"; }, 8s,
+                   "the periodic pass did not land the dirty record");
+        peer.reset();
+        host.signal(SIGTERM);
+        host.wait();
+        const auto row = row_of(journal);
+        require(row.has_value(), "the periodic save left no durable row");
+        require(row->generation == 1 && row->committed_revision == 1,
+                "the durable row lost its fence values");
+        EntityValues loaded;
+        std::string reason;
+        require(codec.decode_persistent(contract.entities()[0], row->snapshot, loaded, reason)
+                && reason.empty(), "the durable snapshot did not decode");
+        require(loaded.count("gold") == 1 && std::get<std::int64_t>(loaded.at("gold").data) == 5,
+                "the durable snapshot lost the persistent value");
+        require(loaded.count("title") == 0, "a transient property leaked into the durable snapshot");
+        std::cout << "entity.save.runtime periodic: dirty lands inside the period, fences intact [PASS]\n";
+    }
+
+    // Shutdown half: a period the test never outwaits, so the only pass that
+    // can land the write is the stop() one — a mid-dirty shutdown must still
+    // end with the row on the journal.
+    {
+        const auto journal = c.path("entity-shutdown.sqlite");
+        const auto listen = port();
+        auto& host = launch(listen, journal, "60000");
+        auto peer = tcp(listen);
+        handshake(*peer);
+        equal(peer->request("spawn"), "spawned");
+        equal(peer->request("write"), "1,1,0,true");
+        peer.reset();
+        host.signal(SIGTERM);
+        host.wait();
+        const auto row = row_of(journal);
+        require(row.has_value() && row->generation == 1 && row->committed_revision == 1,
+                "a shutdown save did not land the mid-dirty record");
+        std::cout << "entity.save.runtime shutdown: mid-dirty stop still lands the row [PASS]\n";
+    }
 }
 
 

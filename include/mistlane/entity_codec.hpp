@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
-#include "mistlane/entity_endpoint.hpp"
+#include "mistlane/entity_codec_iface.hpp"
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>

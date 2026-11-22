@@ -1,6 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
 #include "mistlane/entity_dispatch.hpp"
+#include "mistlane/entity_persist.hpp"
+#include "mistlane/entity_save.hpp"
+#include "mistlane/entity_state.hpp"
 #include "mistlane/entity_sync.hpp"
 #include <functional>
 #include <map>
@@ -11,7 +14,13 @@
 
 namespace mistlane {
 // Deterministic fixture-driven route table. An entity ref is single-live-instance;
-// repeated delivery is rejected by the invocation correlation key.
+// repeated delivery is rejected by the invocation correlation key. With
+// persistence enabled (set_persistence) every declared entity also gets the
+// persistence half of the same runtime: a PersistentStore over its property
+// store (so a script write marks the record dirty only when it lands on a
+// persistent property) and an EntityStateStore bound to the node's backend,
+// registered with a PeriodicSaveDriver the node ticks. Persistence is opt-in
+// per node; without it spawn behaves exactly as before.
 class EntityRuntime {
 public:
  // Property sync push sink: one call per message drained from an entity's
@@ -21,17 +30,39 @@ public:
  using PropertyPush = std::function<void(const EntityTarget&, const std::string& observer, const SyncMessage&)>;
  explicit EntityRuntime(const EntityContract& contract) : dispatcher_(contract) {}
  EntityDispatcher& dispatcher() { return dispatcher_; }
+ // Switch on the persistence chain. The codec is what a snapshot is encoded
+ // with, the backend the durable boundary (null keeps everything in process),
+ // the period the driver's ms budget under the injected (steady by default)
+ // clock. A store a node registered before this call is not back-registered:
+ // the runtime is constructed before the node spawns anything.
+ void set_persistence(const SprotoCodec* codec, EntityStateBackend* backend, std::uint64_t period_ms) {
+   codec_ = codec;
+   backend_ = backend;
+   driver_.emplace(period_ms);
+ }
+ bool persistence_enabled() const { return codec_ != nullptr; }
  bool spawn(EntityTarget ref, std::uint32_t hosting_generation = 1) {
    if (!ref.scope || !ref.type_id || !ref.entity_id || !ref.incarnation || !hosting_generation) return false;
    if (!entities_.emplace(address(ref), hosting_generation).second) return false;
    // A declared entity also gets its controlled property store and observer
    // channel; an undeclared type keeps the fence-only behavior (dispatch
-   // answers it), so existing spawn semantics are unchanged.
+   // answers it), so existing spawn semantics are unchanged. With persistence
+   // enabled it also gets the forced-save chain, fenced by the spawn
+   // generation (monotone, so a re-spawn of a fresh incarnation starts
+   // clean).
    for (const auto& entity : dispatcher_.contract().entities()) {
      if (entity.id != ref.type_id) continue;
      auto store = std::make_shared<PropertyStore>(dispatcher_.contract(), ref.type_id);
      stores_.emplace(address(ref), store);
      channels_.emplace(address(ref), store.get());
+     if (codec_) {
+       auto owned = std::make_unique<PersistentStore>(*store);
+       owned->assume(hosting_generation);
+       auto record = std::make_unique<EntityStateStore>(ref, *owned, codec_, backend_);
+       driver_->add(record.get());
+       records_.emplace(address(ref), std::move(record));
+       owned_state_.emplace(address(ref), std::move(owned));
+     }
      break;
    }
    return true;
@@ -83,6 +114,12 @@ public:
    if (entities_.erase(a) == 0) return false;
    channels_.erase(a);
    stores_.erase(a);
+   // The record leaves the periodic driver with its entity. A dirty record is
+   // not saved here: destroy is the reclaim path, not a persistence point —
+   // the record's fate on the owning data side is a transfer/shutdown concern.
+   if (const auto it = records_.find(a); it != records_.end() && driver_) driver_->remove(it->second.get());
+   records_.erase(a);
+   owned_state_.erase(a);
    // Drop correlation tombstones for this exact incarnation so a re-spawn of
    // the same address starts with a clean dedupe table instead of growing
    // without bound on a long-lived node.
@@ -102,6 +139,34 @@ public:
    const auto it = stores_.find(address(ref));
    return it == stores_.end() ? nullptr : it->second;
  }
+ // The persistence write path of one live entity: a script write through this
+ // store marks the record dirty only when it lands on a persistent property,
+ // and the single forced-save entry reads the same fence values it advanced.
+ // Null when the address has no store or the node never enabled persistence.
+ PersistentStore* persistent(const EntityTarget& ref) {
+   const auto it = owned_state_.find(address(ref));
+   return it == owned_state_.end() ? nullptr : it->second.get();
+ }
+ // The durable driver of one live entity: the store the periodic tick saves
+ // through the single entry, bound to the node's backend. Null when
+ // persistence is off or the address is not a live declared entity.
+ EntityStateStore* state_store(const EntityTarget& ref) {
+   const auto it = records_.find(address(ref));
+   return it == records_.end() ? nullptr : it->second.get();
+ }
+ // One periodic save pass — the node calls this from its tick. A no-op when
+ // persistence is off.
+ PeriodicSaveDriver::Report tick_saves() {
+   return driver_ ? driver_->tick() : PeriodicSaveDriver::Report{};
+ }
+ // Shutdown save: every dirty record through the same entry once, period
+ // ignored. The node calls this before teardown, so a stop never silently
+ // drops a refused save — the report names what did not land.
+ PeriodicSaveDriver::Report shutdown_save() {
+   return driver_ ? driver_->flush() : PeriodicSaveDriver::Report{};
+ }
+ // Live persistence records registered with the driver (for observability).
+ std::size_t registered_saves() const { return driver_ ? driver_->registered() : 0; }
  // Observer admission and departure on one entity's property stream: visibility
  // is per property (the channel filters SERVER_ONLY and, for guests, OWN_CLIENT).
  bool observe(const EntityTarget& ref, const std::string& id, bool is_owner) {
@@ -137,6 +202,15 @@ private:
  std::set<std::pair<Address,std::uint64_t>> delivered_;
  std::map<Address,std::shared_ptr<PropertyStore>> stores_;
  std::map<Address,PropertyChannel> channels_;
+ // Persistence half of the runtime, one chain per live declared entity: the
+ // record (the durable driver) sits on top of the owned persistent store, so
+ // a store outlives its record and the driver only ever holds a record that
+ // still has a store behind it.
+ std::map<Address,std::unique_ptr<EntityStateStore>> records_;
+ std::map<Address,std::unique_ptr<PersistentStore>> owned_state_;
+ std::optional<PeriodicSaveDriver> driver_;
+ const SprotoCodec* codec_ = nullptr;
+ EntityStateBackend* backend_ = nullptr;
  PropertyPush push_;
 };
 

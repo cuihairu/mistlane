@@ -21,6 +21,7 @@ void entity_endpoint();
 void entity_transport();
 void entity_transport_gateway();
 void entity_push();
+void entity_save_runtime();
 void entity_codec();
 void entity_snapshot();
 void entity_gateway();
@@ -156,6 +157,7 @@ int run_tests(int argc, char** argv) {
         {"entity.persist","contract",test::entity_persist},
         {"entity.state.store","contract",test::entity_state_store},
         {"entity.save.periodic","contract",test::entity_save_periodic},
+        {"entity.save.runtime","contract",test::entity_save_runtime},
         {"entity.perf","contract",test::entity_perf},
         {"core.roles","core",test::role_names},
         {"transport.tcp","transport",test::transport_tcp},

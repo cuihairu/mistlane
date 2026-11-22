@@ -26,7 +26,31 @@ struct ProxyRef {
     // it, even after the entity is destroyed (the store then detaches from its
     // channel, so further writes journal but never flush).
     std::shared_ptr<PropertyStore> anchor;
+    // The persistence write path (EntityRuntime::persistent). When set, every
+    // write goes through it: the revision then advances only on a persistent
+    // property, which is what marks the record dirty for the periodic save.
+    PersistentStore* persist = nullptr;
 };
+
+// The four write shapes route through the persist store when one is present
+// (the pass-throughs apply the same rules to the same storage, then bump the
+ // persistent revision); reads stay on the raw store.
+bool write_set(ProxyRef& ref, const std::string& name, EntityValue value) {
+    return ref.persist ? ref.persist->set(name, std::move(value)) : ref.store->set(name, std::move(value));
+}
+bool write_set_path(ProxyRef& ref, const std::string& name, TreePath path, EntityValue value) {
+    return ref.persist ? ref.persist->set_path(name, std::move(path), std::move(value))
+                       : ref.store->set_path(name, std::move(path), std::move(value));
+}
+bool write_insert_at(ProxyRef& ref, const std::string& name, const TreePath& path,
+                     std::size_t position, EntityValue value) {
+    return ref.persist ? ref.persist->insert_at(name, path, position, std::move(value))
+                       : ref.store->insert_at(name, path, position, std::move(value));
+}
+bool write_remove_at(ProxyRef& ref, const std::string& name, const TreePath& path, std::size_t position) {
+    return ref.persist ? ref.persist->remove_at(name, path, position)
+                       : ref.store->remove_at(name, path, position);
+}
 
 ProxyRef* proxy(lua_State* state, int index) {
     auto* ref = static_cast<ProxyRef*>(lua_touserdata(state, index));
@@ -178,7 +202,7 @@ int array_remove(lua_State* state);
 // its entity no longer owns.
 void push_node(lua_State* state, ProxyRef& parent, std::string property, TreePath path, bool is_array) {
     auto* ref = static_cast<ProxyRef*>(lua_newuserdatauv(state, sizeof(ProxyRef), 0));
-    new (ref) ProxyRef{parent.store, std::move(property), std::move(path), is_array, false, parent.anchor};
+    new (ref) ProxyRef{parent.store, std::move(property), std::move(path), is_array, false, parent.anchor, parent.persist};
     luaL_getmetatable(state, kProxyMeta);
     lua_setmetatable(state, -2);
 }
@@ -262,7 +286,7 @@ int newindex_root(lua_State* state, ProxyRef& ref) {
     const auto reason = convert_entity_value(state, 3, prop->type, prop->of, ref.store->contract(), &value);
     if (!reason.empty())
         return luaL_error(state, "property '%s' %s", name.c_str(), reason.c_str());
-    if (!ref.store->set(name, std::move(value)))
+    if (!write_set(ref, name, std::move(value)))
         return luaL_error(state, "%s", ref.store->error().c_str());
     return 0;
 }
@@ -291,7 +315,7 @@ int newindex_proxy(lua_State* state) {
     const auto reason = convert_entity_value(state, 3, shape.type, shape.of, ref->store->contract(), &value);
     if (!reason.empty())
         return luaL_error(state, "%s %s", location(*ref, path).c_str(), reason.c_str());
-    if (!ref->store->set_path(ref->property, std::move(path), std::move(value)))
+    if (!write_set_path(*ref, ref->property, std::move(path), std::move(value)))
         return luaL_error(state, "%s", ref->store->error().c_str());
     return 0;
 }
@@ -305,7 +329,7 @@ int array_grow(lua_State* state, ProxyRef& ref, std::size_t position, int value_
     const auto reason = convert_entity_value(state, value_at, shape.of, {}, ref.store->contract(), &value);
     if (!reason.empty())
         return luaL_error(state, "%s element %s", location(ref, ref.path).c_str(), reason.c_str());
-    if (!ref.store->insert_at(ref.property, ref.path, position, std::move(value)))
+    if (!write_insert_at(ref, ref.property, ref.path, position, std::move(value)))
         return luaL_error(state, "%s", ref.store->error().c_str());
     return 0;
 }
@@ -356,7 +380,7 @@ int array_remove(lua_State* state) {
     const auto* element = ref->store->get_path(ref->property, at);
     if (!element) return luaL_error(state, "%s", ref->store->error().c_str());
     push_entity_value(state, *element);
-    if (!ref->store->remove_at(ref->property, ref->path, position))
+    if (!write_remove_at(*ref, ref->property, ref->path, position))
         return luaL_error(state, "%s", ref->store->error().c_str());
     return 1;
 }
@@ -423,8 +447,10 @@ int gc_proxy(lua_State* state) {
 
 // The shared root construction: refusal check, metatable registration, and the
 // root userdata. anchor is empty for a borrowed store, or a shared_ptr for a
-// runtime-owned one (nested proxies thread it through push_node).
-bool push_root(lua_State* state, PropertyStore* store, std::shared_ptr<PropertyStore> anchor) {
+// runtime-owned one (nested proxies thread it through push_node). persist is
+// the persistence write path, threaded the same way.
+bool push_root(lua_State* state, PropertyStore* store, std::shared_ptr<PropertyStore> anchor,
+               PersistentStore* persist) {
     // A declared property named like a binding method would be shadowed by
     // the method; refuse the binding instead of hiding the property.
     for (const auto& p : store->entity().properties)
@@ -438,19 +464,20 @@ bool push_root(lua_State* state, PropertyStore* store, std::shared_ptr<PropertyS
     }
     lua_pop(state, 1);
     auto* ref = static_cast<ProxyRef*>(lua_newuserdatauv(state, sizeof(ProxyRef), 0));
-    new (ref) ProxyRef{store, "", {}, false, true, std::move(anchor)};
+    new (ref) ProxyRef{store, "", {}, false, true, std::move(anchor), persist};
     luaL_getmetatable(state, kProxyMeta);
     lua_setmetatable(state, -2);
     return true;
 }
 }
 
-bool push_entity_properties(lua_State* state, PropertyStore* store) {
-    return push_root(state, store, nullptr);
+bool push_entity_properties(lua_State* state, PropertyStore* store, PersistentStore* persist) {
+    return push_root(state, store, nullptr, persist);
 }
 
-bool push_entity_properties(lua_State* state, const std::shared_ptr<PropertyStore>& store) {
+bool push_entity_properties(lua_State* state, const std::shared_ptr<PropertyStore>& store,
+                            PersistentStore* persist) {
     if (!store) return false;
-    return push_root(state, store.get(), store);
+    return push_root(state, store.get(), store, persist);
 }
 }

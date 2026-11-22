@@ -2,6 +2,7 @@
 #pragma once
 #include <lua.hpp>
 #include <memory>
+#include "mistlane/entity_persist.hpp"
 #include "mistlane/entity_property.hpp"
 
 namespace mistlane {
@@ -18,14 +19,18 @@ namespace mistlane {
 // surface. Returns false without pushing anything when a declared property
 // name collides with a method key — the refusal happens at push time, never
 // as silent shadowing. The proxy borrows the store: the owner must outlive
-// the Lua side's use of it.
-bool push_entity_properties(lua_State* state, PropertyStore* store);
+// the Lua side's use of it. When a persist store is given, every write also
+// runs through it, so a persistent property is what marks a record dirty
+// (the single forced-save entry then captures it).
+bool push_entity_properties(lua_State* state, PropertyStore* store,
+                            PersistentStore* persist = nullptr);
 
 // The anchored form, for stores owned by a container (EntityRuntime holds one
 // per live address): every proxy keeps a shared_ptr to the store, so the
 // store outlives its entity and the proxy never dangles after a destroy —
 // writes then journal into a detached store that no channel drains.
-bool push_entity_properties(lua_State* state, const std::shared_ptr<PropertyStore>& store);
+bool push_entity_properties(lua_State* state, const std::shared_ptr<PropertyStore>& store,
+                           PersistentStore* persist = nullptr);
 
 // One EntityValue becomes one Lua value (scalars keep their kind; arrays and
 // structs become plain tables, arrays 1-based). Used by the property proxy and

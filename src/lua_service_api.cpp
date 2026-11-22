@@ -73,6 +73,7 @@ void LuaService::push_entity_api(lua_State* l, EntityRuntime* runtime) {
     lua_pushlightuserdata(l, runtime); lua_pushcclosure(l, entity_observe, 1); lua_setfield(l, -2, "observe");
     lua_pushlightuserdata(l, runtime); lua_pushcclosure(l, entity_depart, 1); lua_setfield(l, -2, "depart");
     lua_pushlightuserdata(l, runtime); lua_pushcclosure(l, entity_flush, 1); lua_setfield(l, -2, "flush");
+    lua_pushlightuserdata(l, runtime); lua_pushcclosure(l, entity_state_inspect, 1); lua_setfield(l, -2, "state");
     lua_setfield(l, -2, "entity"); lua_setglobal(l, "mistlane");
 }
 void LuaService::push_ticket_api(lua_State* l, LuaService* service) {
@@ -259,10 +260,11 @@ int LuaService::entity_properties(lua_State* l) {
     if (!lua_u32(l, 1, scope) || !lua_u32(l, 2, type) || !lua_u32(l, 3, incarnation)
             || !lua_isinteger(l, 4))
         return luaL_error(l, "entity.properties expects scope, type, incarnation, entity_id integers");
-    const auto store = runtime->property_store({scope, type, incarnation,
-        static_cast<std::int64_t>(lua_tointeger(l, 4))});
+    const EntityTarget target{scope, type, incarnation,
+        static_cast<std::int64_t>(lua_tointeger(l, 4))};
+    const auto store = runtime->property_store(target);
     if (!store) { lua_pushnil(l); return 1; }
-    if (!push_entity_properties(l, store))
+    if (!push_entity_properties(l, store, runtime->persistent(target)))
         return luaL_error(l, "a declared property name collides with a property proxy method");
     return 1;
 }
@@ -310,6 +312,32 @@ int LuaService::entity_flush(lua_State* l) {
         return luaL_error(l, "entity.flush expects scope, type, incarnation, entity_id integers");
     lua_pushboolean(l, runtime->flush_properties({scope, type, incarnation,
         static_cast<std::int64_t>(lua_tointeger(l, 4))}) ? 1 : 0);
+    return 1;
+}
+// mistlane.entity.state(scope, type, incarnation, entity_id) ->
+// {generation, revision, committed_revision, dirty}|nil: the live persistence
+// record's fence values, so a script (and a test through one) can observe
+// what the periodic driver will capture without poking internals. Nil when
+// this node never enabled persistence or the address is not a live declared
+// entity — an absent surface never pretends to be a clean record.
+int LuaService::entity_state_inspect(lua_State* l) {
+    auto* runtime = static_cast<EntityRuntime*>(lua_touserdata(l, lua_upvalueindex(1)));
+    std::uint32_t scope, type, incarnation;
+    if (!lua_u32(l, 1, scope) || !lua_u32(l, 2, type) || !lua_u32(l, 3, incarnation)
+            || !lua_isinteger(l, 4))
+        return luaL_error(l, "entity.state expects scope, type, incarnation, entity_id integers");
+    const auto* record = runtime->state_store({scope, type, incarnation,
+        static_cast<std::int64_t>(lua_tointeger(l, 4))});
+    if (!record) { lua_pushnil(l); return 1; }
+    lua_createtable(l, 0, 4);
+    lua_pushinteger(l, static_cast<lua_Integer>(record->generation()));
+    lua_setfield(l, -2, "generation");
+    lua_pushinteger(l, static_cast<lua_Integer>(record->revision()));
+    lua_setfield(l, -2, "revision");
+    lua_pushinteger(l, static_cast<lua_Integer>(record->committed_revision()));
+    lua_setfield(l, -2, "committed_revision");
+    lua_pushboolean(l, record->dirty() ? 1 : 0);
+    lua_setfield(l, -2, "dirty");
     return 1;
 }
 // Entity method implementations are the script's `entities` table:

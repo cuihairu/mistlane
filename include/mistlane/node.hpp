@@ -47,6 +47,11 @@ struct Config {
     // runtime and answers MLE1 frames instead of passing them to the script.
     // Only the entity-hosting roles may load one (gameServer/crossServer).
     std::string contract;
+    // How often an entity host drives its forced-save pass (ms). The node
+    // ticks its own periodic driver on its 100ms loop; 0 removes the period
+    // gate so each pass attempts every dirty record. A shutdown save always
+    // runs at stop. Only meaningful with a contract.
+    std::uint64_t entity_save_period_ms = 1000;
     std::string script;
     Endpoint redis{"127.0.0.1", 6379};
     Endpoint metrics_listen{"127.0.0.1", 9090};

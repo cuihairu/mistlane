@@ -16,7 +16,9 @@ namespace mistlane {
 // hosting assignment yet) is reported and retried on a later period, while a
 // persist that never landed aborts its own receipt so the record stays dirty.
 // This is the driver half of "Periodic, transfer and shutdown saves use the
-// same mechanism"; which data role holds which store is the runtime wiring.
+// same mechanism"; the runtime wiring landed too — an entity-hosting node owns
+// one chain per live declared entity and drives the periodic pass from its
+// tick plus the shutdown pass from stop() (see EntityRuntime).
 class PeriodicSaveDriver {
 public:
     using Clock = std::function<std::uint64_t()>;
@@ -53,6 +55,17 @@ public:
         if (has_ticked_ && now - last_ < period_) return report;
         last_ = now;
         has_ticked_ = true;
+        return attempt(report);
+    }
+
+    // The shutdown half of the same mechanism: every dirty record goes through
+    // the single forced-save entry once, ignoring the period. Same
+    // classification, so a stop never silently drops a refused save — the
+    // report names what did not land.
+    Report flush() { return attempt({}); }
+
+private:
+    Report attempt(Report report) {
         for (auto* store : stores_) {
             if (!store->dirty()) continue;
             ++report.attempted;
@@ -74,7 +87,6 @@ public:
         return report;
     }
 
-private:
     static Clock default_clock() {
         return [] {
             return static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(

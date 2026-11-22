@@ -271,6 +271,10 @@ int main(int argc, char** argv) {
                              "    --max-group-sessions N --max-shard-sessions N\n"
                              "  crossServer return sender: --data IP:PORT (home data MLD1 endpoint;\n"
                              "    enqueued changes retry in a bounded queue until ACK durable)\n"
+                             "  entity host (gameServer/crossServer with --contract): --journal FILE\n"
+                             "    adds durable entity save rows to that journal; --entity-save-period N\n"
+                             "    (ms, default 1000) drives the periodic forced-save pass and a shutdown\n"
+                             "    save always runs at stop\n"
                              "SIGHUP: transactional script reload (state is reset)\n"
                              "  coordinator: --service-token TOKEN (require member identity); registry\n"
                              "    members connect with --coordinator IP:PORT [--namespace NAME]\n"
@@ -304,6 +308,7 @@ int main(int argc, char** argv) {
             else if (key == "--listener") config.listeners.push_back(listener(value));
             else if (key == "--script") config.script = value;
             else if (key == "--contract") config.contract = value;
+            else if (key == "--entity-save-period") config.entity_save_period_ms = number(value, 1000000000);
             else if (key == "--redis") { config.redis = endpoint(value); config.redis_enabled = true; }
             else if (key == "--metrics-listen") { config.metrics_listen = endpoint(value); config.metrics_enabled = true; }
             else if (key == "--dashboard-listen") { config.dashboard_listen = endpoint(value); config.dashboard_enabled = true; }
@@ -348,8 +353,14 @@ int main(int argc, char** argv) {
             // The registry is state, not a forwarding or scripting plane.
             throw std::invalid_argument("coordinator requires no script and no upstream");
         }
-        if (!config.journal.empty() && config.role != "coordinator" && config.role != "data" && config.role != "apiServer")
-            throw std::invalid_argument("--journal applies to coordinator, data or apiServer");
+        if (!config.journal.empty() && config.role != "coordinator" && config.role != "data" && config.role != "apiServer") {
+            // An entity host keeps its forced-save rows in the same journal, so
+            // gameServer/crossServer take the flag too — but only while they
+            // actually load a contract, since without one the file would open
+            // and nothing would write to it.
+            if (config.role != "gameServer" && config.role != "crossServer" || config.contract.empty())
+                throw std::invalid_argument("--journal applies to coordinator, data, apiServer or an entity host with --contract");
+        }
         if (!config.contract.empty() && config.role != "gameServer" && config.role != "crossServer")
             throw std::invalid_argument("--contract applies to gameServer/crossServer only");
         // Registration is a member duty; gateways route, coordinators collect.
