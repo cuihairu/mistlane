@@ -11,6 +11,7 @@
 #include <optional>
 #include <set>
 #include <tuple>
+#include <vector>
 
 namespace mistlane {
 // Deterministic fixture-driven route table. An entity ref is single-live-instance;
@@ -68,6 +69,7 @@ public:
      }
      break;
    }
+   if (host_route_) host_route_(ref, true);
    return true;
  }
  EntityDispatchResult deliver(const EntityInvocation& call, std::uint64_t correlation_id) {
@@ -159,6 +161,7 @@ public:
    // the same address starts with a clean dedupe table instead of growing
    // without bound on a long-lived node.
    std::erase_if(delivered_, [a](const auto& row) { return row.first == a; });
+   if (host_route_) host_route_(ref, false);
    return true;
  }
  // The controlled store of one live entity, seeded with its declared defaults.
@@ -212,6 +215,23 @@ public:
    const auto it = channels_.find(address(ref));
    return it != channels_.end() && it->second.depart(id);
  }
+ // Host route publish: called with owned=true after a successful spawn and
+ // owned=false after a successful destroy, so the node's coordinator leg can
+ // tell the registry which endpoint hosts which entity (the dynamic half of
+ // host routing). Unset, or a node without a coordinator leg, publishes nothing.
+ using HostRoute = std::function<void(const EntityTarget&, bool)>;
+ void set_host_route(HostRoute publish) { host_route_ = std::move(publish); }
+ // The live entity addresses, for re-publishing the whole table when a
+ // coordinator leg (re)establishes.
+ std::vector<EntityTarget> live_targets() const {
+   std::vector<EntityTarget> out;
+   out.reserve(entities_.size());
+   for (const auto& [a, generation] : entities_) {
+     (void)generation;
+     out.push_back({std::get<0>(a), std::get<1>(a), std::get<3>(a), std::get<2>(a)});
+   }
+   return out;
+ }
  void set_property_push(PropertyPush push) { push_ = std::move(push); }
  // Drain one entity's journal and emit every message through the sink. False
  // when the address has no property stream. Without a sink nothing drains —
@@ -251,6 +271,7 @@ private:
  const SprotoCodec* codec_ = nullptr;
  EntityStateBackend* backend_ = nullptr;
  PropertyPush push_;
+ HostRoute host_route_;
 };
 
 // Single-threaded RPC lifecycle model driven by a monotonic clock supplied by tests.

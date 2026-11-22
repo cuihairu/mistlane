@@ -282,6 +282,11 @@ int main(int argc, char** argv) {
                              "      address to upstream INDEX, so an entity request reaches the host\n"
                              "      that spawned it; a miss keeps the round-robin upstream and the\n"
                              "      host answers UNROUTED)\n"
+                             "    --coordinator IP:PORT (multiplexing gateways only: the coordinator\n"
+                             "      publishes entity host routes, one the gateway re-pulls each second\n"
+                             "      and forwards to the upstream whose endpoint matches; a published\n"
+                             "      endpoint no --upstream names is skipped, never guessed; the\n"
+                             "      --upstream-token presents MLS1 to the coordinator)\n"
                              "  --routing session|cross (gateway only; default session)\n"
                              "  service identity (session routing only; cross keeps MLC1):\n"
                              "    --service-token TOKEN (accept only peers presenting MLS1),\n"
@@ -413,10 +418,13 @@ int main(int argc, char** argv) {
             throw std::invalid_argument("--contract applies to gameServer/crossServer only");
         // Registration is a member duty; gateways route, coordinators collect.
         if (config.coordinator_enabled && config.role != "gameServer" && config.role != "crossServer"
-                && config.role != "login")
-            // gameServer/crossServer register and heartbeat; login only asks
-            // placements. The registry stays the coordinator's own job.
-            throw std::invalid_argument("--coordinator applies to gameServer, crossServer and login");
+                && config.role != "login" && config.role != "gateway")
+            // gameServer/crossServer register and heartbeat; gateway and login
+            // only read: the gateway pulls the published entity host routes so
+            // it can forward to the owning host, login asks placements. The
+            // registry stays the coordinator's own job.
+            throw std::invalid_argument(
+                "--coordinator applies to gameServer, crossServer, gateway and login");
         if (!config.coordinator_enabled && (namespace_selected || scope_selected))
             throw std::invalid_argument("--namespace and --scope require --coordinator");
         if (!config.coordinator_enabled && !config.upstream_token.empty() && config.role != "gateway"
@@ -497,6 +505,13 @@ int main(int argc, char** argv) {
                 if (r.index >= config.upstreams.size())
                     throw std::invalid_argument("--entity-route index beyond --upstream list");
         }
+        // A gateway that pulls the published host routes is a multiplexing
+        // gateway: the table is consulted on the mux path only, and a gateway
+        // that would never consult it would keep a silently-ignored coordinator
+        // connection, so refuse the misconfiguration like --entity-route.
+        if (config.coordinator_enabled && config.role == "gateway"
+                && !config.upstream_multiplex)
+            throw std::invalid_argument("gateway --coordinator requires --upstream-multiplex");
         // The primary listener comes from --listen/--transport; --listener entries follow.
         mistlane::Listener primary;
         primary.protocol = config.transport;

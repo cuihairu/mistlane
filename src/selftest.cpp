@@ -25,6 +25,7 @@ void entity_push();
 void entity_save_runtime();
 void entity_owner_bind();
 void entity_route();
+void entity_route_dynamic();
 void entity_cross_correlation();
 void entity_cross_caller();
 void entity_codec();
@@ -166,6 +167,7 @@ int run_tests(int argc, char** argv) {
         {"entity.save.runtime","contract",test::entity_save_runtime},
         {"entity.owner.bind","contract",test::entity_owner_bind},
         {"entity.route","contract",test::entity_route},
+        {"entity.route.dynamic","contract",test::entity_route_dynamic},
         {"entity.cross.correlation","contract",test::entity_cross_correlation},
         {"entity.cross.caller","contract",test::entity_cross_caller},
         {"entity.perf","contract",test::entity_perf},

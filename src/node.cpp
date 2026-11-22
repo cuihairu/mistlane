@@ -300,8 +300,11 @@ public:
         const bool script_role = role_definition && role_definition->script;
         service_context_ = ServiceContext{config_.role, config_.transport, config_.route_epoch, game_sessions, http_service};
         if (config_.role == "coordinator") registry_ = std::make_unique<Registry>(config_.journal);
-        if (config_.coordinator_enabled && config_.role != "login")
-            // Members register and heartbeat; login only asks placements.
+        if (config_.coordinator_enabled && config_.role != "login"
+                && config_.role != "gateway")
+            // Members register and heartbeat; login only asks placements and a
+            // coordinator-connected gateway only pulls the published host routes
+            // (one-shot legs), so neither ever registers as a member.
             member_ = std::make_shared<RegistryMember>(io_, config_,
                 [this] { return heartbeat_status(); });
         if (script_role && http_service)
@@ -363,6 +366,21 @@ public:
             }
             std::cout << "contract " << path.string() << " loaded" << std::endl;
         }
+        // The host map is published by the entity owner: spawn and destroy are
+        // the ownership points, so the coordinator learns a route on spawn and
+        // withdraws it on destroy. The endpoint is the member's own registered
+        // listen address (the coordinator stores that, never a client-supplied
+        // one), and a frame published while the member leg is not live is
+        // dropped -- on_live re-publishes the whole live set once the leg is
+        // up, so a reconnect loses no route.
+        if (member_ && entity_endpoint_) {
+            entity_endpoint_->runtime().set_host_route(
+                [this](const EntityTarget& target, bool live) { publish_host_route(target, live); });
+            member_->set_on_live([this] {
+                for (const EntityTarget& target : entity_endpoint_->runtime().live_targets())
+                    publish_host_route(target, true);
+            });
+        }
         // The gateway is the entity relay, plain or cross: it maps outer
         // transport correlations onto the inner entity ids for every session it
         // fronts. The cross gateway's join protocol (MLC1) is untouched — the
@@ -373,8 +391,13 @@ public:
         // routed entity address to the upstream that owns it. The CLI already
         // refused a non-gateway, a non-multiplexing or an out-of-range route,
         // so every entry lands (except past the table's bound, which a hostile
-        // count of --entity-route flags could hit; report rather than drop).
-        if (!config_.entity_routes.empty()) {
+        // count of --entity-route flags could hit; report rather than drop). A
+        // coordinator-connected gateway also starts with an empty table: its
+        // refresh tick rebuilds it from the published routes, and the static
+        // rows are re-applied after every rebuild, so a flag row survives the
+        // refreshes while a published row on the same address wins.
+        if (!config_.entity_routes.empty()
+                || (config_.role == "gateway" && config_.coordinator_enabled)) {
             entity_routes_ = std::make_unique<EntityHostRoutes>();
             for (const auto& r : config_.entity_routes)
                 if (!entity_routes_->set({r.scope, r.type_id, r.incarnation, r.entity_id}, r.index))
@@ -663,6 +686,41 @@ private:
         if (!entity_endpoint_) return true;
         return service.bind_entity_handlers(entity_endpoint_->runtime().dispatcher(), *entity_contract_, error);
     }
+    void publish_host_route(const EntityTarget& target, bool live) {
+        if (!member_) return;
+        std::ostringstream frame;
+        frame << "MLR1 HOST " << (live ? "SET" : "REMOVE") << ' ' << target.scope << ' '
+              << target.type_id << ' ' << target.incarnation << ' ' << target.entity_id;
+        member_->publish(frame.str());
+    }
+    // The published endpoint names a host the gateway can only forward to if it
+    // has that upstream; an endpoint no one dials resolves to no index, and the
+    // route is skipped rather than guessed at.
+    std::optional<std::size_t> upstream_index(const std::string& endpoint) const {
+        for (std::size_t i = 0; i < config_.upstreams.size(); ++i)
+            if (config_.upstreams[i].address+":"+std::to_string(config_.upstreams[i].port) == endpoint)
+                return i;
+        return std::nullopt;
+    }
+    void refresh_host_routes() {
+        if (!entity_routes_ || !config_.coordinator_enabled || config_.upstreams.empty()
+                || host_routes_pull_) return;
+        host_routes_pull_ = true;
+        RegistryClient::host_routes(io_, config_, [this](std::vector<PublishedHostRoute> routes, std::string reason) {
+            host_routes_pull_ = false;
+            if (!reason.empty()) return;
+            // A refusal keeps the last good view: an unreachable coordinator is
+            // not an empty fleet.
+            entity_routes_->clear();
+            for (const auto& r : config_.entity_routes)
+                entity_routes_->set({r.scope, r.type_id, r.incarnation, r.entity_id}, r.index);
+            for (const auto& r : routes) {
+                const auto index = upstream_index(r.endpoint);
+                if (index)
+                    entity_routes_->set({r.scope, r.type_id, r.incarnation, r.entity_id}, *index);
+            }
+        });
+    }
     void tick() {
         const auto scheduled = std::chrono::steady_clock::now() + std::chrono::milliseconds(100);
         tick_.expires_at(scheduled);
@@ -703,6 +761,11 @@ private:
             // Dumps arrive from crashes, not from ticks, so the sweep is a
             // minute-granular modulo: zero per-tick cost, still bounded disk.
             if (++tick_count_ % 600u == 0u) diagnostics_->prune_crashpad_reports();
+            // The published host table moves with membership, so the gateway
+            // re-pulls it on a second-scale modulo (one leg, no state). Only
+            // one pull is ever in flight: a slow coordinator does not stack
+            // legs on top of each other.
+            if (tick_count_ % 10u == 0u) refresh_host_routes();
             tick();
         });
     }
@@ -800,8 +863,13 @@ private:
     // Sessions borrow it; the node hands out per-session connection ids.
     std::unique_ptr<GatewayEntityCorrelation> gateway_correlation_;
     // Static entity host-route table for the multiplexing gateway, built from
-    // --entity-route. Sessions borrow it for the mux-path routing consult.
+    // --entity-route. Sessions borrow it for the mux-path routing consult; a
+    // coordinator-connected gateway also has this and its refresh tick refills
+    // it from the published routes, never swapping the object the sessions hold.
     std::unique_ptr<EntityHostRoutes> entity_routes_;
+    // One coordinator pull in flight at a time (the leg may take up to its 10s
+    // deadline; a slow coordinator must not stack pulls).
+    bool host_routes_pull_ = false;
     std::uint64_t next_connection_ = 1;
     // MLT1 host verification on the crossServer join path. The claims are
     // volatile and per process, like the rest of the verifier's state.

@@ -36,6 +36,11 @@ public:
         return true;
     }
     bool remove(const EntityTarget& target) { return by_index_.erase(key(target)) != 0; }
+    // Rebuilds the table in place: a coordinator-published refresh replaces the
+    // whole view so a withdrawn entity no longer routes to its old host. The
+    // sessions hold the table by pointer, so the object is never swapped, only
+    // cleared and refilled (all on the node's event loop).
+    void clear() { by_index_.clear(); }
     std::optional<std::size_t> route(const EntityTarget& target) const {
         const auto found = by_index_.find(key(target));
         return found == by_index_.end() ? std::nullopt

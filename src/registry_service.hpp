@@ -158,8 +158,16 @@ public:
                 void* owner) {
         auto found = members_.find(member_key(namespace_, scope, role, instance));
         if (found == members_.end() || found->second.second != owner) return false;
+        const auto listen = found->second.first.listen;
         members_.erase(found);
         drop_routes(scope, namespace_, role, instance);
+        // Entity host routes follow the member too: they point at the endpoint
+        // the member registered, so a leaving host must not leave routes that
+        // a gateway would still forward to.
+        for (auto it = entity_host_routes_.begin(); it != entity_host_routes_.end();) {
+            if (it->second == listen) it = entity_host_routes_.erase(it);
+            else ++it;
+        }
         retire_members(scope, namespace_, role, instance);
         return true;
     }
@@ -233,6 +241,35 @@ public:
         }
         return RouteAnswer{&member->second.first, scene, generation};
     }
+    // Entity host routes: the coordinator-published dynamic half of host routing
+    // (docs/entity-contract.md "host routing"). A contract host publishes the
+    // entity address it owns and the endpoint it registered with; a gateway pulls
+    // this table and resolves each endpoint against its own --upstream list. The
+    // registry stores the endpoint, never an index — an index is meaningless
+    // outside the gateway that owns it, and a gateway whose upstream list lacks
+    // the endpoint drops the route instead of guessing at a host.
+    using EntityHostRouteKey = std::tuple<std::uint32_t, std::uint32_t, std::uint32_t, std::int64_t>;
+    static constexpr std::size_t kEntityHostRouteCapacity = 4096;
+    // Same bound as the gateway's own table: a full table is a refusal the host
+    // sees, not a publish that silently vanishes on one leg of the path.
+    bool set_entity_host_route(std::uint32_t scope, std::uint32_t type_id,
+                               std::uint32_t incarnation, std::int64_t entity_id,
+                               const std::string& endpoint) {
+        const EntityHostRouteKey key{scope, type_id, incarnation, entity_id};
+        const auto found = entity_host_routes_.find(key);
+        if (found == entity_host_routes_.end() && entity_host_routes_.size() >= kEntityHostRouteCapacity)
+            return false;
+        entity_host_routes_.insert_or_assign(key, endpoint);
+        return true;
+    }
+    bool remove_entity_host_route(std::uint32_t scope, std::uint32_t type_id,
+                                  std::uint32_t incarnation, std::int64_t entity_id) {
+        return entity_host_routes_.erase({scope, type_id, incarnation, entity_id}) != 0;
+    }
+    const std::map<EntityHostRouteKey, std::string>& entity_host_routes() const {
+        return entity_host_routes_;
+    }
+    std::size_t entity_host_routes_size() const { return entity_host_routes_.size(); }
     static std::string member_key(const std::string& namespace_, const std::string& scope,
                                   const std::string& role, const std::string& instance) {
         return scope+'\x1'+role+'\x1'+instance+'\x1'+namespace_;
@@ -375,6 +412,9 @@ private:
     }
     std::map<std::string, std::pair<Member, void*>> members_;
     std::map<std::string, Route> routes_;
+    // Entity host routes are live membership facts, like character routes: they
+    // are republished by the host that owns the entity and die with the host.
+    std::map<EntityHostRouteKey, std::string> entity_host_routes_;
     std::map<MigrationKey, MigrationEntry> migrations_;
     std::unique_ptr<MigrationJournal> journal_;
 };
@@ -541,6 +581,9 @@ private:
         // A registered member may also publish or look up character routes on
         // its control connection; the leg stays open afterwards.
         if (payload.starts_with("MLR1 ROUTE")) return route_frame(payload);
+        // Entity host routes publish the same way: the entity address the
+        // member owns, stored against the endpoint it registered with.
+        if (payload.starts_with("MLR1 HOST")) return host_frame(payload);
         std::istringstream in(payload);
         std::string magic, state, extra;
         std::size_t active = 0, capacity = 0;
@@ -561,6 +604,9 @@ private:
     }
     void registry_query(const std::string& payload) {
         if (payload.starts_with("MLR1 ROUTE")) return route_frame(payload);
+        // Entity host routes are read off a one-shot leg too, so a gateway pulls
+        // the whole table without becoming a registered member.
+        if (payload.starts_with("MLR1 HOST")) return host_frame(payload);
         std::istringstream in(payload);
         std::string magic, command, role, namespace_, scope, extra;
         in >> magic;
@@ -693,6 +739,52 @@ private:
             return answer(out.str());
         }
         return refuse("UNEXPECTED");
+    }
+    // MLR1 HOST SET <scope> <type> <incarnation> <entity>      (member leg)
+    //   -> MLR1 OK | MLR1 ERR INVALID | MLR1 ERR CAPACITY
+    // MLR1 HOST REMOVE <scope> <type> <incarnation> <entity>   (member leg)
+    //   -> MLR1 OK | MLR1 ERR INVALID
+    // MLR1 HOST LIST                                           (one-shot leg)
+    //   -> MLR1 HOSTS <n> [ \n <scope> <type> <incarnation> <entity> <endpoint> ... ]
+    //   | MLR1 HOSTS 0
+    // The endpoint is never client-supplied: the coordinator stores the listen
+    // address the member itself registered, so a host cannot publish a route to
+    // a socket the registry does not know.
+    void host_frame(const std::string& payload) {
+        std::istringstream in(payload);
+        std::string magic, command, sub, extra;
+        std::uint64_t scope = 0, type_id = 0, incarnation = 0;
+        std::int64_t entity_id = 0;
+        in >> magic >> command >> sub;
+        if (sub == "LIST") return host_list();
+        if (sub != "SET" && sub != "REMOVE") return refuse("UNEXPECTED");
+        if (!member_) return refuse("UNEXPECTED");
+        if (!(in >> scope >> type_id >> incarnation >> entity_id) || (in >> extra)
+                || scope > UINT32_MAX || type_id > UINT32_MAX || incarnation > UINT32_MAX
+                || !scope || !type_id || !incarnation || !entity_id)
+            return refuse("INVALID");
+        const auto s = static_cast<std::uint32_t>(scope);
+        const auto t = static_cast<std::uint32_t>(type_id);
+        const auto i = static_cast<std::uint32_t>(incarnation);
+        if (sub == "SET") {
+            if (!registry_.set_entity_host_route(s, t, i, entity_id, member_->listen))
+                return refuse("CAPACITY");
+        } else {
+            registry_.remove_entity_host_route(s, t, i, entity_id);
+        }
+        // The member leg's verdict grammar is the heartbeat's: every reply is
+        // "MLR1 OK" or "MLR1 ERR <reason>", so anything else makes the member
+        // re-register in a loop.
+        return reply("MLR1 OK");
+    }
+    void host_list() {
+        const auto& routes = registry_.entity_host_routes();
+        std::ostringstream out;
+        out << "MLR1 HOSTS " << routes.size();
+        for (const auto& [key, endpoint] : routes)
+            out << '\n' << std::get<0>(key) << ' ' << std::get<1>(key) << ' '
+                << std::get<2>(key) << ' ' << std::get<3>(key) << ' ' << endpoint;
+        return close_with(out.str());
     }
     // MLR1 MIG: the migration model on the wire. It is registry traffic, so a
     // tokened coordinator gates it behind MLS1 like any other leg, and every
@@ -986,6 +1078,17 @@ public:
         timer_.cancel();
         if (channel_) channel_->close();
     }
+    // A host publishes its entity host routes on this leg. The publish is
+    // dropped (not queued) unless the leg is live, so the node re-publishes
+    // every live entity from on_live_ after a (re)registration.
+    void publish(std::string frame) {
+        if (dead_ || phase_ != Phase::live) return;
+        write(std::move(frame), [](Error) {});
+    }
+    // Called on every transition to the live phase (first registration and each
+    // reconnect), so the owner can re-publish state that a disconnected window
+    // would have dropped.
+    void set_on_live(std::function<void()> on_live) { on_live_ = std::move(on_live); }
 private:
     enum class Phase { connecting, identifying, registering, live };
     void pump() {
@@ -1046,6 +1149,7 @@ private:
                       << config_.coordinator.port << ' ' << config_.namespace_ << ' '
                       << config_.scope << std::endl;
             beat();
+            if (on_live_) on_live_();
         }
         deadline(60);
         return pump();
@@ -1093,6 +1197,7 @@ private:
     asio::io_context& io_;
     const Config& config_;
     std::function<std::string()> status_;
+    std::function<void()> on_live_;
     tcp::endpoint endpoint_;
     asio::steady_timer connect_, heartbeat_, timer_;
     std::shared_ptr<TcpChannel> channel_;
@@ -1100,18 +1205,36 @@ private:
     unsigned generation_ = 0;
     bool reading_ = false, dead_ = false;
 };
-// One-shot placement lookups: connect, optionally identify, ask MLR1 PLACE,
-// answer once and close. The registry closes a PLACE connection itself, so
-// every lookup owns a fresh connection and keeps no state between lookups.
+// One placement question, one connection: the registry closes a query leg
+// itself, so every lookup owns a fresh connection and keeps no state between
+// lookups.
+// An entity host route as published by the coordinator: the entity address and
+// the endpoint of the host that registered it. The gateway that pulls this
+// resolves the endpoint against its own --upstream list, so the endpoint is
+// the only part of the route that is meaningful outside its publisher.
+struct PublishedHostRoute {
+    std::uint32_t scope = 0, type_id = 0, incarnation = 0;
+    std::int64_t entity_id = 0;
+    std::string endpoint;
+};
 class RegistryClient : public std::enable_shared_from_this<RegistryClient> {
 public:
     using Answer = std::function<void(std::string address, std::string reason)>;
+    using RoutesAnswer = std::function<void(std::vector<PublishedHostRoute> routes, std::string reason)>;
     static void lookup(asio::io_context& io, const Config& config,
                        std::string_view role, std::string_view namespace_, std::string_view scope,
                        Answer answer) {
         std::shared_ptr<RegistryClient> self(new RegistryClient(io, config));
         self->begin(std::string(role), std::string(namespace_),
                     !scope.empty() ? std::string(scope) : config.scope, std::move(answer));
+    }
+    // The whole coordinator-published entity host route table in one leg.
+    static void host_routes(asio::io_context& io, const Config& config, RoutesAnswer answer) {
+        std::shared_ptr<RegistryClient> self(new RegistryClient(io, config));
+        self->routes_answer_ = std::move(answer);
+        self->host_mode_ = true;
+        self->question_ = "MLR1 HOST LIST";
+        self->start();
     }
 private:
     RegistryClient(asio::io_context& io, const Config& config)
@@ -1121,12 +1244,15 @@ private:
         question_ = "MLR1 PLACE " + role + ' '
             + (namespace_.empty() ? "-" : "NS " + namespace_) + ' ' + scope;
         answer_ = std::move(answer);
+        start();
+    }
+    void start() {
         deadline();
         channel_->socket().async_connect(endpoint_, [self=shared_from_this()](Error ec) {
             if (self->answered()) return;
             if (ec) return self->answer({}, "unreachable");
             // A tokened coordinator requires the identity first; a plain one
-            // would refuse the handshake instead of the placement.
+            // would refuse the handshake instead of the query.
             if (self->config_.upstream_token.empty()) return self->ask();
             self->write(service_hello(self->config_));
         });
@@ -1147,20 +1273,50 @@ private:
     }
     void verdict(std::string payload) {
         std::istringstream in(payload);
-        std::string magic, command, instance, address, extra;
+        std::string magic, command, instance, address;
         in >> magic >> command;
         if (magic == "MLS1") {
-            if (command == "OK") return ask(); // identified: now ask the placement
+            if (command == "OK") return ask(); // identified: now ask the query
             // "MLS1 ERR <reason>": TOKEN / INVALID / UNEXPECTED.
             std::string reason;
             if (command == "ERR") in >> reason;
             return answer({}, reason.empty() ? std::string("refused") : reason);
         }
         if (magic != "MLR1") return answer({}, "unexpected");
+        if (host_mode_) return host_routes_verdict(payload, command == "EMPTY");
         if (command == "EMPTY") return answer({}, "EMPTY");
         // "MLR1 PLACE <instance> <listen> <probe> ready <active>/<capacity>"
         if (command != "PLACE" || !(in >> instance >> address)) return answer({}, "unexpected");
         answer(address, {});
+    }
+    // "MLR1 HOSTS <n>" then n lines of
+    // "<scope> <type> <incarnation> <entity> <endpoint>". A truncated or
+    // trailing reply is a refusal, not a partial table.
+    void host_routes_verdict(const std::string& payload, bool empty) {
+        if (empty) return finish({}, {});
+        std::istringstream in(payload);
+        std::string magic, command;
+        std::size_t count = 0;
+        in >> magic >> command;
+        if (magic != "MLR1" || command != "HOSTS" || !(in >> count)) return finish({}, "unexpected");
+        std::vector<PublishedHostRoute> routes;
+        routes.reserve(count);
+        for (std::size_t i = 0; i < count; ++i) {
+            PublishedHostRoute route;
+            if (!(in >> route.scope >> route.type_id >> route.incarnation
+                    >> route.entity_id >> route.endpoint)) return finish({}, "unexpected");
+            routes.push_back(std::move(route));
+        }
+        std::string extra;
+        if (in >> extra) return finish({}, "unexpected");
+        finish(std::move(routes), {});
+    }
+    void finish(std::vector<PublishedHostRoute> routes, std::string reason) {
+        if (done_) return;
+        done_ = true;
+        timer_.cancel();
+        channel_->close();
+        routes_answer_(std::move(routes), std::move(reason));
     }
     void deadline() {
         timer_.expires_after(std::chrono::seconds(10));
@@ -1177,6 +1333,7 @@ private:
         done_ = true;
         timer_.cancel();
         channel_->close();
+        if (host_mode_) return routes_answer_({}, std::move(reason));
         answer_(std::move(address), std::move(reason));
     }
     asio::io_context& io_;
@@ -1186,6 +1343,8 @@ private:
     asio::steady_timer timer_;
     std::string question_;
     Answer answer_;
+    RoutesAnswer routes_answer_;
+    bool host_mode_ = false;
     bool done_ = false;
 };
 

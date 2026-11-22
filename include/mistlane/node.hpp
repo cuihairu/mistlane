@@ -57,7 +57,8 @@ struct Config {
     // for a routed address to that upstream so the request reaches the host
     // that spawned the entity; a miss keeps the round-robin upstream (the host
     // answers UNROUTED). Gateway-only; the coordinator-published dynamic table
-    // stays a separate slice.
+    // (--coordinator) rebuilds the same table each second and re-applies these
+    // static rows after every rebuild.
     struct EntityRoute {
         std::uint32_t scope = 0, type_id = 0, incarnation = 0;
         std::int64_t entity_id = 0;

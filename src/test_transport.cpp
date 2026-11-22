@@ -851,6 +851,125 @@ return service)");
     std::cout << "entity.cross.caller client: an unidentified peer stays a client leg [PASS]\n";
 }
 
+// The coordinator publishes the entity host map: a contract host registers with
+// the coordinator, its runtime publishes each spawn and withdraws each destroy,
+// and a multiplexing gateway re-pulls that table each second, resolving the
+// published endpoint against its own --upstream list. No --entity-route was
+// configured: the route below exists only because host B owns the entity. The
+// withdraw half pins the refresh, not just the install — a destroyed entity
+// must stop routing to its old host, so a request falls back to the round-robin
+// upstream and answers UNROUTED again.
+void entity_route_dynamic() {
+    const std::string xml =
+        "<Contracts><Entity name=\"Avatar\" id=\"1\"><ServerMethods>"
+        "<Method name=\"get\" id=\"2\" mode=\"request\" caller=\"server\">"
+        "<Arg name=\"account\" id=\"0\" type=\"INT32\"/>"
+        "<Returns><Field name=\"level\" id=\"1\" type=\"UINT16\"/></Returns></Method>"
+        "</ServerMethods></Entity></Contracts>";
+    Context c;
+    const auto def = c.path("avatar.def");
+    write(def, xml);
+    const auto script = c.path("avatar.lua");
+    write(script, R"(local service = {}
+function service.message(payload)
+    if payload == "spawn" then
+        return mistlane.entity.spawn(1, 1, 3, 42) and "spawned" or "duplicate"
+    end
+    if payload == "destroy" then
+        return mistlane.entity.destroy(1, 1, 3, 42) and "destroyed" or "missing"
+    end
+    return "echo:"..payload
+end
+service.entities = {
+    Avatar = {
+        get = function(args, ctx)
+            assert(args.account == 4)
+            assert(ctx.caller_kind == "server")
+            return { level = 7 }
+        end,
+    },
+}
+return service)");
+    const auto hostA = port(), hostB = port(), relay = port(), coord = port();
+    c.node("coordinator", coord, {"--service-token", "s3cret"});
+    // Both hosts register with the coordinator (MLS1 identity, then REGISTER),
+    // so the publish leg and the placement table share one deployment view.
+    c.node("gameServer", hostA,
+        {"--script", script.string(), "--contract", def.string(), "--service-token", "s3cret",
+         "--coordinator", endpoint(coord), "--upstream-token", "s3cret", "--scope", "g1"});
+    c.node("gameServer", hostB,
+        {"--script", script.string(), "--contract", def.string(), "--service-token", "s3cret",
+         "--coordinator", endpoint(coord), "--upstream-token", "s3cret", "--scope", "g1"});
+    // No --entity-route: the gateway's table exists only as the coordinator's
+    // published view of which host owns which entity address.
+    c.node("gateway", relay, {"--upstream", endpoint(hostA), "--upstream", endpoint(hostB),
+        "--upstream-token", "s3cret", "--upstream-multiplex", "1",
+        "--coordinator", endpoint(coord)});
+
+    EntityContract contract(xml);
+    SprotoCodec codec(contract);
+    const ContractMethod* get = nullptr;
+    for (const auto& e : contract.entities())
+        for (const auto& m : e.server_methods)
+            if (m.name == "get") get = &m;
+    require(get != nullptr, "test contract lost the get method");
+    const auto payload = [&](std::int64_t value) -> std::string {
+        auto encoded = codec.encode_returns(get->args, {{"account", value}});
+        require(encoded.has_value(), "test arg encode failed");
+        return *encoded;
+    };
+    const auto frame = [](std::uint64_t correlation, unsigned method, std::int64_t entity_id,
+                          std::uint32_t generation, const std::string& body) {
+        return "MLE1" + encode_entity_envelope({1, 1, 3, entity_id, kEntitySideServer,
+            static_cast<std::uint16_t>(method), correlation, generation, 0, body});
+    };
+    const auto reply_of = [](const std::string& body) -> EntityReply {
+        require(body.size() >= 12 && body.starts_with("MLE1"), "expected an MLE1 reply frame");
+        const auto decoded = decode_entity_reply(std::string_view(body).substr(12));
+        require(decoded.has_value(), "reply body did not decode");
+        return *decoded;
+    };
+    const auto correlation_of = [](const std::string& body) {
+        require(body.size() >= 12, "reply frame too short");
+        std::uint64_t value = 0;
+        for (std::size_t i = 4; i < 12; ++i) value = value << 8 | static_cast<unsigned char>(body[i]);
+        return value;
+    };
+
+    // Round-robin joins land the first session on host A and the second on
+    // host B; only B spawns the entity.
+    auto onA = tcp(relay);
+    auto onB = tcp(relay);
+    equal(onB->request("spawn"), "spawned");
+
+    // The route exists only after B's publish and the gateway's next pull, so
+    // converge: until then host A (the session's round-robin upstream) answers
+    // UNROUTED, and after it the frame reaches the owning host and returns the
+    // typed reply with the client's correlation echoed.
+    std::string routed;
+    eventually([&] {
+        routed = onA->request(frame(42, 2, 42, 1, payload(4)));
+        return !reply_of(routed).is_error;
+    }, 15s, "the published host route never reached the gateway");
+    require(correlation_of(routed) == 42, "routed reply did not echo the client correlation");
+    EntityValues got;
+    std::string reason;
+    require(codec.decode_args(get->returns, reply_of(routed).payload, got, reason) && reason.empty()
+            && std::get<std::int64_t>(got.at("level").data) == 7,
+        "the published route did not reach the owning host");
+    std::cout << "entity.route.dynamic install: the pulled route reaches the owning host [PASS]\n";
+
+    // The destroy publishes a withdrawal, and the next pull drops the route:
+    // the same request falls back to host A and answers UNROUTED again, so a
+    // destroyed entity never keeps routing to its old host.
+    equal(onB->request("destroy"), "destroyed");
+    eventually([&] {
+        const auto gone = onA->request(frame(43, 2, 42, 1, payload(4)));
+        return reply_of(gone).is_error && reply_of(gone).error == EntityError::UNROUTED;
+    }, 15s, "the withdrawn host route kept routing the entity");
+    std::cout << "entity.route.dynamic withdraw: a destroyed entity stops routing to its old host [PASS]\n";
+}
+
 
 // The gateway fronts the contract host's trusted leg: a plain client reaches
 // caller="server" methods through the relay, and the relay swaps the client's

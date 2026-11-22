@@ -133,8 +133,8 @@ void coordinator_registry() {
                 "coordinator accepted a script");
         auto& routed = c.spawn({self().string(), "--role", "gateway", "--listen", endpoint(port()),
             "--upstream", endpoint(registry), "--coordinator", endpoint(registry)});
-        require(routed.wait() != 0 && routed.output().find("--coordinator applies to gameServer, crossServer and login") != std::string::npos,
-                "gateway accepted a coordinator");
+        require(routed.wait() != 0 && routed.output().find("gateway --coordinator requires --upstream-multiplex") != std::string::npos,
+                "gateway accepted a coordinator without multiplex");
         auto& scoped = c.spawn({self().string(), "--role", "gameServer", "--listen", endpoint(port()),
             "--script", c.path("echo.lua").string(), "--scope", "alpha"});
         require(scoped.wait() != 0 && scoped.output().find("--namespace and --scope require --coordinator") != std::string::npos,
@@ -268,7 +268,7 @@ void coordinator_placement() {
     // The registry stays the coordinator's job: data never presents itself.
     auto& data = c.spawn({self().string(), "--role", "data", "--listen", endpoint(port()),
         "--script", c.path("place.lua").string(), "--coordinator", endpoint(registry)});
-    require(data.wait() != 0 && data.output().find("--coordinator applies to gameServer, crossServer and login")
+    require(data.wait() != 0 && data.output().find("--coordinator applies to gameServer, crossServer, gateway and login")
         != std::string::npos, "data accepted registry placement");
     require(coord.output().find("member registered login") == std::string::npos, "login registered as a member");
     require(coord.output().find("unexpected frame") == std::string::npos, "coordinator log noise");
