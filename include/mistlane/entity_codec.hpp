@@ -53,12 +53,41 @@ public:
         if (end != payload.size()) { reason = "trailing bytes after record"; return false; }
         return true;
     }
+    // The home-data snapshot codec: the same record form restricted to the
+    // descriptor's persistent properties, which is exactly what
+    // PersistentStore::save captures and what restore() accepts. Absent
+    // persistent fields decode as absent, which is what a grown contract relies
+    // on to default its new property instead of refusing the load.
+    std::optional<std::string> encode_persistent(const ContractEntity& entity, const EntityValues& values) const {
+        std::vector<unsigned char> bytes;
+        if (!encode_record(persistent_args(entity), values, bytes, 0)) return std::nullopt;
+        return std::string(bytes.begin(), bytes.end());
+    }
+    bool decode_persistent(const ContractEntity& entity, std::string_view payload,
+                           EntityValues& out, std::string& reason) const {
+        std::size_t end = 0;
+        if (!decode_record(payload, 0, persistent_args(entity), out, end, reason)) return false;
+        if (end != payload.size()) { reason = "trailing bytes after record"; return false; }
+        return true;
+    }
 private:
     // The declared properties share the field shape of an invocation record.
     static ContractArgs property_args(const ContractEntity& entity) {
         ContractArgs args;
         args.reserve(entity.properties.size());
         for (const auto& p : entity.properties) {
+            ContractField f;
+            f.id = p.id; f.name = p.name; f.type = p.type; f.of = p.of;
+            args.push_back(std::move(f));
+        }
+        return args;
+    }
+    // The persistent subset in declaration order; the encoder sorts by id, so
+    // a snapshot survives a reorder of the contract's property list.
+    static ContractArgs persistent_args(const ContractEntity& entity) {
+        ContractArgs args;
+        for (const auto& p : entity.properties) {
+            if (!p.persistent) continue;
             ContractField f;
             f.id = p.id; f.name = p.name; f.type = p.type; f.of = p.of;
             args.push_back(std::move(f));

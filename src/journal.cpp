@@ -376,6 +376,12 @@ struct MigrationJournal::Impl {
             "realm TEXT NOT NULL, character TEXT NOT NULL, role TEXT NOT NULL,"
             "instance TEXT NOT NULL, generation INTEGER NOT NULL, scene TEXT NOT NULL DEFAULT '-',"
             "PRIMARY KEY(namespace, realm, character))");
+        sqlite_record_exec(db,
+            "CREATE TABLE IF NOT EXISTS entity_state ("
+            "version INTEGER NOT NULL, scope INTEGER NOT NULL, type_id INTEGER NOT NULL,"
+            "incarnation INTEGER NOT NULL, entity_id INTEGER NOT NULL,"
+            "generation INTEGER NOT NULL, revision INTEGER NOT NULL, snapshot BLOB NOT NULL,"
+            "PRIMARY KEY(scope, type_id, incarnation, entity_id))");
         // Version 1 files predate the scene column; migrate them in place and
         // remember the new row format. A future incompatible writer refuses
         // anything it does not recognize instead of silently decoding garbage.
@@ -621,6 +627,65 @@ std::vector<RecordSnapshot> MigrationJournal::restore_records() const {
     }
     return records;
 }
+
+void MigrationJournal::save_state(const EntityStateSnapshot& snapshot) {
+    if (impl_->db == nullptr) throw std::runtime_error("entity state store is closed");
+    if (!snapshot.generation || !snapshot.scope || !snapshot.type_id || !snapshot.incarnation
+            || !snapshot.entity_id || snapshot.snapshot.empty())
+        throw std::invalid_argument("invalid entity state key or fence");
+    std::vector<unsigned char> bytes(snapshot.snapshot.begin(), snapshot.snapshot.end());
+    RecordStatement upsert(impl_->db,
+        "INSERT INTO entity_state(version, scope, type_id, incarnation, entity_id, generation, revision, snapshot) "
+        "VALUES(?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(scope, type_id, incarnation, entity_id) DO UPDATE SET "
+        "version=excluded.version, generation=excluded.generation, revision=excluded.revision, "
+        "snapshot=excluded.snapshot");
+    upsert.bind_int(1, static_cast<int>(kVersion));
+    upsert.bind_int(2, static_cast<int>(snapshot.scope));
+    upsert.bind_int(3, static_cast<int>(snapshot.type_id));
+    upsert.bind_int(4, static_cast<int>(snapshot.incarnation));
+    upsert.bind_u64(5, static_cast<std::uint64_t>(snapshot.entity_id));
+    upsert.bind_u64(6, snapshot.generation);
+    upsert.bind_u64(7, snapshot.committed_revision);
+    upsert.bind_blob(8, bytes);
+    upsert.step("entity state save step failed");
+}
+
+std::vector<EntityStateSnapshot> MigrationJournal::restore_states() const {
+    if (impl_->db == nullptr) throw std::runtime_error("entity state store is closed");
+    std::vector<EntityStateSnapshot> states;
+    RecordStatement query(impl_->db,
+        "SELECT version, scope, type_id, incarnation, entity_id, generation, revision, snapshot "
+        "FROM entity_state ORDER BY scope, type_id, incarnation, entity_id");
+    for (;;) {
+        const int code = sqlite3_step(query.get());
+        if (code == SQLITE_DONE) break;
+        if (code != SQLITE_ROW) sqlite_throw(impl_->db, "entity state restore step failed");
+        const int version = sqlite3_column_int(query.get(), 0);
+        const sqlite3_int64 scope = sqlite3_column_int64(query.get(), 1);
+        const sqlite3_int64 type_id = sqlite3_column_int64(query.get(), 2);
+        const sqlite3_int64 incarnation = sqlite3_column_int64(query.get(), 3);
+        const sqlite3_int64 entity_id = sqlite3_column_int64(query.get(), 4);
+        const sqlite3_int64 generation = sqlite3_column_int64(query.get(), 5);
+        const sqlite3_int64 revision = sqlite3_column_int64(query.get(), 6);
+        if (version != static_cast<int>(kVersion) || scope <= 0 || type_id <= 0 || incarnation <= 0
+                || entity_id <= 0 || generation <= 0 || revision < 0)
+            throw std::runtime_error("entity state row corrupted");
+        const auto* blob = static_cast<const unsigned char*>(sqlite3_column_blob(query.get(), 7));
+        const int blob_size = sqlite3_column_bytes(query.get(), 7);
+        if (!blob || blob_size <= 0) throw std::runtime_error("entity state row missing snapshot");
+        EntityStateSnapshot row;
+        row.scope = static_cast<std::uint32_t>(scope);
+        row.type_id = static_cast<std::uint32_t>(type_id);
+        row.incarnation = static_cast<std::uint32_t>(incarnation);
+        row.entity_id = entity_id;
+        row.generation = static_cast<std::uint64_t>(generation);
+        row.committed_revision = static_cast<std::uint64_t>(revision);
+        row.snapshot.assign(reinterpret_cast<const char*>(blob), static_cast<std::size_t>(blob_size));
+        states.push_back(std::move(row));
+    }
+    return states;
+}
+
 void MigrationJournal::save_placement(const PlacementRecord& record) {
     if (impl_->db == nullptr) throw std::runtime_error("migration journal is closed");
     if (!record_identifier(record.scope) || !record_identifier(record.realm)

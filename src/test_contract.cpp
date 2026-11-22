@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
+#include "mistlane/entity_state.hpp"
 #include "mistlane/entity_sync_wire.hpp"
 #include "test_common.hpp"
 namespace mistlane::test {
@@ -1291,6 +1292,123 @@ void entity_persist() {
     require(grown_p.set("mails", EntityValue(std::int64_t{3})) && grown_p.revision() == 3,
             "the defaulted property was not writable");
     std::cout << "entity.persist restore: version conversion, whole-load refusal [PASS]\n";
+}
+
+// The owning data side's durable half: a real SQLite backend under the same
+// forced-save fences. A landed save confirms and clears dirty, a backend that
+// throws aborts its own in-flight receipt (dirty survives, the slot frees for
+// a retry), a reopen restores the fence values through the persisted bytes,
+// and a grown contract defaults its new persistent property instead of
+// refusing the row. Each entity address is one row.
+void entity_state_store() {
+    const EntityContract contract(R"(<Contracts><Types>
+        <Item><itemId id="0" type="UINT32"/><count id="1" type="UINT32" default="2"/></Item>
+        </Types>
+        <Entity name="Avatar" id="1">
+          <Properties>
+            <level id="1" type="UINT16" default="1" persistent="true"/>
+            <gold id="2" type="UINT32" persistent="true"/>
+            <bag id="3" type="Item" persistent="true"/>
+            <title id="4" type="STRING"/>
+          </Properties>
+        </Entity></Contracts>)");
+    const EntityTarget target{1, 1, 3, 42};
+    const EntityTarget other{1, 1, 3, 43};
+    SprotoCodec codec(contract);
+    Context c;
+    const auto path = c.path("entity-state.sqlite");
+
+    {
+        MigrationJournal backend(path.string());
+        PropertyStore store(contract, 1);
+        PersistentStore persist(store);
+        EntityStateStore owned(target, persist, &codec, &backend);
+        require(persist.assume(5), "generation assignment refused");
+        require(owned.save(4, 0).error == EntityError::STALE,
+                "a foreign generation was not STALE through the driver");
+        require(persist.set("level", EntityValue(std::int64_t{9})), "persistent write failed");
+        require(persist.set_path("bag", TreePath{TreeStep{false, "count", 0}}, EntityValue(std::int64_t{5})),
+                "nested persistent write failed");
+        const auto landed = owned.save(5, persist.revision());
+        require(landed.ok && landed.receipt.generation == 5 && landed.receipt.revision == 2,
+                "the durable save lost its fence values");
+        require(!owned.dirty() && owned.committed_revision() == 2,
+                "a landed durable save did not confirm its record");
+        PropertyStore second(contract, 1);
+        PersistentStore second_persist(second);
+        EntityStateStore second_owned(other, second_persist, &codec, &backend);
+        require(second_persist.assume(5) && second_persist.set("level", EntityValue(std::int64_t{3})),
+                "the second entity's write failed");
+        require(second_owned.save(5, second_persist.revision()).ok, "the second entity's durable save failed");
+        std::cout << "entity.state.store durable: landed save confirms, one row per address [PASS]\n";
+    }
+
+    {
+        struct FailingBackend : EntityStateBackend {
+            void save_state(const EntityStateSnapshot&) override { throw std::runtime_error("backend down"); }
+            std::vector<EntityStateSnapshot> restore_states() const override { return {}; }
+        } down;
+        PropertyStore store(contract, 1);
+        PersistentStore persist(store);
+        EntityStateStore owned(target, persist, &codec, &down);
+        require(persist.assume(5) && persist.set("level", EntityValue(std::int64_t{7})),
+                "abort-path setup failed");
+        bool threw = false;
+        try { (void)owned.save(5, persist.revision()); } catch (const std::runtime_error&) { threw = true; }
+        require(threw && persist.dirty(), "a failed persist lost the dirty flag");
+        const auto unblocked = persist.save(5, persist.revision());
+        require(unblocked.ok, "an aborted save left its in-flight slot occupied");
+        require(persist.abort(unblocked.receipt.save_id), "the retry's receipt could not retire");
+        MigrationJournal backend(c.path("entity-state-retry.sqlite").string());
+        EntityStateStore recovered(target, persist, &codec, &backend);
+        const auto retried = recovered.save(5, persist.revision());
+        require(retried.ok && !persist.dirty() && persist.committed_revision() == 1,
+                "a retry after abort did not land");
+        std::cout << "entity.state.store abort: in-flight retires, dirty survives, retry lands [PASS]\n";
+    }
+
+    {
+        MigrationJournal reopened(path.string());
+        const auto rows = reopened.restore_states();
+        require(rows.size() == 2, "the durable rows were lost on reopen");
+        require(rows[0].scope == 1 && rows[0].type_id == 1 && rows[0].incarnation == 3
+                && rows[0].entity_id == 42 && rows[0].generation == 5 && rows[0].committed_revision == 2,
+                "the avatar row lost its address or fence values");
+        require(rows[1].entity_id == 43 && rows[1].committed_revision == 1,
+                "the second address did not keep its own row");
+        PropertyStore store(contract, 1);
+        PersistentStore persist(store);
+        EntityStateStore owned(target, persist, &codec, &reopened);
+        const auto loaded = owned.restore(rows[0].generation, rows[0].committed_revision, rows[0].snapshot);
+        require(loaded.ok && !owned.dirty() && owned.generation() == 5 && owned.committed_revision() == 2,
+                "a reopen did not re-establish the record");
+        const auto* level = store.get("level");
+        require(level && std::get<std::int64_t>(level->data) == 9, "the restored level lost its value");
+        const auto* count = store.get_path("bag", TreePath{TreeStep{false, "count", 0}});
+        require(count && std::get<std::int64_t>(count->data) == 5, "the restored bag lost its nested value");
+        const std::string garbage{'\x01', '\x00', '\x00', '\x00'};
+        const auto junk = owned.restore(5, 2, garbage);
+        require(!junk.ok && junk.error == EntityError::INVALID, "corrupt durable bytes were accepted");
+        const EntityContract grown(R"(<Contracts><Types>
+            <Item><itemId id="0" type="UINT32"/><count id="1" type="UINT32" default="2"/></Item>
+            </Types>
+            <Entity name="Avatar" id="1">
+              <Properties>
+                <level id="1" type="UINT16" default="1" persistent="true"/>
+                <gold id="2" type="UINT32" persistent="true"/>
+                <bag id="3" type="Item" persistent="true"/>
+                <mails id="4" type="UINT32" persistent="true"/>
+              </Properties>
+            </Entity></Contracts>)");
+        PropertyStore grown_store(grown, 1);
+        PersistentStore grown_persist(grown_store);
+        SprotoCodec grown_codec(grown);
+        EntityStateStore grown_owned(target, grown_persist, &grown_codec, &reopened);
+        const auto converted = grown_owned.restore(rows[0].generation, rows[0].committed_revision, rows[0].snapshot);
+        require(converted.ok && converted.defaulted.size() == 1 && converted.defaulted[0] == "mails",
+                "a grown contract did not default its new persistent property");
+        std::cout << "entity.state.store restore: reopen re-establishes, version conversion [PASS]\n";
+    }
 }
 // Big-bag single-item modification — the property design's cost question.
 // One nested write must journal exactly one delta (never a full-bag

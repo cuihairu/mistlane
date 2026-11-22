@@ -112,6 +112,20 @@ public:
         return true;
     }
 
+    // A persist that never landed aborts its own in-flight save: the receipt
+    // retires without advancing the committed revision, so dirty survives and
+    // the slot frees for a fresh capture. Only the in-flight id aborts; a
+    // foreign id is refused and changes nothing.
+    bool abort(std::uint64_t save_id) {
+        error_.clear();
+        if (!in_flight_.save_id || save_id != in_flight_.save_id) {
+            error_ = "save id "+std::to_string(save_id)+" is not the in-flight save";
+            return false;
+        }
+        in_flight_ = SaveReceipt{};
+        return true;
+    }
+
     // Load path with explicit version conversion. Any snapshot key the
     // contract no longer declares, or that was never persistent, refuses the
     // whole load — never a silent merge; declared persistent keys absent from
@@ -162,6 +176,9 @@ public:
     std::uint64_t revision() const { return revision_; }
     std::uint64_t committed_revision() const { return committed_revision_; }
     std::uint64_t generation() const { return generation_; }
+    // The descriptor the persistent flags come from (also what a snapshot
+    // codec needs to pick the persistent property subset).
+    const ContractEntity& entity() const { return store_.entity(); }
     const std::string& error() const { return error_; }
 private:
     void bump(const std::string& name) {

@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
+#include "mistlane/entity_state.hpp"
 #include "mistlane/migration.hpp"
 #include "mistlane/record.hpp"
 #include <memory>
@@ -51,8 +52,10 @@ struct MigrationAuthorityRecord {
 // Single-process SQLite storage for the coordinator migration journal. This is
 // the first persistence-chain layer: it makes coordinator intent durable, but
 // it is not the home-data record store. The MLD1/Mld1 durable confirmation and
-// the cross-return queue can reuse this store boundary in later slices.
-class MigrationJournal : public RecordBackend {
+// the cross-return queue can reuse this store boundary in later slices. The
+// owning data side's entity state rides the same journal through
+// EntityStateBackend.
+class MigrationJournal : public RecordBackend, public EntityStateBackend {
 public:
     explicit MigrationJournal(std::string path);
     ~MigrationJournal();
@@ -73,6 +76,8 @@ public:
     std::vector<RecordSnapshot> restore_records() const override;
     void save_fence(const HomeSequenceAuthority::Pin& pin) override;
     std::vector<HomeSequenceAuthority::Pin> restore_fences() const override;
+    void save_state(const EntityStateSnapshot&) override;
+    std::vector<EntityStateSnapshot> restore_states() const override;
 private:
     struct Impl;
     std::unique_ptr<Impl> impl_;
