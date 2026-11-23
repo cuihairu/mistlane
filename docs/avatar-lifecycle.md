@@ -142,7 +142,9 @@ the destination side is implemented on the same host (a node polls the coordinat
 DESTINED` enumeration for the fenced gaps its own destination lease awaits, loads the frozen
 record, builds the avatar through `avatar_load` + `avatar_transfer_in`, lands it active and
 unbound, and acknowledges READY, so the coordinator publishes the destination route —
-avatar.transfer.destination).
+avatar.transfer.destination). The composed chain is pinned end-to-end with both hosts real: the
+source's `mistlane.transfer` hands off to the destination's poll with no raw-frame driving on
+either side, and the destination's READY is what unblocks the source's COMMIT (avatar.transfer.full).
 
 ### 5. Disconnect and reconnect
 
