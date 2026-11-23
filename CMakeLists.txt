@@ -90,7 +90,7 @@ if(BUILD_TESTING)
       entity.owner.bind
       entity.route
       entity.cross.correlation
-      avatar.lifecycle avatar.lua avatar.session avatar.home avatar.home.record avatar.return avatar.transfer.source
+      avatar.lifecycle avatar.lua avatar.session avatar.home avatar.home.record avatar.return avatar.transfer.source avatar.transfer.destination
       entity.perf
       coordinator.placement coordinator.routes coordinator.placement.schema coordinator.placement.journal coordinator.migration.commit coordinator.migration.abort
       coordinator.migration.recover coordinator.migration.stale coordinator.migration.order

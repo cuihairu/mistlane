@@ -1236,4 +1236,113 @@ return {
         "OWNER -> PREPARE -> transfer_out -> SUBMIT/FENCE -> COMMIT -> release, "
         "old writer tombstoned, new generation resumes [PASS]\n";
 }
+// The destination half of a cross-process transfer: nothing pushes a transfer
+// at a host, so the destination polls the coordinator (MLR1 MIG DESTINED) for
+// the fenced gaps its own destination lease awaits, loads the frozen snapshot,
+// builds the avatar via avatar_load + avatar_transfer_in (landing it active
+// and unbound), and acknowledges READY — then the coordinator publishes the
+// destination route. The source is only a published fact here (no live source
+// node): the test drives OWNER -> PREPARE -> DRAINED -> FENCE over raw frames
+// and the destination's poller takes the gap in. The hook calls are observed
+// through the destination's Lua print -> child log.
+void avatar_transfer_destination() {
+    Context c;
+    const auto script = c.path("transfer_in.lua");
+    write(script, R"avatar(return {
+  message = function(payload) return payload end,
+  avatar_load = function(context, state)
+    print("load:" .. context.character)
+    return { name = context.character, generation = context.generation }
+  end,
+  avatar_transfer_in = function(context, avatar)
+    print("transfer_in:" .. context.character)
+    return true
+  end,
+}
+)avatar");
+    write(c.path("echo.lua"), echo);
+    const auto registry = port(), data_port = port(), dest_port = port();
+    const auto journal = c.path("dest-transfer.sqlite");
+    c.node("coordinator", registry, {"--journal", journal.string()});
+    c.node("data", data_port, {"--script", c.path("echo.lua").string(),
+        "--journal", c.path("dest-records.sqlite").string()});
+    // The destination is a real transfer-in host: with avatar_load it owns a
+    // runtime, and with --data + --coordinator it polls for the gaps it awaits.
+    auto& destination = c.node("crossServer", dest_port, {"--script", script.string(),
+        "--data", endpoint(data_port), "--coordinator", endpoint(registry),
+        "--scope", "arena2", "--service-name", "xs-b"});
+    const auto send_frame = [](RawSocket& raw, std::string_view payload) {
+        std::string frame(4, '\0');
+        auto length = static_cast<std::uint32_t>(payload.size());
+        for (int i = 3; i >= 0; --i) { frame[i] = static_cast<char>(length & 255); length >>= 8; }
+        raw.send(frame+std::string(payload));
+    };
+    const auto read_frame = [](RawSocket& raw) {
+        std::size_t length = 0;
+        for (unsigned char ch : raw.receive(4)) length = (length << 8) | ch;
+        return raw.receive(length);
+    };
+    const auto ask = [&](unsigned listen, const std::string& line) {
+        RawSocket raw(listen);
+        send_frame(raw, line);
+        return read_frame(raw);
+    };
+    const auto ask_data = [&](const std::string& line) { return ask(data_port, line); };
+    // Step 0: the source's committed cursor (the source host is a published
+    // fact, not a live node), and the destination as a live member — COMMIT
+    // only publishes to a destination the registry can see.
+    equal(ask_data("MLD1 SUBMIT home hero gen 8 seq 1 hp=10"),
+        "MLD1 ACK durable home hero gen 8 seq 1");
+    equal(ask_data("MLD1 SUBMIT home hero gen 8 seq 2 hp=12"),
+        "MLD1 ACK durable home hero gen 8 seq 2");
+    eventually([&] {
+        return ask(registry, "MLR1 QUERY crossServer - arena2").find("xs-b") != std::string::npos;
+    }, 10s, "the destination never reached the registry");
+    // Step 1: the source stops and the coordinator reserves the next
+    // generation; step 2: the home fences and the gap opens.
+    const std::string source = "realm NS - alpha gameServer gs-a town";
+    const std::string target = "cross NS - arena2 crossServer xs-b room-1";
+    equal(ask(registry, "MLR1 MIG OWNER NS - home hero 8 "+source), "MLR1 MIG OWNER OK");
+    equal(ask(registry, "MLR1 MIG PREPARE NS - home hero move-1 8 "+source+" "+target),
+        "MLR1 MIG PREPARED move-1 9");
+    equal(ask(registry, "MLR1 MIG EVENT NS - home hero move-1 9 DRAINED"),
+        "MLR1 MIG STEP move-1 PREPARING");
+    equal(ask_data("MLD1 FENCE home hero gen 8"), "MLD1 FENCED gen 8 seq 2");
+    equal(ask(registry, "MLR1 MIG EVENT NS - home hero move-1 9 FENCE"),
+        "MLR1 MIG STEP move-1 PREPARING");
+    // The destination discovers the gap on its next poll, loads the frozen
+    // record, builds the avatar (active, unbound) and acknowledges READY.
+    eventually([&] {
+        const auto seen = destination.output();
+        return seen.find("load:hero") != std::string::npos
+            && seen.find("transfer_in:hero") != std::string::npos;
+    }, 10s, "the destination never took the avatar in");
+    eventually([&] {
+        const auto status = ask(registry, "MLR1 MIG STATUS NS - home hero");
+        std::istringstream in(status);
+        std::string magic, tag, verb, id, state, drained, fenced, ready, generation;
+        if (!(in >> magic >> tag >> verb >> id >> state >> drained >> fenced >> ready >> generation))
+            return false;
+        return drained == "drained" && fenced == "fenced" && ready == "ready";
+    }, 10s, "the destination READY never reached the coordinator");
+    // The coordinator publishes the destination route at the reserved
+    // generation.
+    equal(ask(registry, "MLR1 MIG COMMIT NS - home hero move-1 9"),
+        "MLR1 MIG COMMITTED move-1 "+target+" 9");
+    eventually([&] {
+        return ask(registry, "MLR1 ROUTE GET NS - home hero")
+            .starts_with("MLR1 ROUTE AT arena2 crossServer xs-b ");
+    }, 10s, "the committed route never published to the destination");
+    // The old writer stays tombstoned; the new generation resumes from the
+    // frozen cursor.
+    equal(ask_data("MLD1 SUBMIT home hero gen 8 seq 3 late"), "MLD1 ERR STALE gen 8");
+    equal(ask_data("MLD1 SUBMIT home hero gen 9 seq 3 hp=20"),
+        "MLD1 ACK durable home hero gen 9 seq 3");
+    equal(ask_data("MLD1 LOAD home hero"), "MLD1 STATE gen 9 seq 3 hp=20");
+    const auto published = ask(registry, "MLR1 ROUTE GET NS - home hero");
+    require(published.ends_with(" room-1 9"), "published route lost scene/generation: "+published);
+    std::cout << "avatar.transfer.destination: the fenced gap is polled by the "
+        "destination, taken in (avatar_load + avatar_transfer_in) and READY'd, "
+        "so the coordinator publishes the destination route [PASS]\n";
+}
 } // namespace mistlane::test
