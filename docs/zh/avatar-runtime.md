@@ -1,6 +1,6 @@
 # Avatar 运行时：会话、生命周期钩子、迁移与加载保存
 
-状态：已定设计（2026-10-19）。当前框架有会话、帧协议、握手层与每个 gameServer/crossServer 一个串行调用的 Lua VM，但没有端到端 Avatar 运行时——七态预言机模型已实现（include/mistlane/avatar_runtime.hpp，由 avatar.lifecycle 模型测试钉住）并采用[生命周期页](./avatar-lifecycle.md)的扩态集（其勘误 C1–C2），其 Lua 钩子面已接入服务 VM（LuaService 实现钩子桥；avatar.lua 测试钉住参数封送与失败即拒），crossServer 会话接线已实现——跨服加入创建 visiting Avatar（admit_visit）、会话停止关闭它（close_visit）、重载退役 VM 拥有的全部 Avatar（retire_all），均由 avatar.session 测试钉住；归属登录路径也已接线——加入自己区服的加入（realm == return_realm）经 avatar_load→avatar_enter 落 `active`（绑定会话），断开把它 `suspended`（宽限窗口开），宽限内重连不重载直接回 `active`，宽限到后节点 tick 走有序回收（最终保存→`closed`），由 avatar.home 测试钉住；回传/移交链及运行时验收仍是后续切片——本页不改变任何 CLI 行为，下面描述的运行行为仍未端到端实现、未经验证。本页把[模型页](./player-scene-model.md)列为抽取目标的内容（"钩子需要线程/错误/重入/超时契约与迁移期间的规则"）落成契约，为 coordinator 协调的移交切片提供前置设计；职责边界仍是[进程职责页](./process-roles.md)。持久归属与唯一写入权归[跨服回传协议](./cross-return-protocol.md)；实例准备状态归[场景生命周期](./scene-lifecycle.md)；属性 schema、脏追踪与增量同步归[实体契约链](./entity-contract.md)且继续延后。任何新 Avatar API 的实现被客户端协议契约恢复（账本中的协议契约恢复条目）门控。
+状态：已定设计（2026-10-19）。当前框架有会话、帧协议、握手层与每个 gameServer/crossServer 一个串行调用的 Lua VM，但没有端到端 Avatar 运行时——七态预言机模型已实现（include/mistlane/avatar_runtime.hpp，由 avatar.lifecycle 模型测试钉住）并采用[生命周期页](./avatar-lifecycle.md)的扩态集（其勘误 C1–C2），其 Lua 钩子面已接入服务 VM（LuaService 实现钩子桥；avatar.lua 测试钉住参数封送与失败即拒），crossServer 会话接线已实现——跨服加入创建 visiting Avatar（admit_visit）、会话停止关闭它（close_visit）、重载退役 VM 拥有的全部 Avatar（retire_all），均由 avatar.session 测试钉住；归属登录路径也已接线——加入自己区服的加入（realm == return_realm）经 avatar_load→avatar_enter 落 `active`（绑定会话），断开把它 `suspended`（宽限窗口开），宽限内重连不重载直接回 `active`，宽限到后节点 tick 走有序回收（最终保存→`closed`），由 avatar.home 测试钉住——加入的记录来自归属数据端点的一次性 `MLD1 LOAD`（回复延后到它应答之后），由 avatar.home.record 测试钉住——回传/移交链及运行时验收仍是后续切片——本页不改变任何 CLI 行为，下面描述的运行行为仍未端到端实现、未经验证。本页把[模型页](./player-scene-model.md)列为抽取目标的内容（"钩子需要线程/错误/重入/超时契约与迁移期间的规则"）落成契约，为 coordinator 协调的移交切片提供前置设计；职责边界仍是[进程职责页](./process-roles.md)。持久归属与唯一写入权归[跨服回传协议](./cross-return-protocol.md)；实例准备状态归[场景生命周期](./scene-lifecycle.md)；属性 schema、脏追踪与增量同步归[实体契约链](./entity-contract.md)且继续延后。任何新 Avatar API 的实现被客户端协议契约恢复（账本中的协议契约恢复条目）门控。
 
 ## 基线：框架现在有什么
 
@@ -65,7 +65,7 @@ stateDiagram-v2
 
 | 钩子 | 何时调用 | 参数 → 返回 | 出错或超时 |
 |---|---|---|---|
-| `avatar_load` | 本宿主从加载的记录创建 Avatar | `(context, state)` → avatar 表；`state` 是加载到的记录（`MLD1 STATE` 载荷，不透明字节串），宿主侧记录读取落地后非 nil，之前为 nil | 加载失败：不发布 Avatar，带原因拒绝进入 |
+| `avatar_load` | 本宿主从加载的记录创建 Avatar | `(context, state)` → avatar 表；`state` 是归属加入从其数据端点取到的加载记录（`MLD1 STATE` 载荷，不透明字节串），首次登录（`MLD1 EMPTY`）为 nil | 加载失败：不发布 Avatar，带原因拒绝进入 |
 | `avatar_enter` | 会话绑定到 active Avatar | `(context, avatar)` → `true`，或 `false, reason` | 以该原因拒绝进入 |
 | `avatar_leave` | 会话解除绑定（登出、迁出） | `(context, avatar)` → 无 | 记日志；绝不阻塞解除绑定 |
 | `avatar_tick` | 节点 tick，仅 active Avatar | `(context, avatar)` → 无 | 记日志；Avatar 保留（与 `tick` 一致） |
@@ -111,12 +111,12 @@ stateDiagram-v2
 
 - 属性 schema、脏追踪、增量同步与快照编码：实体契约链，其取代了更早的 Avatar-only 范围并继续延后。
 - 客户端协议、绑定与方法暴露：被协议契约恢复（账本中的协议契约恢复条目）门控；game-fogs 没有 `.sproto` 文本源，只有编译产物 `sproto.spb` 与 `Protocol.lua` 名字表。
-- 钩子名与签名：随服务 VM 钩子桥在代码中固定（上表记录的是已实现形态）。仍开放的是 `avatar_load`/`avatar_transfer_in` 的 `state` 参数——持久记录需要宿主把 `MLD1 LOAD` 送进 `avatar_load`（记录端点——`LOAD`/`SUBMIT`/`FENCE` 跨 store 持久化节点——已实现，但宿主侧记录读取尚未接线，故 `avatar_load` 只见 `state` 为 nil），跨进程快照需要移交接线，尚未存在。
+- 钩子名与签名：随服务 VM 钩子桥在代码中固定（上表记录的是已实现形态）。`avatar_load` 的 `state` 参数已为归属加入接线：带 `--data` 端点的 crossServer 把加入回复延后到对归属数据端点的一次性 `MLD1` `LOAD` 之后，并把记录的不透明负载传给 `avatar_load`，`MLD1 EMPTY`（首次登录）到达为 nil，无法应答的数据端点则拒绝加入。仍开放的是 `avatar_transfer_in` 的 `state`——跨进程快照需要移交接线，尚未存在。
 - 宽限期、tick 预算与保存节奏：实现时实测。
 - crossServer 发送侧的有界重试队列与只读转换：回传协议切片，等持久化链。
 
 ## 验证
 
-七态预言机模型已实现并有模型测试（avatar.lifecycle），归属加入与跨服访问的会话/Lua/传输接线已实现并钉住（avatar.home、avatar.session）。运行时验收仍无：正常登录经有界双向消息、同进程切场景、跨进程/跨服移交与回传、回调与多监听——整条链——因为回传/移交链尚未接线，验证记录仍不得声称完整 Avatar 行为。
+七态预言机模型已实现并有模型测试（avatar.lifecycle），归属加入、跨服访问与归属加入的延迟记录读取的会话/Lua/传输接线已实现并钉住（avatar.home、avatar.home.record、avatar.session）。运行时验收仍无：正常登录经有界双向消息、同进程切场景、跨进程/跨服移交与回传、回调与多监听——整条链——因为回传/移交链尚未接线，验证记录仍不得声称完整 Avatar 行为。
 
 相关：[玩家、场景与跨服模型](./player-scene-model.md)、[跨服回传与唯一写入权协议](./cross-return-protocol.md)、[场景生命周期](./scene-lifecycle.md)、[实体契约与代码生成](./entity-contract.md)、[Lua 与生命周期](./lua.md)。

@@ -360,7 +360,7 @@ void record_fetch() {
         asio::io_context io;
         RecordFetcher::Record record;
         std::string reason = "never answered";
-        RecordFetcher::load(io, {std::string("127.0.0.1"), static_cast<std::uint16_t>(listen)},
+        RecordFetcher::load(io.get_executor(), {std::string("127.0.0.1"), static_cast<std::uint16_t>(listen)},
                             identity, realm, character,
             [&](RecordFetcher::Record got, std::string why) { record = std::move(got); reason = std::move(why); });
         io.run();

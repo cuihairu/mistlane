@@ -5,6 +5,7 @@
 #pragma once
 #include "node_internal.hpp"
 #include "tcp_channel.hpp"
+#include "record_fetch.hpp"
 #include "return_sender.hpp"
 #include "mistlane/api.hpp"
 #include "mistlane/cross.hpp"
@@ -631,6 +632,28 @@ private:
                         const AvatarKey key{context_.return_realm, context_.character, context_.generation};
                         const auto session_id = context_.session ? context_.session : connection_;
                         if (context_.realm == context_.return_realm) {
+                            if (!config_.data.address.empty()) {
+                                // The home login's record comes from the data
+                                // node: the join's reply is deferred until the
+                                // MLD1 LOAD answers. The client read stays
+                                // un-armed, so no frame re-enters the join, and
+                                // the wider deadline bounds the whole join (the
+                                // fetcher's own budget is 10s inside it). The
+                                // resume runs the load/attach/reply the
+                                // synchronous path below would have.
+                                deadline(15);
+                                const auto self = shared_from_this();
+                                RecordFetcher::load(client_->executor(), config_.data,
+                                    config_.upstream_token.empty() ? std::string{}
+                                        : service_hello(config_),
+                                    key.realm, key.character,
+                                    [self, key, session_id](RecordFetcher::Record record,
+                                                            std::string reason) {
+                                        self->home_record(key, session_id, std::move(record),
+                                                          std::move(reason));
+                                    });
+                                return;
+                            }
                             auto admitted = runtime->load(key, kAvatarGraceMs, LoadSource::Home);
                             if (admitted.ok() || admitted.code == AvatarError::Exists)
                                 admitted = runtime->attach(key, session_id);
@@ -721,6 +744,35 @@ private:
             std::cerr << "callback failed: " << e.what() << '\n';
             stop();
         }
+    }
+    // The deferred home join resumes here, on the same io thread that started
+    // the fetch. A session that closed while the fetch was in flight ends the
+    // join — nothing was loaded yet, so there is no avatar to clean up. A
+    // fetch that did not produce a record refuses the join: a login whose
+    // record cannot be established must not host the avatar. MLD1 EMPTY is a
+    // first login — the load runs with no record and avatar_load sees nil. The
+    // reply and the client read resume exactly as the synchronous join did.
+    void home_record(const AvatarKey& key, std::uint64_t session_id,
+                     RecordFetcher::Record record, std::string reason) {
+        if (closed_) return;
+        if (!reason.empty() && reason != "EMPTY") {
+            std::cerr << "home join refused on record fetch: " << reason << '\n';
+            return reject("AVATAR");
+        }
+        AvatarRuntime* runtime = service_->avatar_runtime();
+        if (!runtime) return reject("AVATAR"); // the VM stopped hosting avatars
+        auto admitted = runtime->load(key, kAvatarGraceMs, LoadSource::Home, record.payload);
+        if (admitted.ok() || admitted.code == AvatarError::Exists)
+            admitted = runtime->attach(key, session_id);
+        if (!admitted.ok()) {
+            std::cerr << "home join refused on attach: " << admitted.reason << '\n';
+            return reject("AVATAR");
+        }
+        avatar_home_ = true;
+        avatar_key_ = key;
+        joined_ = true;
+        awaiting_join_ = config_.is_cross_gateway();
+        reply("MLC1 OK " + std::to_string(config_.route_epoch));
     }
     void reject(const std::string& reason) {
         std::cerr << "cross admission rejected: " << reason << '\n';

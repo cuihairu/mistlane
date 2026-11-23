@@ -825,4 +825,88 @@ return {
     require(node.wait() == 0, "crossServer graceful shutdown failed");
     std::cout << "avatar.home: home join -> active avatar, business, disconnect, grace reattach [PASS]\n";
 }
+// The home join with a --data endpoint defers its reply behind the one-shot
+// MLD1 LOAD (the async record fetch): a committed record reaches avatar_load as
+// the state argument, MLD1 EMPTY (a first login) reaches it as nil, and a data
+// endpoint that cannot answer refuses the join instead of hosting an avatar
+// whose record was never established. The deferred path must load, attach,
+// reply and carry the character exactly like the synchronous join does.
+void avatar_home_record() {
+    Context c;
+    const auto script = c.path("avatar_home_record.lua");
+    write(script, R"avatar(local calls = {}
+return {
+  message = function(payload)
+    if payload == "read" then return table.concat(calls, "|") end
+    return "noop"
+  end,
+  avatar_load = function(context, state)
+    calls[#calls+1] = "load:" .. context.character .. "=" .. tostring(state)
+    return { name = context.character, generation = context.generation }
+  end,
+  avatar_enter = function(context, avatar) return true end,
+}
+)avatar");
+    write(c.path("echo.lua"), echo);
+    const auto data = port(), cross = port(), dead = port(), broken = port();
+    auto& store = c.node("data", data, {"--script", c.path("echo.lua").string()});
+    auto& host = c.node("crossServer", cross, {"--script", script.string(), "--data", endpoint(data)});
+    auto& refused = c.node("crossServer", broken, {"--script", script.string(), "--data", endpoint(dead)});
+    const auto send_frame = [](RawSocket& raw, std::string_view payload) {
+        std::string frame(4, '\0');
+        auto length = static_cast<std::uint32_t>(payload.size());
+        for (int i = 3; i >= 0; --i) { frame[i] = static_cast<char>(length & 255); length >>= 8; }
+        raw.send(frame+std::string(payload));
+    };
+    const auto read_frame = [](RawSocket& raw) {
+        std::size_t length = 0;
+        for (unsigned char ch : raw.receive(4)) length = (length << 8) | ch;
+        return raw.receive(length);
+    };
+    const auto join = [&](RawSocket& raw, std::string_view character) {
+        send_frame(raw, "MLC1 1 home g r1 ch " + std::string(character) + " gen 5 ret home g r1");
+        return read_frame(raw);
+    };
+    const auto trace = [&](RawSocket& raw) {
+        send_frame(raw, "read");
+        return read_frame(raw);
+    };
+    const auto has = [](std::string_view haystack, std::string_view needle) {
+        return haystack.find(needle) != std::string_view::npos;
+    };
+    // Seed one committed record; the unseeded character stays EMPTY.
+    {
+        RawSocket raw(data);
+        send_frame(raw, "MLD1 SUBMIT home hero gen 5 seq 1 hp=10 mp=5");
+        require(read_frame(raw) == "MLD1 RECEIVED gen 5 seq 1", "the seed submit was not received");
+    }
+    // The deferred home join fetches the record: avatar_load sees the opaque
+    // STATE payload and the join completes with the character bound.
+    {
+        RawSocket raw(cross);
+        equal(join(raw, "hero"), "MLC1 OK 1");
+        const auto seen = trace(raw);
+        require(has(seen, "load:hero=hp=10 mp=5"),
+                "avatar_load did not receive the fetched record state");
+    }
+    // A first login (MLD1 EMPTY) loads with nil state — not a refusal.
+    {
+        RawSocket raw(cross);
+        equal(join(raw, "ghost"), "MLC1 OK 1");
+        const auto seen = trace(raw);
+        require(has(seen, "load:ghost=nil"), "an EMPTY record did not reach avatar_load as nil");
+    }
+    // A data endpoint that cannot answer refuses the join: a login whose
+    // record cannot be established must not host the avatar.
+    {
+        RawSocket raw(broken);
+        const auto reply = join(raw, "hero");
+        require(reply.starts_with("MLC1 ERR "), "an unreachable data endpoint did not refuse the join");
+    }
+    store.signal(SIGTERM);
+    host.signal(SIGTERM);
+    refused.signal(SIGTERM);
+    std::cout << "avatar.home.record: deferred home join feeds the MLD1 LOAD record "
+        "into avatar_load, EMPTY is nil, unreachable refuses [PASS]\n";
+}
 } // namespace mistlane::test

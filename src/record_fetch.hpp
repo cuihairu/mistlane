@@ -32,26 +32,28 @@ public:
         bool present = false;
     };
     using Answer = std::function<void(Record record, std::string reason)>;
-    // Answers exactly once, on the io thread: present=true with the STATE
-    // bytes on success; present=false with reason "EMPTY" when the data node
-    // holds no record; otherwise present=false with a short reason —
+    // Answers exactly once, on the executor's thread that started it: present=true with
+    // the STATE bytes on success; present=false with reason "EMPTY" when the
+    // data node holds no record; otherwise present=false with a short reason —
     // "unreachable" (no leg), "refused" (MLS1 refused or no OK),
     // "INVALID"/"STALE"/... (the home side answered MLD1 ERR <word>) or
     // "timeout" (the deadline passed). `identity` is the MLS1 hello presented
     // when the data endpoint is tokened (the crossServer's service_hello);
-    // empty for a plain one.
-    static void load(asio::io_context& io, Endpoint data, std::string identity,
+    // empty for a plain one. The executor is the caller's event loop, so the
+    // answer re-enters the same serial thread that started the fetch.
+    static void load(asio::any_io_executor executor, Endpoint data, std::string identity,
                      std::string_view realm, std::string_view character, Answer answer) {
-        std::shared_ptr<RecordFetcher> self(new RecordFetcher(io, data, std::move(identity)));
+        std::shared_ptr<RecordFetcher> self(
+            new RecordFetcher(std::move(executor), data, std::move(identity)));
         self->question_ = "MLD1 LOAD " + std::string(realm) + " " + std::string(character);
         self->answer_ = std::move(answer);
         self->start();
     }
 private:
-    RecordFetcher(asio::io_context& io, Endpoint data, std::string identity)
-      : io_(io), endpoint_(tcp::endpoint(parse_address(data.address), data.port)),
+    RecordFetcher(asio::any_io_executor executor, Endpoint data, std::string identity)
+      : endpoint_(tcp::endpoint(parse_address(data.address), data.port)),
         identity_(std::move(identity)),
-        channel_(std::make_shared<TcpChannel>(tcp::socket(io))), timer_(io) {}
+        channel_(std::make_shared<TcpChannel>(tcp::socket(executor))), timer_(executor) {}
     void start() {
         deadline();
         channel_->socket().async_connect(endpoint_, [self=shared_from_this()](Error ec) {
@@ -129,7 +131,6 @@ private:
         channel_->close();
         answer_(std::move(record), std::move(reason));
     }
-    asio::io_context& io_;
     tcp::endpoint endpoint_;
     std::string identity_, question_;
     std::shared_ptr<TcpChannel> channel_;
