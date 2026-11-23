@@ -68,6 +68,7 @@ src/main.cpp
 src/node.cpp
 src/node_internal.hpp
 src/observability.hpp
+src/record_fetch.hpp
 src/registry_service.hpp
 src/return_sender.hpp
 src/session_plane.hpp

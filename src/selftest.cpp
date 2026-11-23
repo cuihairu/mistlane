@@ -82,6 +82,7 @@ void cross_ticket();
 void login_ticket_wire();
 void cross_record();
 void cross_record_journal();
+void record_fetch();
 void cross_home_sequence();
 void cross_home_sequence_journal();
 void cross_home_fence();
@@ -222,6 +223,7 @@ int run_tests(int argc, char** argv) {
         {"login.ticket.wire","api",test::login_ticket_wire},
         {"cross.record","cross",test::cross_record},
         {"cross.record.journal","cross",test::cross_record_journal},
+        {"record.fetch","cross",test::record_fetch},
         {"record.home.sequence","cross",test::cross_home_sequence},
         {"record.home.sequence.journal","cross",test::cross_home_sequence_journal},
         {"record.home.fence","cross",test::cross_home_fence},

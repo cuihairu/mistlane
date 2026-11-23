@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "test_common.hpp"
+#include "record_fetch.hpp"
 namespace mistlane::test {
 void cross_admission() {
     Context c; write(c.path("cross.lua"),
@@ -314,6 +315,93 @@ void cross_record_journal() {
     equal(ask(isolated, "MLD1 SUBMIT home hero gen 1 seq 1 x"), "MLD1 RECEIVED gen 1 seq 1");
     std::cout << "record.journal: durable MLD1 write survives restart, ACK durable is the "
         "only commitment and replay is idempotent [PASS]\n";
+}
+// Host-side record fetch: the one-shot MLD1 LOAD a home join drives against
+// the data endpoint. Each fetch is one connection and answers exactly once on
+// the io thread that started it; the STATE record (generation, sequence,
+// opaque payload), EMPTY, a refused handshake, a malformed LOAD and an
+// unreachable endpoint each answer as one word the caller can log — the join's
+// own refusal stays the session plane's, not this client's.
+void record_fetch() {
+    Context c;
+    write(c.path("echo.lua"), echo);
+    const auto data = port(), tokened = port(), closed = port();
+    c.node("data", data, {"--script", c.path("echo.lua").string()});
+    c.node("data", tokened, {"--script", c.path("echo.lua").string(), "--service-token", "s3cret"});
+    // Seed records through a raw framed leg; the fetcher only loads, never writes.
+    const auto send_frame = [](RawSocket& leg, std::string_view payload) {
+        std::string frame(4, '\0');
+        auto length = static_cast<std::uint32_t>(payload.size());
+        for (int i = 3; i >= 0; --i) { frame[i] = static_cast<char>(length & 255); length >>= 8; }
+        leg.send(frame + std::string(payload));
+    };
+    const auto read_frame = [](RawSocket& leg) {
+        std::string head = leg.receive(4);
+        std::size_t size = 0;
+        for (char ch : head) size = (size << 8) | static_cast<unsigned char>(ch);
+        return leg.receive(size);
+    };
+    const auto ask = [&](unsigned listen, std::string_view payload) {
+        RawSocket leg(listen);
+        send_frame(leg, payload);
+        return read_frame(leg);
+    };
+    equal(ask(data, "MLD1 SUBMIT home hero gen 5 seq 1 hp=10 mp=5"), "MLD1 RECEIVED gen 5 seq 1");
+    equal(ask(data, "MLD1 SUBMIT home ghost gen 2 seq 1"), "MLD1 RECEIVED gen 2 seq 1");
+    {   // The tokened data node is its own store: seed it over an identified leg.
+        RawSocket leg(tokened);
+        send_frame(leg, "MLS1 gameServer gs-1 s3cret");
+        equal(read_frame(leg), "MLS1 OK");
+        send_frame(leg, "MLD1 SUBMIT home hero gen 1 seq 1 hp=99");
+        equal(read_frame(leg), "MLD1 RECEIVED gen 1 seq 1");
+    }
+    const auto fetch = [](unsigned listen, const std::string& realm, const std::string& character,
+                          const std::string& identity = "") {
+        asio::io_context io;
+        RecordFetcher::Record record;
+        std::string reason = "never answered";
+        RecordFetcher::load(io, {std::string("127.0.0.1"), static_cast<std::uint16_t>(listen)},
+                            identity, realm, character,
+            [&](RecordFetcher::Record got, std::string why) { record = std::move(got); reason = std::move(why); });
+        io.run();
+        return std::make_pair(std::move(record), std::move(reason));
+    };
+    {   // A committed record arrives whole: generation, sequence and the
+        // opaque change-set bytes, space-bearing payload included.
+        const auto [record, reason] = fetch(data, "home", "hero");
+        require(reason.empty(), "record fetch failed: " + reason);
+        require(record.present && record.generation == 5 && record.sequence == 1
+                && record.payload == "hp=10 mp=5", "STATE record mismatch");
+    }
+    {   // A committed record with an empty change-set is still present.
+        const auto [record, reason] = fetch(data, "home", "ghost");
+        require(reason.empty() && record.present && record.generation == 2
+                && record.sequence == 1 && record.payload.empty(), "empty payload mismatch");
+    }
+    {   // No committed record is an EMPTY, not a failure.
+        const auto [record, reason] = fetch(data, "home", "nobody");
+        require(reason == "EMPTY" && !record.present, "missing record must answer EMPTY");
+    }
+    {   // The home side refuses a malformed LOAD with its own one-word reason.
+        const auto [record, reason] = fetch(data, "home", "bad char");
+        require(reason == "INVALID" && !record.present, "malformed LOAD must surface INVALID");
+    }
+    {   // A tokened data endpoint refuses a leg that never identified.
+        const auto [record, reason] = fetch(tokened, "home", "hero");
+        require(reason == "refused" && !record.present, "missing identity must be refused");
+    }
+    {   // The same tokened endpoint answers once the identity is presented.
+        const auto [record, reason] = fetch(tokened, "home", "hero", "MLS1 gameServer gs-1 s3cret");
+        require(reason.empty() && record.present && record.generation == 1
+                && record.sequence == 1 && record.payload == "hp=99",
+                "identified fetch must load the record");
+    }
+    {   // Nothing listening answers unreachable, not a hang.
+        const auto [record, reason] = fetch(closed, "home", "hero");
+        require(reason == "unreachable" && !record.present, "closed port must answer unreachable");
+    }
+    std::cout << "record.fetch: one-shot MLD1 LOAD lands the STATE record (gen/seq/payload), "
+        "EMPTY, refused handshake, INVALID and unreachable each as one word [PASS]\n";
 }
 void cross_home_sequence() {
     // The home final-sequence authority is the data-side tombstone: once a
