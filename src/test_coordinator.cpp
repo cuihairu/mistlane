@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "test_common.hpp"
+#include "migration_client.hpp"
 #include <sqlite3.h>
 namespace mistlane::test {
 void coordinator_registry() {
@@ -1578,6 +1579,169 @@ void coordinator_migration_fourstep() {
     std::cout << "migration.fourstep: source stop -> data freeze -> destination load "
         "and confirm -> coordinator compare-old publish; old writer tombstoned, "
         "newer generation resumes from the frozen cursor [PASS]\n";
+}
+
+// The host side of the MLR1 MIG verbs: MigrationClient drives one verb per
+// connection against a real coordinator and answers the typed verdict.
+void migration_client() {
+    Context c;
+    write(c.path("echo.lua"), echo);
+    const auto registry = port(), tokened = port(), dead = port(), cross = port();
+    c.node("coordinator", registry, {});
+    c.node("coordinator", tokened, {"--service-token", "s3cret"});
+    // The destination member is what COMMIT's publishability checks; the
+    // source is only a published fact, so it needs no live member.
+    auto& member = c.node("crossServer", cross, {"--script", c.path("echo.lua").string(),
+        "--coordinator", endpoint(registry), "--scope", "arena", "--service-name", "xs-a"});
+    member.ready("ready crossServer " + endpoint(cross));
+    // One-shot ask: fresh io_context per verb (like the raw-leg wire test).
+    const auto ask = [&](const std::string& frame, const std::string& identity = "",
+                         unsigned which = 0) {
+        asio::io_context io;
+        MigrationClient::Verdict verdict;
+        MigrationClient::ask(io.get_executor(),
+            {std::string("127.0.0.1"), static_cast<std::uint16_t>(which ? which : registry)},
+            identity, frame, [&](MigrationClient::Verdict got) { verdict = std::move(got); });
+        io.run();
+        return verdict;
+    };
+    // The member registers on its own control leg, asynchronously; COMMIT is
+    // only publishable against a member the registry holds right now, so wait
+    // for the listing before asserting a committed route.
+    const auto query = [&] {
+        try {
+            RawSocket raw(registry);
+            std::string frame(4, '\0');
+            auto length = static_cast<std::uint32_t>(10);
+            for (int i = 3; i >= 0; --i) { frame[i] = static_cast<char>(length & 255); length >>= 8; }
+            raw.send(frame+"MLR1 QUERY -");
+            const auto header = raw.receive(4);
+            std::size_t body = 0;
+            for (unsigned char ch : header) body = (body << 8) | ch;
+            return raw.receive(body);
+        } catch (const std::exception&) { return std::string(); }
+    };
+    eventually([&] { return query().find("MLR1 MEMBERS 1") != std::string::npos; },
+        5s, "destination never reached the registry");
+    const MigrationOwner source{ {MigrationScope::Kind::Realm, "alpha", "", ""},
+        "gameServer", "gs-a", "town" };
+    const MigrationOwner target{ {MigrationScope::Kind::CrossGroup, "", "arena", ""},
+        "crossServer", "xs-a", "room-1" };
+    const MigrationOwner dead_dest{ {MigrationScope::Kind::CrossGroup, "", "arena", ""},
+        "crossServer", "xs-dead", "room-9" };
+    const std::string source_text = MigrationClient::owner_text(source);
+    const std::string target_text = MigrationClient::owner_text(target);
+    require(source_text == "realm NS - alpha gameServer gs-a town"
+            && target_text == "cross NS - arena crossServer xs-a room-1",
+        "owner builder mismatch");
+    // A participant with no published facts is EMPTY, not a failure.
+    {   const auto v = ask(MigrationClient::status_frame("", "home", "hero"));
+        require(v.reason == "EMPTY" && !v.applied, "unknown key must answer EMPTY: " + v.reason);
+    }
+    // OWNER publishes the home facts once; a changed fact is a conflict.
+    {   const auto v = ask(MigrationClient::owner_frame("", "home", "hero", 8, source));
+        require(v.applied && v.reason.empty(), "OWNER did not apply: " + v.reason);
+    }
+    // PREPARE names a generation the coordinator never published: STALE.
+    {   const auto v = ask(MigrationClient::prepare_frame("PREPARE", "", "home", "hero",
+            "stale-1", 7, source, target));
+        require(v.reason == "STALE" && !v.applied, "stale PREPARE must answer STALE: " + v.reason);
+    }
+    // A real PREPARE reserves the next generation; the verdict names it.
+    {   const auto v = ask(MigrationClient::prepare_frame("PREPARE", "", "home", "hero",
+            "move-1", 8, source, target));
+        require(v.applied && v.id == "move-1" && v.generation == 9,
+            "PREPARE mismatch: id="+v.id+" gen="+std::to_string(v.generation)+" "+v.reason);
+    }
+    {   const auto v = ask(MigrationClient::status_frame("", "home", "hero"));
+        require(v.applied && v.id == "move-1" && v.state == "PREPARING"
+                && v.flags == "open unfenced notready" && v.generation == 9,
+            "STATUS PREPARING mismatch: "+v.state+" "+v.flags);
+    }
+    // A skipped step is ORDER, surfaced whole rather than silently retried.
+    {   const auto v = ask(MigrationClient::token_frame("COMMIT", "", "home", "hero", "move-1", 9));
+        require(v.reason == "ORDER" && !v.applied, "early COMMIT must answer ORDER: "+v.reason);
+    }
+    // The ordered steps; each answers the state it produced.
+    {   const auto v = ask(MigrationClient::event_frame("", "home", "hero", "move-1", 9, "DRAINED"));
+        require(v.applied && v.id == "move-1" && v.state == "PREPARING",
+            "DRAINED mismatch: "+v.state+" "+v.reason);
+    }
+    {   const auto v = ask(MigrationClient::event_frame("", "home", "hero", "move-1", 9, "FENCE"));
+        require(v.applied && v.state == "PREPARING", "FENCE mismatch: "+v.reason);
+    }
+    {   const auto v = ask(MigrationClient::event_frame("", "home", "hero", "move-1", 9, "READY"));
+        require(v.applied && v.state == "PREPARING", "READY mismatch: "+v.reason);
+    }
+    // COMMIT publishes the destination route and names it in the verdict.
+    {   const auto v = ask(MigrationClient::token_frame("COMMIT", "", "home", "hero", "move-1", 9));
+        require(v.applied && v.id == "move-1" && v.generation == 9 && v.owner == target_text,
+            "COMMIT mismatch: owner="+v.owner+" gen="+std::to_string(v.generation)+" "+v.reason);
+    }
+    {   const auto v = ask(MigrationClient::status_frame("", "home", "hero"));
+        require(v.applied && v.state == "COMMITTED" && v.flags == "drained fenced ready",
+            "STATUS COMMITTED mismatch: "+v.state+" "+v.flags);
+    }
+    // A destination that is not a live member cannot be committed: the commit
+    // downgrades to PENDING so the fenced gap stays takeover-eligible.
+    {   const auto v = ask(MigrationClient::owner_frame("", "home2", "hero2", 8, source));
+        require(v.applied, "OWNER (second key) did not apply: " + v.reason);
+    }
+    {   const auto v = ask(MigrationClient::prepare_frame("PREPARE", "", "home2", "hero2",
+            "pend-1", 8, source, dead_dest));
+        require(v.applied && v.id == "pend-1" && v.generation == 9,
+            "PEND PREPARE mismatch: "+v.reason);
+    }
+    {   const auto v = ask(MigrationClient::event_frame("", "home2", "hero2", "pend-1", 9, "DRAINED"));
+        require(v.applied, "PEND DRAINED mismatch: "+v.reason);
+    }
+    {   const auto v = ask(MigrationClient::event_frame("", "home2", "hero2", "pend-1", 9, "FENCE"));
+        require(v.applied, "PEND FENCE mismatch: "+v.reason);
+    }
+    {   const auto v = ask(MigrationClient::event_frame("", "home2", "hero2", "pend-1", 9, "READY"));
+        require(v.applied, "PEND READY mismatch: "+v.reason);
+    }
+    {   const auto v = ask(MigrationClient::token_frame("COMMIT", "", "home2", "hero2", "pend-1", 9));
+        require(v.pending && !v.applied,
+            "dead destination must answer PENDING: "+v.reason);
+    }
+    // After a commit the next candidate is strictly newer; the published
+    // route is the new expectation, not the original source.
+    {   const auto v = ask(MigrationClient::prepare_frame("PREPARE", "", "home", "hero",
+            "move-2", 9, target, source));
+        require(v.applied && v.generation == 10, "second PREPARE did not reserve 10");
+    }
+    {   const auto v = ask(MigrationClient::event_frame("", "home", "hero", "move-2", 10, "FENCE"));
+        require(v.reason == "ORDER", "out-of-order FENCE must answer ORDER: "+v.reason);
+    }
+    // ABORT only schedules the rollback; CLEANUP finishes it, and the replies
+    // never claim a terminal word that has not happened yet.
+    {   const auto v = ask(MigrationClient::token_frame("ABORT", "", "home", "hero", "move-2", 10));
+        require(v.applied && v.id == "move-2", "ABORT mismatch: "+v.reason);
+    }
+    {   const auto v = ask(MigrationClient::event_frame("", "home", "hero", "move-2", 10, "CLEANUP"));
+        require(v.applied && v.state == "ABORTED", "CLEANUP did not finish the abort: "+v.state);
+    }
+    // A tokened coordinator refuses a leg that never identified.
+    {   const auto v = ask(MigrationClient::status_frame("", "home", "hero"), "", tokened);
+        require(v.reason == "refused", "missing identity must be refused: "+v.reason);
+    }
+    // An identified leg is served: publish facts, then read them back.
+    {   const auto v = ask(MigrationClient::owner_frame("", "home", "hero", 8, source),
+            "MLS1 gameServer gs-a s3cret", tokened);
+        require(v.applied, "identified OWNER did not apply: "+v.reason);
+    }
+    {   const auto v = ask(MigrationClient::status_frame("", "home", "hero"),
+            "MLS1 gameServer gs-a s3cret", tokened);
+        require(v.applied && v.state == "idle" && v.owner == source_text && v.generation == 8,
+            "identified STATUS mismatch: "+v.state+" "+v.owner);
+    }
+    // Nothing listening answers unreachable, not a hang.
+    {   const auto v = ask(MigrationClient::status_frame("", "home", "hero"), "", dead);
+        require(v.reason == "unreachable", "dead coordinator must answer unreachable: "+v.reason);
+    }
+    std::cout << "migration.client: MLR1 MIG verbs through a real coordinator, "
+        "typed verdicts [PASS]\n";
 }
 
 }

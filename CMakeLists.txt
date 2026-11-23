@@ -95,7 +95,7 @@ if(BUILD_TESTING)
       coordinator.placement coordinator.routes coordinator.placement.schema coordinator.placement.journal coordinator.migration.commit coordinator.migration.abort
       coordinator.migration.recover coordinator.migration.stale coordinator.migration.order
       coordinator.migration.retire coordinator.migration.wire coordinator.migration.journal coordinator.migration.journal.recovery cross.ticket lua.lifecycle lua.http
-      coordinator.migration.authority coordinator.migration.fourstep
+      coordinator.migration.authority coordinator.migration.fourstep coordinator.migration.client
       api.signature api.tamper api.rotation api.replay api.acceptance api.acceptance.sqlite api.ownership api.wire api.http
       login.ticket login.ticket.wire login.grant
       cross.admission cross.record cross.record.journal record.grant record.grant.journal record.fetch cross.return.queue cross.return.queue.bounded cross.return.sender probe.control scaffold.init
