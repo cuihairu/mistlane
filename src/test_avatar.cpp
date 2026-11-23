@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "mistlane/avatar_runtime.hpp"
 #include "mistlane/lua_service.hpp"
+#include "mistlane/scene_runtime.hpp"
 #include "test_common.hpp"
 namespace mistlane::test {
 namespace {
@@ -1660,5 +1661,196 @@ return {
     }
     std::cout << "avatar.scene.switch: active avatar keeps state, only the scene reference "
         "moves -- no save, no reload; non-active and runtimeless hosts refuse [PASS]\n";
+}
+
+// The scene lifecycle model of docs/scene-lifecycle.md: the map-definition
+// registry, the process-local spatial cache (reference-driven load and
+// eviction, per-request failure that never poisons a ready entry) and the
+// instance prepare machine (creating -> preparing -> ready | failed, only
+// ready accepts entry, a timeout is a failure). A fake clock drives the
+// prepare budget deterministically.
+void scene_lifecycle() {
+    // --- Definitions: id + digest identity, never mutated in place ----------
+    {
+        SceneRuntime scenes;
+        require(scenes.register_definition("town", "d1"), "registering town/d1 was refused");
+        require(scenes.register_definition("town", "d1"),
+                "re-registering the same (id, digest) was not the idempotent no-op");
+        require(scenes.definition_registered("town", "d1"), "town/d1 is not registered");
+        // A changed definition is a new digest and therefore a new key; both
+        // coexist and neither mutates the other.
+        require(scenes.register_definition("town", "d2"), "registering town/d2 was refused");
+        require(scenes.definition_registered("town", "d1") && scenes.definition_registered("town", "d2"),
+                "the two digests of one definition id do not coexist");
+        require(!scenes.register_definition("", "d1") && !scenes.register_definition("town", ""),
+                "an identity without id or digest was accepted");
+        std::cout << "scene.lifecycle definitions: id + digest key, re-register idempotent [PASS]\n";
+    }
+    // --- Cache: references drive load and eviction ---------------------------
+    {
+        SceneRuntime scenes;
+        scenes.register_definition("town", "d1");
+        require(scenes.cache_state("town", "d1") == SceneCacheState::Missing,
+                "an unreferenced definition is not missing");
+        require(scenes.acquire("town", "d1"), "acquiring a registered definition was refused");
+        require(scenes.cache_state("town", "d1") == SceneCacheState::Loading,
+                "taking a reference did not make the entry eligible to load");
+        require(!scenes.acquire("nowhere", "d1"), "acquiring an unknown definition was accepted");
+        require(scenes.acquire("town", "d1"), "a second reference was refused");
+        require(scenes.resolve("town", "d1"), "resolving the load was refused");
+        require(scenes.cache_state("town", "d1") == SceneCacheState::Ready,
+                "a resolved load did not land ready");
+        // Retention is reference-driven: one reference leaving keeps the entry.
+        scenes.release("town", "d1");
+        require(scenes.cache_state("town", "d1") == SceneCacheState::Ready,
+                "a ready entry was evicted while still referenced");
+        scenes.release("town", "d1");
+        require(scenes.cache_state("town", "d1") == SceneCacheState::Missing,
+                "an entry with zero references and no load in flight was not evicted");
+        // A released key reloads from its own source when asked again.
+        require(scenes.acquire("town", "d1"), "re-acquiring an evicted entry was refused");
+        require(scenes.cache_state("town", "d1") == SceneCacheState::Loading,
+                "a re-acquired entry did not start a fresh load");
+        std::cout << "scene.lifecycle cache: references load and evict, ready while referenced [PASS]\n";
+    }
+    // --- Failure is per request, never for the key ---------------------------
+    {
+        SceneRuntime scenes;
+        scenes.register_definition("town", "d1");
+        scenes.acquire("town", "d1");
+        require(scenes.fail("town", "d1"), "failing a load in flight was refused");
+        require(scenes.cache_state("town", "d1") == SceneCacheState::Missing,
+                "a failed load left the key poisoned");
+        require(scenes.acquire("town", "d1"), "the same key was not retryable after a failure");
+        scenes.resolve("town", "d1");
+        // A ready entry can never be poisoned by a later failure report.
+        const auto poisoned = scenes.fail("town", "d1");
+        require(!poisoned, "failing a ready entry was accepted");
+        require(scenes.cache_state("town", "d1") == SceneCacheState::Ready,
+                "a refused failure changed a ready entry");
+        // A load in flight with no references still waits for its resolve
+        // before the entry may be dropped (the observable half of the
+        // two-phase release).
+        scenes.release("town", "d1");
+        scenes.release("town", "d1");
+        require(scenes.cache_state("town", "d1") == SceneCacheState::Missing,
+                "a ready entry survived its last reference");
+        scenes.acquire("town", "d1");
+        scenes.release("town", "d1");
+        require(scenes.cache_state("town", "d1") == SceneCacheState::Loading,
+                "an in-flight load was dropped before its resolve");
+        scenes.resolve("town", "d1");
+        require(scenes.cache_state("town", "d1") == SceneCacheState::Missing,
+                "a resolved entry with zero references was not evicted");
+        std::cout << "scene.lifecycle failure: per request, key retryable, ready never poisoned [PASS]\n";
+    }
+    // --- Instances: only ready accepts entry ---------------------------------
+    {
+        SceneRuntime scenes;
+        scenes.register_definition("town", "d1");
+        require(scenes.create("room-1", "town", "d1", 100), "creating room-1 was refused");
+        require(scenes.state("room-1") == SceneInstanceState::Creating,
+                "an allocated instance did not land creating");
+        require(!scenes.enter("room-1", 1), "entry was accepted while creating");
+        require(scenes.begin_prepare("room-1"), "beginning room-1's prepare was refused");
+        require(scenes.state("room-1") == SceneInstanceState::Preparing, "room-1 is not preparing");
+        require(scenes.cache_state("town", "d1") == SceneCacheState::Loading,
+                "the prepare did not trigger the cache load");
+        require(!scenes.enter("room-1", 1), "entry was accepted before ready");
+        require(scenes.resolve("town", "d1"), "resolving the definition was refused");
+        require(scenes.state("room-1") == SceneInstanceState::Ready,
+                "a resolved reference did not land the instance ready");
+        require(scenes.enter("room-1", 1) && scenes.enter("room-1", 2), "a ready instance refused entry");
+        require(scenes.participants("room-1") == 2, "the participants were not recorded");
+        require(!scenes.create("room-1", "town", "d1", 100), "a duplicate instance name was accepted");
+        // Entering an instance on a process that already holds the definition
+        // ready loads nothing: the second instance resolves immediately.
+        require(scenes.create("room-2", "town", "d1", 100), "creating room-2 was refused");
+        require(scenes.begin_prepare("room-2"), "beginning room-2's prepare was refused");
+        require(scenes.state("room-2") == SceneInstanceState::Ready,
+                "a prepare over a ready cache entry did not resolve immediately");
+        require(scenes.cache_state("town", "d1") == SceneCacheState::Ready,
+                "the shared entry changed state for the second instance");
+        // A close is attempted only when the instance is empty.
+        require(!scenes.close("room-1"), "a close with participants was accepted");
+        require(scenes.leave("room-1", 1), "leaving was refused");
+        require(!scenes.close("room-1"), "a close with one participant was accepted");
+        require(scenes.leave("room-1", 2), "leaving was refused");
+        require(scenes.close("room-1"), "an empty close was refused");
+        require(!scenes.has("room-1"), "the closed instance stayed registered");
+        // The shared cache entry outlives one instance and dies with the last.
+        require(scenes.cache_state("town", "d1") == SceneCacheState::Ready,
+                "closing one instance evicted a still-referenced entry");
+        require(scenes.close("room-2"), "closing the last instance was refused");
+        require(scenes.cache_state("town", "d1") == SceneCacheState::Missing,
+                "the entry was not evicted with its last reference");
+        std::cout << "scene.lifecycle instances: only ready accepts entry, close needs empty [PASS]\n";
+    }
+    // --- Timeout: a failure, never a success with holes -----------------------
+    {
+        FakeClock clock;
+        SceneRuntime scenes(clock.fn());
+        scenes.register_definition("town", "d1");
+        scenes.create("room-3", "town", "d1", 50);
+        scenes.begin_prepare("room-3");
+        clock.now += std::chrono::milliseconds(60);
+        scenes.tick();
+        require(scenes.state("room-3") == SceneInstanceState::Failed,
+                "a prepare over budget did not fail");
+        require(scenes.failure("room-3") == "prepare timed out", "the timeout was not recorded");
+        require(!scenes.enter("room-3", 1), "a failed instance accepted entry");
+        // The failure path released the definition reference, but the load
+        // itself is still in flight — the cache decides, and it holds the
+        // entry until the load lands (eviction needs refcount zero and no
+        // load in flight). Only the resolve (or its failure) lets it go.
+        require(scenes.cache_state("town", "d1") == SceneCacheState::Loading,
+                "the cache dropped a load still in flight");
+        scenes.resolve("town", "d1");
+        require(scenes.cache_state("town", "d1") == SceneCacheState::Missing,
+                "a resolved load with no references was not evicted");
+        require(!scenes.close("room-3"), "closing a failed instance was accepted");
+        scenes.reap_failed();
+        require(!scenes.has("room-3"), "the failed instance stayed registered after the reap");
+        std::cout << "scene.lifecycle timeout: over budget fails, cleans up and reaps [PASS]\n";
+    }
+    // --- Load failure fails every waiter, key stays retryable -----------------
+    {
+        SceneRuntime scenes;
+        scenes.register_definition("town", "d1");
+        scenes.create("room-4", "town", "d1", 100);
+        scenes.create("room-5", "town", "d1", 100);
+        scenes.begin_prepare("room-4");
+        scenes.begin_prepare("room-5");
+        require(scenes.fail("town", "d1"), "failing the shared load was refused");
+        require(scenes.state("room-4") == SceneInstanceState::Failed
+                && scenes.state("room-5") == SceneInstanceState::Failed,
+                "a failed load did not fail every preparing instance");
+        require(scenes.failure("room-4") == "definition load failed"
+                && scenes.failure("room-5") == "definition load failed",
+                "the failure was not recorded for the asking instances");
+        scenes.reap_failed();
+        // The same key stays retryable by another instance's prepare.
+        scenes.create("room-6", "town", "d1", 100);
+        require(scenes.begin_prepare("room-6"), "a retry of the failed key was refused");
+        require(scenes.cache_state("town", "d1") == SceneCacheState::Loading,
+                "the retried key did not start a new load");
+        scenes.resolve("town", "d1");
+        require(scenes.state("room-6") == SceneInstanceState::Ready, "the retried prepare never landed");
+        std::cout << "scene.lifecycle waiters: shared failure, retryable key [PASS]\n";
+    }
+    // --- Unknown definition: the allocation edge ------------------------------
+    {
+        SceneRuntime scenes;
+        require(scenes.create("room-7", "nowhere", "d1", 100), "creating room-7 was refused");
+        require(scenes.state("room-7") == SceneInstanceState::Failed,
+                "an allocation without a registered definition did not fail");
+        require(scenes.failure("room-7") == "unknown definition", "the allocation failure was not recorded");
+        scenes.reap_failed();
+        require(!scenes.has("room-7"), "the failed allocation stayed registered");
+        // A registered definition that is unregistered later is a different
+        // story: registration is startup-time, so a created-then-unknown
+        // combination cannot arise here — the create refused it above.
+        std::cout << "scene.lifecycle allocation: unknown definition fails at creation [PASS]\n";
+    }
 }
 } // namespace mistlane::test
