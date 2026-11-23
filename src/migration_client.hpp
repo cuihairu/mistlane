@@ -43,6 +43,9 @@ public:
         std::string state;  // STEP's <STATE>, or the STATE line's state word
         std::string owner;  // the COMMITTED / idle-STATE owner text
         std::string flags;  // the STATE line's drained/open etc. tail
+        // DESTINED: the transfers this member's destination lease awaits.
+        struct DestinedTransfer { std::string realm, character, id; std::uint64_t generation = 0; };
+        std::vector<DestinedTransfer> destined;
     };
     using Answer = std::function<void(Verdict)>;
     // Answers exactly once, on the executor's thread that started it.
@@ -118,6 +121,18 @@ public:
     static std::string status_frame(const std::string& namespace_, std::string_view realm,
                                     std::string_view character) {
         return head("STATUS", namespace_, realm, character);
+    }
+    // DESTINED: the fenced transfers this member's destination lease awaits.
+    // <scope> is the realm or cross-group name, <role> is gameServer or
+    // crossServer and <instance> names the member. The destination polls this
+    // instead of being pushed a transfer it may not be ready to take.
+    static std::string destined_frame(const std::string& namespace_, const std::string& scope,
+                                      const std::string& role, const std::string& instance) {
+        std::ostringstream out;
+        out << "MLR1 MIG DESTINED";
+        if (!namespace_.empty()) out << " NS " << namespace_;
+        out << ' ' << scope << ' ' << role << ' ' << instance;
+        return out.str();
     }
 private:
     MigrationClient(asio::any_io_executor executor, Endpoint coordinator, std::string identity)
@@ -200,6 +215,26 @@ private:
             v.id = id;
             return done(std::move(v));
         }
+        if (payload.starts_with("MLR1 MIG DESTINED ")) {
+            // <count> [<realm> <character> <id> <generation>]... — the count
+            // bounds the pairs, and an empty answer is count 0.
+            Verdict v; v.applied = true;
+            std::istringstream in(payload);
+            std::string magic, mig, verb, count;
+            if (!(in >> magic >> mig >> verb >> count)) return fail("unexpected");
+            std::uint64_t n = 0;
+            if (!record_decimal(count, n)) return fail("unexpected");
+            for (std::uint64_t i = 0; i < n; ++i) {
+                std::string realm, character, id, gen;
+                std::uint64_t generation = 0;
+                if (!(in >> realm >> character >> id >> gen) || !record_decimal(gen, generation))
+                    return fail("unexpected");
+                v.destined.push_back({realm, character, id, generation});
+            }
+            std::string extra;
+            if (in >> extra) return fail("unexpected");
+            return done(std::move(v));
+        }
         if (payload.starts_with("MLR1 MIG COMMITTED ")) {
             // <id> <owner (7 words)> <gen> — owner is space-bearing, so the
             // generation is the last token and the owner is everything between.
@@ -247,7 +282,7 @@ private:
         }
         return fail("unexpected");
     }
-    void applied() { done(Verdict{true, false, {}, {}, 0, {}, {}, {}}); }
+    void applied() { Verdict v; v.applied = true; done(std::move(v)); }
     void done(Verdict v) {
         if (done_) return;
         done_ = true;
