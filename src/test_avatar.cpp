@@ -357,12 +357,19 @@ void avatar_lifecycle() {
         require(r.code == AvatarError::TransferInFailed, "a failed transfer_in did not report failure");
         require(runtime.state(key) == AvatarState::Closed, "the incoming avatar did not close on this host");
         hooks.fail_transfer_in = false;
-        r = runtime.load(key, 100, LoadSource::TransferIn);
+        r = runtime.load(key, 100, LoadSource::TransferIn, "level=1", "room-1");
         require(r.ok(), "transfer-in load refused: " + r.reason);
         require(runtime.state(key) == AvatarState::Active, "transfer-in load did not land active");
         require(runtime.session_of(key) == 0, "transfer-in bound a session by itself");
-        require(hooks.saw("load") && hooks.saw("transfer_in") && !hooks.saw("enter"),
+        require(runtime.scene(key) == "room-1",
+                "the landed avatar did not hold the scene its transfer named");
+        require(hooks.saw("load:level=1") && hooks.saw("transfer_in") && !hooks.saw("enter"),
                 "transfer-in did not run avatar_load + avatar_transfer_in without avatar_enter");
+        // A home load arrives sceneless: the reference stays unset until the
+        // runtime assigns one.
+        r = runtime.load(other, 100);
+        require(r.ok() && runtime.scene(other).empty(),
+                "a home load arrived holding a scene reference");
         auto a = runtime.attach(key, 5);
         require(a.ok(), "attaching a session to the landed avatar refused: " + a.reason);
         std::cout << "avatar.lifecycle transfer_in: lands active unbound, failure closes [PASS]\n";
@@ -1296,6 +1303,7 @@ void avatar_transfer_destination() {
   end,
   avatar_transfer_in = function(context, avatar)
     print("transfer_in:" .. context.character)
+    print("scene:" .. tostring(mistlane.scene.current(context.realm, context.character)))
     return true
   end,
 }
@@ -1351,12 +1359,14 @@ void avatar_transfer_destination() {
     equal(ask(registry, "MLR1 MIG EVENT NS - home hero move-1 9 FENCE"),
         "MLR1 MIG STEP move-1 PREPARING");
     // The destination discovers the gap on its next poll, loads the frozen
-    // record, builds the avatar (active, unbound) and acknowledges READY.
+    // record, builds the avatar (active, unbound) with the scene the transfer
+    // named (seeded from the DESTINED answer) and acknowledges READY.
     eventually([&] {
         const auto seen = destination.output();
         return seen.find("load:hero") != std::string::npos
-            && seen.find("transfer_in:hero") != std::string::npos;
-    }, 10s, "the destination never took the avatar in");
+            && seen.find("transfer_in:hero") != std::string::npos
+            && seen.find("scene:room-1") != std::string::npos;
+    }, 10s, "the destination never took the avatar in with its scene");
     eventually([&] {
         const auto status = ask(registry, "MLR1 MIG STATUS NS - home hero");
         std::istringstream in(status);
@@ -1430,6 +1440,7 @@ return {
   end,
   avatar_transfer_in = function(context, avatar)
     print("transfer_in:" .. context.character)
+    print("scene:" .. tostring(mistlane.scene.current(context.realm, context.character)))
     return true
   end,
 }
@@ -1486,13 +1497,15 @@ return {
     eventually([&] {
         return ask_data("MLD1 LOAD home hero") == "MLD1 STATE gen 5 seq 1 level=1 hp=10";
     }, 10s, "the transfer snapshot never reached home data");
-    // The destination takes the fenced gap in: its avatar_load sees the snapshot
-    // the source submitted, then avatar_transfer_in.
+    // The destination takes the fenced gap in: its avatar_load sees the
+    // snapshot the source submitted, then avatar_transfer_in, and the landed
+    // avatar holds the scene the transfer's destination owner named.
     eventually([&] {
         const auto seen = destination.output();
         return seen.find("load:hero:level=1 hp=10") != std::string::npos
-            && seen.find("transfer_in:hero") != std::string::npos;
-    }, 10s, "the destination never took the avatar in");
+            && seen.find("transfer_in:hero") != std::string::npos
+            && seen.find("scene:room-1") != std::string::npos;
+    }, 10s, "the destination never took the avatar in with its scene");
     // The source commits only after the destination's READY landed, and the
     // coordinator publishes the destination route.
     eventually([&] {

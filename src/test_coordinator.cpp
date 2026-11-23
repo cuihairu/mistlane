@@ -1670,6 +1670,20 @@ void migration_client() {
     {   const auto v = ask(MigrationClient::event_frame("", "home", "hero", "move-1", 9, "FENCE"));
         require(v.applied && v.state == "PREPARING", "FENCE mismatch: "+v.reason);
     }
+    // DESTINED enumerates the fenced gap the destination lease awaits, with
+    // the scene the transfer's destination owner named — the field the
+    // destination seeds the landed avatar's scene reference from. A lease
+    // that is not this transfer's destination answers nothing.
+    {   const auto v = ask(MigrationClient::destined_frame("", "arena", "crossServer", "xs-a"));
+        require(v.applied && v.destined.size() == 1
+                && v.destined[0].realm == "home" && v.destined[0].character == "hero"
+                && v.destined[0].id == "move-1" && v.destined[0].generation == 9
+                && v.destined[0].scene == "room-1",
+            "DESTINED mismatch: count="+std::to_string(v.destined.size())+" "+v.reason);
+    }
+    {   const auto v = ask(MigrationClient::destined_frame("", "arena", "crossServer", "xs-b"));
+        require(v.applied && v.destined.empty(), "DESTINED answered a lease that is not the destination");
+    }
     {   const auto v = ask(MigrationClient::event_frame("", "home", "hero", "move-1", 9, "READY"));
         require(v.applied && v.state == "PREPARING", "READY mismatch: "+v.reason);
     }
