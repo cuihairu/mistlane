@@ -825,11 +825,11 @@ private:
                 destined_pull_ = false;
                 if (!verdict.applied) return;
                 for (const auto& t : verdict.destined)
-                    drive_destination_transfer(t.realm, t.character, t.id, t.generation);
+                    drive_destination_transfer(t.realm, t.character, t.id, t.generation, t.scene);
             });
     }
     void drive_destination_transfer(std::string realm, std::string character,
-                                    std::string id, std::uint64_t generation) {
+                                    std::string id, std::uint64_t generation, std::string scene) {
         AvatarRuntime* runtime = service_ ? service_->avatar_runtime() : nullptr;
         if (!runtime) return;
         const AvatarKey key{std::move(realm), std::move(character), generation};
@@ -845,15 +845,19 @@ private:
         }
         const std::string identity = config_.upstream_token.empty() ? std::string{} : service_hello(config_);
         RecordFetcher::load(io_.get_executor(), config_.data, identity, key.realm, key.character,
-            [this, key, id, generation](RecordFetcher::Record record, std::string reason) {
+            [this, key, id, generation, scene = std::move(scene)](RecordFetcher::Record record,
+                                                                  std::string reason) {
                 // EMPTY is a recordless avatar (a first login): the source
                 // would have submitted a snapshot, so a fenced gap with no
                 // record is still a take-over of an empty state, not a failure.
                 if (!reason.empty() && reason != "EMPTY") { transfer_in_pending_.erase(key); return; }
                 AvatarRuntime* runtime = service_ ? service_->avatar_runtime() : nullptr;
                 if (!runtime) { transfer_in_pending_.erase(key); return; }
+                // The scene the transfer's destination owner named seeds the
+                // landed avatar's scene reference at load (avatar_load and
+                // avatar_transfer_in run with it already set).
                 const auto admitted = runtime->load(key, kTransferInGraceMs,
-                    LoadSource::TransferIn, record.payload);
+                    LoadSource::TransferIn, record.payload, scene);
                 if (!admitted.ok()) { transfer_in_pending_.erase(key); return; }
                 send_ready(key, std::move(id), generation);
             });

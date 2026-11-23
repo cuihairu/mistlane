@@ -331,17 +331,20 @@ public:
     }
     // The transfers this member must take over: the home is fenced and the
     // destination lease is handed to (scope, role, instance). The destination
-    // polls this; each answer names the key, the request id and the candidate
-    // generation the READY must echo. A live transaction answers only while it
-    // waits on this member, so a taken or superseded transfer never repeats.
-    struct Destined { MigrationKey key; std::string id; std::uint64_t generation; };
+    // polls this; each answer names the key, the request id, the candidate
+    // generation the READY must echo and the scene the transfer's destination
+    // owner names (the destination seeds the landed avatar's scene reference
+    // from it). A live transaction answers only while it waits on this
+    // member, so a taken or superseded transfer never repeats.
+    struct Destined { MigrationKey key; std::string id; std::uint64_t generation; std::string scene; };
     std::vector<Destined> destined(const std::string& namespace_, const MigrationScope& scope,
                                    const std::string& role, const std::string& instance) const {
         std::vector<Destined> out;
         for (const auto& [storage_key, entry] : migrations_) {
             if (entry.namespace_ != namespace_) continue;
-            if (auto token = entry.transaction->destined_token(scope, role, instance))
-                out.push_back({entry.key, token->id, token->generation});
+            if (auto takeover = entry.transaction->destined_transfer(scope, role, instance))
+                out.push_back({entry.key, takeover->token.id, takeover->token.generation,
+                               takeover->scene});
         }
         return out;
     }
@@ -829,7 +832,7 @@ private:
     //   -> MLR1 MIG OWNER OK | PREPARED <id> <generation> | STEP <id> <STATE>
     //    | COMMITTED <id> <owner> <generation> | ABORTING <id> | ABORTED <id>
     //    | PENDING <id> | DESTINED <count> [<realm> <character> <id>
-    //      <generation>]...
+    //      <generation> <scene>]...
     //    | STATE idle <owner> <generation> | STATE <id> <STATE> <drained|open>
     //      <fenced|unfenced> <ready|notready> <generation>
     //    | MLR1 EMPTY | MLR1 ERR INVALID | STALE | CONFLICT | ORDER | UNEXPECTED
@@ -949,7 +952,7 @@ private:
             out << "MLR1 MIG DESTINED " << list.size();
             for (const auto& item : list)
                 out << ' ' << item.key.first << ' ' << item.key.second << ' '
-                    << item.id << ' ' << item.generation;
+                    << item.id << ' ' << item.generation << ' ' << item.scene;
             return out.str();
         }
         if (!(in >> realm >> character) || !record_identifier(realm)

@@ -43,8 +43,11 @@ public:
         std::string state;  // STEP's <STATE>, or the STATE line's state word
         std::string owner;  // the COMMITTED / idle-STATE owner text
         std::string flags;  // the STATE line's drained/open etc. tail
-        // DESTINED: the transfers this member's destination lease awaits.
-        struct DestinedTransfer { std::string realm, character, id; std::uint64_t generation = 0; };
+        // DESTINED: the transfers this member's destination lease awaits;
+        // each names the scene the transfer's destination owner chose (the
+        // destination seeds the landed avatar's scene reference from it).
+        struct DestinedTransfer { std::string realm, character, id, scene;
+                                  std::uint64_t generation = 0; };
         std::vector<DestinedTransfer> destined;
     };
     using Answer = std::function<void(Verdict)>;
@@ -216,20 +219,29 @@ private:
             return done(std::move(v));
         }
         if (payload.starts_with("MLR1 MIG DESTINED ")) {
-            // <count> [<realm> <character> <id> <generation>]... — the count
-            // bounds the pairs, and an empty answer is count 0.
+            // <count> [<realm> <character> <id> <generation> <scene>]... — the
+            // count bounds the entries, and an empty answer is count 0.
             Verdict v; v.applied = true;
             std::istringstream in(payload);
             std::string magic, mig, verb, count;
             if (!(in >> magic >> mig >> verb >> count)) return fail("unexpected");
+            // The count may be 0 — an empty answer — so it cannot ride
+            // record_decimal (record.hpp refuses zero: a record generation
+            // starts at 1). The per-entry generations below still can.
             std::uint64_t n = 0;
-            if (!record_decimal(count, n)) return fail("unexpected");
+            bool digits = !count.empty() && count.size() <= 10;
+            for (unsigned char ch : count) {
+                if (ch < '0' || ch > '9') { digits = false; break; }
+                n = n*10 + ch-'0';
+            }
+            if (!digits) return fail("unexpected");
             for (std::uint64_t i = 0; i < n; ++i) {
-                std::string realm, character, id, gen;
+                std::string realm, character, id, gen, scene;
                 std::uint64_t generation = 0;
-                if (!(in >> realm >> character >> id >> gen) || !record_decimal(gen, generation))
+                if (!(in >> realm >> character >> id >> gen >> scene)
+                        || !record_decimal(gen, generation))
                     return fail("unexpected");
-                v.destined.push_back({realm, character, id, generation});
+                v.destined.push_back({realm, character, id, scene, generation});
             }
             std::string extra;
             if (in >> extra) return fail("unexpected");

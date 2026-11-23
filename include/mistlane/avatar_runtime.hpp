@@ -184,8 +184,12 @@ public:
     // already holds a live avatar (any state but closed) is refused — one
     // active per character. Home loads stop in loading until attach(); a
     // transfer-in load completes to active (unbound) via avatar_transfer_in.
+    // `scene` is the avatar's scene reference at landing (empty = unset): a
+    // transfer-in arrives holding the scene its transfer's destination owner
+    // named (seeded from the coordinator's DESTINED answer), a home login
+    // arrives with none until the runtime assigns one.
     Result load(AvatarKey key, std::uint64_t grace_ms, LoadSource source = LoadSource::Home,
-                std::string_view state = {}) {
+                std::string_view state = {}, std::string_view scene = {}) {
         if (!key.valid()) return {AvatarError::InvalidIdentity, "invalid avatar identity"};
         for (const auto& [k, x] : avatars_)
             if (k.realm == key.realm && k.character == key.character && x.state != AvatarState::Closed)
@@ -195,6 +199,7 @@ public:
         e.state = AvatarState::Loading;
         e.grace_ms = grace_ms;
         e.source = source;
+        e.scene = std::string(scene);
         avatars_.emplace(key, std::move(e));
         return finish_load(key, state);
     }
