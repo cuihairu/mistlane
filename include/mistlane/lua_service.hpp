@@ -202,6 +202,8 @@ private:
         bool present = false; // the service table names the hook
         bool raised = false;  // the hook is malformed or raised a Lua error
         bool truthy = false;  // truthiness of the first return value
+        bool has_text = false;// the first return value is a string
+        std::string text;     // the first return value, when it is a string
         std::string reason;   // second return value, when it is a string
         std::string ref;      // avatar_load: the encoded avatar table handle
     };
@@ -213,7 +215,8 @@ private:
     void on_leave(const AvatarKey& key, const std::string& avatar_ref) override;
     void on_tick(const AvatarKey& key, const std::string& avatar_ref) override;
     bool on_save(const AvatarKey& key, const std::string& avatar_ref) override;
-    bool on_transfer_out(const AvatarKey& key, const std::string& avatar_ref) override;
+    bool on_transfer_out(const AvatarKey& key, const std::string& avatar_ref,
+                         std::string& snapshot) override;
     bool on_transfer_in(const AvatarKey& key, const std::string& avatar_ref) override;
     void on_detach(const AvatarKey& key, const std::string& avatar_ref) override;
     void on_fail(const AvatarKey& key, const std::string& avatar_ref, std::string_view reason) override;

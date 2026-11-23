@@ -702,6 +702,15 @@ LuaService::AvatarHookOutcome LuaService::avatar_hook(const char* name, const Av
     const int results = lua_gettop(state_) - guard.top - 2;
     if (results >= 1) {
         out.truthy = lua_toboolean(state_, guard.top+3) != 0;
+        // The first return value read as a string (avatar_transfer_out's state
+        // snapshot travels as opaque bytes, like avatar_load's state argument).
+        // A non-string first return leaves has_text false even when truthy.
+        if (lua_type(state_, guard.top+3) == LUA_TSTRING) {
+            std::size_t size = 0;
+            const auto* data = lua_tolstring(state_, guard.top+3, &size);
+            out.has_text = true;
+            out.text.assign(data, size);
+        }
         if (store_avatar && !lua_isnil(state_, guard.top+3)) {
             lua_pushvalue(state_, guard.top+3);
             out.ref = "r" + std::to_string(luaL_ref(state_, LUA_REGISTRYINDEX));
@@ -740,10 +749,18 @@ bool LuaService::on_save(const AvatarKey& key, const std::string& avatar_ref) {
     if (!result.present) return true; // nothing declared to save: vacuous success
     return !result.raised && result.truthy;
 }
-bool LuaService::on_transfer_out(const AvatarKey& key, const std::string& avatar_ref) {
+bool LuaService::on_transfer_out(const AvatarKey& key, const std::string& avatar_ref,
+                                 std::string& snapshot) {
     const auto result = avatar_hook("avatar_transfer_out", key, avatar_ref, true, {}, false);
-    if (!result.present) return true;
-    return !result.raised && result.truthy;
+    if (!result.present) return true; // nothing declared to snapshot: vacuous success
+    if (result.raised || !result.truthy) return false;
+    // The snapshot is the avatar's final state as opaque bytes. A truthy hook
+    // that did not return a string is a malformed surface — fail closed, the
+    // runtime returns the avatar to active rather than submitting a state the
+    // destination could not load.
+    if (!result.has_text) return false;
+    snapshot = result.text;
+    return true;
 }
 bool LuaService::on_transfer_in(const AvatarKey& key, const std::string& avatar_ref) {
     const auto result = avatar_hook("avatar_transfer_in", key, avatar_ref, true, {}, false);

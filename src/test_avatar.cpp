@@ -11,6 +11,7 @@ struct RecordingHooks final : AvatarHooks {
     std::vector<std::string> calls;
     bool fail_load = false, fail_enter = false, fail_save = false;
     bool fail_transfer_out = false, fail_transfer_in = false;
+    std::string transfer_snapshot = "snapshot";
     std::string ref = "avatar-table";
     bool on_load(const AvatarKey&, std::string_view state, std::string& out) override {
         calls.push_back(state.empty() ? "load" : "load:" + std::string(state));
@@ -28,8 +29,9 @@ struct RecordingHooks final : AvatarHooks {
         calls.push_back("save:" + r);
         return !fail_save;
     }
-    bool on_transfer_out(const AvatarKey&, const std::string& r) override {
+    bool on_transfer_out(const AvatarKey&, const std::string& r, std::string& snapshot) override {
         calls.push_back("transfer_out:" + r);
+        snapshot = transfer_snapshot;
         return !fail_transfer_out;
     }
     bool on_transfer_in(const AvatarKey&, const std::string& r) override {
@@ -267,10 +269,12 @@ void avatar_lifecycle() {
         FakeClock clock;
         AvatarRuntime runtime(hooks, clock.fn());
         require(runtime.load(key, 100).ok() && runtime.attach(key, 7).ok(), "setup failed");
-        auto r = runtime.transfer_out(key);
+        std::string snapshot;
+        auto r = runtime.transfer_out(key, snapshot);
         require(r.ok(), "transfer out refused: " + r.reason);
         require(runtime.state(key) == AvatarState::Transferring, "transfer out did not move to transferring");
         require(hooks.saw("transfer_out"), "avatar_transfer_out did not run");
+        require(snapshot == hooks.transfer_snapshot, "transfer_out did not surface the state snapshot");
         r = runtime.save(key);
         require(r.code == AvatarError::Transferring, "save mid-transfer did not refuse AVATAR_TRANSFERRING");
         r = runtime.attach(key, 8);
@@ -278,7 +282,8 @@ void avatar_lifecycle() {
         runtime.transfer_abort(key);
         require(runtime.state(key) == AvatarState::Active, "transfer abort did not return to active");
         // The accepted half: the source reloads as a transfer-in.
-        require(runtime.transfer_out(key).ok(), "second transfer out refused");
+        std::string again;
+        require(runtime.transfer_out(key, again).ok(), "second transfer out refused");
         r = runtime.transfer_accepted(key);
         require(r.ok(), "transfer accepted refused: " + r.reason);
         require(runtime.state(key) == AvatarState::Active, "the accepted reload did not land active");
@@ -295,7 +300,8 @@ void avatar_lifecycle() {
         FakeClock clock;
         AvatarRuntime runtime(hooks, clock.fn());
         require(runtime.load(key, 100).ok() && runtime.attach(key, 7).ok(), "setup failed");
-        auto r = runtime.transfer_out(key);
+        std::string snapshot;
+        auto r = runtime.transfer_out(key, snapshot);
         require(r.code == AvatarError::TransferAborted, "a failed transfer_out did not report abort");
         require(runtime.state(key) == AvatarState::Active, "a failed transfer_out did not return to active");
         std::cout << "avatar.lifecycle transfer_out_failed: aborted, avatar stays active [PASS]\n";
@@ -334,7 +340,8 @@ void avatar_lifecycle() {
         require(hooks.count("tick") >= 1, "a visiting avatar was not ticked (cross-local)");
         r = runtime.save(key);
         require(r.ok(), "cross-local save refused: " + r.reason);
-        r = runtime.transfer_out(key);
+        std::string snapshot;
+        r = runtime.transfer_out(key, snapshot);
         require(r.code == AvatarError::Visiting, "transfer out from visiting did not refuse AVATAR_VISITING");
         // Return complete: back to home authority.
         r = runtime.return_complete(key);
@@ -388,7 +395,8 @@ void avatar_lifecycle() {
         require(runtime.load(same_character, 100).ok() && runtime.attach(same_character, 11).ok(),
                 "re-setup failed");
         const auto cross_before = hooks.count("cross_end");
-        r = runtime.transfer_out(same_character);
+        std::string snapshot;
+        r = runtime.transfer_out(same_character, snapshot);
         require(r.ok() && runtime.state(same_character) == AvatarState::Transferring,
                 "transfer out refused");
         r = runtime.release(same_character);
@@ -467,7 +475,7 @@ return {
   avatar_save = function(context, avatar) hook('save', context, avatar) return true end,
   avatar_leave = function(context, avatar) hook('leave', context, avatar) end,
   avatar_detach = function(context, avatar) hook('detach', context, avatar) end,
-  avatar_transfer_out = function(context, avatar) hook('transfer_out', context, avatar) return { level = 1 } end,
+  avatar_transfer_out = function(context, avatar) hook('transfer_out', context, avatar) return 'level=1' end,
   avatar_transfer_in = function(context, avatar) hook('transfer_in', context, avatar) return true end,
   avatar_fail = function(context, avatar, reason) note('fail:' .. reason) end,
   -- Cross-visit event hooks are context-only (the registry's event family):
@@ -561,7 +569,12 @@ return {
 
     // Transfer: out snapshots and moves to transferring; the destination
     // reload runs load again then transfer_in and lands active unbound.
-    require(runtime.transfer_out(hero).code == AvatarError::Ok, "avatar transfer out");
+    // The script's string snapshot travels through the hook into the runtime.
+    {
+        std::string snapshot;
+        require(runtime.transfer_out(hero, snapshot).code == AvatarError::Ok, "avatar transfer out");
+        equal(snapshot, "level=1");
+    }
     require(runtime.state(hero) == AvatarState::Transferring, "transfer out moves to transferring");
     require(contains("transfer_out:hero"), "avatar_transfer_out ran");
     require(runtime.transfer_accepted(hero).code == AvatarError::Ok, "avatar transfer accepted");

@@ -122,8 +122,13 @@ public:
     // state or triggers a save by side effect.
     virtual bool on_save(const AvatarKey&, const std::string& avatar_ref) = 0;
     // avatar_transfer_out (context) -> state snapshot. Valid at the
-    // active -> transferring edge; abort returns to active.
-    virtual bool on_transfer_out(const AvatarKey&, const std::string& avatar_ref) = 0;
+    // active -> transferring edge; abort returns to active. The snapshot is the
+    // avatar's final state as an opaque byte string (the same representation a
+    // home LOAD carries to avatar_load) — the source caller submits it as the
+    // final MLD1 change before the fence. `snapshot` is written only when the
+    // hook accepts the transfer; an abort leaves it untouched.
+    virtual bool on_transfer_out(const AvatarKey&, const std::string& avatar_ref,
+                                 std::string& snapshot) = 0;
     // avatar_transfer_in (context, state). Valid at the loading (transfer-in)
     // edge; failure closes on this host and the source keeps its avatar.
     virtual bool on_transfer_in(const AvatarKey&, const std::string& avatar_ref) = 0;
@@ -319,14 +324,17 @@ public:
     }
 
     // E_TRANSFER_REQ: active -> transferring (avatar_transfer_out); an abort
-    // returns to active.
-    Result transfer_out(AvatarKey key) {
+    // returns to active. The snapshot is the hook's state snapshot (opaque
+    // bytes), written only on acceptance — the source caller submits it as the
+    // final change before the fence. A hook that accepts without producing a
+    // snapshot leaves it empty, which the caller may refuse as malformed.
+    Result transfer_out(AvatarKey key, std::string& snapshot) {
         Entry* e = find(key);
         if (!e) return {AvatarError::NoAvatar, "no avatar"};
         if (e->state != AvatarState::Active)
             return {state_refusal(e->state), std::string("avatar is ") + to_string(e->state)};
         e->state = AvatarState::Transferring;
-        if (!hooks_.on_transfer_out(key, e->ref)) {
+        if (!hooks_.on_transfer_out(key, e->ref, snapshot)) {
             e->state = AvatarState::Active;
             return {AvatarError::TransferAborted, "avatar_transfer_out failed: transfer aborted"};
         }
