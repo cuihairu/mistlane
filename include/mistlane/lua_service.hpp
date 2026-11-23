@@ -103,6 +103,23 @@ public:
         MigrationOwner destination, std::string_view source_scene,
         std::function<void(std::string error)> answer) = 0;
 };
+// Same-process scene switch adapter (the avatar's scene reference;
+// docs/avatar-runtime.md "Same-process scene switch"). The script names realm +
+// character, the generation is recovered from the runtime. Implemented by the
+// node; calls run on the node's event loop thread.
+class SceneSink {
+public:
+    virtual ~SceneSink() = default;
+    // Returns "" on success (the reference changed, the avatar stays active),
+    // otherwise a short machine-readable word: "disabled; ..." when the node has
+    // no avatar runtime, "no avatar" when the character holds none, or the
+    // oracle's rejection-code word for a non-active avatar
+    // (AVATAR_SUSPENDED / AVATAR_TRANSFERRING / AVATAR_VISITING / AVATAR_RECLAIMING).
+    virtual std::string switch_scene(std::string_view realm, std::string_view character,
+        std::string_view scene) = 0;
+    // The named avatar's current scene reference, or "" when unset/absent.
+    virtual std::string scene_of(std::string_view realm, std::string_view character) const = 0;
+};
 // Script-declared business gauge adapter: mistlane.metrics.gauge publishes a
 // named gauge onto the node's Prometheus registry (rooms, queue depths — the
 // game's own vocabulary). Implemented by Diagnostics; called on the node's
@@ -144,7 +161,7 @@ public:
                         PlacementSink* placement_sink = nullptr, EntityRuntime* entity_runtime = nullptr,
                         const TicketIssuer* ticket_issuer = nullptr, ReturnSink* return_sink = nullptr,
                         ScriptMetricsSink* metrics_sink = nullptr, GrantSink* grant_sink = nullptr,
-                        TransferSink* transfer_sink = nullptr);
+                        TransferSink* transfer_sink = nullptr, SceneSink* scene_sink = nullptr);
     ~LuaService();
     LuaService(const LuaService&) = delete;
     LuaService& operator=(const LuaService&) = delete;
@@ -189,6 +206,9 @@ private:
     static void push_grant_api(lua_State*, LuaService*);
     static int transfer_call(lua_State*);
     static void push_transfer_api(lua_State*, LuaService*);
+    static int scene_call(lua_State*);
+    static int scene_current(lua_State*);
+    static void push_scene_api(lua_State*, LuaService*);
     void websocket_callback(const char* name, std::uint64_t id, std::string_view payload, const std::string& path);
     static int leaderboard_add(lua_State*);
     static int leaderboard_get(lua_State*);
@@ -256,6 +276,7 @@ private:
     PlacementSink* placement_sink_ = nullptr;
     GrantSink* grant_sink_ = nullptr;
     TransferSink* transfer_sink_ = nullptr;
+    SceneSink* scene_sink_ = nullptr;
     EntityRuntime* entity_runtime_ = nullptr;
     const TicketIssuer* ticket_issuer_ = nullptr;
     ReturnSink* return_sink_ = nullptr;

@@ -23,6 +23,10 @@
 
 namespace mistlane {
 
+// Converts a C++ exception into the active Lua error; the scene face (below)
+// uses it before the original definition point.
+int lua_error(lua_State* l, const std::exception& e) { return luaL_error(l, "%s", e.what()); }
+
 void LuaService::push_stream_api(lua_State* l, LuaService* service) {
     lua_getglobal(l, "mistlane");
     if (!lua_istable(l, -1)) { lua_pop(l, 1); lua_newtable(l); }
@@ -691,6 +695,74 @@ void LuaService::push_transfer_api(lua_State* l, LuaService* service) {
     lua_setfield(l, -2, "transfer");
     lua_setglobal(l, "mistlane");
 }
+// Same-process scene switch (docs/avatar-runtime.md "Same-process scene
+// switch"): the avatar stays active, only its instance reference changes — no
+// save, no state round-trip. The script names realm + character (the
+// participant the message context carries); the node resolves the generation
+// from the runtime. Synchronous, like mistlane.returning.seed.
+int LuaService::scene_call(lua_State* l) {
+    auto* service = static_cast<LuaService*>(lua_touserdata(l, lua_upvalueindex(1)));
+    auto identifier = [&](int index, const char* label) {
+        if (!lua_isstring(l, index)) throw std::runtime_error(std::string(label)+" must be an identifier");
+        std::size_t size = 0;
+        const char* data = lua_tolstring(l, index, &size);
+        if (!size || size > 64) throw std::runtime_error(std::string(label)+" length is invalid");
+        for (std::size_t i = 0; i < size; ++i) {
+            const unsigned char ch = data[i];
+            if (!((ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z')
+                    || (ch >= '0' && ch <= '9') || ch == '_' || ch == '-'))
+                throw std::runtime_error(std::string(label)+" must be an identifier");
+        }
+        return std::string(data, size);
+    };
+    try {
+        const auto realm = identifier(1, "realm");
+        const auto character = identifier(2, "character");
+        const auto scene = identifier(3, "scene");
+        if (!service->scene_sink_)
+            throw std::runtime_error("scene is disabled; start with an avatar-load script");
+        const std::string reason = service->scene_sink_->switch_scene(realm, character, scene);
+        if (reason.empty()) { lua_pushboolean(l, 1); return 1; }
+        lua_pushboolean(l, 0);
+        lua_pushlstring(l, reason.data(), reason.size());
+        return 2;
+    } catch (const std::exception& e) { return lua_error(l, e); }
+}
+int LuaService::scene_current(lua_State* l) {
+    auto* service = static_cast<LuaService*>(lua_touserdata(l, lua_upvalueindex(1)));
+    auto identifier = [&](int index, const char* label) {
+        if (!lua_isstring(l, index)) throw std::runtime_error(std::string(label)+" must be an identifier");
+        std::size_t size = 0;
+        const char* data = lua_tolstring(l, index, &size);
+        if (!size || size > 64) throw std::runtime_error(std::string(label)+" length is invalid");
+        for (std::size_t i = 0; i < size; ++i) {
+            const unsigned char ch = data[i];
+            if (!((ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z')
+                    || (ch >= '0' && ch <= '9') || ch == '_' || ch == '-'))
+                throw std::runtime_error(std::string(label)+" must be an identifier");
+        }
+        return std::string(data, size);
+    };
+    try {
+        const auto realm = identifier(1, "realm");
+        const auto character = identifier(2, "character");
+        if (!service->scene_sink_) { lua_pushnil(l); return 1; }
+        const std::string scene = service->scene_sink_->scene_of(realm, character);
+        if (scene.empty()) { lua_pushnil(l); return 1; }
+        lua_pushlstring(l, scene.data(), scene.size());
+        return 1;
+    } catch (const std::exception& e) { return lua_error(l, e); }
+}
+void LuaService::push_scene_api(lua_State* l, LuaService* service) {
+    // Registered unconditionally, like mistlane.transfer: an unconfigured scene
+    // still answers a reason instead of failing the script.
+    lua_getglobal(l, "mistlane");
+    if (!lua_istable(l, -1)) { lua_pop(l, 1); lua_newtable(l); }
+    lua_newtable(l);
+    lua_pushlightuserdata(l, service); lua_pushcclosure(l, scene_call, 1); lua_setfield(l, -2, "switch");
+    lua_pushlightuserdata(l, service); lua_pushcclosure(l, scene_current, 1); lua_setfield(l, -2, "current");
+    lua_setfield(l, -2, "scene"); lua_setglobal(l, "mistlane");
+}
 void LuaService::websocket_callback(const char* name, std::uint64_t id, std::string_view payload, const std::string& path) {
     StackGuard guard(state_);
     lua_pushcfunction(state_, traceback);
@@ -876,7 +948,6 @@ int callback_ref(lua_State* l) {
     lua_pushvalue(l, -1); return luaL_ref(l, LUA_REGISTRYINDEX);
 }
 std::string group_key(const std::string& group) { return group; }
-int lua_error(lua_State* l, const std::exception& e) { return luaL_error(l, "%s", e.what()); }
 constexpr const char* create_group_script =
     "local r=redis.pcall('XGROUP','CREATE',KEYS[1],ARGV[1],'0','MKSTREAM'); "
     "if type(r)=='table' and r.err and string.find(r.err,'BUSYGROUP',1,true) then return 'OK' end; "

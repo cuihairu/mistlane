@@ -229,7 +229,7 @@ private:
     std::map<std::uint64_t, std::shared_ptr<Channel>> sessions_;
     std::uint64_t next_id_ = 1;
 };
-class Node : public PlacementSink, public GrantSink, public TransferSink {
+class Node : public PlacementSink, public GrantSink, public TransferSink, public SceneSink {
 public:
     // One placement question, one connection: login handlers ask the registry
     // through Lua; the answer callback runs back on this event loop.
@@ -277,6 +277,29 @@ public:
             [this] { return service_ ? service_->avatar_runtime() : nullptr; },
             std::move(answer))
             ->start(realm, character, source_scene);
+    }
+    // Same-process scene switch (docs/avatar-runtime.md): the script names
+    // realm + character, the node recovers the generation from the runtime and
+    // changes only the avatar's scene reference — the avatar stays active, no
+    // save, no state round-trip. A refused state reports the oracle's
+    // rejection-code word (AVATAR_SUSPENDED and friends).
+    std::string switch_scene(std::string_view realm, std::string_view character,
+        std::string_view scene) override {
+        if (!service_ || !service_->avatar_runtime())
+            return "disabled; start with an avatar-load script";
+        const auto runtime = service_->avatar_runtime();
+        const auto key = runtime->live_key(realm, character);
+        if (!key) return "no avatar";
+        const auto result = runtime->switch_scene(*key, scene);
+        if (!result.ok()) return std::string(to_string(result.code));
+        return {};
+    }
+    std::string scene_of(std::string_view realm, std::string_view character) const override {
+        if (!service_ || !service_->avatar_runtime()) return {};
+        const auto runtime = service_->avatar_runtime();
+        const auto key = runtime->live_key(realm, character);
+        if (!key) return {};
+        return runtime->scene(*key);
     }
     explicit Node(Config config)
       : config_(std::move(config)), signals_(io_, SIGINT, SIGTERM, SIGHUP), tick_(io_),
@@ -482,7 +505,7 @@ public:
             service_ = std::make_shared<LuaService>(config_.script, service_context_, redis_,
                 websockets_.get(), game_sessions_.get(), this,
                 entity_endpoint_ ? &entity_endpoint_->runtime() : nullptr,
-                ticket_issuer_.get(), return_sender_.get(), metrics_sink_.get(), this, this);
+                ticket_issuer_.get(), return_sender_.get(), metrics_sink_.get(), this, this, this);
         if (http_service) {
             // MLA1 rides the same listener as the Lua routes. Both variables
             // must be injected together; anything else leaves /mla1 as a
@@ -710,7 +733,7 @@ private:
                         auto replacement = std::make_shared<LuaService>(config_.script, service_context_, redis_,
                             websockets_.get(), game_sessions_.get(), this,
                             entity_endpoint_ ? &entity_endpoint_->runtime() : nullptr,
-                            ticket_issuer_.get(), return_sender_.get(), metrics_sink_.get(), this, this);
+                            ticket_issuer_.get(), return_sender_.get(), metrics_sink_.get(), this, this, this);
                         replacement->start();
                         // Rebinding under the new state happens before the swap,
                         // so a bad implementation table keeps the old service.

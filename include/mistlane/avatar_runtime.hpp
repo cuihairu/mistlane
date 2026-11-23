@@ -382,6 +382,22 @@ public:
         return {AvatarError::Ok, ""};
     }
 
+    // Same-process scene switch (docs/avatar-runtime.md: the avatar stays
+    // `active`; only its instance reference changes. No save, no state
+    // round-trip — nothing travels, and the scene-lifecycle no-repeat rule
+    // applies to the avatar too). This is runtime data, not an oracle
+    // transition: only the scene reference changes, the state machine is
+    // untouched. A non-active avatar has no hosted scene to move, so the
+    // switch is refused with that state's rejection code.
+    Result switch_scene(AvatarKey key, std::string_view scene) {
+        Entry* e = find(key);
+        if (!e) return {AvatarError::NoAvatar, "no avatar"};
+        if (e->state != AvatarState::Active)
+            return {state_refusal(e->state), std::string("avatar is ") + to_string(e->state)};
+        e->scene = std::string(scene);
+        return {AvatarError::Ok, ""};
+    }
+
     // Abnormal crossServer termination (peer down, admission revoked, lease
     // lost): the visiting avatar closes here with a best-effort save;
     // onCrossVisitEnd notifies and the close proceeds. Unacknowledged changes
@@ -510,6 +526,11 @@ public:
         const Entry* e = find(key);
         return e ? e->session : 0;
     }
+    // The avatar's scene reference (empty when unset or absent).
+    std::string scene(const AvatarKey& key) const {
+        const Entry* e = find(key);
+        return e ? e->scene : std::string();
+    }
     std::size_t active_count() const {
         std::size_t n = 0;
         for (const auto& [k, e] : avatars_) if (e.state == AvatarState::Active) ++n;
@@ -525,6 +546,11 @@ private:
         bool bound = false;
         std::uint64_t grace_ms = 0;
         std::chrono::steady_clock::time_point suspended_at;
+        // The avatar's scene reference (docs/avatar-runtime.md "Same-process
+        // scene switch": the instance reference the avatar holds; empty when
+        // unset). This is runtime data, not an oracle transition — the switch
+        // keeps the avatar active and changes only this reference.
+        std::string scene;
     };
     Entry* find(const AvatarKey& key) {
         auto it = avatars_.find(key);
