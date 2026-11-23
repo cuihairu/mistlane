@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <functional>
 #include <map>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -477,6 +478,15 @@ public:
     }
 
     bool has(const AvatarKey& key) const { return avatars_.count(key) != 0; }
+    // The live (non-closed) avatar for a character, if any. A script transfer
+    // request names only realm + character, so the caller recovers the
+    // generation the oracle keys on.
+    std::optional<AvatarKey> live_key(std::string_view realm, std::string_view character) const {
+        for (const auto& [k, e] : avatars_)
+            if (k.realm == realm && k.character == character && e.state != AvatarState::Closed)
+                return k;
+        return std::nullopt;
+    }
     AvatarState state(const AvatarKey& key) const {
         const Entry* e = find(key);
         return e ? e->state : AvatarState::Closed;

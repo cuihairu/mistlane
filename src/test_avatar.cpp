@@ -1098,4 +1098,142 @@ return {
     std::cout << "avatar.return: cross visit returns through the durable queue, "
         "release on the drain [PASS]\n";
 }
+// The source-side production caller of a cross-process transfer: the script
+// names realm + character and a destination, the node drives OWNER -> PREPARE
+// -> transfer_out -> MLD1 SUBMIT/FENCE -> MLR1 MIG EVENT DRAINED/FENCE -> poll
+// STATUS -> COMMIT -> release, and the test plays the destination over raw
+// frames (the destination half is a later slice). The source is a crossServer
+// with --data holding a home avatar (--data is crossServer/login-only), so the
+// source owner is cross-scoped and the home release runs no save.
+void avatar_transfer_source() {
+    Context c;
+    const auto script = c.path("transfer.lua");
+    write(script, R"avatar(local calls = {}
+return {
+  message = function(payload)
+    if payload == "read" then return table.concat(calls, "|") end
+    if payload == "transfer" then
+      mistlane.transfer("home", "hero",
+        { kind = "cross", scope = "arena2", role = "crossServer",
+          instance = "xs-b", scene = "room-1" },
+        "town",
+        function(err)
+          calls[#calls+1] = err and ("transfer:err:" .. tostring(err)) or "transfer:ok"
+        end)
+      return "issued"
+    end
+    return "noop"
+  end,
+  avatar_load = function(context, state)
+    calls[#calls+1] = "load:" .. context.character
+    return { name = context.character, generation = context.generation }
+  end,
+  avatar_enter = function(context, avatar) return true end,
+  avatar_transfer_out = function(context, avatar)
+    calls[#calls+1] = "transfer_out:" .. context.character
+    return "level=1 hp=10"
+  end,
+}
+)avatar");
+    write(c.path("echo.lua"), echo);
+    const auto registry = port(), data_port = port(), source_port = port(), dest_port = port();
+    const auto journal = c.path("transfer.sqlite");
+    c.node("coordinator", registry, {"--journal", journal.string()});
+    c.node("data", data_port, {"--script", c.path("echo.lua").string(),
+        "--journal", c.path("transfer-records.sqlite").string()});
+    c.node("crossServer", source_port, {"--script", script.string(),
+        "--data", endpoint(data_port), "--coordinator", endpoint(registry),
+        "--scope", "arena", "--service-name", "xs-a"});
+    // The destination is only a live member for COMMIT's publishability check;
+    // the test plays it as raw frames, not a real transfer-in host.
+    c.node("crossServer", dest_port, {"--script", c.path("echo.lua").string(),
+        "--coordinator", endpoint(registry), "--scope", "arena2", "--service-name", "xs-b"});
+    const auto send_frame = [](RawSocket& raw, std::string_view payload) {
+        std::string frame(4, '\0');
+        auto length = static_cast<std::uint32_t>(payload.size());
+        for (int i = 3; i >= 0; --i) { frame[i] = static_cast<char>(length & 255); length >>= 8; }
+        raw.send(frame+std::string(payload));
+    };
+    const auto read_frame = [](RawSocket& raw) {
+        std::size_t length = 0;
+        for (unsigned char ch : raw.receive(4)) length = (length << 8) | ch;
+        return raw.receive(length);
+    };
+    const auto ask = [&](unsigned listen, const std::string& line) {
+        RawSocket raw(listen);
+        send_frame(raw, line);
+        return read_frame(raw);
+    };
+    const auto ask_data = [&](const std::string& line) { return ask(data_port, line); };
+    const auto join = [&](RawSocket& raw, std::string_view character) {
+        send_frame(raw, "MLC1 1 home g r1 ch " + std::string(character) + " gen 5 ret home g r1");
+        return read_frame(raw);
+    };
+    const auto has = [](std::string_view haystack, std::string_view needle) {
+        return haystack.find(needle) != std::string_view::npos;
+    };
+    // Step 0: the source holds a home avatar (realm == return_realm). The join
+    // defers behind the one-shot MLD1 LOAD; the recordless hero loads with nil
+    // state and lands active, bound to this session. No record is seeded — the
+    // transfer submits the first one at seq 1.
+    RawSocket source(source_port);
+    equal(join(source, "hero"), "MLC1 OK 1");
+    // The script asks for the transfer; the handler returns at once and the
+    // driver runs on the event loop.
+    send_frame(source, "transfer");
+    equal(read_frame(source), "issued");
+    // The snapshot reaches home data as the next ordered change (gen 5, seq 1).
+    eventually([&] {
+        return ask_data("MLD1 LOAD home hero") == "MLD1 STATE gen 5 seq 1 level=1 hp=10";
+    }, 10s, "the transfer snapshot never reached home data");
+    // Wait for the coordinator's home fence: the request id + the reserved
+    // generation the driver uses, and the "fenced" flag meaning the EVENT FENCE
+    // applied. STATUS answers EMPTY before PREPARE lands, so parse retries.
+    std::string move_id;
+    std::uint64_t move_gen = 0;
+    eventually([&] {
+        const auto status = ask(registry, "MLR1 MIG STATUS NS - home hero");
+        std::istringstream in(status);
+        std::string magic, tag, verb, id, state, drained, fenced, ready, generation;
+        if (!(in >> magic >> tag >> verb >> id >> state >> drained >> fenced >> ready >> generation))
+            return false;
+        if (magic != "MLR1" || tag != "MIG" || verb != "STATE" || drained != "drained"
+                || fenced != "fenced") return false;
+        move_id = id;
+        move_gen = std::stoull(generation);
+        return true;
+    }, 10s, "the transfer never reached the data fence");
+    // Play the destination: load the frozen snapshot (observed above), then
+    // acknowledge ready. The driver polls STATUS and commits.
+    equal(ask(registry, "MLR1 MIG EVENT NS - home hero " + move_id + " "
+            + std::to_string(move_gen) + " READY"),
+        "MLR1 MIG STEP " + move_id + " PREPARING");
+    eventually([&] {
+        return ask(registry, "MLR1 ROUTE GET NS - home hero")
+            .starts_with("MLR1 ROUTE AT arena2 crossServer xs-b ");
+    }, 10s, "the committed route never published to the destination");
+    // The source ran transfer_out, released the avatar, and the script's
+    // callback fired. The release ran no save and no cross-scope end: this is
+    // a home-sourced avatar, and the final change already left with the transfer.
+    eventually([&] {
+        send_frame(source, "read");
+        const auto seen = read_frame(source);
+        return has(seen, "transfer_out:hero") && has(seen, "transfer:ok");
+    }, 10s, "the source never ran transfer_out and released");
+    send_frame(source, "read");
+    const auto seen = read_frame(source);
+    require(!has(seen, "save:hero"), "the release ran a save");
+    require(!has(seen, "end:hero"), "a home-sourced release ran onCrossVisitEnd");
+    // The home fence held: a late gen-5 writer is refused, and only the new
+    // generation resumes from the frozen cursor.
+    equal(ask_data("MLD1 SUBMIT home hero gen 5 seq 3 late"), "MLD1 ERR STALE gen 5");
+    equal(ask_data("MLD1 SUBMIT home hero gen 6 seq 2 hp=20"),
+        "MLD1 ACK durable home hero gen 6 seq 2");
+    equal(ask_data("MLD1 LOAD home hero"), "MLD1 STATE gen 6 seq 2 hp=20");
+    const auto published = ask(registry, "MLR1 ROUTE GET NS - home hero");
+    require(published.ends_with(" room-1 6"), "published route lost scene/generation: "+published);
+    std::cout << "avatar.transfer.source: home avatar transfer drives "
+        "OWNER -> PREPARE -> transfer_out -> SUBMIT/FENCE -> COMMIT -> release, "
+        "old writer tombstoned, new generation resumes [PASS]\n";
+}
 } // namespace mistlane::test

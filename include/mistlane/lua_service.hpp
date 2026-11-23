@@ -12,6 +12,7 @@
 #include "mistlane/cross.hpp"
 #include "mistlane/entity_runtime.hpp"
 #include "mistlane/http_service.hpp"
+#include "mistlane/migration.hpp"
 #include <boost/redis/connection.hpp>
 #include <boost/asio/io_context.hpp>
 
@@ -85,6 +86,23 @@ public:
     // when the final change-set is acknowledged durably.
     virtual bool drained(std::string_view realm, std::string_view character) const = 0;
 };
+// Source-side transfer adapter (the host that holds the avatar): drives the
+// coordinator's MLR1 MIG sequence and the home data endpoint's final MLD1
+// SUBMIT/FENCE, then releases the avatar once the destination accepted and the
+// route committed. The script only names realm + character, the destination
+// owner and the source scene; the generation is recovered from the runtime.
+// Implemented by the node; calls run on the node's event loop thread.
+class TransferSink {
+public:
+    virtual ~TransferSink() = default;
+    // Answers once on the event loop thread: an empty error on success (the
+    // avatar released), otherwise a short machine-readable word ("disabled" for
+    // no avatar runtime or no coordinator/data endpoint, "no avatar", or the
+    // coordinator/data refusal — "CONFLICT"/"STALE"/"ORDER"/"timeout"/...).
+    virtual void transfer(std::string_view realm, std::string_view character,
+        MigrationOwner destination, std::string_view source_scene,
+        std::function<void(std::string error)> answer) = 0;
+};
 // Script-declared business gauge adapter: mistlane.metrics.gauge publishes a
 // named gauge onto the node's Prometheus registry (rooms, queue depths — the
 // game's own vocabulary). Implemented by Diagnostics; called on the node's
@@ -125,7 +143,8 @@ public:
                         WebsocketSink* websocket_sink = nullptr, GameSessionSink* session_sink = nullptr,
                         PlacementSink* placement_sink = nullptr, EntityRuntime* entity_runtime = nullptr,
                         const TicketIssuer* ticket_issuer = nullptr, ReturnSink* return_sink = nullptr,
-                        ScriptMetricsSink* metrics_sink = nullptr, GrantSink* grant_sink = nullptr);
+                        ScriptMetricsSink* metrics_sink = nullptr, GrantSink* grant_sink = nullptr,
+                        TransferSink* transfer_sink = nullptr);
     ~LuaService();
     LuaService(const LuaService&) = delete;
     LuaService& operator=(const LuaService&) = delete;
@@ -168,6 +187,8 @@ private:
     static void push_placement_api(lua_State*, LuaService*);
     static int grant_call(lua_State*);
     static void push_grant_api(lua_State*, LuaService*);
+    static int transfer_call(lua_State*);
+    static void push_transfer_api(lua_State*, LuaService*);
     void websocket_callback(const char* name, std::uint64_t id, std::string_view payload, const std::string& path);
     static int leaderboard_add(lua_State*);
     static int leaderboard_get(lua_State*);
@@ -234,6 +255,7 @@ private:
     GameSessionSink* session_sink_ = nullptr;
     PlacementSink* placement_sink_ = nullptr;
     GrantSink* grant_sink_ = nullptr;
+    TransferSink* transfer_sink_ = nullptr;
     EntityRuntime* entity_runtime_ = nullptr;
     const TicketIssuer* ticket_issuer_ = nullptr;
     ReturnSink* return_sink_ = nullptr;

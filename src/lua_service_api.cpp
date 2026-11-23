@@ -608,6 +608,89 @@ void LuaService::push_grant_api(lua_State* l, LuaService* service) {
     lua_setfield(l, -2, "grant");
     lua_setglobal(l, "mistlane");
 }
+// A source-side transfer cannot answer inside the handler either: it drives a
+// coordinator sequence and a data SUBMIT/FENCE, then releases the avatar, all
+// on the event loop after the handler returned. The callback receives (error)
+// — nil on success (the avatar released), otherwise the short reason word.
+int LuaService::transfer_call(lua_State* l) {
+    auto* service = static_cast<LuaService*>(lua_touserdata(l, lua_upvalueindex(1)));
+    auto word = [&](int index, const char* label) {
+        if (!lua_isstring(l, index)) throw std::runtime_error(std::string(label)+" must be an identifier");
+        std::size_t size = 0;
+        const char* data = lua_tolstring(l, index, &size);
+        if (!size || size > 64) throw std::runtime_error(std::string(label)+" length is invalid");
+        for (std::size_t i = 0; i < size; ++i) {
+            const unsigned char ch = data[i];
+            if (!((ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z')
+                    || (ch >= '0' && ch <= '9') || ch == '_' || ch == '-'))
+                throw std::runtime_error(std::string(label)+" must be an identifier");
+        }
+        return std::string(data, size);
+    };
+    const auto realm = word(1, "realm");
+    const auto character = word(2, "character");
+    if (!lua_istable(l, 3)) throw std::runtime_error("destination must be a table");
+    const auto source_scene = word(4, "source_scene");
+    if (!lua_isfunction(l, 5)) throw std::runtime_error("last argument must be a callback function");
+    // destination = { kind="realm"|"cross", scope, role, instance, scene,
+    //   namespace=... } — the owner the avatar moves to. The scope is the realm
+    // name (kind=realm) or the cross group (kind=cross); the role must match.
+    MigrationOwner dest;
+    const auto field = [&](const char* name) {
+        lua_getfield(l, 3, name);
+        if (!lua_isstring(l, -1)) { lua_pop(l, 1); return std::string(); }
+        std::size_t size = 0;
+        const char* data = lua_tolstring(l, -1, &size);
+        const std::string out(data, size);
+        lua_pop(l, 1);
+        return out;
+    };
+    const auto valid = [](const char* label, const std::string& value) {
+        if (value.empty() || value.size() > 64)
+            throw std::runtime_error(std::string(label)+" must be an identifier");
+        for (unsigned char ch : value)
+            if (!((ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z')
+                    || (ch >= '0' && ch <= '9') || ch == '_' || ch == '-'))
+                throw std::runtime_error(std::string(label)+" must be an identifier");
+    };
+    const auto kind = field("kind");
+    if (kind == "realm") dest.scope.kind = MigrationScope::Kind::Realm;
+    else if (kind == "cross") dest.scope.kind = MigrationScope::Kind::CrossGroup;
+    else throw std::runtime_error("destination.kind must be \"realm\" or \"cross\"");
+    if (const auto group = field("namespace"); !group.empty()) { valid("namespace", group); dest.scope.namespace_ = group; }
+    const auto scope = field("scope");
+    valid("scope", scope);
+    if (dest.scope.kind == MigrationScope::Kind::Realm) dest.scope.realm = scope;
+    else dest.scope.cross_group = scope;
+    dest.role = field("role"); valid("role", dest.role);
+    dest.instance = field("instance"); valid("instance", dest.instance);
+    dest.scene = field("scene"); valid("scene", dest.scene);
+    if (!valid_migration_owner(dest))
+        throw std::runtime_error("destination owner is invalid (role must match kind)");
+    lua_pushvalue(l, 5);
+    const auto callback = luaL_ref(l, LUA_REGISTRYINDEX);
+    const auto life = service->async_context_;
+    if (!service->transfer_sink_)
+        return finish_lua(life, callback, "transfer is disabled; start with an avatar-load script",
+            [](lua_State* l) { lua_pushnil(l); }), 0;
+    service->transfer_sink_->transfer(realm, character, dest, source_scene,
+        [life, callback](std::string error) {
+            if (!error.empty())
+                return finish_lua(life, callback, std::move(error), [](lua_State* l) { lua_pushnil(l); });
+            finish_lua(life, callback, {}, [](lua_State* l) { lua_pushboolean(l, 1); });
+        });
+    return 0;
+}
+void LuaService::push_transfer_api(lua_State* l, LuaService* service) {
+    // Registered unconditionally, like mistlane.grant: an unconfigured transfer
+    // still answers the callback (a "disabled" reason) instead of failing the
+    // script silently.
+    lua_getglobal(l, "mistlane");
+    if (!lua_istable(l, -1)) { lua_pop(l, 1); lua_newtable(l); }
+    lua_pushlightuserdata(l, service); lua_pushcclosure(l, transfer_call, 1);
+    lua_setfield(l, -2, "transfer");
+    lua_setglobal(l, "mistlane");
+}
 void LuaService::websocket_callback(const char* name, std::uint64_t id, std::string_view payload, const std::string& path) {
     StackGuard guard(state_);
     lua_pushcfunction(state_, traceback);

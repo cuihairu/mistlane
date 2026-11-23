@@ -20,6 +20,7 @@
 #include "observability.hpp"
 #include "tcp_channel.hpp"
 #include "return_sender.hpp"
+#include "transfer_driver.hpp"
 #include "registry_service.hpp"
 #include "session_plane.hpp"
 #include "mistlane/entity_gateway.hpp"
@@ -228,7 +229,7 @@ private:
     std::map<std::uint64_t, std::shared_ptr<Channel>> sessions_;
     std::uint64_t next_id_ = 1;
 };
-class Node : public PlacementSink, public GrantSink {
+class Node : public PlacementSink, public GrantSink, public TransferSink {
 public:
     // One placement question, one connection: login handlers ask the registry
     // through Lua; the answer callback runs back on this event loop.
@@ -247,6 +248,36 @@ public:
         RecordFetcher::grant(io_.get_executor(), config_.data,
             config_.upstream_token.empty() ? std::string{} : service_hello(config_),
             realm, character, std::move(answer));
+    }
+    // One source-side transfer, one driver: the script names realm + character
+    // and the destination; the driver recovers the generation from the runtime,
+    // drives the coordinator sequence and the data SUBMIT/FENCE, then releases
+    // the avatar. The source owner is this host — role by config, instance by
+    // the register_line derivation, scope/namespace from config.
+    void transfer(std::string_view realm, std::string_view character,
+        MigrationOwner destination, std::string_view source_scene,
+        std::function<void(std::string error)> answer) override {
+        if (!config_.coordinator_enabled || config_.data.address.empty())
+            return answer("transfer is disabled; start with --coordinator and --data");
+        if (!service_ || !service_->avatar_runtime())
+            return answer("transfer is disabled; start with an avatar-load script");
+        MigrationOwner source;
+        source.scope.kind = config_.role == "gameServer" ? MigrationScope::Kind::Realm
+                                                         : MigrationScope::Kind::CrossGroup;
+        source.scope.namespace_ = config_.namespace_;
+        if (source.scope.kind == MigrationScope::Kind::Realm) source.scope.realm = config_.scope;
+        else source.scope.cross_group = config_.scope;
+        source.role = config_.role;
+        source.instance = !config_.service_name.empty() ? config_.service_name
+            : "node-"+std::to_string(config_.listen.port);
+        // The avatar's current scene is the owner text's scene field; it is
+        // filled from the request just before the driver starts.
+        std::make_shared<TransferDriver>(io_.get_executor(), config_.coordinator, config_.data,
+            config_.upstream_token.empty() ? std::string{} : service_hello(config_),
+            std::move(source), std::move(destination), config_.namespace_,
+            [this] { return service_ ? service_->avatar_runtime() : nullptr; },
+            std::move(answer))
+            ->start(realm, character, source_scene);
     }
     explicit Node(Config config)
       : config_(std::move(config)), signals_(io_, SIGINT, SIGTERM, SIGHUP), tick_(io_),
@@ -452,7 +483,7 @@ public:
             service_ = std::make_shared<LuaService>(config_.script, service_context_, redis_,
                 websockets_.get(), game_sessions_.get(), this,
                 entity_endpoint_ ? &entity_endpoint_->runtime() : nullptr,
-                ticket_issuer_.get(), return_sender_.get(), metrics_sink_.get(), this);
+                ticket_issuer_.get(), return_sender_.get(), metrics_sink_.get(), this, this);
         if (http_service) {
             // MLA1 rides the same listener as the Lua routes. Both variables
             // must be injected together; anything else leaves /mla1 as a
@@ -680,7 +711,7 @@ private:
                         auto replacement = std::make_shared<LuaService>(config_.script, service_context_, redis_,
                             websockets_.get(), game_sessions_.get(), this,
                             entity_endpoint_ ? &entity_endpoint_->runtime() : nullptr,
-                            ticket_issuer_.get(), return_sender_.get(), metrics_sink_.get(), this);
+                            ticket_issuer_.get(), return_sender_.get(), metrics_sink_.get(), this, this);
                         replacement->start();
                         // Rebinding under the new state happens before the swap,
                         // so a bad implementation table keeps the old service.
