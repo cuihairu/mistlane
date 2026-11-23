@@ -369,6 +369,25 @@ public:
             return "MLD1 FENCED gen " + std::to_string(pin->generation)
                  + " seq " + std::to_string(pin->sequence);
         }
+        // The durable-write lease: when home data has allocated a generation
+        // for the key, a submission is authorized only at exactly that granted
+        // generation. A writer below it is the superseded host (STALE, named at
+        // the current lease); a writer above it is a host that names a
+        // generation home data never handed out — the whole point of the sole
+        // authority is that no host self-advances. A key home data never
+        // granted keeps the record-relative fence below (migration-era records
+        // carry their own generation as the implicit lease, and the coordinator
+        // handoff authorizes the destination past a FENCE).
+        if (const auto lease = generation_authority_.current(key)) {
+            if (request.generation < *lease) {
+                result = "stale";
+                return "MLD1 ERR STALE gen " + std::to_string(*lease);
+            }
+            if (request.generation > *lease) {
+                result = "ungranted";
+                return "MLD1 ERR UNGRANTED gen " + std::to_string(*lease);
+            }
+        }
         if (it != records_.end() && request.generation < it->second.generation) {
             // The generation fence: a late writer cannot overwrite a newer
             // hosting assignment by arriving last.

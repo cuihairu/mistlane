@@ -808,23 +808,34 @@ void record_grant() {
     // grant and the record's committed generation, and a caller that tries to
     // name a generation of its own is refused as malformed — the whole point
     // of the sole authority is that no host chooses or advances a generation.
+    // Once a generation is granted it is also the durable-write lease: a
+    // submission is authorized only at exactly that generation — below it is
+    // the writer the lease superseded (STALE), above it is a host home data
+    // never authorized (UNGRANTED), so no host self-advances past its lease.
     RecordStore store;
     std::string_view result;
     equal(store.handle("MLD1 GRANT home hero", result), "MLD1 GRANTED gen 1");
-    equal(store.handle("MLD1 GRANT home hero", result), "MLD1 GRANTED gen 2");
-    require(store.granted({"home", "hero"}) == 2, "grant query lost the high-water mark");
-    // The grant is a generation authority, not a record: it leaves the record
-    // alone (a load before any submit is still EMPTY).
-    equal(store.handle("MLD1 LOAD home hero", result), "MLD1 EMPTY");
+    require(store.granted({"home", "hero"}) == 1, "grant query lost the high-water mark");
     equal(store.handle("MLD1 SUBMIT home hero gen 1 seq 1 hp=10", result), "MLD1 RECEIVED gen 1 seq 1");
-    // The next grant is strictly above the last one even though the record's
-    // own generation is lower, and a migration-era record at a higher
-    // generation resumes strictly above it, never below.
-    equal(store.handle("MLD1 GRANT home hero", result), "MLD1 GRANTED gen 3");
-    equal(store.handle("MLD1 SUBMIT home hero gen 5 seq 2 hp=20", result), "MLD1 RECEIVED gen 5 seq 2");
-    equal(store.handle("MLD1 GRANT home hero", result), "MLD1 GRANTED gen 6");
+    equal(store.handle("MLD1 GRANT home hero", result), "MLD1 GRANTED gen 2");
+    equal(store.handle("MLD1 SUBMIT home hero gen 2 seq 2 hp=20", result), "MLD1 RECEIVED gen 2 seq 2");
+    // A writer below the lease is the host the lease superseded; a writer
+    // above it names a generation home data never handed out.
+    equal(store.handle("MLD1 SUBMIT home hero gen 1 seq 3 hp=30", result), "MLD1 ERR STALE gen 2");
+    equal(store.handle("MLD1 SUBMIT home hero gen 3 seq 3 hp=30", result), "MLD1 ERR UNGRANTED gen 2");
+    // At the lease the normal discipline resumes (sequence, dedup, LOAD).
+    equal(store.handle("MLD1 SUBMIT home hero gen 2 seq 3 hp=30", result), "MLD1 RECEIVED gen 2 seq 3");
+    equal(store.handle("MLD1 SUBMIT home hero gen 2 seq 3 hp=99", result), "MLD1 RECEIVED gen 2 seq 3");
+    equal(store.handle("MLD1 LOAD home hero", result), "MLD1 STATE gen 2 seq 3 hp=30");
+    // A key home data never granted keeps the record-relative fence: a
+    // migration-era record carries its own generation as the implicit lease,
+    // so the legacy takeover (a strictly newer generation resumes) still works
+    // there, and the next grant floors strictly above the record.
+    equal(store.handle("MLD1 SUBMIT away hero gen 5 seq 1 x", result), "MLD1 RECEIVED gen 5 seq 1");
+    equal(store.handle("MLD1 SUBMIT away hero gen 6 seq 2 y", result), "MLD1 RECEIVED gen 6 seq 2");
+    equal(store.handle("MLD1 GRANT away hero", result), "MLD1 GRANTED gen 7");
+    equal(store.handle("MLD1 GRANT away hero", result), "MLD1 GRANTED gen 8");
     // A different participant counts independently.
-    equal(store.handle("MLD1 GRANT away hero", result), "MLD1 GRANTED gen 1");
     equal(store.handle("MLD1 GRANT home other", result), "MLD1 GRANTED gen 1");
     // The caller never names a generation, so a frame that tries to is not a
     // grant at all.
@@ -832,7 +843,8 @@ void record_grant() {
     equal(store.handle("MLD1 GRANT home", result), "MLD1 ERR INVALID");
     equal(store.handle("MLD1 GRANT home bad char", result), "MLD1 ERR INVALID");
     std::cout << "record.grant: the data side alone allocates a strictly greater "
-        "hosting generation per participant and never accepts a caller-chosen one [PASS]\n";
+        "hosting generation per participant, never accepts a caller-chosen one, "
+        "and fences durable writes at the granted lease [PASS]\n";
 }
 void record_grant_journal() {
     // The allocated generation is durable: a restart of the data node keeps
@@ -868,6 +880,11 @@ void record_grant_journal() {
     c.node("data", second, {"--script", c.path("echo.lua").string(),
         "--journal", journal.string()});
     equal(ask(second, "MLD1 GRANT home hero"), "MLD1 GRANTED gen 3");
+    // The restored high-water mark is also the durable-write lease: the write
+    // at exactly the restored grant lands, and a host naming a generation the
+    // restored node never issued is refused with the lease as the ceiling.
+    equal(ask(second, "MLD1 SUBMIT home hero gen 3 seq 1 hp=5"), "MLD1 ACK durable home hero gen 3 seq 1");
+    equal(ask(second, "MLD1 SUBMIT home hero gen 4 seq 2 hp=6"), "MLD1 ERR UNGRANTED gen 3");
     // The journal boundary refuses an invalid grant row instead of persisting
     // it: the authority is a high-water mark, not a suggestion.
     {
