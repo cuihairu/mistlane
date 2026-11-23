@@ -1345,4 +1345,142 @@ void avatar_transfer_destination() {
         "destination, taken in (avatar_load + avatar_transfer_in) and READY'd, "
         "so the coordinator publishes the destination route [PASS]\n";
 }
+// The composed cross-process transfer: the source and the destination are both
+// real hosts, and nothing is driven over raw frames. The source's
+// mistlane.transfer runs the source half (transfer_out -> MLD1 SUBMIT/FENCE ->
+// EVENT DRAINED/FENCE -> poll STATUS until ready) and the destination's poll
+// takes the fenced gap in and acknowledges READY, which is what unblocks the
+// source's COMMIT so the coordinator publishes the destination route. The
+// snapshot the source's transfer_out returns travels home data -> the
+// destination's avatar_load state.
+void avatar_transfer_full() {
+    Context c;
+    write(c.path("transfer.lua"), R"avatar(local calls = {}
+return {
+  message = function(payload)
+    if payload == "read" then return table.concat(calls, "|") end
+    if payload == "transfer" then
+      mistlane.transfer("home", "hero",
+        { kind = "cross", scope = "arena2", role = "crossServer",
+          instance = "xs-b", scene = "room-1" },
+        "town",
+        function(err)
+          calls[#calls+1] = err and ("transfer:err:" .. tostring(err)) or "transfer:ok"
+        end)
+      return "issued"
+    end
+    return "noop"
+  end,
+  avatar_load = function(context, state)
+    calls[#calls+1] = "load:" .. context.character
+    return { name = context.character, generation = context.generation }
+  end,
+  avatar_enter = function(context, avatar) return true end,
+  avatar_transfer_out = function(context, avatar)
+    calls[#calls+1] = "transfer_out:" .. context.character
+    return "level=1 hp=10"
+  end,
+}
+)avatar");
+    write(c.path("transfer_in.lua"), R"avatar(return {
+  message = function(payload) return payload end,
+  avatar_load = function(context, state)
+    print("load:" .. context.character .. ":" .. tostring(state))
+    return { name = context.character, generation = context.generation }
+  end,
+  avatar_transfer_in = function(context, avatar)
+    print("transfer_in:" .. context.character)
+    return true
+  end,
+}
+)avatar");
+    write(c.path("echo.lua"), echo);
+    const auto registry = port(), data_port = port(), source_port = port(), dest_port = port();
+    const auto journal = c.path("full-transfer.sqlite");
+    c.node("coordinator", registry, {"--journal", journal.string()});
+    c.node("data", data_port, {"--script", c.path("echo.lua").string(),
+        "--journal", c.path("full-records.sqlite").string()});
+    c.node("crossServer", source_port, {"--script", c.path("transfer.lua").string(),
+        "--data", endpoint(data_port), "--coordinator", endpoint(registry),
+        "--scope", "arena", "--service-name", "xs-a"});
+    auto& destination = c.node("crossServer", dest_port,
+        {"--script", c.path("transfer_in.lua").string(),
+        "--data", endpoint(data_port), "--coordinator", endpoint(registry),
+        "--scope", "arena2", "--service-name", "xs-b"});
+    const auto send_frame = [](RawSocket& raw, std::string_view payload) {
+        std::string frame(4, '\0');
+        auto length = static_cast<std::uint32_t>(payload.size());
+        for (int i = 3; i >= 0; --i) { frame[i] = static_cast<char>(length & 255); length >>= 8; }
+        raw.send(frame+std::string(payload));
+    };
+    const auto read_frame = [](RawSocket& raw) {
+        std::size_t length = 0;
+        for (unsigned char ch : raw.receive(4)) length = (length << 8) | ch;
+        return raw.receive(length);
+    };
+    const auto ask = [&](unsigned listen, const std::string& line) {
+        RawSocket raw(listen);
+        send_frame(raw, line);
+        return read_frame(raw);
+    };
+    const auto ask_data = [&](const std::string& line) { return ask(data_port, line); };
+    const auto join = [&](RawSocket& raw, std::string_view character) {
+        send_frame(raw, "MLC1 1 home g r1 ch " + std::string(character) + " gen 5 ret home g r1");
+        return read_frame(raw);
+    };
+    const auto has = [](std::string_view haystack, std::string_view needle) {
+        return haystack.find(needle) != std::string_view::npos;
+    };
+    // Both hosts must be live members before the source asks: COMMIT publishes
+    // only to a destination the registry can see.
+    eventually([&] {
+        return ask(registry, "MLR1 QUERY crossServer - arena").find("xs-a") != std::string::npos
+            && ask(registry, "MLR1 QUERY crossServer - arena2").find("xs-b") != std::string::npos;
+    }, 10s, "the transfer hosts never registered");
+    // The source hosts a home avatar (realm == return_realm), loaded recordless
+    // at gen 5; the transfer submits the first record at seq 1.
+    RawSocket source(source_port);
+    equal(join(source, "hero"), "MLC1 OK 1");
+    send_frame(source, "transfer");
+    equal(read_frame(source), "issued");
+    eventually([&] {
+        return ask_data("MLD1 LOAD home hero") == "MLD1 STATE gen 5 seq 1 level=1 hp=10";
+    }, 10s, "the transfer snapshot never reached home data");
+    // The destination takes the fenced gap in: its avatar_load sees the snapshot
+    // the source submitted, then avatar_transfer_in.
+    eventually([&] {
+        const auto seen = destination.output();
+        return seen.find("load:hero:level=1 hp=10") != std::string::npos
+            && seen.find("transfer_in:hero") != std::string::npos;
+    }, 10s, "the destination never took the avatar in");
+    // The source commits only after the destination's READY landed, and the
+    // coordinator publishes the destination route.
+    eventually([&] {
+        return ask(registry, "MLR1 ROUTE GET NS - home hero")
+            .starts_with("MLR1 ROUTE AT arena2 crossServer xs-b ");
+    }, 10s, "the committed route never published to the destination");
+    // The source ran transfer_out and released the avatar: a home-sourced
+    // release runs no save and no onCrossVisitEnd, because the change already
+    // left with the transfer.
+    eventually([&] {
+        send_frame(source, "read");
+        const auto seen = read_frame(source);
+        return has(seen, "transfer_out:hero") && has(seen, "transfer:ok");
+    }, 10s, "the source never released the avatar");
+    send_frame(source, "read");
+    const auto seen = read_frame(source);
+    require(!has(seen, "save:hero"), "the release ran a save");
+    require(!has(seen, "end:hero"), "a home-sourced release ran onCrossVisitEnd");
+    // The old writer stays tombstoned; the new generation resumes from the
+    // frozen cursor.
+    equal(ask_data("MLD1 SUBMIT home hero gen 5 seq 3 late"), "MLD1 ERR STALE gen 5");
+    equal(ask_data("MLD1 SUBMIT home hero gen 6 seq 2 hp=20"),
+        "MLD1 ACK durable home hero gen 6 seq 2");
+    equal(ask_data("MLD1 LOAD home hero"), "MLD1 STATE gen 6 seq 2 hp=20");
+    const auto published = ask(registry, "MLR1 ROUTE GET NS - home hero");
+    require(published.ends_with(" room-1 6"), "published route lost scene/generation: "+published);
+    std::cout << "avatar.transfer.full: both real hosts compose the transfer -- "
+        "source transfer_out -> MLD1 SUBMIT/FENCE -> destination poll + READY -> "
+        "coordinator COMMIT publishes the destination route [PASS]\n";
+}
 } // namespace mistlane::test
