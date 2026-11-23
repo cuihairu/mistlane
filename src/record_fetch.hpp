@@ -35,6 +35,9 @@ public:
     };
     using Answer = std::function<void(Record record, std::string reason)>;
     using GrantAnswer = std::function<void(std::uint64_t generation, std::string reason)>;
+    // The write side of the record protocol (SUBMIT / FENCE): ok=true on the
+    // success verdict, ok=false with the short reason word otherwise.
+    using WriteAnswer = std::function<void(bool ok, std::string reason)>;
     // Answers exactly once, on the executor's thread that started it: present=true with
     // the STATE bytes on success; present=false with reason "EMPTY" when the
     // data node holds no record; otherwise present=false with a short reason —
@@ -65,8 +68,41 @@ public:
         self->grant_answer_ = std::move(answer);
         self->start();
     }
+    // The source transfer's final change: submit the state snapshot as the
+    // next ordered change at the current generation. Answers exactly once with
+    // ok=true on MLD1 ACK durable (journaled) or MLD1 RECEIVED (volatile), or
+    // ok=false with a short reason — "unreachable"/"refused"/"timeout"/
+    // "INVALID"/"STALE"/"SEQ"/"UNGRANTED"/"FULL"/"STORAGE"/"unexpected".
+    // The payload is opaque and space-bearing, appended after one separating
+    // space (an empty payload is a valid record, matching return_sender).
+    static void submit(asio::any_io_executor executor, Endpoint data, std::string identity,
+                       std::string_view realm, std::string_view character,
+                       std::uint64_t generation, std::uint64_t sequence,
+                       std::string payload, WriteAnswer answer) {
+        std::shared_ptr<RecordFetcher> self(
+            new RecordFetcher(std::move(executor), data, std::move(identity), Kind::Submit));
+        self->question_ = "MLD1 SUBMIT " + std::string(realm) + " " + std::string(character)
+            + " gen " + std::to_string(generation) + " seq " + std::to_string(sequence)
+            + (payload.empty() ? "" : " " + payload);
+        self->write_answer_ = std::move(answer);
+        self->start();
+    }
+    // The transfer tombstone: fence the current generation so no older writer
+    // resumes. Answers exactly once with ok=true on MLD1 FENCED, or ok=false
+    // with the short reason ("unreachable"/"refused"/"timeout"/"NOFENCE"/
+    // "STALE"/"STORAGE"/"unexpected").
+    static void fence(asio::any_io_executor executor, Endpoint data, std::string identity,
+                      std::string_view realm, std::string_view character,
+                      std::uint64_t generation, WriteAnswer answer) {
+        std::shared_ptr<RecordFetcher> self(
+            new RecordFetcher(std::move(executor), data, std::move(identity), Kind::Fence));
+        self->question_ = "MLD1 FENCE " + std::string(realm) + " " + std::string(character)
+            + " gen " + std::to_string(generation);
+        self->write_answer_ = std::move(answer);
+        self->start();
+    }
 private:
-    enum class Kind { Load, Grant };
+    enum class Kind { Load, Grant, Submit, Fence };
     RecordFetcher(asio::any_io_executor executor, Endpoint data, std::string identity, Kind kind)
       : endpoint_(tcp::endpoint(parse_address(data.address), data.port)),
         identity_(std::move(identity)), kind_(kind),
@@ -115,6 +151,19 @@ private:
             // not the record frame — a tokened data endpoint answered it.
             if (payload.starts_with("MLS1")) return answer({}, "refused");
             return answer({}, "unexpected");
+        }
+        // MLD1 SUBMIT / MLD1 FENCE: the success verdict is all the caller
+        // needs (the echoed generation and sequence are its own frame's), the
+        // refusal is the ERR word — including ERR SEQ seq <n> for a submit
+        // past the committed sequence.
+        if (kind_ == Kind::Submit || kind_ == Kind::Fence) {
+            const bool ok = kind_ == Kind::Submit
+                ? (payload.starts_with("MLD1 ACK durable ") || payload.starts_with("MLD1 RECEIVED "))
+                : payload.starts_with("MLD1 FENCED ");
+            if (ok) return write_answer(true, {});
+            if (payload.starts_with("MLD1 ERR ")) return write_answer(false, payload.substr(9));
+            if (payload.starts_with("MLS1")) return write_answer(false, "refused");
+            return write_answer(false, "unexpected");
         }
         // MLD1 GRANTED gen <n> — the granted generation, nothing else.
         if (payload.starts_with("MLD1 GRANTED ")) {
@@ -170,11 +219,19 @@ private:
         channel_->close();
         grant_answer_(generation, std::move(reason));
     }
+    void write_answer(bool ok, std::string reason) {
+        if (done_) return;
+        done_ = true;
+        timer_.cancel();
+        channel_->close();
+        write_answer_(ok, std::move(reason));
+    }
     // Every refusal that is not a protocol verdict — no leg, a refused
     // handshake, a deadline — is delivered to whichever question was asked.
     void fail(std::string reason) {
         if (kind_ == Kind::Load) return answer({}, std::move(reason));
-        return grant_answer(0, std::move(reason));
+        if (kind_ == Kind::Grant) return grant_answer(0, std::move(reason));
+        return write_answer(false, std::move(reason));
     }
     tcp::endpoint endpoint_;
     std::string identity_, question_;
@@ -183,6 +240,7 @@ private:
     asio::steady_timer timer_;
     Answer answer_;
     GrantAnswer grant_answer_;
+    WriteAnswer write_answer_;
     bool done_ = false;
 };
 }
