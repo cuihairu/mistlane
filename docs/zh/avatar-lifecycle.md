@@ -1,6 +1,6 @@
 # Avatar 全生命周期：分段、预言机状态机与关系
 
-状态：已定设计（2026-11-22）。框架当前没有端到端 Avatar 运行时——七态预言机模型已实现并由 avatar.lifecycle 模型测试钉住，其 Lua 钩子面已接入服务 VM 并由 avatar.lua 测试钉住，跨服进入边（`admit_visit`、`close_visit` 与节点退役面）已实现并由 avatar.session 测试钉住，故 crossServer 加入现在真的创建 `visiting` Avatar，归属登录路径也已接线——加入自己的区服（realm == return_realm）创建 `active` Avatar（avatar_load→avatar_enter），断开把它 `suspended`（宽限窗口开），宽限内重连直接回 `active` 不重载，宽限到后节点 tick 走有序回收（最终保存→`closed`），由 avatar.home 测试钉住；源侧的优雅回服也已接线——带 `--data` 端点的 crossServer 上断开的访问者离开跨服作用域，并在回传队列排空的那一刻释放其 Avatar（`cross_leave` 后 `release`，不做尽力保存），由 avatar.return 测试钉住，而不带 `--data` 的 crossServer 保留异常的 `close_visit`（文件名见 [Avatar 运行时页](./avatar-runtime.md)）；移交链仍为后续切片——本页不改变任何 CLI 行为，下面描述的运行行为仍未端到端实现、未经验证。本页是[Avatar 运行时](./avatar-runtime.md)的五态、[跨服回传协议](./cross-return-protocol.md)的租约态与[场景生命周期](./scene-lifecycle.md)的实例态各自覆盖一部分的**统一**生命周期契约；它记录三者哪里一致、哪里分歧，以及一个可机械判定的预言机长什么样。本页**不改**那三页——冲突以勘误表（下文）记录，交由维护者处置。英文页：[English](../avatar-lifecycle.md)。
+状态：已定设计（2026-11-22）。框架当前没有端到端 Avatar 运行时——七态预言机模型已实现并由 avatar.lifecycle 模型测试钉住，其 Lua 钩子面已接入服务 VM 并由 avatar.lua 测试钉住，跨服进入边（`admit_visit`、`close_visit` 与节点退役面）已实现并由 avatar.session 测试钉住，故 crossServer 加入现在真的创建 `visiting` Avatar，归属登录路径也已接线——加入自己的区服（realm == return_realm）创建 `active` Avatar（avatar_load→avatar_enter），断开把它 `suspended`（宽限窗口开），宽限内重连直接回 `active` 不重载，宽限到后节点 tick 走有序回收（最终保存→`closed`），由 avatar.home 测试钉住；源侧的优雅回服也已接线——带 `--data` 端点的 crossServer 上断开的访问者离开跨服作用域，并在回传队列排空的那一刻释放其 Avatar（`cross_leave` 后 `release`，不做尽力保存），由 avatar.return 测试钉住，而不带 `--data` 的 crossServer 保留异常的 `close_visit`（文件名见 [Avatar 运行时页](./avatar-runtime.md)）；移交链已接线——源侧生产调用方与目标侧接管均已实现（avatar.transfer.source / avatar.transfer.destination），组合链由 avatar.transfer.full 端到端钉住（两侧真实节点、零 raw 帧驱动）——而场景与运行时验收仍为后续切片——本页不改变任何 CLI 行为，下面描述的运行行为仍未端到端实现、未经验证。本页是[Avatar 运行时](./avatar-runtime.md)的五态、[跨服回传协议](./cross-return-protocol.md)的租约态与[场景生命周期](./scene-lifecycle.md)的实例态各自覆盖一部分的**统一**生命周期契约；它记录三者哪里一致、哪里分歧，以及一个可机械判定的预言机长什么样。本页**不改**那三页——冲突以勘误表（下文）记录，交由维护者处置。英文页：[English](../avatar-lifecycle.md)。
 
 ## 为什么需要一页
 
@@ -96,7 +96,7 @@ sequenceDiagram
   S->>S: transferring → closed (source released)
 ```
 
-墓碑前中止回到源 `active`；墓碑后只有更新一代可续。这就是[租约交接](./cross-return-protocol.md#写入租约交接)序列，画在 Avatar 对象而非租约上。
+墓碑前中止回到源 `active`；墓碑后只有更新一代可续。这就是[租约交接](./cross-return-protocol.md#写入租约交接)序列，画在 Avatar 对象而非租约上；源侧已实现（avatar.transfer.source），目标侧在同一宿主上已实现（节点轮询协调器的 `MLR1 MIG DESTINED` 枚举取它目标租约等待的已栅栏缺口，加载冻结记录，经 `avatar_load` + `avatar_transfer_in` 构建并落 active 未绑定，确认 READY，协调器发布目的地路由——avatar.transfer.destination）。组合链由 avatar.transfer.full 端到端钉住，两侧真实节点、零 raw 帧驱动——来源的 `mistlane.transfer` 交给目标侧的轮询，目标的 READY 正是解锁来源 COMMIT 的时机。
 
 ### 5. 断线与重连
 
