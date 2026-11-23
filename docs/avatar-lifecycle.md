@@ -108,10 +108,23 @@ sequenceDiagram
   participant H as Home data
   participant D as Destination
   C->>S: transfer request (g → g+1)
+  S->>C: MLR1 MIG OWNER gen g
+  C->>S: OWNER OK
+  S->>C: MLR1 MIG PREPARE <id> gen g
+  C->>S: PREPARED <id> <g+1>
   S->>S: active → transferring, stop handlers/ticks, drain
   S->>H: MLD1 SUBMIT final changes gen g
-  H->>H: commit final sequence, FENCE gen g (tombstone)
   H-->>S: ACK durable
+  S->>C: MLR1 MIG EVENT DRAINED
+  S->>H: MLD1 FENCE gen g (tombstone)
+  H-->>S: FENCED
+  S->>C: MLR1 MIG EVENT FENCE
+  loop STATUS
+    S->>C: MLR1 MIG STATUS
+    C->>S: drained fenced notready
+  end
+  S->>C: MLR1 MIG COMMIT
+  C->>S: COMMITTED <id> dest g+1
   D->>H: MLD1 LOAD realm character
   H-->>D: MLD1 STATE gen g+1
   D->>D: loading → active (g+1)
@@ -120,9 +133,11 @@ sequenceDiagram
   S->>S: transferring → closed (source released)
 ```
 
-Abort before the tombstone returns the source to `active`; after the tombstone only a newer
-generation may resume. This is the [lease handoff](./cross-return-protocol.md#writer-lease-handoff)
-sequence, drawn over the Avatar object rather than the lease.
+Abort before the tombstone returns the source to `active` (the driver sends ABORT then
+EVENT CLEANUP so the request lease is released and the key is not blocked for a later
+transfer); after the tombstone only a newer generation may resume. This is the
+[lease handoff](./cross-return-protocol.md#writer-lease-handoff) sequence, drawn over the
+Avatar object rather than the lease; the source side is implemented (avatar.transfer.source).
 
 ### 5. Disconnect and reconnect
 
@@ -254,7 +269,7 @@ rejection code, persistence obligation, sync visibility.
 | `active` | Home domain; hosting generation current; entry accepted | detach → `suspended`; transfer → `transferring`; cross accept → `visiting`; destroy → `reclaiming` | `avatar_enter` `avatar_tick` `avatar_save` | `AVATAR_ALREADY_ATTACHED` (duplicate attach) | Durable writes allowed; `avatar_save` is the only entry | Full (AOI) |
 | `suspended` | Session detached; grace open; pending save obligations still run | reattach → `active`; grace expired → `reclaiming` | `avatar_detach` | `AVATAR_SUSPENDED` | Pending saves still run | Detach broadcast only |
 | `visiting` | Cross admission verified (entry ticket); provisional lease granted | leave → `transferring`; return complete → `active` | `avatar_tick` (cross-local) | `AVATAR_VISITING` (durable write) | Cross-local only; durable changes return via MLD1 | Cross-scope AOI |
-| `transferring` | Transfer in flight; no handlers, no ticks; in-flight work drained | pre-tombstone abort → `active`; destination accepted → `loading`; source released (return drained) → `closed` | `avatar_transfer_out` `avatar_transfer_in` | `AVATAR_TRANSFERRING` | Source flushes final ordered changes before tombstone; a cross return drains its queue before the release | Frozen |
+| `transferring` | Transfer in flight; no handlers, no ticks; in-flight work drained | pre-tombstone abort → `active`; destination accepted → `loading`; source released (return drained) → `closed` | `avatar_transfer_out` `avatar_transfer_in` | `AVATAR_TRANSFERRING` | Source flushes final ordered changes before tombstone; a pre-tombstone abort also aborts the coordinator transaction (ABORT + CLEANUP); a cross return drains its queue before the release | Frozen |
 | `reclaiming` | Grace expired or explicit close; cleanup must run | reclaim done → `closed` | `avatar_save` (final) | `AVATAR_RECLAIMING` | Final save acknowledged before `closed` | AOI leave broadcast |
 | `closed` | Ordered cleanup finished | destroyed → `[*]` | `avatar_fail` | `AVATAR_CLOSED` | None | None |
 
