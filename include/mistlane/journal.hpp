@@ -76,6 +76,8 @@ public:
     std::vector<RecordSnapshot> restore_records() const override;
     void save_fence(const HomeSequenceAuthority::Pin& pin) override;
     std::vector<HomeSequenceAuthority::Pin> restore_fences() const override;
+    void save_grant(const GenerationAuthority::Grant& grant) override;
+    std::vector<GenerationAuthority::Grant> restore_grants() const override;
     void save_state(const EntityStateSnapshot&) override;
     std::vector<EntityStateSnapshot> restore_states() const override;
 private:

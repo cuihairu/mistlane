@@ -81,9 +81,12 @@ void lua_http();
 void cross_admission();
 void cross_ticket();
 void login_ticket_wire();
+void login_grant();
 void cross_record();
 void cross_record_journal();
 void record_fetch();
+void record_grant();
+void record_grant_journal();
 void cross_home_sequence();
 void cross_home_sequence_journal();
 void cross_home_fence();
@@ -223,8 +226,11 @@ int run_tests(int argc, char** argv) {
         {"cross.admission","cross",test::cross_admission},
         {"cross.ticket","cross",test::cross_ticket},
         {"login.ticket.wire","api",test::login_ticket_wire},
+        {"login.grant","api",test::login_grant},
         {"cross.record","cross",test::cross_record},
         {"cross.record.journal","cross",test::cross_record_journal},
+        {"record.grant","cross",test::record_grant},
+        {"record.grant.journal","cross",test::record_grant_journal},
         {"record.fetch","cross",test::record_fetch},
         {"record.home.sequence","cross",test::cross_home_sequence},
         {"record.home.sequence.journal","cross",test::cross_home_sequence_journal},

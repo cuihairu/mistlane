@@ -370,6 +370,10 @@ struct MigrationJournal::Impl {
             "version INTEGER NOT NULL, realm TEXT NOT NULL, character TEXT NOT NULL,"
             "generation INTEGER NOT NULL, sequence INTEGER NOT NULL,"
             "PRIMARY KEY(realm, character))");
+        sqlite_record_exec(db,
+            "CREATE TABLE IF NOT EXISTS record_grant ("
+            "version INTEGER NOT NULL, realm TEXT NOT NULL, character TEXT NOT NULL,"
+            "generation INTEGER NOT NULL, PRIMARY KEY(realm, character))");
         sqlite_exec(db,
             "CREATE TABLE IF NOT EXISTS placement ("
             "version INTEGER NOT NULL, namespace TEXT NOT NULL, scope TEXT NOT NULL,"
@@ -599,6 +603,49 @@ std::vector<HomeSequenceAuthority::Pin> MigrationJournal::restore_fences() const
             static_cast<std::uint64_t>(generation), static_cast<std::uint64_t>(sequence)});
     }
     return pins;
+}
+
+void MigrationJournal::save_grant(const GenerationAuthority::Grant& grant) {
+    if (impl_->db == nullptr) throw std::runtime_error("record store is closed");
+    if (!record_identifier(grant.key.first) || !record_identifier(grant.key.second)
+            || !grant.generation)
+        throw std::invalid_argument("invalid record grant key or generation");
+    RecordStatement upsert(impl_->db, "INSERT INTO record_grant(version, realm, character, generation) "
+        "VALUES(?, ?, ?, ?) ON CONFLICT(realm, character) DO UPDATE SET "
+        "version=excluded.version, generation=excluded.generation");
+    upsert.bind_int(1, static_cast<int>(kVersion));
+    upsert.bind_text(2, grant.key.first);
+    upsert.bind_text(3, grant.key.second);
+    upsert.bind_u64(4, grant.generation);
+    upsert.step("record grant save step failed");
+}
+
+std::vector<GenerationAuthority::Grant> MigrationJournal::restore_grants() const {
+    if (impl_->db == nullptr) throw std::runtime_error("record store is closed");
+    std::vector<GenerationAuthority::Grant> grants;
+    RecordStatement query(impl_->db,
+        "SELECT version, realm, character, generation FROM record_grant "
+        "ORDER BY realm, character");
+    for (;;) {
+        const int code = sqlite3_step(query.get());
+        if (code == SQLITE_DONE) break;
+        if (code != SQLITE_ROW) sqlite_throw(impl_->db, "record grant restore step failed");
+        const int version = sqlite3_column_int(query.get(), 0);
+        const auto* realm = reinterpret_cast<const char*>(sqlite3_column_text(query.get(), 1));
+        const auto* character = reinterpret_cast<const char*>(sqlite3_column_text(query.get(), 2));
+        const int realm_size = sqlite3_column_bytes(query.get(), 1);
+        const int character_size = sqlite3_column_bytes(query.get(), 2);
+        const sqlite3_int64 generation = sqlite3_column_int64(query.get(), 3);
+        std::string key_realm(realm ? realm : "", static_cast<std::size_t>(realm_size));
+        std::string key_character(character ? character : "",
+            static_cast<std::size_t>(character_size));
+        if (version != static_cast<int>(kVersion) || !record_identifier(key_realm)
+                || !record_identifier(key_character) || generation <= 0)
+            throw std::runtime_error("record grant row corrupted");
+        grants.push_back({{std::move(key_realm), std::move(key_character)},
+            static_cast<std::uint64_t>(generation)});
+    }
+    return grants;
 }
 
 std::vector<RecordSnapshot> MigrationJournal::restore_records() const {

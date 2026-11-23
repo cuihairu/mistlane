@@ -1,12 +1,14 @@
 // SPDX-License-Identifier: Apache-2.0
-// The host side of the MLD1 record endpoint: a crossServer's home join loads
-// the participant's record from the home data endpoint before it can host the
-// character. One connection per fetch — a login is one event, not a long-lived
-// leg — so the shape is RegistryClient::lookup's connect / write / read one
-// verdict / answer, with a deadline that cancels a silent endpoint. The
-// sender side of the same protocol (one ordered return queue, one persistent
-// leg) is return_sender.hpp, and the two are deliberately different: nothing
-// here is retried, because the join has its own refusal.
+// The host side of the MLD1 record endpoint, as a one-shot client. A
+// crossServer's home join loads the participant's record from the home data
+// endpoint before it can host the character; a login's entry flow asks the
+// same endpoint for the data-issued hosting generation. One connection per
+// question — a login is one event, not a long-lived leg — so the shape is
+// RegistryClient::lookup's connect / write / read one verdict / answer, with
+// a deadline that cancels a silent endpoint. The sender side of the same
+// protocol (one ordered return queue, one persistent leg) is return_sender.hpp,
+// and the two are deliberately different: nothing here is retried, because the
+// join and the entry flow have their own refusal.
 #pragma once
 #include "tcp_channel.hpp"
 #include "node_internal.hpp"
@@ -32,6 +34,7 @@ public:
         bool present = false;
     };
     using Answer = std::function<void(Record record, std::string reason)>;
+    using GrantAnswer = std::function<void(std::uint64_t generation, std::string reason)>;
     // Answers exactly once, on the executor's thread that started it: present=true with
     // the STATE bytes on success; present=false with reason "EMPTY" when the
     // data node holds no record; otherwise present=false with a short reason —
@@ -44,31 +47,45 @@ public:
     static void load(asio::any_io_executor executor, Endpoint data, std::string identity,
                      std::string_view realm, std::string_view character, Answer answer) {
         std::shared_ptr<RecordFetcher> self(
-            new RecordFetcher(std::move(executor), data, std::move(identity)));
+            new RecordFetcher(std::move(executor), data, std::move(identity), Kind::Load));
         self->question_ = "MLD1 LOAD " + std::string(realm) + " " + std::string(character);
         self->answer_ = std::move(answer);
         self->start();
     }
+    // The login entry flow's grant: asks the data endpoint for the data-issued
+    // hosting generation of a participant. Answers exactly once with the
+    // granted generation and an empty reason, or generation 0 and a short
+    // reason (the same words load() uses, plus "EMPTY" never applies — a grant
+    // allocates, so it always produces a generation or a refusal).
+    static void grant(asio::any_io_executor executor, Endpoint data, std::string identity,
+                      std::string_view realm, std::string_view character, GrantAnswer answer) {
+        std::shared_ptr<RecordFetcher> self(
+            new RecordFetcher(std::move(executor), data, std::move(identity), Kind::Grant));
+        self->question_ = "MLD1 GRANT " + std::string(realm) + " " + std::string(character);
+        self->grant_answer_ = std::move(answer);
+        self->start();
+    }
 private:
-    RecordFetcher(asio::any_io_executor executor, Endpoint data, std::string identity)
+    enum class Kind { Load, Grant };
+    RecordFetcher(asio::any_io_executor executor, Endpoint data, std::string identity, Kind kind)
       : endpoint_(tcp::endpoint(parse_address(data.address), data.port)),
-        identity_(std::move(identity)),
+        identity_(std::move(identity)), kind_(kind),
         channel_(std::make_shared<TcpChannel>(tcp::socket(executor))), timer_(executor) {}
     void start() {
         deadline();
         channel_->socket().async_connect(endpoint_, [self=shared_from_this()](Error ec) {
             if (self->done_) return;
-            if (ec) return self->answer({}, "unreachable");
+            if (ec) return self->fail("unreachable");
             if (self->identity_.empty()) return self->ask();
             // A tokened data endpoint refuses every record frame until the
             // peer identifies (session plane: refuse_service MLS1 TOKEN).
             self->channel_->write(self->identity_, [self](Error ec) {
                 if (self->done_) return;
-                if (ec) return self->answer({}, "unreachable");
+                if (ec) return self->fail("unreachable");
                 self->channel_->read([self](Error ec, std::string payload) {
                     if (self->done_) return;
-                    if (ec) return self->answer({}, "unreachable");
-                    if (payload != "MLS1 OK") return self->answer({}, "refused");
+                    if (ec) return self->fail("unreachable");
+                    if (payload != "MLS1 OK") return self->fail("refused");
                     self->ask();
                 });
             });
@@ -77,26 +94,41 @@ private:
     void ask() {
         channel_->write(question_, [self=shared_from_this()](Error ec) {
             if (self->done_) return;
-            if (ec) return self->answer({}, "unreachable");
+            if (ec) return self->fail("unreachable");
             self->channel_->read([self](Error ec, std::string payload) {
                 if (self->done_) return;
-                if (ec) return self->answer({}, "unreachable");
+                if (ec) return self->fail("unreachable");
                 self->verdict(std::move(payload));
             });
         });
     }
     void verdict(std::string payload) {
-        if (payload == "MLD1 EMPTY") return answer({}, "EMPTY");
-        if (payload.starts_with("MLD1 STATE ")) {
-            Record record;
-            if (!parse_state(payload, record)) return answer({}, "unexpected");
-            return answer(std::move(record), {});
+        if (kind_ == Kind::Load) {
+            if (payload == "MLD1 EMPTY") return answer({}, "EMPTY");
+            if (payload.starts_with("MLD1 STATE ")) {
+                Record record;
+                if (!parse_state(payload, record)) return answer({}, "unexpected");
+                return answer(std::move(record), {});
+            }
+            if (payload.starts_with("MLD1 ERR ")) return answer({}, payload.substr(9));
+            // An MLS1 verdict means the handshake was refused (TOKEN/INVALID/...),
+            // not the record frame — a tokened data endpoint answered it.
+            if (payload.starts_with("MLS1")) return answer({}, "refused");
+            return answer({}, "unexpected");
         }
-        if (payload.starts_with("MLD1 ERR ")) return answer({}, payload.substr(9));
-        // An MLS1 verdict means the handshake was refused (TOKEN/INVALID/...),
-        // not the record frame — a tokened data endpoint answered it.
-        if (payload.starts_with("MLS1")) return answer({}, "refused");
-        return answer({}, "unexpected");
+        // MLD1 GRANTED gen <n> — the granted generation, nothing else.
+        if (payload.starts_with("MLD1 GRANTED ")) {
+            std::istringstream in(payload);
+            std::string magic, granted, gen_tag, gen;
+            std::uint64_t generation = 0;
+            if (!(in >> magic >> granted >> gen_tag >> gen) || magic != "MLD1"
+                    || granted != "GRANTED" || gen_tag != "gen"
+                    || !record_decimal(gen, generation)) return grant_answer(0, "unexpected");
+            return grant_answer(generation, {});
+        }
+        if (payload.starts_with("MLD1 ERR ")) return grant_answer(0, payload.substr(9));
+        if (payload.starts_with("MLS1")) return grant_answer(0, "refused");
+        return grant_answer(0, "unexpected");
     }
     // "MLD1 STATE gen <n> seq <m> [<payload>]" — the change-set is everything
     // past one separating space, opaque and space-bearing, so the header is
@@ -121,7 +153,7 @@ private:
     void deadline() {
         timer_.expires_after(std::chrono::seconds(10));
         timer_.async_wait([self=shared_from_this()](Error ec) {
-            if (!ec && !self->done_) self->answer({}, "timeout");
+            if (!ec && !self->done_) self->fail("timeout");
         });
     }
     void answer(Record record, std::string reason) {
@@ -131,11 +163,26 @@ private:
         channel_->close();
         answer_(std::move(record), std::move(reason));
     }
+    void grant_answer(std::uint64_t generation, std::string reason) {
+        if (done_) return;
+        done_ = true;
+        timer_.cancel();
+        channel_->close();
+        grant_answer_(generation, std::move(reason));
+    }
+    // Every refusal that is not a protocol verdict — no leg, a refused
+    // handshake, a deadline — is delivered to whichever question was asked.
+    void fail(std::string reason) {
+        if (kind_ == Kind::Load) return answer({}, std::move(reason));
+        return grant_answer(0, std::move(reason));
+    }
     tcp::endpoint endpoint_;
     std::string identity_, question_;
+    Kind kind_ = Kind::Load;
     std::shared_ptr<TcpChannel> channel_;
     asio::steady_timer timer_;
     Answer answer_;
+    GrantAnswer grant_answer_;
     bool done_ = false;
 };
 }

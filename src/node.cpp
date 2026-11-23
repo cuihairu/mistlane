@@ -228,7 +228,7 @@ private:
     std::map<std::uint64_t, std::shared_ptr<Channel>> sessions_;
     std::uint64_t next_id_ = 1;
 };
-class Node : public PlacementSink {
+class Node : public PlacementSink, public GrantSink {
 public:
     // One placement question, one connection: login handlers ask the registry
     // through Lua; the answer callback runs back on this event loop.
@@ -236,6 +236,17 @@ public:
         std::function<void(std::string_view address, std::string_view reason)> answer) override {
         if (!config_.coordinator_enabled) return answer({}, "disabled");
         RegistryClient::lookup(io_, config_, role, namespace_, scope, std::move(answer));
+    }
+    // One grant question, one connection: the login entry flow asks the home
+    // data endpoint for the data-issued hosting generation through Lua. The
+    // identity is the member token (--upstream-token presents MLS1 when the
+    // data endpoint is tokened), the same leg crossServer's data sender uses.
+    void grant(std::string_view realm, std::string_view character,
+        std::function<void(std::uint64_t generation, std::string_view reason)> answer) override {
+        if (config_.data.address.empty()) return answer(0, "disabled");
+        RecordFetcher::grant(io_.get_executor(), config_.data,
+            config_.upstream_token.empty() ? std::string{} : service_hello(config_),
+            realm, character, std::move(answer));
     }
     explicit Node(Config config)
       : config_(std::move(config)), signals_(io_, SIGINT, SIGTERM, SIGHUP), tick_(io_),
@@ -429,7 +440,7 @@ public:
             service_ = std::make_shared<LuaService>(config_.script, service_context_, redis_,
                 websockets_.get(), game_sessions_.get(), this,
                 entity_endpoint_ ? &entity_endpoint_->runtime() : nullptr,
-                ticket_issuer_.get(), return_sender_.get(), metrics_sink_.get());
+                ticket_issuer_.get(), return_sender_.get(), metrics_sink_.get(), this);
         if (http_service) {
             // MLA1 rides the same listener as the Lua routes. Both variables
             // must be injected together; anything else leaves /mla1 as a
@@ -656,7 +667,7 @@ private:
                         auto replacement = std::make_shared<LuaService>(config_.script, service_context_, redis_,
                             websockets_.get(), game_sessions_.get(), this,
                             entity_endpoint_ ? &entity_endpoint_->runtime() : nullptr,
-                            ticket_issuer_.get(), return_sender_.get(), metrics_sink_.get());
+                            ticket_issuer_.get(), return_sender_.get(), metrics_sink_.get(), this);
                         replacement->start();
                         // Rebinding under the new state happens before the swap,
                         // so a bad implementation table keeps the old service.

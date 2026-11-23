@@ -321,8 +321,10 @@ int main(int argc, char** argv) {
                              "    --crashpad-retention N (keep N dumps, default 20; 0 disables pruning)\n"
                              "  cross routing/crossServer: --route-epoch N --max-room-sessions N\n"
                              "    --max-group-sessions N --max-shard-sessions N\n"
-                             "  crossServer return sender: --data IP:PORT (home data MLD1 endpoint;\n"
-                             "    enqueued changes retry in a bounded queue until ACK durable)\n"
+                             "  --data IP:PORT (home data MLD1 endpoint: crossServer return sender\n"
+                             "    retries enqueued changes in a bounded queue until ACK durable;\n"
+                             "    login asks it for the data-issued hosting generation, whose\n"
+                             "    mistlane.grant(realm, character, callback) answers the entry flow)\n"
                              "  entity host (gameServer/crossServer with --contract): --journal FILE\n"
                              "    adds durable entity save rows to that journal; --entity-save-period N\n"
                              "    (ms, default 1000) drives the periodic forced-save pass and a shutdown\n"
@@ -428,7 +430,7 @@ int main(int argc, char** argv) {
         if (!config.coordinator_enabled && (namespace_selected || scope_selected))
             throw std::invalid_argument("--namespace and --scope require --coordinator");
         if (!config.coordinator_enabled && !config.upstream_token.empty() && config.role != "gateway"
-                && config.role != "crossServer")
+                && config.role != "crossServer" && config.role != "login")
             // Members present this identity when they register; anywhere else
             // the flag would silently do nothing.
             throw std::invalid_argument("--upstream-token applies to gateway or coordinator members");
@@ -438,6 +440,12 @@ int main(int argc, char** argv) {
             // and the MLD1 data leg (--data); with neither it would silently
             // do nothing, so refuse the misconfiguration.
             throw std::invalid_argument("--upstream-token on crossServer requires --coordinator or --data");
+        if (config.role == "login" && !config.upstream_token.empty()
+                && !config.coordinator_enabled && config.data.address.empty())
+            // The same two identity legs on a login: the registry leg
+            // (--coordinator) or the MLD1 data leg that answers mistlane.grant
+            // (--data); with neither it would silently do nothing.
+            throw std::invalid_argument("--upstream-token on login requires --coordinator or --data");
         // The service name is concatenated into the MLS1 identity frame, which
         // is whitespace-delimited: any whitespace would corrupt the handshake.
         // The frame itself accepts any single word (the default listen
@@ -476,10 +484,11 @@ int main(int argc, char** argv) {
             throw std::invalid_argument("--service-token does not apply to cross routing");
         if (!config.upstream_token.empty() && config.routing == "cross")
             throw std::invalid_argument("--upstream-token does not apply to cross routing");
-        // The framework return sender is crossServer-only; any other role
+        // The framework return sender is crossServer-only and the login entry
+        // flow's data-issued generation grant is login-only; any other role
         // would silently ignore the endpoint, so refuse the misconfiguration.
-        if (!config.data.address.empty() && config.role != "crossServer")
-            throw std::invalid_argument("--data applies to crossServer only");
+        if (!config.data.address.empty() && config.role != "crossServer" && config.role != "login")
+            throw std::invalid_argument("--data applies to crossServer or login");
         // Multiplexing is the internal mode: only identified peers may upgrade
         // a shared connection, so an anonymous upstream link cannot be offered it.
         if (config.upstream_multiplex) {

@@ -558,6 +558,56 @@ int LuaService::placement_call(lua_State* l) {
         });
     return 0;
 }
+// A data grant cannot answer inside the handler either: the MLD1 data
+// endpoint is a different node, so the callback runs on the event loop only
+// after the handler returned, and scripts answer through mistlane.session.send
+// from it. The callback receives the granted generation on success, or nil and
+// a short machine-readable reason word ("disabled" for no data endpoint,
+// "unreachable"/"refused"/"INVALID"/... /"timeout" from the data leg).
+int LuaService::grant_call(lua_State* l) {
+    auto* service = static_cast<LuaService*>(lua_touserdata(l, lua_upvalueindex(1)));
+    auto word = [&](int index, const char* label) {
+        if (!lua_isstring(l, index)) throw std::runtime_error(std::string(label)+" must be an identifier");
+        std::size_t size = 0;
+        const char* data = lua_tolstring(l, index, &size);
+        if (!size || size > 64) throw std::runtime_error(std::string(label)+" length is invalid");
+        for (std::size_t i = 0; i < size; ++i) {
+            const unsigned char ch = data[i];
+            if (!((ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z')
+                    || (ch >= '0' && ch <= '9') || ch == '_' || ch == '-'))
+                throw std::runtime_error(std::string(label)+" must be an identifier");
+        }
+        return std::string(data, size);
+    };
+    const auto realm = word(1, "realm");
+    const auto character = word(2, "character");
+    if (!lua_isfunction(l, 3)) throw std::runtime_error("last argument must be a callback function");
+    lua_pushvalue(l, 3);
+    const auto callback = luaL_ref(l, LUA_REGISTRYINDEX);
+    const auto life = service->async_context_;
+    if (!service->grant_sink_)
+        return finish_lua(life, callback, "grant is disabled; start with --data IP:PORT",
+            [](lua_State* l) { lua_pushnil(l); }), 0;
+    service->grant_sink_->grant(realm, character,
+        [life, callback](std::uint64_t generation, std::string_view reason) {
+            if (!reason.empty())
+                return finish_lua(life, callback, std::string(reason), [](lua_State* l) { lua_pushnil(l); });
+            finish_lua(life, callback, {}, [generation](lua_State* l) {
+                lua_pushinteger(l, static_cast<lua_Integer>(generation));
+            });
+        });
+    return 0;
+}
+void LuaService::push_grant_api(lua_State* l, LuaService* service) {
+    // Registered unconditionally, like mistlane.place: an unconfigured grant
+    // still answers the callback (a "disabled" reason from the node, or the
+    // fallback below when no sink exists at all) instead of failing the script.
+    lua_getglobal(l, "mistlane");
+    if (!lua_istable(l, -1)) { lua_pop(l, 1); lua_newtable(l); }
+    lua_pushlightuserdata(l, service); lua_pushcclosure(l, grant_call, 1);
+    lua_setfield(l, -2, "grant");
+    lua_setglobal(l, "mistlane");
+}
 void LuaService::websocket_callback(const char* name, std::uint64_t id, std::string_view payload, const std::string& path) {
     StackGuard guard(state_);
     lua_pushcfunction(state_, traceback);

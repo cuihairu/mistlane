@@ -16,18 +16,23 @@ namespace mistlane {
 //   MLD1 LOAD <realm> <character>
 //   MLD1 SUBMIT <realm> <character> gen <n> seq <m> [<payload>]
 //   MLD1 FENCE <realm> <character> gen <n>
+//   MLD1 GRANT <realm> <character>
 // Replies:
 //   MLD1 EMPTY
 //   MLD1 STATE gen <n> seq <m> [<payload>]
 //   MLD1 RECEIVED gen <n> seq <m>
 //   MLD1 FENCED gen <n> seq <m>
+//   MLD1 GRANTED gen <n>
 //   MLD1 ACK durable <realm> <character> gen <n> seq <m>
 //   MLD1 ERR INVALID | STALE gen <n> | SEQ seq <n> | FULL | NOFENCE | STORAGE
 // Without a durable backend RECEIVED is a receipt, never a durability claim.
 // With one, acceptance is acknowledged with ACK durable only after the home
 // write is durable, so a restart never loses an acknowledged change-set.
+// GRANT is the data-issued hosting generation (the login entry flow): the
+// caller names the participant only and never a generation, because this
+// endpoint is the sole authority that hands them out.
 struct RecordRequest {
-    enum class Type { Load, Submit, Fence };
+    enum class Type { Load, Submit, Fence, Grant };
     Type type = Type::Load;
     std::string realm, character;
     std::uint64_t generation = 0, sequence = 0;
@@ -102,6 +107,13 @@ inline RecordRequest parse_record(std::string_view payload) {
                 || !record_decimal(gen, r.generation))
             throw std::invalid_argument("INVALID");
         r.type = RecordRequest::Type::Fence;
+    } else if (command == "GRANT") {
+        // The grant names the participant and nothing else: a generation the
+        // caller tried to choose or advance would defeat the sole authority
+        // this endpoint is, so the frame carries no gen to accept.
+        std::string extra;
+        if (!(in >> r.realm >> r.character) || (in >> extra)) throw std::invalid_argument("INVALID");
+        r.type = RecordRequest::Type::Grant;
     } else throw std::invalid_argument("INVALID");
     if (!record_identifier(r.realm) || !record_identifier(r.character))
         throw std::invalid_argument("INVALID");
@@ -158,6 +170,63 @@ public:
 private:
     std::map<Key, Pin> pins_;
 };
+// The data role's sole generation authority for one participant. The hosting
+// generation is allocated here, durably, and never chosen or advanced by a
+// host: a fresh key starts at one and every later grant is strictly greater,
+// so an aborted or timed-out allocation is never reused. The row is a
+// high-water mark — it records the last generation the authority issued,
+// which is what a load reports as the active grant. This is deliberately
+// separate from the record's fence generation: the ordered lease handoff
+// freezes the latter, while the authority answers "which generation may
+// write next" without touching the cursor.
+class GenerationAuthority {
+public:
+    using Key = std::pair<std::string, std::string>;
+    struct Grant {
+        Key key;
+        std::uint64_t generation = 0;
+        bool operator==(const Grant&) const = default;
+    };
+    // Restore a persisted grant. A grant is immutable once issued, so
+    // re-seeding the same key at the same generation is idempotent and a
+    // changed row is refused fail-closed rather than silently rewritten.
+    bool restore(const Grant& grant) {
+        if (!record_identifier(grant.key.first) || !record_identifier(grant.key.second)
+                || !grant.generation) return false;
+        const auto [it, inserted] = grants_.try_emplace(grant.key, grant.generation);
+        return inserted || it->second == grant.generation;
+    }
+    std::optional<std::uint64_t> current(const Key& key) const {
+        const auto found = grants_.find(key);
+        return found == grants_.end() ? std::nullopt : std::optional(found->second);
+    }
+    // The generation a new grant would receive: strictly greater than the
+    // last one issued for the key and at least one past `floor` (the record's
+    // committed generation, when one already exists — a migration-era record
+    // must never be overwritten by a grant below it). A fresh key starts at
+    // one. nullopt when the counter has no representable next value to hand out.
+    std::optional<std::uint64_t> next(const Key& key, std::uint64_t floor = 0) const {
+        const auto last = current(key);
+        const auto base = std::max(last.value_or(0), floor);
+        const std::uint64_t candidate = base + 1;
+        return candidate > base ? std::optional<std::uint64_t>(candidate) : std::nullopt;
+    }
+    // Record an allocated grant after the durable write succeeded. A later
+    // allocation advances the high-water mark; the same row is idempotent (a
+    // retry of a grant the store already committed); a lower one is refused
+    // fail-closed — the authority is a monotone cursor, never a suggestion.
+    bool grant(const Grant& grant) {
+        if (!grant.generation) return false;
+        const auto [it, inserted] = grants_.try_emplace(grant.key, grant.generation);
+        if (inserted) return true;
+        if (grant.generation == it->second) return true;
+        if (grant.generation < it->second) return false;
+        it->second = grant.generation;
+        return true;
+    }
+private:
+    std::map<Key, std::uint64_t> grants_;
+};
 // Storage boundary for the data role's persistent record store. The SQLite
 // backend lives beside the coordinator journal and reuses its versioned-BLOB
 // encoding; an in-memory-only store passes no backend here.
@@ -171,6 +240,9 @@ public:
     // working; a SQLite-backed store overrides them.
     virtual void save_fence(const HomeSequenceAuthority::Pin&) {}
     virtual std::vector<HomeSequenceAuthority::Pin> restore_fences() const { return {}; }
+    // The durable generation authority is part of the same store boundary.
+    virtual void save_grant(const GenerationAuthority::Grant&) {}
+    virtual std::vector<GenerationAuthority::Grant> restore_grants() const { return {}; }
 };
 // Single event-loop thread: no locking. The store keeps the newest accepted
 // change-set per (realm, character); merging change-sets into entity state is the
@@ -196,12 +268,20 @@ public:
             if (!sequence_authority_.restore(pin))
                 throw std::invalid_argument("record store fence row corrupted");
         }
+        for (auto grant : backend->restore_grants()) {
+            if (!generation_authority_.restore(grant))
+                throw std::invalid_argument("record store grant row corrupted");
+        }
         backend_ = backend;
     }
     bool durable() const { return backend_ != nullptr; }
     // The authoritative final cursor for a key, if it has been fenced.
     std::optional<HomeSequenceAuthority::Pin> final_sequence(const RecordKey& key) const {
         return sequence_authority_.pin(key);
+    }
+    // The last hosting generation this authority issued for a key, if any.
+    std::optional<std::uint64_t> granted(const RecordKey& key) const {
+        return generation_authority_.current(key);
     }
     // Freeze the final ordered cursor for a fenced generation. Returns the pin,
     // or nullopt when there is no committed cursor yet, the store cannot make
@@ -236,6 +316,30 @@ public:
             return "MLD1 STATE gen " + std::to_string(it->second.generation)
                  + " seq " + std::to_string(it->second.sequence)
                  + (it->second.payload.empty() ? "" : " " + it->second.payload);
+        }
+        // The data-issued hosting generation: allocate the strictly greater
+        // next generation durably, then remember it in memory. The durable
+        // write precedes the in-memory grant so a failed commit never leaves
+        // a generation the store did not record — the caller may retry and
+        // get the same (or a later) generation, never a gap it must skip.
+        if (request.type == RecordRequest::Type::Grant) {
+            const auto next = generation_authority_.next(key,
+                it == records_.end() ? 0 : it->second.generation);
+            if (!next) { result = "storage"; return "MLD1 ERR STORAGE"; }
+            const GenerationAuthority::Grant grant{key, *next};
+            if (backend_) {
+                try { backend_->save_grant(grant); }
+                catch (const std::exception&) {
+                    result = "storage";
+                    return "MLD1 ERR STORAGE";
+                }
+            }
+            if (!generation_authority_.grant(grant)) {
+                result = "storage";
+                return "MLD1 ERR STORAGE";
+            }
+            result = "granted";
+            return "MLD1 GRANTED gen " + std::to_string(grant.generation);
         }
         // A migration fence freezes the final cursor for the requested
         // generation. It is idempotent for the same pin; a different
@@ -331,6 +435,7 @@ private:
     struct RecordState { std::uint64_t generation = 0, sequence = 0; std::string payload; };
     std::map<RecordKey, RecordState> records_;
     HomeSequenceAuthority sequence_authority_;
+    GenerationAuthority generation_authority_;
     RecordBackend* backend_ = nullptr;
 };
 

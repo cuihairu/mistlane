@@ -51,6 +51,20 @@ public:
     virtual void place(std::string_view role, std::string_view namespace_, std::string_view scope,
         std::function<void(std::string_view address, std::string_view reason)> answer) = 0;
 };
+// Home-data generation authority adapter (login): asks the MLD1 data endpoint
+// for the data-issued hosting generation of a participant, one question per
+// connection. The data endpoint is the sole generation authority, so the login
+// entry flow binds the granted generation into the ticket rather than choosing
+// one. Implemented by the node; calls run on the event loop thread.
+class GrantSink {
+public:
+    virtual ~GrantSink() = default;
+    // Answers once on the event loop thread: the granted generation on
+    // success, otherwise 0 and a short machine-readable word ("disabled" for
+    // no data endpoint, "unreachable"/"refused"/"INVALID"/... /"timeout").
+    virtual void grant(std::string_view realm, std::string_view character,
+        std::function<void(std::uint64_t generation, std::string_view reason)> answer) = 0;
+};
 // Cross-return sender adapter (crossServer): the framework owns the MLD1
 // ordered retry queue, so a script only seeds a participant's durable cursor
 // and enqueues changes; the sender connects to home data, submits in sequence
@@ -105,7 +119,7 @@ public:
                         WebsocketSink* websocket_sink = nullptr, GameSessionSink* session_sink = nullptr,
                         PlacementSink* placement_sink = nullptr, EntityRuntime* entity_runtime = nullptr,
                         const TicketIssuer* ticket_issuer = nullptr, ReturnSink* return_sink = nullptr,
-                        ScriptMetricsSink* metrics_sink = nullptr);
+                        ScriptMetricsSink* metrics_sink = nullptr, GrantSink* grant_sink = nullptr);
     ~LuaService();
     LuaService(const LuaService&) = delete;
     LuaService& operator=(const LuaService&) = delete;
@@ -146,6 +160,8 @@ private:
     static void push_session_api(lua_State*, LuaService*);
     static int placement_call(lua_State*);
     static void push_placement_api(lua_State*, LuaService*);
+    static int grant_call(lua_State*);
+    static void push_grant_api(lua_State*, LuaService*);
     void websocket_callback(const char* name, std::uint64_t id, std::string_view payload, const std::string& path);
     static int leaderboard_add(lua_State*);
     static int leaderboard_get(lua_State*);
@@ -208,6 +224,7 @@ private:
     WebsocketSink* websocket_sink_ = nullptr;
     GameSessionSink* session_sink_ = nullptr;
     PlacementSink* placement_sink_ = nullptr;
+    GrantSink* grant_sink_ = nullptr;
     EntityRuntime* entity_runtime_ = nullptr;
     const TicketIssuer* ticket_issuer_ = nullptr;
     ReturnSink* return_sink_ = nullptr;

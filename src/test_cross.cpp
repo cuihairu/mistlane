@@ -802,4 +802,86 @@ void cross_return_queue_bounded() {
     std::cout << "cross.return.queue.bounded: capacity refuses overflow and a "
         "durable ACK frees a slot [PASS]\n";
 }
+void record_grant() {
+    // The hosting generation is allocated by the data side alone: a fresh key
+    // starts at one, every later grant is strictly greater than both the last
+    // grant and the record's committed generation, and a caller that tries to
+    // name a generation of its own is refused as malformed — the whole point
+    // of the sole authority is that no host chooses or advances a generation.
+    RecordStore store;
+    std::string_view result;
+    equal(store.handle("MLD1 GRANT home hero", result), "MLD1 GRANTED gen 1");
+    equal(store.handle("MLD1 GRANT home hero", result), "MLD1 GRANTED gen 2");
+    require(store.granted({"home", "hero"}) == 2, "grant query lost the high-water mark");
+    // The grant is a generation authority, not a record: it leaves the record
+    // alone (a load before any submit is still EMPTY).
+    equal(store.handle("MLD1 LOAD home hero", result), "MLD1 EMPTY");
+    equal(store.handle("MLD1 SUBMIT home hero gen 1 seq 1 hp=10", result), "MLD1 RECEIVED gen 1 seq 1");
+    // The next grant is strictly above the last one even though the record's
+    // own generation is lower, and a migration-era record at a higher
+    // generation resumes strictly above it, never below.
+    equal(store.handle("MLD1 GRANT home hero", result), "MLD1 GRANTED gen 3");
+    equal(store.handle("MLD1 SUBMIT home hero gen 5 seq 2 hp=20", result), "MLD1 RECEIVED gen 5 seq 2");
+    equal(store.handle("MLD1 GRANT home hero", result), "MLD1 GRANTED gen 6");
+    // A different participant counts independently.
+    equal(store.handle("MLD1 GRANT away hero", result), "MLD1 GRANTED gen 1");
+    equal(store.handle("MLD1 GRANT home other", result), "MLD1 GRANTED gen 1");
+    // The caller never names a generation, so a frame that tries to is not a
+    // grant at all.
+    equal(store.handle("MLD1 GRANT home hero gen 9", result), "MLD1 ERR INVALID");
+    equal(store.handle("MLD1 GRANT home", result), "MLD1 ERR INVALID");
+    equal(store.handle("MLD1 GRANT home bad char", result), "MLD1 ERR INVALID");
+    std::cout << "record.grant: the data side alone allocates a strictly greater "
+        "hosting generation per participant and never accepts a caller-chosen one [PASS]\n";
+}
+void record_grant_journal() {
+    // The allocated generation is durable: a restart of the data node keeps
+    // the high-water mark, so the next grant is strictly greater than the one
+    // issued before the restart — an abort or a timeout can never hand out a
+    // generation twice.
+    Context c;
+    write(c.path("echo.lua"), echo);
+    const auto first = port(), second = port();
+    const auto journal = c.path("record-grant.sqlite");
+    auto& initial = c.node("data", first, {"--script", c.path("echo.lua").string(),
+        "--journal", journal.string()});
+    const auto send_frame = [](RawSocket& raw, std::string_view payload) {
+        std::string frame(4, '\0');
+        auto length = static_cast<std::uint32_t>(payload.size());
+        for (int i = 3; i >= 0; --i) { frame[i] = static_cast<char>(length & 255); length >>= 8; }
+        raw.send(frame + std::string(payload));
+    };
+    const auto read_frame = [](RawSocket& raw) {
+        std::size_t length = 0;
+        for (unsigned char ch : raw.receive(4)) length = (length << 8) | ch;
+        return raw.receive(length);
+    };
+    const auto ask = [&](unsigned listen, const std::string& line) {
+        RawSocket raw(listen);
+        send_frame(raw, line);
+        return read_frame(raw);
+    };
+    equal(ask(first, "MLD1 GRANT home hero"), "MLD1 GRANTED gen 1");
+    equal(ask(first, "MLD1 GRANT home hero"), "MLD1 GRANTED gen 2");
+    initial.signal(SIGTERM);
+    require(initial.wait() == 0, "record grant node did not stop cleanly");
+    c.node("data", second, {"--script", c.path("echo.lua").string(),
+        "--journal", journal.string()});
+    equal(ask(second, "MLD1 GRANT home hero"), "MLD1 GRANTED gen 3");
+    // The journal boundary refuses an invalid grant row instead of persisting
+    // it: the authority is a high-water mark, not a suggestion.
+    {
+        MigrationJournal store(journal.string());
+        store.save_grant({{"away", "hero"}, 9});
+        must_fail([&] { (void)store.save_grant({{"bad realm", "hero"}, 1}); });
+        must_fail([&] { (void)store.save_grant({{"away", "hero"}, 0}); });
+        const auto rows = store.restore_grants();
+        require(rows.size() == 2
+                && rows[0] == GenerationAuthority::Grant{{"away", "hero"}, 9}
+                && rows[1] == GenerationAuthority::Grant{{"home", "hero"}, 3},
+            "grant restore lost or reordered rows");
+    }
+    std::cout << "record.grant.journal: the durable grant survives a restart and "
+        "the next allocation stays strictly greater [PASS]\n";
+}
 }

@@ -55,6 +55,8 @@ stateDiagram-v2
 
 以 `MISTLANE_TICKET_SECRETS` 启动的 login 节点另暴露 `mistlane.ticket.issue(realm, character, instance, generation, expires)`：按该区服密钥签发绑定目标宿主实例与承载版本的短时效 `MLT1` 入场凭据（十六进制），有效期到绝对 Unix 秒 `expires`（含边界）；login 自身不需要实例名，目标由参数传入。成功返回凭据十六进制串，失败返回 `nil` 与原因（无该区服密钥或参数非法）。没有该环境时 API 不存在，脚本不会把缺签发者误当成可用。以相同密钥启动的 crossServer 在握手上验证凭据并把结论写入 `context.verified`。
 
+以 `--data IP:PORT` 启动的 login 节点另暴露 `mistlane.grant(realm, character, callback)`：经新连接向归属 data 端点询问一次 `MLD1 GRANT`，获取 data 签发的承载 generation，回调在 handler 返回之后才触发，参数为（`nil`, generation）或（`reason`, `nil`），因此应答须在回调里用 `mistlane.session.send` 推送。归属 data 返回的 generation 严格大于此前任何一次授权且跨 data 重启保留；把它传给 `mistlane.ticket.issue`，接收宿主即按归属 data 分配的那个 generation 准入进入。没有 `--data` 时回调应答（`"disabled"`, `nil`）而不是让脚本报错；设令牌的 data 端点由 `--upstream-token` 以 `MLS1` 表明身份后询问，其拒绝以 `unreachable`、`refused` 或 `timeout` 呈现（另有 data 链路自身的原因词，如 `INVALID` 或 `STORAGE`）。
+
 除监听组合要求的 message/http 外均可选；nil 表示缺省。字段存在但不是函数会在调用时失败。没有 on_connect/on_disconnect 玩家登录钩子；连接生命周期不等同于业务登录。原游戏全局 Timer、SQLService、C_* 和协议没有直接迁入。
 
 正常 SIGTERM/SIGINT：关闭监听，调用 stop，取消活动会话，调用 shutdown，排空取消回调。当前是取消，不是业务请求排空或事务刷盘。stop 抛错仍尝试 shutdown；标记在调用前设置，避免重复调用。已完成 init 的失败候选也尽力执行 stop/shutdown；顶层或 init 本身失败只销毁 VM，不承诺对部分初始化调用清理钩子。崩溃、SIGKILL、断电不保证任何清理。

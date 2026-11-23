@@ -183,7 +183,7 @@ WSS 在 `config/instances/gateway-wss.env` 中设置 `CERT` 和 `KEY`，可填�
 | `ROUTE_EPOCH` | 可选 | gateway cross routing/crossServer 纪元作为 `--route-epoch` 传入；留空则省略该参数。 |
 | `COORDINATOR` | 可选 | 注册表端点作为 `--coordinator` 传入；仅 gameServer、crossServer、login 可用。 |
 | `SCOPE` | 可选 | 注册表作用域作为 `--scope` 传入；须与 `COORDINATOR` 同时设置。 |
-| `DATA` | 可选 | 归属 data 的 MLD1 端点作为 `--data` 传入；仅 crossServer（跨服回传发送器）可用。 |
+| `DATA` | 可选 | 归属 data 的 MLD1 端点作为 `--data` 传入；crossServer（跨服回传发送器）与 login（data 签发的承载 generation，`mistlane.grant`）可用。 |
 | `LISTENERS` | 可选 | 逗号分隔的 `PROTO://IP:PORT` 条目；每个条目展开为一个 `--listener` 参数，一个实例即可同时暴露 TCP、WS、WSS 与 HTTP。`wss`/`https` 条目可追加 `?cert=FILE&key=FILE`；query 路径原样传递，不按项目根目录解析。 |
 | `CERT`、`KEY` | 仅 wss/https | 证书链与私钥，绝对路径或项目根目录相对路径；启动器先确认两者可读。 |
 

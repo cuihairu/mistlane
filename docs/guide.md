@@ -183,7 +183,7 @@ Each `config/instances/<name>.env` file is sourced as shell assignments by `ops/
 | `ROUTE_EPOCH` | optional | Cross/crossServer epoch passed as `--route-epoch`; an empty value omits the flag. |
 | `COORDINATOR` | optional | Registry endpoint passed as `--coordinator`; valid for gameServer, crossServer and login. |
 | `SCOPE` | optional | Registry scope passed as `--scope`; requires `COORDINATOR` to be set. |
-| `DATA` | optional | Home data MLD1 endpoint passed as `--data`; valid for crossServer (the cross-return sender). |
+| `DATA` | optional | Home data MLD1 endpoint passed as `--data`; valid for crossServer (the cross-return sender) and login (the data-issued hosting generation, `mistlane.grant`). |
 | `LISTENERS` | optional | Comma-separated `PROTO://IP:PORT` entries; each becomes one `--listener` flag, so an instance can expose TCP, WS, WSS and HTTP side by side. `wss`/`https` entries may append `?cert=FILE&key=FILE`; those query paths are passed through verbatim, not root-resolved. |
 | `CERT`, `KEY` | `wss`/`https` only | Certificate chain and private key, absolute or project-root relative; the launcher verifies both are readable. |
 

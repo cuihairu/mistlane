@@ -888,6 +888,124 @@ void login_ticket_wire() {
     require(!ask().empty(), "login did not keep serving after a rejected ticket argument");
     std::cout << "login.ticket.wire: Lua issuer -> crossServer verifier [PASS]\n";
 }
+// The login entry flow asks the home data side for the hosting generation
+// instead of choosing one: mistlane.grant answers through the callback with a
+// strictly greater generation every time, the allocation survives a data
+// restart, a tokened data leg is one ask like any other, and the ticket the
+// same login issues is bound to exactly the granted number — so a host admits
+// that arrival and refuses a join that claims a different generation. A login
+// without --data exposes no grant at all.
+void login_grant() {
+    Context c;
+    write(c.path("echo.lua"), echo);
+    write(c.path("grant.lua"),
+        "return {message=function(p,c)\n"
+        " local realm, character = p:match('grant (%S+) (%S+)')\n"
+        " if not realm then return 'usage: grant realm character' end\n"
+        " mistlane.grant(realm, character, function(err, gen)\n"
+        "   mistlane.session.send(c.session, err and ('ERR '..err) or ('OK '..gen))\n"
+        " end)\n"
+        " return nil end}");
+    write(c.path("bind.lua"),
+        "return {message=function(p,c)\n"
+        " local realm, character, instance, expires = p:match('bind (%S+) (%S+) (%S+) (%S+)')\n"
+        " if not realm then return 'usage: bind realm character instance expires' end\n"
+        " mistlane.grant(realm, character, function(err, gen)\n"
+        "   if err then return mistlane.session.send(c.session, 'ERR '..err) end\n"
+        "   local ticket, issue = mistlane.ticket.issue(realm, character, instance, gen, tonumber(expires))\n"
+        "   if not ticket then return mistlane.session.send(c.session, 'ERR '..issue) end\n"
+        "   mistlane.session.send(c.session, 'GEN '..gen..' TICKET '..ticket)\n"
+        " end)\n"
+        " return nil end}");
+    write(c.path("host.lua"),
+        "return {message=function(p,c)"
+        " return (c.character or 'anon')..' verified='..tostring(c.verified==true) end}");
+    ApiSecret secret{};
+    for (std::size_t i = 0; i < secret.size(); ++i) secret[i] = static_cast<unsigned char>(i*13+5);
+    static const char digits[] = "0123456789abcdef";
+    std::string hex;
+    for (unsigned char byte : secret) { hex += digits[byte/16]; hex += digits[byte%16]; }
+    const auto now = std::chrono::duration_cast<std::chrono::seconds>(
+        std::chrono::system_clock::now().time_since_epoch()).count();
+    const auto data = port(), login = port(), bind_login = port(), host = port(),
+        token_login = port(), wrong_login = port(), bare = port(), tokened = port();
+    const auto journal = c.path("grant.sqlite");
+    const auto grant = [&](unsigned listen, const std::string& line) {
+        return tcp(listen)->request(line);
+    };
+    // The durable data node hands out strictly greater generations to the same
+    // participant, and the login surfaces each answer through its callback.
+    {
+        auto& initial = c.node("data", data, {"--script", c.path("echo.lua").string(),
+            "--journal", journal.string()});
+        c.node("login", login, {"--script", c.path("grant.lua").string(),
+            "--data", endpoint(data)});
+        equal(grant(login, "grant alpha hero"), "OK 1");
+        equal(grant(login, "grant alpha hero"), "OK 2");
+        equal(grant(login, "grant alpha hero"), "OK 3");
+        // A different participant starts its own cursor, independently.
+        equal(grant(login, "grant alpha sidekick"), "OK 1");
+        initial.signal(SIGTERM);
+        require(initial.wait() == 0, "grant data node did not stop cleanly");
+    }
+    c.node("data", data, {"--script", c.path("echo.lua").string(),
+        "--journal", journal.string()});
+    c.node("login", login, {"--script", c.path("grant.lua").string(),
+        "--data", endpoint(data)});
+    // The restart kept the high-water mark, so the same participant resumes
+    // strictly above the last grant rather than reusing a freed number.
+    equal(grant(login, "grant alpha hero"), "OK 4");
+    // A tokened data node still answers one identified ask; a login with the
+    // wrong token gets the refusal word, not a hang or a wrong generation.
+    c.node("data", tokened, {"--script", c.path("echo.lua").string(),
+        "--service-token", "s3cret"});
+    c.node("login", token_login, {"--script", c.path("grant.lua").string(),
+        "--data", endpoint(tokened), "--upstream-token", "s3cret"});
+    c.node("login", wrong_login, {"--script", c.path("grant.lua").string(),
+        "--data", endpoint(tokened), "--upstream-token", "nope"});
+    equal(grant(token_login, "grant alpha hero"), "OK 1");
+    equal(grant(wrong_login, "grant alpha hero"), "ERR refused");
+    // A login with no data endpoint still exposes mistlane.grant (like
+    // mistlane.place without --coordinator): the callback answers a graceful
+    // "disabled" reason word instead of failing the script or hanging.
+    c.node("login", bare, {"--script", c.path("grant.lua").string()});
+    equal(grant(bare, "grant alpha hero"), "ERR disabled");
+    // The ticket the same login issues is bound to the granted generation: a
+    // host admits that exact arrival and refuses a join that lies about it.
+    {
+        ScopedEnv secrets("MISTLANE_TICKET_SECRETS", "alpha:"+hex);
+        c.node("login", bind_login, {"--script", c.path("bind.lua").string(),
+            "--data", endpoint(data)});
+        c.node("crossServer", host, {"--script", c.path("host.lua").string(),
+            "--service-name", "xs-a"});
+    }
+    const auto reply = grant(bind_login, "bind alpha hero xs-a "+std::to_string(now+120));
+    require(reply.rfind("GEN ", 0) == 0, "the bind script did not answer with a granted ticket: "+reply);
+    const auto gen_at = reply.find(' ', 4);
+    const auto gen = std::stoull(reply.substr(4, gen_at-4));
+    const auto ticket = reply.substr(gen_at+8); // "TICKET <hex>"
+    require(parse_entry_ticket(ticket).has_value(), "the granted ticket was not a valid MLT1 hex token");
+    const auto join = "MLC1 1 alpha arena r1 ch hero gen "+std::to_string(gen)+" ret alpha arena r1 tk "+ticket;
+    {
+        auto peer = tcp(host);
+        equal(peer->request(join), "MLC1 OK 1");
+        equal(peer->request("who"), "hero verified=true");
+    }
+    {
+        auto replay = tcp(host);
+        equal(replay->request(join), "MLC1 ERR TICKET");
+    }
+    {
+        // A ticket bound to the granted generation cannot vouch for another
+        // one: the join claims gen+1 and is refused as malformed, not admitted.
+        auto lying = tcp(host);
+        const auto mismatch = "MLC1 1 alpha arena r1 ch hero gen "+std::to_string(gen+1)
+            +" ret alpha arena r1 tk "+ticket;
+        equal(lying->request(mismatch), "MLC1 ERR INVALID");
+    }
+    std::cout << "login.grant: the data-issued generation answers the entry flow "
+        "and is the one the ticket binds [PASS]\n";
+}
 // Character route records: a route is only written against a registered
 // member, GET answers from the live member state, and a retiring member drops
 // every route that pointed at it.
