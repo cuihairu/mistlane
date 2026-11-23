@@ -19,6 +19,7 @@ void avatar_return();
 void avatar_transfer_source();
 void avatar_transfer_destination();
 void avatar_transfer_full();
+void avatar_scene_switch();
 void entity_envelope();
 void entity_properties();
 void entity_tree();
@@ -169,6 +170,7 @@ int run_tests(int argc, char** argv) {
         {"avatar.transfer.source","contract",test::avatar_transfer_source},
         {"avatar.transfer.destination","contract",test::avatar_transfer_destination},
         {"avatar.transfer.full","contract",test::avatar_transfer_full},
+        {"avatar.scene.switch","contract",test::avatar_scene_switch},
         {"entity.envelope","contract",test::entity_envelope},
         {"entity.properties","contract",test::entity_properties},
         {"entity.tree","contract",test::entity_tree},

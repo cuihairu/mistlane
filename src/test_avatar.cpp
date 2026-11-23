@@ -207,6 +207,45 @@ void avatar_lifecycle() {
         std::cout << "avatar.lifecycle reattach: grace window, no reload [PASS]\n";
     }
 
+    // --- Same-process scene switch: only the reference changes ---------------
+    {
+        RecordingHooks hooks;
+        FakeClock clock;
+        AvatarRuntime runtime(hooks, clock.fn());
+        require(runtime.load(key, 100).ok() && runtime.attach(key, 7).ok(), "setup failed");
+        const std::size_t before = hooks.calls.size();
+        const std::size_t loads = hooks.count("load"), enters = hooks.count("enter"),
+                          saves = hooks.count("save");
+        auto r = runtime.switch_scene(key, "room-2");
+        require(r.ok(), "a same-process scene switch was refused: " + r.reason);
+        require(runtime.state(key) == AvatarState::Active, "a scene switch moved the avatar off active");
+        require(runtime.scene(key) == "room-2", "the scene reference did not change");
+        require(hooks.calls.size() == before, "a scene switch ran hooks (it is not a transition)");
+        require(hooks.count("load") == loads && hooks.count("enter") == enters &&
+                hooks.count("save") == saves,
+                "a scene switch saved, reloaded or re-entered (no state round-trip)");
+        r = runtime.switch_scene(key, "dungeon-9");
+        require(r.ok() && runtime.scene(key) == "dungeon-9", "a second switch did not move the reference");
+        // A suspended avatar has no hosted scene: the switch refuses with the
+        // state's own rejection code and leaves the reference alone.
+        runtime.detach(key, 7);
+        require(runtime.state(key) == AvatarState::Suspended, "detach did not suspend");
+        r = runtime.switch_scene(key, "room-3");
+        require(r.code == AvatarError::Suspended, "a suspended avatar's scene switch did not refuse AVATAR_SUSPENDED");
+        require(runtime.scene(key) == "dungeon-9", "a refused switch still changed the reference");
+        // A transferring avatar refuses too (AVATAR_TRANSFERRING).
+        require(runtime.load(other, 100).ok() && runtime.attach(other, 8).ok(), "setup failed");
+        require(runtime.switch_scene(other, "room-1").ok(), "an active switch was refused");
+        std::string snapshot;
+        require(runtime.transfer_out(other, snapshot).ok(), "the transfer was refused");
+        r = runtime.switch_scene(other, "room-4");
+        require(r.code == AvatarError::Transferring, "a transferring avatar's scene switch did not refuse AVATAR_TRANSFERRING");
+        // No such avatar is a no-avatar refusal.
+        r = runtime.switch_scene(same_character, "room-5");
+        require(r.code == AvatarError::NoAvatar, "a scene switch for a missing avatar did not refuse");
+        std::cout << "avatar.lifecycle scene_switch: reference only, no save/reload, non-active refused [PASS]\n";
+    }
+
     // --- Grace expiry -> reclaiming -> closed (final save must succeed) ------
     {
         RecordingHooks hooks;
@@ -1482,5 +1521,144 @@ return {
     std::cout << "avatar.transfer.full: both real hosts compose the transfer -- "
         "source transfer_out -> MLD1 SUBMIT/FENCE -> destination poll + READY -> "
         "coordinator COMMIT publishes the destination route [PASS]\n";
+}
+
+// The same-process scene switch (docs/avatar-runtime.md's migration table):
+// mistlane.scene.switch keeps the avatar active and moves only its scene
+// reference -- no save, no state round-trip, nothing travels. The node answers
+// synchronously from the runtime, a non-active avatar is refused with the
+// oracle's rejection-code word, and the API is registered even on a node with
+// no avatar runtime (it answers the disabled reason).
+void avatar_scene_switch() {
+    Context c;
+    const auto script = c.path("avatar_scene.lua");
+    write(script, R"avatar(local calls = {}
+local function note(name) calls[#calls+1] = name end
+return {
+  message = function(payload, ctx)
+    if payload == "read" then return table.concat(calls, "|") end
+    if payload == "switch" then
+      local ok, reason = mistlane.scene.switch(ctx.realm, ctx.character, "room-2")
+      if not ok then return "switched:ERR:" .. tostring(reason) end
+      return "switched:OK:" .. tostring(mistlane.scene.current(ctx.realm, ctx.character))
+    end
+    if payload == "switch-hero" then
+      local ok, reason = mistlane.scene.switch("home", "hero", "room-3")
+      if not ok then return "switched:ERR:" .. tostring(reason) end
+      return "switched:OK"
+    end
+    if payload == "scene-hero" then
+      return "scene:" .. tostring(mistlane.scene.current("home", "hero"))
+    end
+    if payload == "switch-missing" then
+      local ok, reason = mistlane.scene.switch("home", "ghost", "room-1")
+      if not ok then return "switched:ERR:" .. tostring(reason) end
+      return "switched:OK"
+    end
+    return payload
+  end,
+  avatar_load = function(context, state)
+    note("load:" .. context.character)
+    return { name = context.character }
+  end,
+  avatar_enter = function(context, avatar) note("enter:" .. avatar.name) return true end,
+  avatar_tick = function(context, avatar) note("tick:" .. avatar.name) end,
+  avatar_save = function(context, avatar) note("save:" .. avatar.name) return true end,
+  avatar_leave = function(context, avatar) note("leave:" .. avatar.name) end,
+  avatar_detach = function(context, avatar) note("detach:" .. avatar.name) end,
+}
+)avatar");
+    const auto listen = port();
+    c.node("crossServer", listen, {"--script", script.string()});
+    // A runtimeless host: the API is registered, so the call answers the
+    // disabled reason instead of failing the script.
+    const auto disabled_script = c.path("avatar_scene_runtimeless.lua");
+    write(disabled_script, R"avatar(return {
+  message = function(payload)
+    if payload == "switch" then
+      local ok, reason = mistlane.scene.switch("home", "hero", "room-1")
+      if not ok then return "switched:ERR:" .. tostring(reason) end
+      return "switched:OK"
+    end
+    return payload
+  end,
+}
+)avatar");
+    const auto disabled = port();
+    c.node("crossServer", disabled, {"--script", disabled_script.string()});
+    const auto send_frame = [](RawSocket& raw, std::string_view payload) {
+        std::string frame(4, '\0');
+        auto length = static_cast<std::uint32_t>(payload.size());
+        for (int i = 3; i >= 0; --i) { frame[i] = static_cast<char>(length & 255); length >>= 8; }
+        raw.send(frame+std::string(payload));
+    };
+    const auto read_frame = [](RawSocket& raw) {
+        std::size_t length = 0;
+        for (unsigned char ch : raw.receive(4)) length = (length << 8) | ch;
+        return raw.receive(length);
+    };
+    const auto join = [&](RawSocket& raw, std::string_view character) {
+        send_frame(raw, "MLC1 1 home g r1 ch " + std::string(character) + " gen 5 ret home g r1");
+        return read_frame(raw);
+    };
+    const auto has = [](std::string_view haystack, std::string_view needle) {
+        return haystack.find(needle) != std::string_view::npos;
+    };
+    const auto count = [&](std::string_view seen, std::string_view needle) {
+        std::size_t n = 0;
+        for (std::size_t pos = seen.find(needle); pos != std::string_view::npos;
+             pos = seen.find(needle, pos + needle.size())) ++n;
+        return n;
+    };
+
+    // The home join loads and enters, then the script switches the avatar's
+    // scene: the avatar stays active, the reference moves, and no save, reload
+    // or re-entry ran (nothing travelled, no state round-trip).
+    {
+        RawSocket raw(listen);
+        equal(join(raw, "hero"), "MLC1 OK 1");
+        send_frame(raw, "switch");
+        equal(read_frame(raw), "switched:OK:room-2");
+        send_frame(raw, "read");
+        const auto seen = read_frame(raw);
+        require(has(seen, "load:hero") && has(seen, "enter:hero"),
+                "the home join did not load and enter the avatar");
+        require(!has(seen, "save:hero") && !has(seen, "leave:hero") && !has(seen, "detach:hero"),
+                "a same-process scene switch saved, left or detached the avatar");
+        require(count(seen, "load:hero") == 1 && count(seen, "enter:hero") == 1,
+                "a same-process scene switch reloaded or re-entered the avatar");
+        send_frame(raw, "scene-hero");
+        equal(read_frame(raw), "scene:room-2");
+        // No such avatar is a no-avatar refusal, and a second switch moves the
+        // reference again.
+        send_frame(raw, "switch-missing");
+        equal(read_frame(raw), "switched:ERR:no avatar");
+        send_frame(raw, "switch");
+        equal(read_frame(raw), "switched:OK:room-2");
+    }
+    // The scope exit detaches hero, opening the grace window; a switch for a
+    // suspended avatar refuses with the oracle's AVATAR_SUSPENDED and leaves
+    // the reference alone.
+    {
+        RawSocket raw(listen);
+        equal(join(raw, "rival"), "MLC1 OK 1");
+        eventually([&] {
+            send_frame(raw, "switch-hero");
+            return read_frame(raw) == "switched:ERR:AVATAR_SUSPENDED";
+        }, 5s, "a suspended avatar's scene switch did not refuse AVATAR_SUSPENDED");
+        send_frame(raw, "scene-hero");
+        equal(read_frame(raw), "scene:room-2");
+    }
+    // A node without an avatar runtime still exposes the API; it answers the
+    // disabled reason rather than failing the script.
+    {
+        RawSocket raw(disabled);
+        send_frame(raw, "MLC1 1 home g r1");
+        equal(read_frame(raw), "MLC1 OK 1");
+        send_frame(raw, "switch");
+        equal(read_frame(raw), "switched:ERR:disabled; start with an avatar-load script");
+    }
+    std::cout << "avatar.scene.switch: active avatar keeps state, only the scene reference "
+        "moves -- no save, no reload; non-active and runtimeless hosts refuse [PASS]\n";
 }
 } // namespace mistlane::test
