@@ -329,6 +329,22 @@ public:
         const auto found = migrations_.find(migration_key(namespace_, key));
         return found == migrations_.end() ? nullptr : found->second.transaction;
     }
+    // The transfers this member must take over: the home is fenced and the
+    // destination lease is handed to (scope, role, instance). The destination
+    // polls this; each answer names the key, the request id and the candidate
+    // generation the READY must echo. A live transaction answers only while it
+    // waits on this member, so a taken or superseded transfer never repeats.
+    struct Destined { MigrationKey key; std::string id; std::uint64_t generation; };
+    std::vector<Destined> destined(const std::string& namespace_, const MigrationScope& scope,
+                                   const std::string& role, const std::string& instance) const {
+        std::vector<Destined> out;
+        for (const auto& [storage_key, entry] : migrations_) {
+            if (entry.namespace_ != namespace_) continue;
+            if (auto token = entry.transaction->destined_token(scope, role, instance))
+                out.push_back({entry.key, token->id, token->generation});
+        }
+        return out;
+    }
     static MigrationKey migration_key(const std::string& namespace_, const MigrationKey& key) {
         return {namespace_+'\x1'+key.first+'\x1'+key.second, ""};
     }
@@ -802,13 +818,18 @@ private:
     //   MLR1 MIG TAKEOVER [<namespace>] <realm> <character> <id> <generation>
     //     <expected> <destination>
     //   MLR1 MIG STATUS  [<namespace>] <realm> <character>
+    //   MLR1 MIG DESTINED [NS <namespace>] <scope> <role> <instance>
+    //     (a member query: the fenced transfers its own destination lease
+    //     awaits; <scope> is the realm or cross-group name, <role> is
+    //     gameServer or crossServer and <instance> names the member)
     // where <namespace> is the optional "NS <identifier>" group — "-" or
     // omitted names the default group, and a bare positional namespace is
     // refused so an older frame keeps meaning the default group — and
     // <owner> is "<realm|cross> NS <namespace> <scope> <role> <instance> <scene>".
     //   -> MLR1 MIG OWNER OK | PREPARED <id> <generation> | STEP <id> <STATE>
     //    | COMMITTED <id> <owner> <generation> | ABORTING <id> | ABORTED <id>
-    //    | PENDING <id>
+    //    | PENDING <id> | DESTINED <count> [<realm> <character> <id>
+    //      <generation>]...
     //    | STATE idle <owner> <generation> | STATE <id> <STATE> <drained|open>
     //      <fenced|unfenced> <ready|notready> <generation>
     //    | MLR1 EMPTY | MLR1 ERR INVALID | STALE | CONFLICT | ORDER | UNEXPECTED
@@ -911,6 +932,26 @@ private:
         if (tag != "MIG") return "MLR1 ERR INVALID";
         if (!(in >> verb)) return "MLR1 ERR UNEXPECTED";
         if (!registry_namespace_fields(in, namespace_)) return "MLR1 ERR INVALID";
+        if (verb == "DESTINED") {
+            // A member query, not a key: <scope> <role> <instance> names the
+            // destination lease this member waits on, so no realm/character
+            // follows and the answer enumerates the transfers awaiting it.
+            std::string scope, role, instance;
+            if (!(in >> scope >> role >> instance) || (in >> extra)) return "MLR1 ERR INVALID";
+            if (role != "gameServer" && role != "crossServer") return "MLR1 ERR INVALID";
+            if (!record_identifier(scope) || !record_identifier(instance)) return "MLR1 ERR INVALID";
+            MigrationScope ms;
+            ms.namespace_ = namespace_;
+            if (role == "gameServer") { ms.kind = MigrationScope::Kind::Realm; ms.realm = scope; }
+            else { ms.kind = MigrationScope::Kind::CrossGroup; ms.cross_group = scope; }
+            const auto list = registry_.destined(namespace_, ms, role, instance);
+            std::ostringstream out;
+            out << "MLR1 MIG DESTINED " << list.size();
+            for (const auto& item : list)
+                out << ' ' << item.key.first << ' ' << item.key.second << ' '
+                    << item.id << ' ' << item.generation;
+            return out.str();
+        }
         if (!(in >> realm >> character) || !record_identifier(realm)
                 || !record_identifier(character))
             return "MLR1 ERR INVALID";

@@ -160,6 +160,20 @@ public:
         const auto it = data_.journal.find(std::string(id));
         return it == data_.journal.end() ? nullptr : &it->second;
     }
+    // The token this transaction is waiting on from a destination member: the
+    // home is fenced and the transfer has not been taken yet. The registry's
+    // DESTINED enumeration asks each live transaction, so the destination can
+    // poll for the transfers it must take over instead of being pushed.
+    std::optional<MigrationToken> destined_token(const MigrationScope& scope,
+                                                 const std::string& role,
+                                                 const std::string& instance) const {
+        const auto* row = entry(data_.current);
+        if (!row || terminal(row->state) || !row->home_fenced || row->destination_ready)
+            return std::nullopt;
+        const auto& d = row->request.destination;
+        if (!(d.scope == scope && d.role == role && d.instance == instance)) return std::nullopt;
+        return row->token;
+    }
     MigrationState state() const {
         const auto* current = entry(data_.current);
         return current ? current->state : MigrationState::Idle;
