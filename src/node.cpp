@@ -268,8 +268,7 @@ public:
         if (source.scope.kind == MigrationScope::Kind::Realm) source.scope.realm = config_.scope;
         else source.scope.cross_group = config_.scope;
         source.role = config_.role;
-        source.instance = !config_.service_name.empty() ? config_.service_name
-            : "node-"+std::to_string(config_.listen.port);
+        source.instance = instance_name();
         // The avatar's current scene is the owner text's scene field; it is
         // filled from the request just before the driver starts.
         std::make_shared<TransferDriver>(io_.get_executor(), config_.coordinator, config_.data,
@@ -748,6 +747,12 @@ private:
               << target.type_id << ' ' << target.incarnation << ' ' << target.entity_id;
         member_->publish(frame.str());
     }
+    // The member identity the coordinator's registry knows a node by: the
+    // configured service name, or the generated node-<listen.port> default.
+    std::string instance_name() const {
+        return !config_.service_name.empty() ? config_.service_name
+            : "node-"+std::to_string(config_.listen.port);
+    }
     // The published endpoint names a host the gateway can only forward to if it
     // has that upstream; an endpoint no one dials resolves to no index, and the
     // route is skipped rather than guessed at.
@@ -775,6 +780,83 @@ private:
                     entity_routes_->set({r.scope, r.type_id, r.incarnation, r.entity_id}, *index);
             }
         });
+    }
+    // The destination half of a transfer: nothing pushes a transfer at the
+    // host, so the host polls the coordinator for the transfers its own
+    // destination lease awaits. Each answer is a fenced gap this host must
+    // take over — the home data is frozen at the source's generation and the
+    // record the source submitted is exactly what the avatar is built from.
+    // One pull at a time: a slow coordinator never stacks legs, and a refused
+    // pull keeps the last good view (an unreachable coordinator is not an
+    // empty queue).
+    void poll_destined_transfers() {
+        if (!config_.coordinator_enabled || config_.data.address.empty() || destined_pull_)
+            return;
+        if (!service_ || !service_->avatar_runtime()) return;
+        destined_pull_ = true;
+        const std::string identity = config_.upstream_token.empty() ? std::string{} : service_hello(config_);
+        MigrationClient::ask(io_.get_executor(), config_.coordinator, identity,
+            MigrationClient::destined_frame(config_.namespace_, config_.scope, config_.role,
+                instance_name()),
+            [this](MigrationClient::Verdict verdict) {
+                destined_pull_ = false;
+                if (!verdict.applied) return;
+                for (const auto& t : verdict.destined)
+                    drive_destination_transfer(t.realm, t.character, t.id, t.generation);
+            });
+    }
+    void drive_destination_transfer(std::string realm, std::string character,
+                                    std::string id, std::uint64_t generation) {
+        AvatarRuntime* runtime = service_ ? service_->avatar_runtime() : nullptr;
+        if (!runtime) return;
+        const AvatarKey key{std::move(realm), std::move(character), generation};
+        if (!transfer_in_pending_.insert(key).second) return; // already driven
+        // A prior READY refusal may have left the avatar built: re-send the
+        // READY without rebuilding it. Only a transfer-in avatar is retried; a
+        // home avatar for the same character is a separate concern and is left
+        // alone (a transfer-in would have refused Exists at load).
+        if (const auto live = runtime->live_key(key.realm, key.character);
+            live && runtime->source(*live) == LoadSource::TransferIn) {
+            send_ready(key, std::move(id), generation);
+            return;
+        }
+        const std::string identity = config_.upstream_token.empty() ? std::string{} : service_hello(config_);
+        RecordFetcher::load(io_.get_executor(), config_.data, identity, key.realm, key.character,
+            [this, key, id, generation](RecordFetcher::Record record, std::string reason) {
+                // EMPTY is a recordless avatar (a first login): the source
+                // would have submitted a snapshot, so a fenced gap with no
+                // record is still a take-over of an empty state, not a failure.
+                if (!reason.empty() && reason != "EMPTY") { transfer_in_pending_.erase(key); return; }
+                AvatarRuntime* runtime = service_ ? service_->avatar_runtime() : nullptr;
+                if (!runtime) { transfer_in_pending_.erase(key); return; }
+                const auto admitted = runtime->load(key, kTransferInGraceMs,
+                    LoadSource::TransferIn, record.payload);
+                if (!admitted.ok()) { transfer_in_pending_.erase(key); return; }
+                send_ready(key, std::move(id), generation);
+            });
+    }
+    void send_ready(AvatarKey key, std::string id, std::uint64_t generation) {
+        const std::string identity = config_.upstream_token.empty() ? std::string{} : service_hello(config_);
+        MigrationClient::ask(io_.get_executor(), config_.coordinator, identity,
+            MigrationClient::event_frame(config_.namespace_, key.realm, key.character,
+                id, generation, "READY"),
+            [this, key](MigrationClient::Verdict verdict) {
+                if (verdict.applied) { transfer_in_pending_.erase(key); return; }
+                // A transient refusal is retried on the next poll — the fenced
+                // gap is the destination's to take, so a lost READY (or a
+                // coordinator that restarted) is re-sent; READY is idempotent
+                // (a replayed one answers Duplicate/applied). A hard refusal
+                // means the transaction was superseded (a takeover, or the
+                // gap recovered onto a newer generation): the half-built avatar
+                // is discarded — the incoming avatar closes on this host with
+                // no save (nothing was dirtied between load and READY, and the
+                // durable record stays at data).
+                if (verdict.reason == "unreachable" || verdict.reason == "timeout")
+                    return; // keep pending, retry
+                transfer_in_pending_.erase(key);
+                if (AvatarRuntime* runtime = service_ ? service_->avatar_runtime() : nullptr)
+                    runtime->discard(key);
+            });
     }
     void tick() {
         const auto scheduled = std::chrono::steady_clock::now() + std::chrono::milliseconds(100);
@@ -821,6 +903,11 @@ private:
             // one pull is ever in flight: a slow coordinator does not stack
             // legs on top of each other.
             if (tick_count_ % 10u == 0u) refresh_host_routes();
+            // The destination half of a transfer is pulled on a sub-second
+            // modulo (one leg, no state): a fenced gap waits for this host's
+            // READY, and the take-over is the recovery path for a source that
+            // timed out after the fence.
+            if (tick_count_ % 5u == 0u) poll_destined_transfers();
             tick();
         });
     }
@@ -929,6 +1016,11 @@ private:
     // One coordinator pull in flight at a time (the leg may take up to its 10s
     // deadline; a slow coordinator must not stack pulls).
     bool host_routes_pull_ = false;
+    bool destined_pull_ = false;
+    // Keys being taken in on this host: a transfer-in load + READY spans more
+    // than one pull, so a key already in flight is not re-driven.
+    std::set<AvatarKey> transfer_in_pending_;
+    static constexpr std::uint64_t kTransferInGraceMs = 30000;
     std::uint64_t next_connection_ = 1;
     // MLT1 host verification on the crossServer join path. The claims are
     // volatile and per process, like the rest of the verifier's state.

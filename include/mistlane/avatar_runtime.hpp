@@ -429,9 +429,20 @@ public:
         return {AvatarError::Ok, ""};
     }
 
-    // E_DESTROY / E_OPERATOR_CLOSE: active or suspended -> reclaiming.
-    Result reclaim(AvatarKey key) {
+    // Discard a transfer-in avatar the host cannot keep (its READY was refused
+    // and the gap was superseded): the incoming avatar closes on this host with
+    // no save — nothing was dirtied between load and READY, and the durable
+    // record stays at data. Only an active, unbound transfer-in avatar is
+    // discarded; anything else is untouched.
+    void discard(AvatarKey key) {
         Entry* e = find(key);
+        if (!e || e->state != AvatarState::Active || e->source != LoadSource::TransferIn)
+            return;
+        e->state = AvatarState::Closed;
+    }
+
+    // E_DESTROY / E_OPERATOR_CLOSE: active or suspended -> reclaiming.
+    Result reclaim(AvatarKey key) {        Entry* e = find(key);
         if (!e) return {AvatarError::NoAvatar, "no avatar"};
         if (e->state != AvatarState::Active && e->state != AvatarState::Suspended)
             return {state_refusal(e->state), std::string("avatar is ") + to_string(e->state)};
