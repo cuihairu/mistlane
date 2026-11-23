@@ -1,6 +1,6 @@
 # Avatar full lifecycle: segments, oracle state machine and relationships
 
-Status: decided design (2026-11-22). No end-to-end Avatar runtime exists in the framework today (the seven-state oracle model is implemented and pinned by the avatar.lifecycle model test, its Lua hook surface is wired through the service VM and pinned by the avatar.lua test, and the cross-visit entry edge — `admit_visit`, `close_visit` and the node retirement face — is implemented and pinned by the avatar.session test, so a crossServer join now creates a real `visiting` avatar; the home login path is also wired — a join entering its own realm (realm == return_realm) creates the `active` avatar (avatar_load then avatar_enter), the disconnect suspends it (the grace window opens), a reconnect within grace reattaches to active without a reload, and the node tick runs the ordered reclaim (final save, closed) after grace — pinned by the avatar.home test — the [runtime page](./avatar-runtime.md) names the files; the return/transfer chain remains a later slice)
+Status: decided design (2026-11-22). No end-to-end Avatar runtime exists in the framework today (the seven-state oracle model is implemented and pinned by the avatar.lifecycle model test, its Lua hook surface is wired through the service VM and pinned by the avatar.lua test, and the cross-visit entry edge — `admit_visit`, `close_visit` and the node retirement face — is implemented and pinned by the avatar.session test, so a crossServer join now creates a real `visiting` avatar; the home login path is also wired — a join entering its own realm (realm == return_realm) creates the `active` avatar (avatar_load then avatar_enter), the disconnect suspends it (the grace window opens), a reconnect within grace reattaches to active without a reload, and the node tick runs the ordered reclaim (final save, closed) after grace — pinned by the avatar.home test; and the graceful cross return is wired on the source — a disconnecting visitor whose crossServer has a `--data` endpoint leaves cross scope and releases its avatar exactly when the return queue drains (`cross_leave` then `release`, no best-effort save), pinned by the avatar.return test, while a no-data crossServer keeps the abnormal `close_visit` — the [runtime page](./avatar-runtime.md) names the files; the transfer chain remains a later slice)
 (`grep -rniE "\b(struct|class)\s+(Avatar|Charactor|Player)\b" include/ src/` returns nothing),
 so nothing on this page changes CLI behavior and no runtime below is implemented or
 validated. This page is the **unified** lifecycle contract the [Avatar runtime](./avatar-runtime.md)
@@ -221,6 +221,7 @@ stateDiagram-v2
   visiting --> transferring : leaving cross scope
   transferring --> active : transfer failed or timed out (pre-tombstone)
   transferring --> loading : destination accepted (g+1)
+  transferring --> closed : source released (the return drained)
   visiting --> active : return complete
   reclaiming --> closed : ordered reclaim done
   closed --> [*] : destroyed
@@ -253,7 +254,7 @@ rejection code, persistence obligation, sync visibility.
 | `active` | Home domain; hosting generation current; entry accepted | detach → `suspended`; transfer → `transferring`; cross accept → `visiting`; destroy → `reclaiming` | `avatar_enter` `avatar_tick` `avatar_save` | `AVATAR_ALREADY_ATTACHED` (duplicate attach) | Durable writes allowed; `avatar_save` is the only entry | Full (AOI) |
 | `suspended` | Session detached; grace open; pending save obligations still run | reattach → `active`; grace expired → `reclaiming` | `avatar_detach` | `AVATAR_SUSPENDED` | Pending saves still run | Detach broadcast only |
 | `visiting` | Cross admission verified (entry ticket); provisional lease granted | leave → `transferring`; return complete → `active` | `avatar_tick` (cross-local) | `AVATAR_VISITING` (durable write) | Cross-local only; durable changes return via MLD1 | Cross-scope AOI |
-| `transferring` | Transfer in flight; no handlers, no ticks; in-flight work drained | pre-tombstone abort → `active`; destination accepted → `loading` | `avatar_transfer_out` `avatar_transfer_in` | `AVATAR_TRANSFERRING` | Source flushes final ordered changes before tombstone | Frozen |
+| `transferring` | Transfer in flight; no handlers, no ticks; in-flight work drained | pre-tombstone abort → `active`; destination accepted → `loading`; source released (return drained) → `closed` | `avatar_transfer_out` `avatar_transfer_in` | `AVATAR_TRANSFERRING` | Source flushes final ordered changes before tombstone; a cross return drains its queue before the release | Frozen |
 | `reclaiming` | Grace expired or explicit close; cleanup must run | reclaim done → `closed` | `avatar_save` (final) | `AVATAR_RECLAIMING` | Final save acknowledged before `closed` | AOI leave broadcast |
 | `closed` | Ordered cleanup finished | destroyed → `[*]` | `avatar_fail` | `AVATAR_CLOSED` | None | None |
 
@@ -261,8 +262,8 @@ rejection code, persistence obligation, sync visibility.
 
 Let the event alphabet be `E_ATTACH, E_DETACH, E_REATTACH, E_GRACE_EXPIRED, E_ENTER,
 E_TRANSFER_REQ, E_CROSS_ACCEPT, E_CROSS_LEAVE, E_TRANSFER_ABORT, E_TOMBSTONE_ACCEPT,
-E_RETURN_COMPLETE, E_SPAWN, E_DESTROY, E_DAILY_CUTOVER, E_SAVE_FAIL, E_LOAD_FAIL,
-E_OPERATOR_CLOSE`. The oracle is `δ(state, event) → next | refuse(code)`, total by the rule:
+E_RETURN_COMPLETE, E_RETURN_RELEASE, E_SPAWN, E_DESTROY, E_DAILY_CUTOVER, E_SAVE_FAIL,
+E_LOAD_FAIL, E_OPERATOR_CLOSE`. The oracle is `δ(state, event) → next | refuse(code)`, total by the rule:
 
 > **Every event not listed for a state is refused with that state's rejection code.**
 
@@ -272,7 +273,7 @@ E_OPERATOR_CLOSE`. The oracle is `δ(state, event) → next | refuse(code)`, tot
 | `active` | `E_DETACH → suspended` · `E_TRANSFER_REQ → transferring` · `E_CROSS_ACCEPT → visiting` · `E_DESTROY → reclaiming` · `E_ATTACH → refuse(AVATAR_ALREADY_ATTACHED)` · `E_DAILY_CUTOVER → active` (barrier) |
 | `suspended` | `E_REATTACH → active` · `E_GRACE_EXPIRED → reclaiming` · `E_OPERATOR_CLOSE → reclaiming` · `E_ATTACH → refuse(AVATAR_SUSPENDED)` |
 | `visiting` | `E_CROSS_LEAVE → transferring` · `E_RETURN_COMPLETE → active` · `E_DAILY_CUTOVER → visiting` (barrier) · durable write → `refuse(AVATAR_VISITING)` |
-| `transferring` | `E_TRANSFER_ABORT → active` · `E_TOMBSTONE_ACCEPT → loading` (load source transfer-in) · `E_ATTACH/E_ENTER → refuse(AVATAR_TRANSFERRING)` |
+| `transferring` | `E_TRANSFER_ABORT → active` · `E_TOMBSTONE_ACCEPT → loading` (load source transfer-in) · `E_RETURN_RELEASE → closed` · `E_ATTACH/E_ENTER → refuse(AVATAR_TRANSFERRING)` |
 | `reclaiming` | reclaim done → `closed` · `E_SAVE_FAIL → reclaiming` (retry or surfaced) |
 | `closed` | `E_SPAWN → loading` · everything else → `refuse(AVATAR_CLOSED)` |
 
@@ -290,9 +291,9 @@ signature and failure semantics; this page only assigns which state each hook is
 |---|---|---|
 | `avatar_load` | `loading` | Entry to `active` (home, transfer-in) or `visiting` (cross-visit) only on success; failure → `closed`, no visible avatar |
 | `avatar_enter` | `loading → active` edge | Entry refused with explicit reason |
-| `avatar_leave` | `active → suspended`, `visiting → transferring` | Never blocks the detach |
+| `avatar_leave` | `active → suspended`, `visiting → transferring` | Never blocks the detach. The session detach only: the return's own `cross_leave` (no session bound anymore) runs no hook |
 | `avatar_tick` | `active`, `visiting` | Cross-local only when `visiting` |
-| `avatar_save` | `active`, `suspended`, `visiting`, `reclaiming` | Single forced-save entry; `reclaiming` save must be durable before `closed` |
+| `avatar_save` | `active`, `suspended`, `visiting`, `reclaiming` | Single forced-save entry; `reclaiming` save must be durable before `closed`. The return's release never saves (its changes already landed through MLD1); only the abnormal cross close saves best-effort |
 | `avatar_transfer_out` | `active → transferring` edge | Abort returns to `active` |
 | `avatar_transfer_in` | `loading` (transfer-in) | Failure closes on this host; source keeps the avatar |
 | `avatar_detach` | `active → suspended` edge | Logged; avatar goes `suspended` regardless |
@@ -335,8 +336,10 @@ recorded here for a maintainer to resolve.
   covers renderability, desktop/mobile, light/dark and expansion.
 - **Runtime acceptance:** none today — no end-to-end Avatar runtime exists; the seven-state oracle
   model is implemented and model-tested (avatar.lifecycle), the home join and cross-visit
-  session/Lua/transport wiring is implemented and pinned (avatar.home, avatar.session), but the
-  return/transfer chain is a later slice. Validation records must not claim the full avatar
+  session/Lua/transport wiring is implemented and pinned (avatar.home, avatar.session), and the
+  graceful cross return is wired and pinned on the source (avatar.return: cross_leave then
+  release exactly on the queue drain, no best-effort save), but the transfer chain is a later
+  slice. Validation records must not claim the full avatar
   behavior (unchanged from the avatar-runtime page).
 
 Related: [Avatar runtime](./avatar-runtime.md), [cross return and single-writer protocol](./cross-return-protocol.md),

@@ -37,6 +37,7 @@ struct RecordingHooks final : AvatarHooks {
         return !fail_transfer_in;
     }
     void on_detach(const AvatarKey&, const std::string& r) override { calls.push_back("detach:" + r); }
+    void on_cross_end(const AvatarKey&) override { calls.push_back("cross_end"); }
     void on_fail(const AvatarKey&, const std::string&, std::string_view why) override {
         calls.push_back("fail:" + std::string(why));
     }
@@ -351,6 +352,51 @@ void avatar_lifecycle() {
         require(runtime.state(key) == AvatarState::Transferring, "detach from visiting did not transfer");
         require(hooks.count("leave") >= 1, "avatar_leave did not run on the visiting detach");
         std::cout << "avatar.lifecycle visiting: lease face, tick/save, leave/return [PASS]\n";
+    }
+
+    // --- Release: the graceful cross-return terminal ---------------------------
+    {
+        RecordingHooks hooks;
+        FakeClock clock;
+        AvatarRuntime runtime(hooks, clock.fn());
+        require(runtime.load(key, 100).ok() && runtime.attach(key, 7).ok(), "setup failed");
+        // release from a non-transferring state refuses with that state's code.
+        auto r = runtime.release(key);
+        require(r.code == AvatarError::AlreadyAttached,
+                "release from active did not refuse AVATAR_ALREADY_ATTACHED");
+        require(runtime.state(key) == AvatarState::Active, "a refusal moved the avatar");
+        require(runtime.reclaim(key).ok() && runtime.reclaim_done(key).ok(), "teardown failed");
+        // Cross visit: admit_visit loads a cross-source avatar into visiting,
+        // cross_leave -> transferring, then release closes with no save and
+        // exactly one onCrossVisitEnd.
+        require(runtime.admit_visit(other, 9, 100).ok(), "cross admit refused");
+        require(runtime.state(other) == AvatarState::Visiting, "cross visit did not land visiting");
+        r = runtime.cross_leave(other);
+        require(r.ok() && runtime.state(other) == AvatarState::Transferring,
+                "cross leave did not move to transferring");
+        const auto saves_before = hooks.count("save");
+        r = runtime.release(other);
+        require(r.ok() && runtime.state(other) == AvatarState::Closed,
+                "release did not close the transferring avatar");
+        require(hooks.count("cross_end") == 1, "release did not fire onCrossVisitEnd exactly once");
+        require(hooks.count("save") == saves_before,
+                "release ran a save (the change-set was already durable)");
+        // release of a closed avatar refuses.
+        r = runtime.release(other);
+        require(r.code == AvatarError::Closed, "release of a closed avatar did not refuse");
+        // Host-to-host transfer: transfer_out -> release closes with no cross_end.
+        require(runtime.load(same_character, 100).ok() && runtime.attach(same_character, 11).ok(),
+                "re-setup failed");
+        const auto cross_before = hooks.count("cross_end");
+        r = runtime.transfer_out(same_character);
+        require(r.ok() && runtime.state(same_character) == AvatarState::Transferring,
+                "transfer out refused");
+        r = runtime.release(same_character);
+        require(r.ok() && runtime.state(same_character) == AvatarState::Closed,
+                "host-to-host release did not close");
+        require(hooks.count("cross_end") == cross_before,
+                "host-to-host release fired onCrossVisitEnd");
+        std::cout << "avatar.lifecycle release: transferring close, refusal codes [PASS]\n";
     }
 
     // --- Reclaim: destroy from active, refusal codes elsewhere ----------------
@@ -908,5 +954,135 @@ return {
     refused.signal(SIGTERM);
     std::cout << "avatar.home.record: deferred home join feeds the MLD1 LOAD record "
         "into avatar_load, EMPTY is nil, unreachable refuses [PASS]\n";
+}
+
+// The graceful cross-return on the source: a crossServer with a --data endpoint
+// returns its visitor's changes durably instead of terminating the visit
+// abnormally. A disconnecting visitor leaves cross scope (cross_leave) and
+// releases when the return queue is drained — immediately for a visitor that
+// queued nothing, and only once home data acknowledged an in-flight change for
+// one that queued something. Neither close runs the abnormal path's best-effort
+// save: the changes already landed.
+void avatar_return() {
+    Context c;
+    const auto script = c.path("avatar_return.lua");
+    write(script, R"avatar(local calls = {}
+return {
+  message = function(payload)
+    if payload == "read" then return table.concat(calls, "|") end
+    if payload == "seed" then
+      local ok, reason = mistlane.returning.seed("home", "hero")
+      return ok and "SEEDED" or ("SEEDFAIL:" .. tostring(reason))
+    end
+    if payload == "send" then
+      local ok, reason = mistlane.returning.enqueue("home", "hero", 5, 1, "hp=10")
+      return ok and "ENQUEUED" or ("ENQFAIL:" .. tostring(reason))
+    end
+    return "noop"
+  end,
+  avatar_load = function(context, state)
+    calls[#calls+1] = "load:" .. context.character
+    return { name = context.character, generation = context.generation }
+  end,
+  avatar_save = function(context, avatar)
+    calls[#calls+1] = "save:" .. avatar.name
+    return true
+  end,
+  onCrossVisitStart = function(context) calls[#calls+1] = "start:" .. context.character end,
+  onCrossVisitEnd = function(context) calls[#calls+1] = "end:" .. context.character end,
+}
+)avatar");
+    write(c.path("echo.lua"), echo);
+    const auto data = port(), cross = port();
+    // The crossServer declares home data on a port nothing listens on yet, so
+    // the return sender can never drain a queued change until the endpoint
+    // comes up. That makes the two-phase release observable: the release is
+    // unreachable without the ACK durable, so an early one cannot hide.
+    auto& node = c.node("crossServer", cross, {"--script", script.string(),
+        "--data", endpoint(data)});
+    const auto send_frame = [](RawSocket& raw, std::string_view payload) {
+        std::string frame(4, '\0');
+        auto length = static_cast<std::uint32_t>(payload.size());
+        for (int i = 3; i >= 0; --i) { frame[i] = static_cast<char>(length & 255); length >>= 8; }
+        raw.send(frame + std::string(payload));
+    };
+    const auto read_frame = [](RawSocket& raw) {
+        std::size_t length = 0;
+        for (unsigned char ch : raw.receive(4)) length = (length << 8) | ch;
+        return raw.receive(length);
+    };
+    const auto join = [&](RawSocket& raw, std::string_view character) {
+        send_frame(raw, "MLC1 1 arena g r1 ch " + std::string(character) + " gen 5 ret home g r1");
+        return read_frame(raw);
+    };
+    const auto trace = [&](RawSocket& raw) {
+        send_frame(raw, "read");
+        return read_frame(raw);
+    };
+    const auto has = [](std::string_view haystack, std::string_view needle) {
+        return haystack.find(needle) != std::string_view::npos;
+    };
+    const auto tally = [](std::string_view haystack, std::string_view needle) {
+        std::size_t n = 0;
+        for (std::size_t at = 0;;) {
+            const auto pos = haystack.find(needle, at);
+            if (pos == std::string_view::npos) return n;
+            ++n;
+            at = pos + needle.size();
+        }
+    };
+    // A visitor that queued no change is drained at the stop boundary: the
+    // visit releases now, through the graceful path (no best-effort save).
+    {
+        RawSocket raw(cross);
+        equal(join(raw, "hero"), "MLC1 OK 1");
+    }
+    {
+        RawSocket raw(cross);
+        equal(join(raw, "watcher"), "MLC1 OK 1");
+        eventually([&] { return has(trace(raw), "end:hero"); }, 5s,
+            "the drained visitor did not release on disconnect");
+        const auto seen = trace(raw);
+        require(has(seen, "start:hero"), "the visit never started");
+        require(!has(seen, "save:hero"), "the graceful release ran a best-effort save");
+        require(!has(seen, "leave:hero"), "leaving cross scope ran avatar_leave");
+    }
+    // A visitor holding an unacknowledged change stays a participant of record:
+    // the return queue keeps it transferring until the change lands. Home data
+    // is still down, so the release cannot have come from the drain.
+    {
+        RawSocket raw(cross);
+        equal(join(raw, "hero"), "MLC1 OK 1");
+        send_frame(raw, "seed");
+        equal(read_frame(raw), "SEEDED");
+        send_frame(raw, "send");
+        equal(read_frame(raw), "ENQUEUED");
+    }
+    {
+        RawSocket raw(cross);
+        equal(join(raw, "watcher"), "MLC1 OK 1");
+        for (int round = 0; round != 10; ++round) {
+            require(tally(trace(raw), "end:hero") == 1,
+                    "the undrained visitor released before its change landed");
+            std::this_thread::sleep_for(200ms);
+        }
+    }
+    // Home data comes up, the sender drains the change, and only then does the
+    // source release the visitor it had been holding — still without a save.
+    {
+        auto& store = c.node("data", data, {"--script", c.path("echo.lua").string(),
+            "--journal", c.path("avatar-return-records.sqlite").string()});
+        RawSocket raw(cross);
+        equal(join(raw, "reader"), "MLC1 OK 1");
+        eventually([&] { return tally(trace(raw), "end:hero") == 2; }, 10s,
+            "the drained change did not release the held visitor");
+        const auto seen = trace(raw);
+        require(!has(seen, "save:hero"), "the drained release ran a best-effort save");
+        store.signal(SIGTERM);
+    }
+    node.signal(SIGTERM);
+    require(node.wait() == 0, "crossServer graceful shutdown failed");
+    std::cout << "avatar.return: cross visit returns through the durable queue, "
+        "release on the drain [PASS]\n";
 }
 } // namespace mistlane::test

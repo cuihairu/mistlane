@@ -413,7 +413,8 @@ public:
             bool internal = false, RecordStore* records = nullptr,
             const TicketVerifier* tickets = nullptr, EntityEndpoint* entities = nullptr,
             GatewayEntityCorrelation* gateway = nullptr, std::uint64_t connection = 0,
-            const EntityHostRoutes* entity_routes = nullptr)
+            const EntityHostRoutes* entity_routes = nullptr, ReturnSink* return_sink = nullptr,
+            std::function<void(AvatarKey)> on_return_pending = {})
       : client_(std::move(client)), service_(service),
         timer_(client_->executor()), config_(config), admission_(admission), diagnostics_(diagnostics),
         registry_(registry), on_close_(std::move(on_close)), mux_upgrade_(std::move(mux_upgrade)),
@@ -424,6 +425,8 @@ public:
         // is only meaningful on the path that has one. Declaration order already
         // differs from the init list, so keep new borrowed state out of it.
         entity_routes_ = entity_routes;
+        return_sink_ = return_sink;
+        on_return_pending_ = std::move(on_return_pending);
         if (upstream) {
             endpoint_ = tcp::endpoint(parse_address(upstream->address), upstream->port);
             // Multiplexing keeps one socket per upstream: the link owns the
@@ -457,19 +460,31 @@ public:
         client_->close();
         // A bound avatar ends with the session. A home avatar detaches (active
         // -> suspended, the grace window opens: a reconnect within grace
-        // reattaches without a reload, and the node tick reclaims after grace);
-        // a cross visit closes here (best-effort save, onCrossVisitEnd, closed)
-        // — abnormal termination, not a graceful return, which is a later
-        // slice's MLD1 flow. After a reload the service_ reference points at the
-        // new VM, whose runtime has no such avatar, so this is a no-op (the old
-        // VM retired it already).
+        // reattaches without a reload, and the node tick reclaims after grace).
+        // A cross visit with no home data endpoint closes here (best-effort
+        // save, onCrossVisitEnd, closed) — abnormal termination, because there
+        // is no durable return to wait on. With a data endpoint the graceful
+        // return runs instead: the visit relinquishes the lease (visiting ->
+        // transferring, avatar_leave), and the avatar stays a participant of
+        // record until its final change-set is acknowledged durably — so a
+        // drained participant releases now (avatar_leave, onCrossVisitEnd,
+        // closed, no save: the changes already landed) and an undrained one is
+        // handed to the node, which releases it when the sender's queue drains.
+        // After a reload the service_ reference points at the new VM, whose
+        // runtime has no such avatar, so this is a no-op (the old VM retired it
+        // already).
         if (avatar_key_) {
             if (AvatarRuntime* runtime = service_->avatar_runtime()) {
                 if (avatar_home_) {
                     const auto session_id = context_.session ? context_.session : connection_;
                     runtime->detach(*avatar_key_, session_id);
-                } else {
+                } else if (!return_sink_) {
                     runtime->close_visit(*avatar_key_);
+                } else if (runtime->cross_leave(*avatar_key_).ok()) {
+                    if (return_sink_->drained(avatar_key_->realm, avatar_key_->character))
+                        (void)runtime->release(*avatar_key_);
+                    else if (on_return_pending_)
+                        on_return_pending_(*avatar_key_);
                 }
             }
         }
@@ -1118,8 +1133,17 @@ private:
     // is a no-op (the old VM's retirement already saved and closed it).
     std::optional<AvatarKey> avatar_key_;
     // Which face the bound avatar is: a home join detaches on disconnect
-    // (grace window opens), a cross visit closes (abnormal termination).
+    // (grace window opens), a cross visit returns or closes.
     bool avatar_home_ = false;
+    // The cross return's durable-write authority: the sender queue this node
+    // drains to home data. A cross visit with one ends gracefully (the visit
+    // relinquishes the lease and the avatar stays a participant of record until
+    // the queue drains); without one the visit closes abnormally.
+    ReturnSink* return_sink_ = nullptr;
+    // Node wiring for the graceful return: a cross visit that was relinquished
+    // but still holds undelivered changes is handed to the node here, which
+    // registers the avatar for release when the sender's queue drains.
+    std::function<void(AvatarKey)> on_return_pending_;
     // Default grace for an admitted avatar, until the configuration names it
     // (docs/avatar-runtime.md: grace periods are measured at implementation).
     // A cross visit never suspends — the session end closes the visit — so this

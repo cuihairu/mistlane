@@ -1,6 +1,6 @@
 # Avatar 全生命周期：分段、预言机状态机与关系
 
-状态：已定设计（2026-11-22）。框架当前没有端到端 Avatar 运行时——七态预言机模型已实现并由 avatar.lifecycle 模型测试钉住，其 Lua 钩子面已接入服务 VM 并由 avatar.lua 测试钉住，跨服进入边（`admit_visit`、`close_visit` 与节点退役面）已实现并由 avatar.session 测试钉住，故 crossServer 加入现在真的创建 `visiting` Avatar，归属登录路径也已接线——加入自己的区服（realm == return_realm）创建 `active` Avatar（avatar_load→avatar_enter），断开把它 `suspended`（宽限窗口开），宽限内重连直接回 `active` 不重载，宽限到后节点 tick 走有序回收（最终保存→`closed`），由 avatar.home 测试钉住（文件名见 [Avatar 运行时页](./avatar-runtime.md)）；回传/移交链仍为后续切片——本页不改变任何 CLI 行为，下面描述的运行行为仍未端到端实现、未经验证。本页是[Avatar 运行时](./avatar-runtime.md)的五态、[跨服回传协议](./cross-return-protocol.md)的租约态与[场景生命周期](./scene-lifecycle.md)的实例态各自覆盖一部分的**统一**生命周期契约；它记录三者哪里一致、哪里分歧，以及一个可机械判定的预言机长什么样。本页**不改**那三页——冲突以勘误表（下文）记录，交由维护者处置。英文页：[English](../avatar-lifecycle.md)。
+状态：已定设计（2026-11-22）。框架当前没有端到端 Avatar 运行时——七态预言机模型已实现并由 avatar.lifecycle 模型测试钉住，其 Lua 钩子面已接入服务 VM 并由 avatar.lua 测试钉住，跨服进入边（`admit_visit`、`close_visit` 与节点退役面）已实现并由 avatar.session 测试钉住，故 crossServer 加入现在真的创建 `visiting` Avatar，归属登录路径也已接线——加入自己的区服（realm == return_realm）创建 `active` Avatar（avatar_load→avatar_enter），断开把它 `suspended`（宽限窗口开），宽限内重连直接回 `active` 不重载，宽限到后节点 tick 走有序回收（最终保存→`closed`），由 avatar.home 测试钉住；源侧的优雅回服也已接线——带 `--data` 端点的 crossServer 上断开的访问者离开跨服作用域，并在回传队列排空的那一刻释放其 Avatar（`cross_leave` 后 `release`，不做尽力保存），由 avatar.return 测试钉住，而不带 `--data` 的 crossServer 保留异常的 `close_visit`（文件名见 [Avatar 运行时页](./avatar-runtime.md)）；移交链仍为后续切片——本页不改变任何 CLI 行为，下面描述的运行行为仍未端到端实现、未经验证。本页是[Avatar 运行时](./avatar-runtime.md)的五态、[跨服回传协议](./cross-return-protocol.md)的租约态与[场景生命周期](./scene-lifecycle.md)的实例态各自覆盖一部分的**统一**生命周期契约；它记录三者哪里一致、哪里分歧，以及一个可机械判定的预言机长什么样。本页**不改**那三页——冲突以勘误表（下文）记录，交由维护者处置。英文页：[English](../avatar-lifecycle.md)。
 
 ## 为什么需要一页
 
@@ -187,6 +187,7 @@ stateDiagram-v2
   visiting --> transferring : leaving cross scope
   transferring --> active : transfer failed or timed out (pre-tombstone)
   transferring --> loading : destination accepted (g+1)
+  transferring --> closed : source released (the return drained)
   visiting --> active : return complete
   reclaiming --> closed : ordered reclaim done
   closed --> [*] : destroyed
@@ -212,7 +213,7 @@ stateDiagram-v2
 | `active` | 归属域；宿主代当前；进入被接受 | 断线 → `suspended`；传送 → `transferring`；跨服接受 → `visiting`；销毁 → `reclaiming` | `avatar_enter` `avatar_tick` `avatar_save` | `AVATAR_ALREADY_ATTACHED`（重复进入） | 允许持久写；`avatar_save` 唯一入口 | 全量（AOI） |
 | `suspended` | 会话已断；宽限开启；待存义务仍在跑 | 重连 → `active`；宽限到 → `reclaiming` | `avatar_detach` | `AVATAR_SUSPENDED` | 待存义务仍在跑 | 仅离场广播 |
 | `visiting` | 跨服准入已验证（入场票）；临时租约已授 | 离开 → `transferring`；回传完成 → `active` | `avatar_tick`（跨服本地） | `AVATAR_VISITING`（持久写） | 仅跨服本地；持久变更经 MLD1 回传 | 跨服作用域 AOI |
-| `transferring` | 传送在途；无 handler、无 tick；在途工作已排空 | 墓碑前中止 → `active`；目标接受 → `loading` | `avatar_transfer_out` `avatar_transfer_in` | `AVATAR_TRANSFERRING` | 源在墓碑前冲刷最终有序变更 | 冻结 |
+| `transferring` | 传送在途；无 handler、无 tick；在途工作已排空 | 墓碑前中止 → `active`；目标接受 → `loading`；源释放（回传排空）→ `closed` | `avatar_transfer_out` `avatar_transfer_in` | `AVATAR_TRANSFERRING` | 源在墓碑前冲刷最终有序变更；跨服回传在释放前排空其队列 | 冻结 |
 | `reclaiming` | 宽限到或显式关闭；清理必须执行 | 回收完成 → `closed` | `avatar_save`（最终） | `AVATAR_RECLAIMING` | 最终保存在 `closed` 前已确认 | AOI 离场广播 |
 | `closed` | 有序清理完成 | 销毁 → `[*]` | `avatar_fail` | `AVATAR_CLOSED` | 无 | 无 |
 
@@ -220,7 +221,7 @@ stateDiagram-v2
 
 事件字母表：`E_ATTACH, E_DETACH, E_REATTACH, E_GRACE_EXPIRED, E_ENTER, E_TRANSFER_REQ,
 E_CROSS_ACCEPT, E_CROSS_LEAVE, E_TRANSFER_ABORT, E_TOMBSTONE_ACCEPT, E_RETURN_COMPLETE,
-E_SPAWN, E_DESTROY, E_DAILY_CUTOVER, E_SAVE_FAIL, E_LOAD_FAIL, E_OPERATOR_CLOSE`。预言机是
+E_RETURN_RELEASE, E_SPAWN, E_DESTROY, E_DAILY_CUTOVER, E_SAVE_FAIL, E_LOAD_FAIL, E_OPERATOR_CLOSE`。预言机是
 `δ(态, 事件) → 下一态 | 拒绝(码)`，由下规则保证全定义：
 
 > **凡某态未列出的事件，一律以该态拒绝码拒绝。**
@@ -231,7 +232,7 @@ E_SPAWN, E_DESTROY, E_DAILY_CUTOVER, E_SAVE_FAIL, E_LOAD_FAIL, E_OPERATOR_CLOSE`
 | `active` | `E_DETACH → suspended` · `E_TRANSFER_REQ → transferring` · `E_CROSS_ACCEPT → visiting` · `E_DESTROY → reclaiming` · `E_ATTACH → 拒绝(AVATAR_ALREADY_ATTACHED)` · `E_DAILY_CUTOVER → active`（屏障） |
 | `suspended` | `E_REATTACH → active` · `E_GRACE_EXPIRED → reclaiming` · `E_OPERATOR_CLOSE → reclaiming` · `E_ATTACH → 拒绝(AVATAR_SUSPENDED)` |
 | `visiting` | `E_CROSS_LEAVE → transferring` · `E_RETURN_COMPLETE → active` · `E_DAILY_CUTOVER → visiting`（屏障） · 持久写 → `拒绝(AVATAR_VISITING)` |
-| `transferring` | `E_TRANSFER_ABORT → active` · `E_TOMBSTONE_ACCEPT → loading`（加载来源 transfer-in） · `E_ATTACH/E_ENTER → 拒绝(AVATAR_TRANSFERRING)` |
+| `transferring` | `E_TRANSFER_ABORT → active` · `E_TOMBSTONE_ACCEPT → loading`（加载来源 transfer-in） · `E_RETURN_RELEASE → closed` · `E_ATTACH/E_ENTER → 拒绝(AVATAR_TRANSFERRING)` |
 | `reclaiming` | 回收完成 → `closed` · `E_SAVE_FAIL → reclaiming`（重试或上报） |
 | `closed` | `E_SPAWN → loading` · 其余 → `拒绝(AVATAR_CLOSED)` |
 
@@ -245,9 +246,9 @@ E_SPAWN, E_DESTROY, E_DAILY_CUTOVER, E_SAVE_FAIL, E_LOAD_FAIL, E_OPERATOR_CLOSE`
 |---|---|---|
 | `avatar_load` | `loading` | 成功才入 `active`（home、transfer-in）或 `visiting`（跨服进入）；失败 → `closed`，无可见 Avatar |
 | `avatar_enter` | `loading → active` 边沿 | 以显式原因拒绝进入 |
-| `avatar_leave` | `active → suspended`、`visiting → transferring` | 永不阻塞断离 |
+| `avatar_leave` | `active → suspended`、`visiting → transferring` | 永不阻塞断离。仅会话断离：回传自身的 `cross_leave`（已无绑定会话）不跑钩子 |
 | `avatar_tick` | `active`、`visiting` | `visiting` 时仅跨服本地 |
-| `avatar_save` | `active`、`suspended`、`visiting`、`reclaiming` | 唯一强制保存入口；`reclaiming` 的保存在 `closed` 前须持久 |
+| `avatar_save` | `active`、`suspended`、`visiting`、`reclaiming` | 唯一强制保存入口；`reclaiming` 的保存在 `closed` 前须持久。回传的释放绝不保存（其变更已经 MLD1 落盘）；只有异常的跨服关闭做尽力保存 |
 | `avatar_transfer_out` | `active → transferring` 边沿 | 中止回 `active` |
 | `avatar_transfer_in` | `loading`（transfer-in） | 失败在本宿主关闭；源保留 Avatar |
 | `avatar_detach` | `active → suspended` 边沿 | 记日志；Avatar 无论如何进 `suspended` |
@@ -284,6 +285,6 @@ E_SPAWN, E_DESTROY, E_DAILY_CUTOVER, E_SAVE_FAIL, E_LOAD_FAIL, E_OPERATOR_CLOSE`
 
 - **机械可判定：**转移函数按拒绝规则全定义——任意事件序列终止于某态或具名拒绝。可检视验证，即账本验收（"状态机可机械判定任意事件序列"）。
 - **Mermaid：**九个图（八段 + 状态机）全渲染；`docs:check` 覆盖可渲染、桌面/移动、明暗与展开。
-- **运行时验收：**今天无——无端到端 Avatar 运行时；七态预言机模型已实现并经模型测试（avatar.lifecycle），归属加入与跨服访问的会话/Lua/传输接线已实现并钉住（avatar.home、avatar.session），但回传/移交链仍是后续切片。验证记录不得声称完整 avatar 行为（与 avatar-runtime 页一致）。
+- **运行时验收：**今天无——无端到端 Avatar 运行时；七态预言机模型已实现并经模型测试（avatar.lifecycle），归属加入与跨服访问的会话/Lua/传输接线已实现并钉住（avatar.home、avatar.session），且优雅跨服回传已在源侧接线并钉住（avatar.return：`cross_leave` 后恰在队列排空时 `release`，不做尽力保存），但移交链仍是后续切片。验证记录不得声称完整 avatar 行为（与 avatar-runtime 页一致）。
 
 相关：[Avatar 运行时](./avatar-runtime.md)、[跨服回传与唯一写入权协议](./cross-return-protocol.md)、[场景生命周期](./scene-lifecycle.md)、[玩家、场景与跨服模型](./player-scene-model.md)。

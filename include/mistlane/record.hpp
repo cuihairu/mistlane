@@ -563,6 +563,14 @@ public:
     void owner_generation(std::string realm, std::string character, std::uint64_t generation) {
         owner_generation_[{std::move(realm), std::move(character)}] = generation;
     }
+    // Whether this participant holds no pending change. The sender's in-flight
+    // set and pre-load pool are the sender's, so drained() on the queue alone
+    // is only the pending map — the ReturnSender composes all three.
+    bool drained(std::string_view realm, std::string_view character) const {
+        const auto key = std::pair{std::string(realm), std::string(character)};
+        const auto rows = pending_.find(key);
+        return rows == pending_.end() || rows->second.empty();
+    }
 private:
     using Key = std::pair<std::string, std::string>;
     std::size_t retry_limit_;

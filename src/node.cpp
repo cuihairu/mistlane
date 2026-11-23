@@ -433,9 +433,21 @@ public:
                 ticket_issuer_ = std::make_unique<TicketIssuer>(ticket_secrets(secrets));
             }
         }
-        if (config_.role == "crossServer" && !config_.data.address.empty())
+        if (config_.role == "crossServer" && !config_.data.address.empty()) {
             return_sender_ = std::make_shared<ReturnSender>(io_, config_.data, *diagnostics_,
                 config_.upstream_token.empty() ? "" : service_hello(config_));
+            // The graceful return's release edge: when a participant's queue
+            // drains durably, the node releases any avatar that was left
+            // transferring as a participant of record (a session ended before
+            // its return completed). Runs on the event-loop thread.
+            return_sender_->set_on_drain([this](const std::pair<std::string, std::string>& key) {
+                const auto found = return_releases_.find(key);
+                if (found == return_releases_.end()) return;
+                if (AvatarRuntime* runtime = service_ ? service_->avatar_runtime() : nullptr)
+                    (void)runtime->release(found->second);
+                return_releases_.erase(found);
+            });
+        }
         if (script_role)
             service_ = std::make_shared<LuaService>(config_.script, service_context_, redis_,
                 websockets_.get(), game_sessions_.get(), this,
@@ -586,7 +598,8 @@ private:
             // The correlation table belongs to the dedicated-socket upstream
             // path only; link sessions are keyed by their logical id instead.
             config_.upstream_multiplex ? nullptr : gateway_correlation_.get(), next_connection_++,
-            entity_routes_.get());
+            entity_routes_.get(), return_sender_.get(),
+            [this](AvatarKey key) { return_releases_[{key.realm, key.character}] = key; });
         sessions_.insert(session);
         publish_active();
         session->start();
@@ -851,6 +864,10 @@ private:
     std::unique_ptr<Registry> registry_;
     std::shared_ptr<RegistryMember> member_;
     std::shared_ptr<ReturnSender> return_sender_;
+    // Cross visits that ended before their durable return completed: the
+    // participant key (realm, character) maps to the avatar left transferring,
+    // released by the sender's drain callback (or at node retirement).
+    std::map<std::pair<std::string, std::string>, AvatarKey> return_releases_;
     std::size_t cursor_ = 0;
     CrossAdmission admission_;
     // Only the data role routes frames into this; every other role passes

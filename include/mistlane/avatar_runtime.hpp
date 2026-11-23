@@ -400,6 +400,26 @@ public:
         return {AvatarError::Ok, ""};
     }
 
+    // E_RETURN_RELEASE: transferring -> closed (the source released). This is
+    // the return flow's terminal on the crossServer: the visit relinquished the
+    // lease (E_CROSS_LEAVE put it in transferring) and every change has since
+    // been acknowledged durably, so the avatar is no longer a participant of
+    // record and closes. Unlike close_visit (abnormal termination, best-effort
+    // save) this runs no save — the durable changes already landed via MLD1 —
+    // but fires onCrossVisitEnd for a cross-source avatar (the cross scope
+    // ends here); a host-to-host transfer avatar (source home or transfer-in)
+    // has no cross scope to end. Valid only in transferring; a transfer that
+    // already aborted to active or was accepted to loading is not the source's.
+    Result release(AvatarKey key) {
+        Entry* e = find(key);
+        if (!e) return {AvatarError::NoAvatar, "no avatar"};
+        if (e->state != AvatarState::Transferring)
+            return {state_refusal(e->state), std::string("avatar is ") + to_string(e->state)};
+        if (e->source == LoadSource::Cross) hooks_.on_cross_end(key);
+        e->state = AvatarState::Closed;
+        return {AvatarError::Ok, ""};
+    }
+
     // E_DESTROY / E_OPERATOR_CLOSE: active or suspended -> reclaiming.
     Result reclaim(AvatarKey key) {
         Entry* e = find(key);

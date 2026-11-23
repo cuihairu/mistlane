@@ -1,6 +1,6 @@
 # 跨服回传与唯一写入权协议
 
-状态：MLD1 语法、发送端 ACK 处理、确定性租约状态机、存储后端 MLD1 记录/ACK 路径、crossServer 发送侧队列接线及 data 签发 generation 授权已实现（2026-10-19 语法、2026-10-27 存储、2026-11-01 发送侧队列、2026-11-23 generation 授权）；运行时租约权威与 Avatar 场景运行时尚未实现。参与者上下文及其可选凭据尾缀、端点和有序队列边界、框架持有的回传发送器已实现；带 `--journal` 的 data 只在 SQLite 提交后答 `ACK durable`，无则仅回易失性回执。目标职责见[进程职责](./process-roles.md)；旧路径的观察与缺口在[模型页](./player-scene-model.md)。
+状态：MLD1 语法、发送端 ACK 处理、确定性租约状态机、存储后端 MLD1 记录/ACK 路径、crossServer 发送侧队列接线及 data 签发 generation 授权已实现（2026-10-19 语法、2026-10-27 存储、2026-11-01 发送侧队列、2026-11-23 generation 授权与源侧优雅回服）；运行时租约权威与 Avatar 场景运行时尚未实现。参与者上下文及其可选凭据尾缀、端点和有序队列边界、框架持有的回传发送器已实现；带 `--journal` 的 data 只在 SQLite 提交后答 `ACK durable`，无则仅回易失性回执。目标职责见[进程职责](./process-roles.md)；旧路径的观察与缺口在[模型页](./player-scene-model.md)。
 
 ## 参与者与返回上下文
 
@@ -41,7 +41,7 @@ sequenceDiagram
 - **确认：**归属侧仅在自身写入持久之后确认。收到但未持久的帧与丢失的帧不可区分，因此发送方把它保留在有界重试队列里。
 - **送达：**at-least-once 加归属侧幂等去重。发送方在配置的重试预算内带退避重试；队列满时该参与者对持久写转为只读，并把该状态报告给应用，而不是丢弃或悄悄溢出。
 - **顺序：**归属侧对每个 `(realm, character)` 只接受下一序号（`stored + 1`）。发送方按参与者串行提交，后续条目等缺失序号到达后再发；已提交条目在配置预算内重试，耗尽则暴露为回传失败，不静默丢数据。不同 realm 可独立使用相同角色 ID。
-- **返回：**角色的最终变更集获得持久确认之前，离开跨服作用域不算完成；在此之前角色仍是登记在册的跨服参与者。确认前的强制路由变更是回传失败（见下）。
+- **返回：**角色的最终变更集获得持久确认之前，离开跨服作用域不算完成；在此之前角色仍是登记在册的跨服参与者。确认前的强制路由变更是回传失败（见下）。源侧已接线（2026-11-23）：断开访问者的 crossServer 带 `--data` 端点时，访问离开跨服作用域（[avatar 生命周期](./avatar-lifecycle.md) 的 `cross_leave`），框架恰在回传队列排空时释放其 visiting avatar——未入队任何变更的访问者在断开边界即为已排空、立即释放；持在途变更的则被保持为 `transferring`，直到发送端最后一次 `ACK durable`。两条关闭路径都不跑尽力保存。不带 `--data` 端点的 crossServer 保留异常关闭：访问以尽力保存终止。
 
 线格式沿用共享的 u32 BE 长度分帧，没有每条消息前缀。LOAD/SUBMIT/RECEIVED、存储后端 `ACK durable` 与 generation 授权已在 `data` 角色实现（见[服务契约](./service-contracts.md)）；发送侧队列仍属 crossServer 运行时契约：
 
@@ -69,7 +69,7 @@ MLD1 ERR INVALID | MLD1 ERR STALE gen <n> | MLD1 ERR SEQ seq <n> | MLD1 ERR FULL
 
 已授权的 generation 同时是持久写租约：data 为某键分配 generation 后，`MLD1 SUBMIT` 只在该精确 generation 上获授权。低于租约的提交是被租约取代的写者（`ERR STALE gen <lease>`）；高于租约的提交指名了一个 data 从未签发的 generation（`ERR UNGRANTED gen <lease>`）——宿主不能自行推进越过租约，这正是入场凭据绑定的 `gen` 声明在线路上成立的根据。从未获授权的键保留记录相对栅栏：迁移期记录自带其 generation 作为隐式租约，其旧式接管（严格更新的 generation 从栅栏或已提交游标续写）仍在那里工作。
 
-端点以 `(realm, character)` 为栅栏和序号键，执行 generation 栅栏、已授权租约（低于租约 `STALE`、高于租约 `UNGRANTED`，限已授权键）和严格连续序号。`MLD1 FENCE` 冻结该键的最终有序游标并把旧 generation 墓碑化——同一 generation 幂等、不同 generation 已栅栏为 `ERR STALE`、无已提交游标为 `ERR NOFENCE`、存储失败回 `ERR STORAGE`；栅栏后旧 generation 只能重发冻结游标绝不推进，仅严格更新 generation 从冻结游标续写。发送队列每键最多一个在途提交；`RECEIVED` 释放传输槽，但条目保留到 generation 匹配的 durable ACK。带 `--journal` 时同一个存储支撑每一行已接受数据，重启恢复栅栏、序号、payload、最终游标 pin 与 generation 高水位，重放已丢回执的条目回已提交的 `ACK durable`；无 journal 的记录进程内、重启后答 `EMPTY`。crossServer 发送器（`--data IP:PORT`、`mistlane.returning.seed/enqueue`）持有有序重试队列：先 `MLD1 LOAD` 种入持久游标、按序提交、仅 `ACK durable` 后摘除；连接丢失把在途提交送回有界队列再重连。队列满转只读、回服完成与运行时租约权威仍未实现。
+端点以 `(realm, character)` 为栅栏和序号键，执行 generation 栅栏、已授权租约（低于租约 `STALE`、高于租约 `UNGRANTED`，限已授权键）和严格连续序号。`MLD1 FENCE` 冻结该键的最终有序游标并把旧 generation 墓碑化——同一 generation 幂等、不同 generation 已栅栏为 `ERR STALE`、无已提交游标为 `ERR NOFENCE`、存储失败回 `ERR STORAGE`；栅栏后旧 generation 只能重发冻结游标绝不推进，仅严格更新 generation 从冻结游标续写。发送队列每键最多一个在途提交；`RECEIVED` 释放传输槽，但条目保留到 generation 匹配的 durable ACK。带 `--journal` 时同一个存储支撑每一行已接受数据，重启恢复栅栏、序号、payload、最终游标 pin 与 generation 高水位，重放已丢回执的条目回已提交的 `ACK durable`；无 journal 的记录进程内、重启后答 `EMPTY`。crossServer 发送器（`--data IP:PORT`、`mistlane.returning.seed/enqueue`）持有有序重试队列：先 `MLD1 LOAD` 种入持久游标、按序提交、仅 `ACK durable` 后摘除；连接丢失把在途提交送回有界队列再重连，且参与者最终变更的排空会触发源侧的释放（队列在此之前一直持有回服中的 avatar）。队列满转只读与运行时租约权威仍未实现。
 
 ## 写入租约交接
 
@@ -97,4 +97,4 @@ MLD1 ERR INVALID | MLD1 ERR STALE gen <n> | MLD1 ERR SEQ seq <n> | MLD1 ERR FULL
 - 租约时长、队列界与重试预算：实现时以测量依据给出默认值的配置项，不由本页拍数字。
 - 入场凭据签名与签发方已在 login 契约决定：HMAC-SHA256、login、区服密钥。C++ 签发/验证原语、规范凭据编码与传输已实现（`mistlane.ticket.issue` 在 `MISTLANE_TICKET_SECRETS` 下的 login 节点签发、crossServer 在握手上验证）；初始 generation 及推进生命周期见[服务契约](./service-contracts.md#login)。其中 data 签发的授权经 `MLD1 GRANT` 已接线，其持久写租约把 `MLD1 SUBMIT` 栅栏在该精确 generation 上。
 
-参与者上下文、端点键、有序队列、ACK 编解码/门控、租约状态模型、存储后端记录/ACK 路径、crossServer 发送侧重试接线、data 签发 generation 授权及授权持久写租约均已有测试（validation 记录：cross routing、record endpoint、record journal、record grant、return queue、return sender 与 login grant 进入路径）。coordinator/Avatar 运行时接线仍未完成。
+参与者上下文、端点键、有序队列、ACK 编解码/门控、租约状态模型、存储后端记录/ACK 路径、crossServer 发送侧重试接线、data 签发 generation 授权、授权持久写租约及源侧优雅回服均已有测试（validation 记录：cross routing、record endpoint、record journal、record grant、return queue、return sender、avatar 回服与 login grant 进入路径）。coordinator/Avatar 运行时接线仍未完成。

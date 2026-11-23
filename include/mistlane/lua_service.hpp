@@ -78,6 +78,12 @@ public:
     // Enqueues one change for ordered return; returns "" or a short reason.
     virtual std::string enqueue(std::string_view realm, std::string_view character,
         std::uint64_t generation, std::uint64_t sequence, std::string_view payload) = 0;
+    // Whether every change queued for this participant has been durably
+    // acknowledged: no pending, in-flight or pre-load-held change remains. A
+    // participant never seeded holds nothing and is drained. This is the
+    // graceful return's condition — leaving the cross scope is complete only
+    // when the final change-set is acknowledged durably.
+    virtual bool drained(std::string_view realm, std::string_view character) const = 0;
 };
 // Script-declared business gauge adapter: mistlane.metrics.gauge publishes a
 // named gauge onto the node's Prometheus registry (rooms, queue depths — the

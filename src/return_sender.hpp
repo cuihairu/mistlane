@@ -37,6 +37,27 @@ public:
         timer_.cancel();
         if (channel_) { channel_->close(); channel_ = nullptr; }
     }
+    // Whether every change this participant queued has been durably
+    // acknowledged: nothing pending in the queue, in flight, or held before the
+    // seed LOAD answered. This is the graceful return's condition — a cross
+    // participant is a participant of record until its final change-set is
+    // acknowledged. A participant never seeded holds nothing and is drained,
+    // and one whose LOAD is still in flight is not (its changes wait on it).
+    bool drained(std::string_view realm, std::string_view character) const override {
+        const Key key{std::string(realm), std::string(character)};
+        if (!seeded_.contains(key)) return true;
+        if (!loaded_cursor_.contains(key)) return false;
+        if (submitted_ && *submitted_ == key) return false;
+        if (pending_before_load_.contains(key)) return false;
+        return queue_.drained(key.first, key.second);
+    }
+    // Node wiring: called on the event-loop thread when a participant's last
+    // queued change is durably acknowledged, so the source that was keeping
+    // this participant as a participant of record can release it.
+    void set_on_drain(
+        std::function<void(const std::pair<std::string, std::string>&)> on_drain) {
+        on_drain_ = std::move(on_drain);
+    }
     std::string seed(std::string_view realm, std::string_view character) override {
         try {
             const Key key{std::string(realm), std::string(character)};
@@ -166,6 +187,13 @@ private:
                 (void)queue_.received(ack.realm, ack.character, ack.sequence);
                 if (!queue_.ack_durable(ack)) throw std::invalid_argument("invalid");
                 submitted_.reset(); submitted_sequence_ = 0;
+                // The durable half of the return completes here: the last
+                // change for this participant is acknowledged, so it is no
+                // longer a participant of record and a source waiting on the
+                // return can release its avatar. A participant that never
+                // queued a change drains at the session boundary instead
+                // (drained() answers true there without a callback).
+                if (drained(ack.realm, ack.character) && on_drain_) on_drain_({ack.realm, ack.character});
                 return send_next();
             }
             if (payload.starts_with("MLD1 RECEIVED ")) {
@@ -338,6 +366,7 @@ private:
     std::optional<Key> load_in_flight_, submitted_;
     std::uint64_t submitted_sequence_ = 0;
     std::shared_ptr<TcpChannel> channel_;
+    std::function<void(const Key&)> on_drain_;
     Phase phase_ = Phase::idle;
     bool started_ = false, stopping_ = false;
     bool reading_ = false, writing_ = false;

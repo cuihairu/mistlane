@@ -15,6 +15,7 @@ void avatar_lua();
 void avatar_session();
 void avatar_home();
 void avatar_home_record();
+void avatar_return();
 void entity_envelope();
 void entity_properties();
 void entity_tree();
@@ -160,6 +161,7 @@ int run_tests(int argc, char** argv) {
         {"avatar.session","contract",test::avatar_session},
         {"avatar.home","contract",test::avatar_home},
         {"avatar.home.record","contract",test::avatar_home_record},
+        {"avatar.return","contract",test::avatar_return},
         {"entity.envelope","contract",test::entity_envelope},
         {"entity.properties","contract",test::entity_properties},
         {"entity.tree","contract",test::entity_tree},

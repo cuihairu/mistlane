@@ -1,6 +1,6 @@
 # Avatar 运行时：会话、生命周期钩子、迁移与加载保存
 
-状态：已定设计（2026-10-19）。当前框架有会话、帧协议、握手层与每个 gameServer/crossServer 一个串行调用的 Lua VM，但没有端到端 Avatar 运行时——七态预言机模型已实现（include/mistlane/avatar_runtime.hpp，由 avatar.lifecycle 模型测试钉住）并采用[生命周期页](./avatar-lifecycle.md)的扩态集（其勘误 C1–C2），其 Lua 钩子面已接入服务 VM（LuaService 实现钩子桥；avatar.lua 测试钉住参数封送与失败即拒），crossServer 会话接线已实现——跨服加入创建 visiting Avatar（admit_visit）、会话停止关闭它（close_visit）、重载退役 VM 拥有的全部 Avatar（retire_all），均由 avatar.session 测试钉住；归属登录路径也已接线——加入自己区服的加入（realm == return_realm）经 avatar_load→avatar_enter 落 `active`（绑定会话），断开把它 `suspended`（宽限窗口开），宽限内重连不重载直接回 `active`，宽限到后节点 tick 走有序回收（最终保存→`closed`），由 avatar.home 测试钉住——加入的记录来自归属数据端点的一次性 `MLD1 LOAD`（回复延后到它应答之后），由 avatar.home.record 测试钉住——回传/移交链及运行时验收仍是后续切片——本页不改变任何 CLI 行为，下面描述的运行行为仍未端到端实现、未经验证。本页把[模型页](./player-scene-model.md)列为抽取目标的内容（"钩子需要线程/错误/重入/超时契约与迁移期间的规则"）落成契约，为 coordinator 协调的移交切片提供前置设计；职责边界仍是[进程职责页](./process-roles.md)。持久归属与唯一写入权归[跨服回传协议](./cross-return-protocol.md)；实例准备状态归[场景生命周期](./scene-lifecycle.md)；属性 schema、脏追踪与增量同步归[实体契约链](./entity-contract.md)且继续延后。任何新 Avatar API 的实现被客户端协议契约恢复（账本中的协议契约恢复条目）门控。
+状态：已定设计（2026-10-19）。当前框架有会话、帧协议、握手层与每个 gameServer/crossServer 一个串行调用的 Lua VM，但没有端到端 Avatar 运行时——七态预言机模型已实现（include/mistlane/avatar_runtime.hpp，由 avatar.lifecycle 模型测试钉住）并采用[生命周期页](./avatar-lifecycle.md)的扩态集（其勘误 C1–C2），其 Lua 钩子面已接入服务 VM（LuaService 实现钩子桥；avatar.lua 测试钉住参数封送与失败即拒），crossServer 会话接线已实现——跨服加入创建 visiting Avatar（admit_visit）、会话停止把它回服（cross_leave，然后一旦发送队列排空即 release；带数据端点的宿主如此，无端点者保留异常的 close_visit）、重载退役 VM 拥有的全部 Avatar（retire_all），均由 avatar.session 与 avatar.return 测试钉住；归属登录路径也已接线——加入自己区服的加入（realm == return_realm）经 avatar_load→avatar_enter 落 `active`（绑定会话），断开把它 `suspended`（宽限窗口开），宽限内重连不重载直接回 `active`，宽限到后节点 tick 走有序回收（最终保存→`closed`），由 avatar.home 测试钉住——加入的记录来自归属数据端点的一次性 `MLD1 LOAD`（回复延后到它应答之后），由 avatar.home.record 测试钉住——移交链及运行时验收仍是后续切片——本页不改变任何 CLI 行为，下面描述的运行行为仍未端到端实现、未经验证。本页把[模型页](./player-scene-model.md)列为抽取目标的内容（"钩子需要线程/错误/重入/超时契约与迁移期间的规则"）落成契约，为 coordinator 协调的移交切片提供前置设计；职责边界仍是[进程职责页](./process-roles.md)。持久归属与唯一写入权归[跨服回传协议](./cross-return-protocol.md)；实例准备状态归[场景生命周期](./scene-lifecycle.md)；属性 schema、脏追踪与增量同步归[实体契约链](./entity-contract.md)且继续延后。任何新 Avatar API 的实现被客户端协议契约恢复（账本中的协议契约恢复条目）门控。
 
 ## 基线：框架现在有什么
 
@@ -10,10 +10,10 @@
 | 出向 | 有界 `mistlane.session.send`/`broadcast`（每通道 ~2 MiB、显式原因），推送保持回复顺序，关联（`MLC2`）回显 |
 | 身份层 | `MLS1` 服务身份、`MLM1` 上游复用——各自独立的可选层 |
 | Lua 执行 | 每节点一个 VM，在 Asio 线程串行调用；保护调用带指令数预算（约 100 万条）拦截失控循环；`message` 出错关会话，`tick` 出错记日志 |
-| 节点钩子 | `init`/`start`/`message`/`http`/`tick`/`stop`/`shutdown` 与 websocket 三件套；跨服访问现已触发 `onCrossVisitAdmit`/`Start`/`End`，归属加入现已驱动 `avatar_load`+`avatar_enter`（断开时 `avatar_leave`+`avatar_detach`），但**尚无专门的归属玩家连接/断开钩子名**——Avatar 生命周期钩子就是该表面 |
+| 节点钩子 | `init`/`start`/`message`/`http`/`tick`/`stop`/`shutdown` 与 websocket 三件套；跨服访问现已触发 `onCrossVisitAdmit`/`Start`/`End`（`End` 在优雅释放时同样触发，与异常关闭一样），归属加入现已驱动 `avatar_load`+`avatar_enter`（断开时 `avatar_leave`+`avatar_detach`），但**尚无专门的归属玩家连接/断开钩子名**——Avatar 生命周期钩子就是该表面 |
 | 重载 | SIGHUP 装载候选 VM、切换、经 `stop`/`shutdown` 退役旧 VM；重载重置模块状态且不导出任何东西 |
 | 承载 | `mistlane.place(role, namespace?, scope?, callback)` 查询 coordinator 注册表 |
-| Avatar | 框架侧运行时已存在：七态、`avatar_load`/`avatar_enter`/`avatar_save`/`avatar_leave`/`avatar_tick`/`avatar_detach`/`avatar_fail`/`avatar_transfer_*` 钩子，以及跨服面（`admit_visit`、`close_visit`、`retire_all`）。无脚本可见 Avatar 对象、无迁移；归属加入路径已接线（加入→load+enter 落 active、断开→detach 落 suspended、tick→有序回收） |
+| Avatar | 框架侧运行时已存在：七态、`avatar_load`/`avatar_enter`/`avatar_save`/`avatar_leave`/`avatar_tick`/`avatar_detach`/`avatar_fail`/`avatar_transfer_*` 钩子，以及跨服面（`admit_visit`、`cross_leave`、`release`、`close_visit`、`retire_all`）。无脚本可见 Avatar 对象、无迁移；归属加入路径已接线（加入→load+enter 落 active、断开→detach 落 suspended、tick→有序回收） |
 
 只有 `message` 的节点拥有的是请求处理，不是角色运行时。这个空白正是本页存在的原因：生命周期、状态所有权与迁移需要各自的契约。
 
@@ -117,6 +117,6 @@ stateDiagram-v2
 
 ## 验证
 
-七态预言机模型已实现并有模型测试（avatar.lifecycle），归属加入、跨服访问与归属加入的延迟记录读取的会话/Lua/传输接线已实现并钉住（avatar.home、avatar.home.record、avatar.session）。运行时验收仍无：正常登录经有界双向消息、同进程切场景、跨进程/跨服移交与回传、回调与多监听——整条链——因为回传/移交链尚未接线，验证记录仍不得声称完整 Avatar 行为。
+七态预言机模型已实现并有模型测试（avatar.lifecycle），归属加入、跨服访问、归属加入的延迟记录读取与源侧跨服回传的会话/Lua/传输接线已实现并钉住（avatar.home、avatar.home.record、avatar.session、avatar.return）。运行时验收仍无：正常登录经有界双向消息、同进程切场景、跨进程/跨服移交与回传、回调与多监听——整条链——因为移交链尚未接线，验证记录仍不得声称完整 Avatar 行为。
 
 相关：[玩家、场景与跨服模型](./player-scene-model.md)、[跨服回传与唯一写入权协议](./cross-return-protocol.md)、[场景生命周期](./scene-lifecycle.md)、[实体契约与代码生成](./entity-contract.md)、[Lua 与生命周期](./lua.md)。
