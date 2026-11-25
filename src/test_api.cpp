@@ -1006,6 +1006,206 @@ void login_grant() {
     std::cout << "login.grant: the data-issued generation answers the entry flow "
         "and is the one the ticket binds [PASS]\n";
 }
+
+// The login charlist face: mistlane.data.load asks the home data endpoint for
+// one participant's record over one MLD1 LOAD -- the leg the crossServer's
+// home join drives natively -- and the callback answers (error, record) with
+// the record nil both for an absent participant (the first login, error nil)
+// and for a leg refusal (which carries the reason word). A login without
+// --data answers the disabled reason instead of failing the script.
+void login_data() {
+    Context c;
+    write(c.path("echo.lua"), echo);
+    write(c.path("load.lua"),
+        "return {message=function(p,c)\n"
+        " local realm, character = p:match('load (%S+) (%S+)')\n"
+        " if not realm then return 'usage: load realm character' end\n"
+        " mistlane.data.load(realm, character, function(err, record)\n"
+        "   if err then return mistlane.session.send(c.session, 'ERR '..err) end\n"
+        "   if not record then return mistlane.session.send(c.session, 'EMPTY') end\n"
+        "   mistlane.session.send(c.session, 'REC '..record.generation..' '..record.sequence..' '..record.payload)\n"
+        " end)\n"
+        " return nil end}");
+    const auto data = port(), login = port(), tokened = port(), token_login = port(),
+        wrong = port(), bare = port();
+    c.node("data", data, {"--script", c.path("echo.lua").string(),
+        "--journal", c.path("load.sqlite").string()});
+    c.node("login", login, {"--script", c.path("load.lua").string(), "--data", endpoint(data)});
+    equal(tcp(data)->request("MLD1 SUBMIT alpha hero gen 1 seq 1 hp=10"),
+        "MLD1 ACK durable alpha hero gen 1 seq 1");
+    // A seeded record answers with its full identity; an unknown participant
+    // answers (nil, nil) -- the first login, not a refusal.
+    equal(tcp(login)->request("load alpha hero"), "REC 1 1 hp=10");
+    equal(tcp(login)->request("load alpha novice"), "EMPTY");
+    // A tokened data leg is one identified ask; the wrong token is refused.
+    c.node("data", tokened, {"--script", c.path("echo.lua").string(), "--service-token", "s3cret"});
+    c.node("login", token_login, {"--script", c.path("load.lua").string(),
+        "--data", endpoint(tokened), "--upstream-token", "s3cret"});
+    c.node("login", wrong, {"--script", c.path("load.lua").string(),
+        "--data", endpoint(tokened), "--upstream-token", "nope"});
+    equal(tcp(token_login)->request("load alpha hero"), "EMPTY");
+    equal(tcp(wrong)->request("load alpha hero"), "ERR refused");
+    // No --data: the node answers the disabled word, same as grant -- a bare
+    // login carries the sink but its data address is empty.
+    c.node("login", bare, {"--script", c.path("load.lua").string()});
+    equal(tcp(bare)->request("load alpha hero"), "ERR disabled");
+    // Malformed arguments are Lua errors, never crashes.
+    must_fail([&] { (void)tcp(login)->request("load al!pha hero"); });
+    std::cout << "login.data: the charlist face reads the home record, EMPTY is a first login [PASS]\n";
+}
+
+// The composed normal-login acceptance: one client walks the whole entry flow
+// over bounded two-way messages -- auth (the script's credential check), the
+// charlist (the record read from home data), then entry (place -> grant ->
+// ticket) -- and the placed crossServer admits the arrival at exactly the
+// granted generation with the login's ticket, hosting the avatar from the
+// record the charlist previewed. This is the runtime acceptance's first item
+// (docs/avatar-runtime.md): every hop is a real node.
+void login_entry() {
+    Context c;
+    write(c.path("echo.lua"), echo);
+    write(c.path("login.lua"), R"login(return {message=function(p,c)
+  local user, pass = p:match('auth (%S+) (%S+)')
+  if user then return pass == 'secret' and 'OK' or 'ERR DENIED' end
+  local realm, character = p:match('charlist (%S+) (%S+)')
+  if realm then
+    mistlane.data.load(realm, character, function(err, record)
+      if err then return mistlane.session.send(c.session, 'ERR '..err) end
+      if not record then return mistlane.session.send(c.session, 'EMPTY') end
+      mistlane.session.send(c.session, 'CHAR '..record.generation..' '..record.sequence..' '..record.payload)
+    end)
+    return nil
+  end
+  local eRealm, eChar, instance, expires = p:match('entry (%S+) (%S+) (%S+) (%S+)')
+  if eRealm then
+    mistlane.place('crossServer', nil, 'arena', function(err, address)
+      if err then return mistlane.session.send(c.session, 'ERR place '..err) end
+      mistlane.grant(eRealm, eChar, function(err, gen)
+        if err then return mistlane.session.send(c.session, 'ERR grant '..err) end
+        local ticket, terr = mistlane.ticket.issue(eRealm, eChar, instance, gen, tonumber(expires))
+        if not ticket then return mistlane.session.send(c.session, 'ERR ticket '..terr) end
+        mistlane.session.send(c.session, 'ENTRY '..address..' '..gen..' '..ticket)
+      end)
+    end)
+    return nil
+  end
+  return p
+end})login");
+    write(c.path("host.lua"), R"host(return {
+  message = function(payload, ctx)
+    if payload == 'who' then return (ctx.character or 'anon')..' verified='..tostring(ctx.verified==true) end
+    return payload
+  end,
+  avatar_load = function(context, state)
+    print('load:' .. context.character .. ':' .. tostring(state))
+    return { name = context.character }
+  end,
+  avatar_enter = function(context, avatar) return true end,
+  avatar_save = function(context, avatar) return true end,
+}
+)host");
+    // The same per-realm secret mints on the login and verifies on the host.
+    const auto secret = test_secret(5);
+    static const char digits[] = "0123456789abcdef";
+    std::string hex;
+    for (unsigned char byte : secret) { hex += digits[byte/16]; hex += digits[byte%16]; }
+    const auto now = std::chrono::duration_cast<std::chrono::seconds>(
+        std::chrono::system_clock::now().time_since_epoch()).count();
+    const auto registry = port(), data_port = port(), login = port(), host = port();
+    c.node("coordinator", registry, {"--journal", c.path("entry.sqlite").string()});
+    c.node("data", data_port, {"--script", c.path("echo.lua").string(),
+        "--journal", c.path("entry-records.sqlite").string()});
+    {
+        ScopedEnv secrets("MISTLANE_TICKET_SECRETS", "alpha:"+hex);
+        c.node("login", login, {"--script", c.path("login.lua").string(),
+            "--coordinator", endpoint(registry), "--data", endpoint(data_port)});
+        c.node("crossServer", host, {"--script", c.path("host.lua").string(),
+            "--coordinator", endpoint(registry), "--data", endpoint(data_port),
+            "--scope", "arena", "--service-name", "xs-a"});
+    }
+    const auto send_frame = [](RawSocket& raw, std::string_view payload) {
+        std::string frame(4, '\0');
+        auto length = static_cast<std::uint32_t>(payload.size());
+        for (int i = 3; i >= 0; --i) { frame[i] = static_cast<char>(length & 255); length >>= 8; }
+        raw.send(frame+std::string(payload));
+    };
+    const auto read_frame = [](RawSocket& raw) {
+        std::size_t length = 0;
+        for (unsigned char ch : raw.receive(4)) length = (length << 8) | ch;
+        return raw.receive(length);
+    };
+    const auto ask = [&](unsigned listen, const std::string& line) {
+        RawSocket raw(listen);
+        send_frame(raw, line);
+        return read_frame(raw);
+    };
+    // The placed host must be a live member before an entry names it.
+    eventually([&] {
+        return ask(registry, "MLR1 QUERY crossServer - arena").find("xs-a") != std::string::npos;
+    }, 10s, "the crossServer never reached the registry");
+    // The seed: hero has a record at home; novice is a first login.
+    equal(ask(data_port, "MLD1 SUBMIT alpha hero gen 1 seq 1 hp=10"),
+        "MLD1 ACK durable alpha hero gen 1 seq 1");
+    // The client's flow, over bounded two-way messages: auth is the script's
+    // decision; the charlist previews the record; entry composes place,
+    // grant and ticket.
+    equal(tcp(login)->request("auth hero secret"), "OK");
+    equal(tcp(login)->request("auth hero wrong"), "ERR DENIED");
+    equal(tcp(login)->request("charlist alpha hero"), "CHAR 1 1 hp=10");
+    equal(tcp(login)->request("charlist alpha novice"), "EMPTY");
+    // The placement answers EMPTY until the placed host passes its readiness
+    // hysteresis, so the entry composition is retried until it answers; each
+    // retry consumes a grant, and the final reply is the one the join uses.
+    std::string reply;
+    eventually([&] {
+        reply = tcp(login)->request("entry alpha hero xs-a "+std::to_string(now+120));
+        return reply.starts_with("ENTRY ");
+    }, 15s, "the entry flow never answered: "+reply);
+    std::istringstream parts(reply.substr(6));
+    std::string address, ticket;
+    std::uint64_t generation = 0;
+    parts >> address >> generation >> ticket;
+    require(!address.empty() && address != "nil", "the entry response carried no placed address");
+    require(generation > 1, "the granted generation did not floor above the record: "+reply);
+    require(parse_entry_ticket(ticket).has_value(), "the entry response carried no valid ticket");
+    // The placed host admits the arrival at the granted generation with the
+    // login's ticket and hosts the avatar from the record the charlist
+    // previewed (the home join's deferred record fetch). The join answers
+    // after the record fetch, and the address the entry named is the host's.
+    require(address == endpoint(host), "the placed address is not the crossServer's: "+reply);
+    {
+        RawSocket raw(host);
+        send_frame(raw, "MLC1 1 alpha arena r1 ch hero gen "+std::to_string(generation)
+            +" ret alpha arena r1 tk "+ticket);
+        equal(read_frame(raw), "MLC1 OK 1");
+        send_frame(raw, "who");
+        equal(read_frame(raw), "hero verified=true");
+    }
+    eventually([&] {
+        return c.children.back()->output().find("load:hero:hp=10") != std::string::npos;
+    }, 10s, "the hosted avatar never loaded the record the charlist previewed");
+    // The first login composes the same flow with no record: grant 1, EMPTY
+    // charlist behind it, nil state in avatar_load.
+    const auto first = tcp(login)->request("entry alpha novice xs-a "+std::to_string(now+120));
+    require(first.starts_with("ENTRY "), "the first-login entry flow never answered: "+first);
+    std::istringstream novice_parts(first.substr(6));
+    std::string novice_addr, novice_ticket;
+    std::uint64_t novice_generation = 0;
+    novice_parts >> novice_addr >> novice_generation >> novice_ticket;
+    require(novice_generation == 1, "a fresh participant did not start its own cursor at 1: "+first);
+    require(parse_entry_ticket(novice_ticket).has_value(), "the novice entry carried no valid ticket");
+    {
+        RawSocket raw(host);
+        send_frame(raw, "MLC1 1 alpha arena r1 ch novice gen "+std::to_string(novice_generation)
+            +" ret alpha arena r1 tk "+novice_ticket);
+        equal(read_frame(raw), "MLC1 OK 1");
+    }
+    eventually([&] {
+        return c.children.back()->output().find("load:novice:nil") != std::string::npos;
+    }, 10s, "the first-login avatar never loaded without a record");
+    std::cout << "login.entry: auth -> charlist -> place/grant/ticket -> placed host admits and "
+        "hosts the avatar, the whole normal-login chain [PASS]\n";
+}
 // Character route records: a route is only written against a registered
 // member, GET answers from the live member state, and a retiring member drops
 // every route that pointed at it.

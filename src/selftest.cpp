@@ -90,6 +90,8 @@ void cross_admission();
 void cross_ticket();
 void login_ticket_wire();
 void login_grant();
+void login_data();
+void login_entry();
 void cross_record();
 void cross_record_journal();
 void record_fetch();
@@ -243,6 +245,8 @@ int run_tests(int argc, char** argv) {
         {"cross.ticket","cross",test::cross_ticket},
         {"login.ticket.wire","api",test::login_ticket_wire},
         {"login.grant","api",test::login_grant},
+        {"login.data","api",test::login_data},
+        {"login.entry","api",test::login_entry},
         {"cross.record","cross",test::cross_record},
         {"cross.record.journal","cross",test::cross_record_journal},
         {"record.grant","cross",test::record_grant},
