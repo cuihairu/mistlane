@@ -53,11 +53,11 @@ LuaService::LuaService(const std::string& path, ServiceContext context, std::sha
                        WebsocketSink* sink, GameSessionSink* sessions, PlacementSink* placement,
                        EntityRuntime* entity_runtime, const TicketIssuer* ticket_issuer, ReturnSink* return_sink,
                        ScriptMetricsSink* metrics_sink, GrantSink* grant_sink, TransferSink* transfer_sink,
-                       SceneSink* scene_sink)
+                       SceneSink* scene_sink, DataSink* data_sink)
   : state_(luaL_newstate()), context_(std::move(context)), websocket_sink_(sink), session_sink_(sessions),
     placement_sink_(placement), entity_runtime_(entity_runtime), ticket_issuer_(ticket_issuer),
     return_sink_(return_sink), metrics_sink_(metrics_sink), grant_sink_(grant_sink),
-    transfer_sink_(transfer_sink), scene_sink_(scene_sink),
+    transfer_sink_(transfer_sink), scene_sink_(scene_sink), data_sink_(data_sink),
     async_context_(std::make_shared<AsyncContext>()),
     redis_(std::move(redis)), avatar_runtime_(*this) {
     if (!state_) throw std::runtime_error("cannot create Lua state");
@@ -76,6 +76,7 @@ LuaService::LuaService(const std::string& path, ServiceContext context, std::sha
         push_ticket_api(state_, this);
         push_return_api(state_, this);
         push_grant_api(state_, this);
+        push_data_api(state_, this);
         push_transfer_api(state_, this);
         push_scene_api(state_, this);
         push_metrics_api(state_, this);

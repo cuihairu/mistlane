@@ -216,7 +216,7 @@ public:
         if (!in->participants.empty()) return {false, "instance still has participants"};
         if (in->state == SceneInstanceState::Failed)
             return {false, "a failed instance is reaped, not closed"};
-        release_definition(name, *in);
+        release_definition(*in);
         instances_.erase(name);
         return {};
     }
@@ -299,7 +299,7 @@ private:
             if (in.state == SceneInstanceState::Preparing && in.definition == key)
                 in.state = SceneInstanceState::Ready;
     }
-    void release_definition(const std::string& name, Instance& in) {
+    void release_definition(Instance& in) {
         if (!in.held) return;
         in.held = false;
         release(in.definition.first, in.definition.second);
@@ -315,7 +315,7 @@ private:
         in->failure = std::move(reason);
         in->participants.clear(); // none may have entered (only ready accepts)
         in->state = SceneInstanceState::Failed;
-        release_definition(name, *in);
+        release_definition(*in);
     }
 
     std::function<std::chrono::steady_clock::time_point()> clock_;

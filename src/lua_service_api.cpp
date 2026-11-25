@@ -612,6 +612,68 @@ void LuaService::push_grant_api(lua_State* l, LuaService* service) {
     lua_setfield(l, -2, "grant");
     lua_setglobal(l, "mistlane");
 }
+// The login charlist face reads one participant's record from home data over
+// one MLD1 LOAD — the same question a crossServer's home join drives natively,
+// surfaced to scripts because the login entry flow presents the character
+// list before entry. The callback cannot fire inside the handler (the leg is
+// a fresh connection), so it receives (error, record) — error nil on success,
+// and the record nil both for a leg refusal (error carries the reason word)
+// and for an absent record (error nil: the participant's first login, a
+// normal answer). A present record is a table {generation, sequence, payload}.
+int LuaService::data_load(lua_State* l) {
+    auto* service = static_cast<LuaService*>(lua_touserdata(l, lua_upvalueindex(1)));
+    auto word = [&](int index, const char* label) {
+        if (!lua_isstring(l, index)) throw std::runtime_error(std::string(label)+" must be an identifier");
+        std::size_t size = 0;
+        const char* data = lua_tolstring(l, index, &size);
+        if (!size || size > 64) throw std::runtime_error(std::string(label)+" length is invalid");
+        for (std::size_t i = 0; i < size; ++i) {
+            const unsigned char ch = data[i];
+            if (!((ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z')
+                    || (ch >= '0' && ch <= '9') || ch == '_' || ch == '-'))
+                throw std::runtime_error(std::string(label)+" must be an identifier");
+        }
+        return std::string(data, size);
+    };
+    const auto realm = word(1, "realm");
+    const auto character = word(2, "character");
+    if (!lua_isfunction(l, 3)) throw std::runtime_error("last argument must be a callback function");
+    lua_pushvalue(l, 3);
+    const auto callback = luaL_ref(l, LUA_REGISTRYINDEX);
+    const auto life = service->async_context_;
+    if (!service->data_sink_)
+        return finish_lua(life, callback, "data.load is disabled; start with --data IP:PORT",
+            [](lua_State* l) { lua_pushnil(l); }), 0;
+    service->data_sink_->load_record(realm, character,
+        [life, callback](bool present, std::uint64_t generation, std::uint64_t sequence,
+                         std::string_view payload, std::string_view reason) {
+            if (!reason.empty() && reason != "EMPTY")
+                return finish_lua(life, callback, std::string(reason),
+                                  [](lua_State* l) { lua_pushnil(l); });
+            finish_lua(life, callback, {}, [=](lua_State* l) {
+                if (!present) return lua_pushnil(l);
+                lua_createtable(l, 0, 3);
+                lua_pushinteger(l, static_cast<lua_Integer>(generation));
+                lua_setfield(l, -2, "generation");
+                lua_pushinteger(l, static_cast<lua_Integer>(sequence));
+                lua_setfield(l, -2, "sequence");
+                lua_pushlstring(l, payload.data(), payload.size());
+                lua_setfield(l, -2, "payload");
+            });
+        });
+    return 0;
+}
+void LuaService::push_data_api(lua_State* l, LuaService* service) {
+    // Registered unconditionally, like mistlane.grant: an unconfigured node
+    // answers the callback with a "disabled" reason instead of failing.
+    lua_getglobal(l, "mistlane");
+    if (!lua_istable(l, -1)) { lua_pop(l, 1); lua_newtable(l); }
+    lua_newtable(l);
+    lua_pushlightuserdata(l, service); lua_pushcclosure(l, data_load, 1);
+    lua_setfield(l, -2, "load");
+    lua_setfield(l, -2, "data");
+    lua_setglobal(l, "mistlane");
+}
 // A source-side transfer cannot answer inside the handler either: it drives a
 // coordinator sequence and a data SUBMIT/FENCE, then releases the avatar, all
 // on the event loop after the handler returned. The callback receives (error)

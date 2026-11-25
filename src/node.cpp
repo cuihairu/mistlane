@@ -230,7 +230,8 @@ private:
     std::map<std::uint64_t, std::shared_ptr<Channel>> sessions_;
     std::uint64_t next_id_ = 1;
 };
-class Node : public PlacementSink, public GrantSink, public TransferSink, public SceneSink {
+class Node : public PlacementSink, public GrantSink, public TransferSink, public SceneSink,
+             public DataSink {
 public:
     // One placement question, one connection: login handlers ask the registry
     // through Lua; the answer callback runs back on this event loop.
@@ -250,8 +251,24 @@ public:
             config_.upstream_token.empty() ? std::string{} : service_hello(config_),
             realm, character, std::move(answer));
     }
-    // One source-side transfer, one driver: the script names realm + character
-    // and the destination; the driver recovers the generation from the runtime,
+    // One record read, one connection: the login charlist face asks the home
+    // data endpoint for a participant's record through Lua — the same leg the
+    // crossServer's home join and the grant ask drive. The identity is the
+    // member token, and an absent record is the normal first-login answer.
+    void load_record(std::string_view realm, std::string_view character,
+        std::function<void(bool present, std::uint64_t generation, std::uint64_t sequence,
+                           std::string_view payload, std::string_view reason)> answer) override {
+        if (config_.data.address.empty()) return answer(false, 0, 0, {}, "disabled");
+        RecordFetcher::load(io_.get_executor(), config_.data,
+            config_.upstream_token.empty() ? std::string{} : service_hello(config_),
+            realm, character,
+            [answer = std::move(answer)](RecordFetcher::Record record, std::string reason) {
+                if (!record.present)
+                    return answer(false, 0, 0, {}, std::move(reason));
+                answer(true, record.generation, record.sequence, record.payload, {});
+            });
+    }
+    // One source-side transfer, one driver: the script names realm + character    // and the destination; the driver recovers the generation from the runtime,
     // drives the coordinator sequence and the data SUBMIT/FENCE, then releases
     // the avatar. The source owner is this host — role by config, instance by
     // the register_line derivation, scope/namespace from config.
@@ -531,7 +548,7 @@ public:
             service_ = std::make_shared<LuaService>(config_.script, service_context_, redis_,
                 websockets_.get(), game_sessions_.get(), this,
                 entity_endpoint_ ? &entity_endpoint_->runtime() : nullptr,
-                ticket_issuer_.get(), return_sender_.get(), metrics_sink_.get(), this, this, this);
+                ticket_issuer_.get(), return_sender_.get(), metrics_sink_.get(), this, this, this, this);
         if (http_service) {
             // MLA1 rides the same listener as the Lua routes. Both variables
             // must be injected together; anything else leaves /mla1 as a
@@ -759,7 +776,7 @@ private:
                         auto replacement = std::make_shared<LuaService>(config_.script, service_context_, redis_,
                             websockets_.get(), game_sessions_.get(), this,
                             entity_endpoint_ ? &entity_endpoint_->runtime() : nullptr,
-                            ticket_issuer_.get(), return_sender_.get(), metrics_sink_.get(), this, this, this);
+                            ticket_issuer_.get(), return_sender_.get(), metrics_sink_.get(), this, this, this, this);
                         replacement->start();
                         // Rebinding under the new state happens before the swap,
                         // so a bad implementation table keeps the old service.

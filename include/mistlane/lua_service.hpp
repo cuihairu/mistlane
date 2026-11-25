@@ -86,6 +86,19 @@ public:
     // when the final change-set is acknowledged durably.
     virtual bool drained(std::string_view realm, std::string_view character) const = 0;
 };
+// Home-data record read adapter (the login charlist face): asks the data
+// endpoint for one participant's record over one MLD1 LOAD, exactly the leg
+// a crossServer's home join drives natively. Implemented by the node; calls
+// run on the event loop thread. An absent record (the participant's first
+// login) is a normal answer with present=false and reason "EMPTY", not an
+// error; a leg that cannot be established answers a short reason word.
+class DataSink {
+public:
+    virtual ~DataSink() = default;
+    virtual void load_record(std::string_view realm, std::string_view character,
+        std::function<void(bool present, std::uint64_t generation, std::uint64_t sequence,
+                           std::string_view payload, std::string_view reason)> answer) = 0;
+};
 // Source-side transfer adapter (the host that holds the avatar): drives the
 // coordinator's MLR1 MIG sequence and the home data endpoint's final MLD1
 // SUBMIT/FENCE, then releases the avatar once the destination accepted and the
@@ -165,7 +178,8 @@ public:
                         PlacementSink* placement_sink = nullptr, EntityRuntime* entity_runtime = nullptr,
                         const TicketIssuer* ticket_issuer = nullptr, ReturnSink* return_sink = nullptr,
                         ScriptMetricsSink* metrics_sink = nullptr, GrantSink* grant_sink = nullptr,
-                        TransferSink* transfer_sink = nullptr, SceneSink* scene_sink = nullptr);
+                        TransferSink* transfer_sink = nullptr, SceneSink* scene_sink = nullptr,
+                        DataSink* data_sink = nullptr);
     ~LuaService();
     LuaService(const LuaService&) = delete;
     LuaService& operator=(const LuaService&) = delete;
@@ -208,6 +222,8 @@ private:
     static void push_placement_api(lua_State*, LuaService*);
     static int grant_call(lua_State*);
     static void push_grant_api(lua_State*, LuaService*);
+    static int data_load(lua_State*);
+    static void push_data_api(lua_State*, LuaService*);
     static int transfer_call(lua_State*);
     static void push_transfer_api(lua_State*, LuaService*);
     static int scene_call(lua_State*);
@@ -280,6 +296,7 @@ private:
     GameSessionSink* session_sink_ = nullptr;
     PlacementSink* placement_sink_ = nullptr;
     GrantSink* grant_sink_ = nullptr;
+    DataSink* data_sink_ = nullptr;
     TransferSink* transfer_sink_ = nullptr;
     SceneSink* scene_sink_ = nullptr;
     EntityRuntime* entity_runtime_ = nullptr;
