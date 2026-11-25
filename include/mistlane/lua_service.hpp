@@ -119,6 +119,10 @@ public:
         std::string_view scene) = 0;
     // The named avatar's current scene reference, or "" when unset/absent.
     virtual std::string scene_of(std::string_view realm, std::string_view character) const = 0;
+    // The named scene instance's serving read (mistlane.scene.state): the
+    // state word (creating/preparing/ready/failed) and its participant count,
+    // or "" and 0 when no instance of that name exists on this node.
+    virtual std::pair<std::string, std::size_t> scene_state(std::string_view scene) const = 0;
 };
 // Script-declared business gauge adapter: mistlane.metrics.gauge publishes a
 // named gauge onto the node's Prometheus registry (rooms, queue depths — the
@@ -208,6 +212,7 @@ private:
     static void push_transfer_api(lua_State*, LuaService*);
     static int scene_call(lua_State*);
     static int scene_current(lua_State*);
+    static int scene_state(lua_State*);
     static void push_scene_api(lua_State*, LuaService*);
     void websocket_callback(const char* name, std::uint64_t id, std::string_view payload, const std::string& path);
     static int leaderboard_add(lua_State*);

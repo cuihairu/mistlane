@@ -22,6 +22,7 @@
 #include "return_sender.hpp"
 #include "transfer_driver.hpp"
 #include "registry_service.hpp"
+#include "scene_host.hpp"
 #include "session_plane.hpp"
 #include "mistlane/entity_gateway.hpp"
 #include "mistlane/entity_route.hpp"
@@ -281,8 +282,12 @@ public:
     // Same-process scene switch (docs/avatar-runtime.md): the script names
     // realm + character, the node recovers the generation from the runtime and
     // changes only the avatar's scene reference — the avatar stays active, no
-    // save, no state round-trip. A refused state reports the oracle's
-    // rejection-code word (AVATAR_SUSPENDED and friends).
+    // save, no state round-trip. The scene-lifecycle entry discipline gates
+    // the switch: only a ready instance accepts entry, and a refused entry
+    // never moves the reference, so a switch never succeeds into a scene the
+    // avatar cannot enter ("no such scene" / "scene is <state>"). A refused
+    // avatar state reports the oracle's rejection-code word
+    // (AVATAR_SUSPENDED and friends) and leaves both instances untouched.
     std::string switch_scene(std::string_view realm, std::string_view character,
         std::string_view scene) override {
         if (!service_ || !service_->avatar_runtime())
@@ -290,8 +295,16 @@ public:
         const auto runtime = service_->avatar_runtime();
         const auto key = runtime->live_key(realm, character);
         if (!key) return "no avatar";
+        const auto pid = scene_participant_id(*key);
+        const auto gate = scenes_.enter(std::string(scene), pid);
+        if (!gate.empty()) return gate;
+        const auto moved = runtime->scene(*key);
         const auto result = runtime->switch_scene(*key, scene);
-        if (!result.ok()) return std::string(to_string(result.code));
+        if (!result.ok()) {
+            scenes_.leave(std::string(scene), pid);
+            return std::string(to_string(result.code));
+        }
+        if (!moved.empty()) scenes_.leave(moved, pid);
         return {};
     }
     std::string scene_of(std::string_view realm, std::string_view character) const override {
@@ -300,6 +313,11 @@ public:
         const auto key = runtime->live_key(realm, character);
         if (!key) return {};
         return runtime->scene(*key);
+    }
+    std::pair<std::string, std::size_t> scene_state(std::string_view scene) const override {
+        if (!scenes_.has(std::string(scene))) return {};
+        return {to_string(scenes_.state(std::string(scene))),
+                scenes_.participants(std::string(scene))};
     }
     explicit Node(Config config)
       : config_(std::move(config)), signals_(io_, SIGINT, SIGTERM, SIGHUP), tick_(io_),
@@ -501,6 +519,14 @@ public:
                 return_releases_.erase(found);
             });
         }
+        // Scene definitions are registered before the VM: the definition's
+        // digest is pinned from its source file at startup, and the resident
+        // instances take their references in begin_prepare — their loads
+        // resolve on the node's first tick. A missing or unreadable source is
+        // a startup configuration error, never a silently mutated definition.
+        for (const auto& def : config_.scene_defs) scenes_.define(def.name, def.path);
+        for (const auto& instance : config_.scene_instances)
+            scenes_.resident(instance.name, instance.definition, config_.scene_budget_ms);
         if (script_role)
             service_ = std::make_shared<LuaService>(config_.script, service_context_, redis_,
                 websockets_.get(), game_sessions_.get(), this,
@@ -832,6 +858,15 @@ private:
                                     std::string id, std::uint64_t generation, std::string scene) {
         AvatarRuntime* runtime = service_ ? service_->avatar_runtime() : nullptr;
         if (!runtime) return;
+        // The destination owner named a scene: the avatar lands holding that
+        // scene reference, so its instance must be ready before the transfer
+        // is taken in. Defer rather than discard — the fenced gap stays the
+        // coordinator's to hand out, and the next poll (the DESTINED answer
+        // repeats until READY) retries. No pending is claimed here, so the
+        // retry is a fresh drive, not a second load of a half-built avatar.
+        if (!scene.empty() && !(scenes_.has(scene)
+                && scenes_.state(scene) == SceneInstanceState::Ready))
+            return;
         const AvatarKey key{std::move(realm), std::move(character), generation};
         if (!transfer_in_pending_.insert(key).second) return; // already driven
         // A prior READY refusal may have left the avatar built: re-send the
@@ -909,6 +944,13 @@ private:
                 try { service_->tick(); }
                 catch (const std::exception& e) { std::cerr << "tick failed: " << e.what() << '\n'; }
             }
+            // The scene serving pass: queued loads resolve (or fail per
+            // request), prepares past their budget fail, failed instances are
+            // reaped, and instance membership is reconciled against the live
+            // avatars — the tick that makes "instances actually hosting
+            // avatars" true across every avatar exit path.
+            try { scenes_.tick(service_ ? service_->avatar_runtime() : nullptr); }
+            catch (const std::exception& e) { std::cerr << "scene tick failed: " << e.what() << '\n'; }
             // The periodic forced-save pass runs on the same loop: a dirty
             // record lands on its backend (in process, or the SQLite journal)
             // within the configured period. A refused save is reported and
@@ -999,6 +1041,11 @@ private:
     asio::signal_set signals_;
     asio::steady_timer tick_;
     std::shared_ptr<LuaService> service_;
+    // Scene serving path: definitions registered from --scene-def at startup,
+    // resident instances from --scene, and the tick-driven real loader. Lives
+    // with the node (not the VM): a SIGHUP reload retires avatars but keeps
+    // the registered definitions — a definition is process-lifetime content.
+    SceneHost scenes_;
     std::shared_ptr<WebsocketService> websockets_;
     std::shared_ptr<GameSessions> game_sessions_;
     ServiceContext service_context_;

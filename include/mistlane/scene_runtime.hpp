@@ -244,6 +244,21 @@ public:
         const auto it = instances_.find(name);
         return it == instances_.end() ? 0 : it->second.participants.size();
     }
+    // Serving-wiring accessors: the host iterates the registered instances
+    // and reads each participant set so its membership reconciliation can
+    // compare the instances' participants against the avatars that still
+    // hold them (a copy, because the host leaves through the mutating face).
+    std::vector<std::string> instance_names() const {
+        std::vector<std::string> out;
+        for (const auto& [name, in] : instances_) out.push_back(name);
+        return out;
+    }
+    std::vector<std::uint64_t> participants_of(const std::string& name) const {
+        const auto it = instances_.find(name);
+        return it == instances_.end() ? std::vector<std::uint64_t>{}
+                                      : std::vector<std::uint64_t>(it->second.participants.begin(),
+                                                                   it->second.participants.end());
+    }
 
 private:
     using DefinitionKey = std::pair<std::string, std::string>; // (definition id, digest)

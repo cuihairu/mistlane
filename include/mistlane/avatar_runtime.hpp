@@ -519,6 +519,18 @@ public:
                 return k;
         return std::nullopt;
     }
+    // The scene references the live avatars hold, for the host's scene-membership
+    // reconciliation: every live (non-closed) avatar with a scene reference,
+    // with its key. A suspended or transferring avatar still holds its scene;
+    // only a closed one has none, so the host's reconciliation leaves the
+    // instance exactly when the avatar itself is gone.
+    std::vector<std::pair<AvatarKey, std::string>> held_scenes() const {
+        std::vector<std::pair<AvatarKey, std::string>> out;
+        for (const auto& [k, e] : avatars_)
+            if (e.state != AvatarState::Closed && !e.scene.empty())
+                out.emplace_back(k, e.scene);
+        return out;
+    }
     AvatarState state(const AvatarKey& key) const {
         const Entry* e = find(key);
         return e ? e->state : AvatarState::Closed;

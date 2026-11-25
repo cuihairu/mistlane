@@ -65,6 +65,20 @@ struct Config {
         std::size_t index = 0;
     };
     std::vector<EntityRoute> entity_routes;
+    // Scene lifecycle serving face (docs/scene-lifecycle.md): map definitions
+    // registered at startup from configuration, resident instances created at
+    // startup and prepared from the definition's file. --scene-def NAME=FILE
+    // pins the file's SHA-256 as the definition's digest (a changed file is a
+    // changed definition, never an in-place rewrite); --scene NAME=DEF creates
+    // the resident instance named NAME that prepares from definition DEF and
+    // never closes by idleness — an avatar whose scene reference names it
+    // enters when it is ready and is refused with the instance's state while
+    // it is not. gameServer/crossServer only.
+    struct SceneDef { std::string name; std::string path; };
+    struct SceneInstance { std::string name, definition; };
+    std::vector<SceneDef> scene_defs;
+    std::vector<SceneInstance> scene_instances;
+    std::uint64_t scene_budget_ms = 5000; // prepare budget for config-declared instances
     std::string script;
     Endpoint redis{"127.0.0.1", 6379};
     Endpoint metrics_listen{"127.0.0.1", 9090};

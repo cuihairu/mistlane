@@ -13,6 +13,7 @@
 #include <fstream>
 #include <iostream>
 #include <map>
+#include <set>
 #include <stdexcept>
 #include <string_view>
 #include <utility>
@@ -92,6 +93,24 @@ mistlane::Config::EntityRoute entity_route(std::string_view text) {
     route.index = slot;
     return route;
 }
+// "NAME=FILE": one scene definition registered at startup. The host pins
+// the file's SHA-256 as the definition's digest (a changed file is a new
+// definition, never an in-place rewrite), so no digest is accepted from the
+// operator — the source file is the only authority.
+mistlane::Config::SceneDef scene_def(std::string_view text) {
+    const auto eq = text.find('=');
+    if (eq == text.npos || eq == 0 || eq+1 == text.size())
+        throw std::invalid_argument("expected --scene-def NAME=FILE");
+    return {std::string(text.substr(0, eq)), std::string(text.substr(eq+1))};
+}
+// "NAME=DEF": one resident scene instance, prepared from a registered
+// definition at startup and never closed by idleness.
+mistlane::Config::SceneInstance scene_instance(std::string_view text) {
+    const auto eq = text.find('=');
+    if (eq == text.npos || eq == 0 || eq+1 == text.size())
+        throw std::invalid_argument("expected --scene NAME=DEF");
+    return {std::string(text.substr(0, eq)), std::string(text.substr(eq+1))};
+}
 double ratio(std::string_view text) {
     const std::string plain(text);
     std::size_t consumed = 0;
@@ -156,6 +175,7 @@ std::vector<std::pair<std::string, std::string>> config_flags(const std::filesys
         {"SCOPE","--scope",0,0,0}, {"DATA","--data",0,0,0}, {"JOURNAL","--journal",1,0,0},
         {"SCRIPT","--script",1,0,0}, {"CONTRACT","--contract",1,0,0},
         {"UPSTREAMS","--upstream",0,1,0}, {"ENTITY_ROUTES","--entity-route",0,1,0}, {"CERT","--cert",1,0,0},
+        {"SCENE_DEFS","--scene-def",0,1,0}, {"SCENES","--scene",0,1,0}, {"SCENE_BUDGET","--scene-budget",0,0,0},
         {"KEY","--key",1,0,0}, {"LISTENERS","--listener",0,1,0}, {"REDIS","--redis",0,0,0},
         {"METRICS_LISTEN","--metrics-listen",0,0,0}, {"PROBE_LISTEN","--probe-listen",0,0,0},
         {"OVERLOAD_RATIO","--overload-ratio",0,0,0}, {"READY_HYSTERESIS","--ready-hysteresis",0,0,0},
@@ -245,7 +265,8 @@ int main(int argc, char** argv) {
             if (scaffold_result >= 0) return scaffold_result;
         }
         mistlane::Config config;
-        bool transport_selected = false, namespace_selected = false, scope_selected = false;
+        bool transport_selected = false, namespace_selected = false, scope_selected = false,
+             scene_budget_selected = false;
         // --config entries expand in place: file values first, MISTLANE_<KEY>
         // environment overrides inside the reader, then any explicit flag after.
         std::vector<std::string> tokens;
@@ -276,6 +297,10 @@ int main(int argc, char** argv) {
                              "  gameServer/crossServer/apiServer/login/data: --script FILE\n"
                              "  gameServer/crossServer: --contract FILE (entity contract .def; the node\n"
                              "    then hosts the entity runtime and answers MLE1 frames on game sessions)\n"
+                             "  gameServer/crossServer: --scene-def NAME=FILE (repeat) registers a map\n"
+                             "    definition with the file's SHA-256 as its digest; --scene NAME=DEF\n"
+                             "    (repeat) creates a resident instance named NAME that prepares from\n"
+                             "    definition DEF and accepts avatars once ready [--scene-budget MS]\n"
                              "  gateway: --upstream IP:PORT (repeat for session round robin)\n"
                              "    --entity-route SCOPE:TYPE:INCARNATION:ENTITY=INDEX (repeat; with\n"
                              "      --upstream-multiplex the gateway forwards MLE1 frames for the\n"
@@ -364,6 +389,9 @@ int main(int argc, char** argv) {
             else if (key == "--contract") config.contract = value;
             else if (key == "--entity-save-period") config.entity_save_period_ms = number(value, 1000000000);
             else if (key == "--entity-route") config.entity_routes.push_back(entity_route(value));
+            else if (key == "--scene-def") config.scene_defs.push_back(scene_def(value));
+            else if (key == "--scene") config.scene_instances.push_back(scene_instance(value));
+            else if (key == "--scene-budget") { config.scene_budget_ms = number(value, 1000000000); scene_budget_selected = true; }
             else if (key == "--redis") { config.redis = endpoint(value); config.redis_enabled = true; }
             else if (key == "--metrics-listen") { config.metrics_listen = endpoint(value); config.metrics_enabled = true; }
             else if (key == "--dashboard-listen") { config.dashboard_listen = endpoint(value); config.dashboard_enabled = true; }
@@ -418,6 +446,32 @@ int main(int argc, char** argv) {
         }
         if (!config.contract.empty() && config.role != "gameServer" && config.role != "crossServer")
             throw std::invalid_argument("--contract applies to gameServer/crossServer only");
+        // Scene definitions and resident instances are the gameServer/crossServer
+        // serving face (docs/scene-lifecycle.md): they host the avatar runtime's
+        // scene references, so a role without an avatar runtime would register
+        // definitions nothing can ever enter.
+        if (!config.scene_defs.empty() || !config.scene_instances.empty() || scene_budget_selected) {
+            if (config.role != "gameServer" && config.role != "crossServer")
+                throw std::invalid_argument("--scene-def/--scene apply to gameServer/crossServer only");
+        }
+        {
+            std::set<std::string> names;
+            for (const auto& def : config.scene_defs)
+                if (!names.insert(def.name).second)
+                    throw std::invalid_argument("scene definition "+def.name+" registered twice");
+        }
+        {
+            std::map<std::string, bool> defined;
+            for (const auto& def : config.scene_defs) defined[def.name] = true;
+            std::set<std::string> names;
+            for (const auto& instance : config.scene_instances) {
+                if (!names.insert(instance.name).second)
+                    throw std::invalid_argument("scene instance "+instance.name+" declared twice");
+                if (!defined.count(instance.definition))
+                    throw std::invalid_argument("scene instance "+instance.name+" names unknown definition "
+                                                +instance.definition);
+            }
+        }
         // Registration is a member duty; gateways route, coordinators collect.
         if (config.coordinator_enabled && config.role != "gameServer" && config.role != "crossServer"
                 && config.role != "login" && config.role != "gateway")

@@ -753,6 +753,35 @@ int LuaService::scene_current(lua_State* l) {
         return 1;
     } catch (const std::exception& e) { return lua_error(l, e); }
 }
+// The named scene instance's serving read (docs/scene-lifecycle.md states):
+// answers the state word and the participant count, or nil and 0 when the
+// node hosts no instance of that name. Read-only; the script observes the
+// prepare lifecycle the same way the entry gate judges it.
+int LuaService::scene_state(lua_State* l) {
+    auto* service = static_cast<LuaService*>(lua_touserdata(l, lua_upvalueindex(1)));
+    auto identifier = [&](int index, const char* label) {
+        if (!lua_isstring(l, index)) throw std::runtime_error(std::string(label)+" must be an identifier");
+        std::size_t size = 0;
+        const char* data = lua_tolstring(l, index, &size);
+        if (!size || size > 64) throw std::runtime_error(std::string(label)+" length is invalid");
+        for (std::size_t i = 0; i < size; ++i) {
+            const unsigned char ch = data[i];
+            if (!((ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z')
+                    || (ch >= '0' && ch <= '9') || ch == '_' || ch == '-'))
+                throw std::runtime_error(std::string(label)+" must be an identifier");
+        }
+        return std::string(data, size);
+    };
+    try {
+        const auto scene = identifier(1, "scene");
+        if (!service->scene_sink_) { lua_pushnil(l); lua_pushinteger(l, 0); return 2; }
+        const auto [word, count] = service->scene_sink_->scene_state(scene);
+        if (word.empty()) { lua_pushnil(l); lua_pushinteger(l, 0); return 2; }
+        lua_pushlstring(l, word.data(), word.size());
+        lua_pushinteger(l, static_cast<lua_Integer>(count));
+        return 2;
+    } catch (const std::exception& e) { return lua_error(l, e); }
+}
 void LuaService::push_scene_api(lua_State* l, LuaService* service) {
     // Registered unconditionally, like mistlane.transfer: an unconfigured scene
     // still answers a reason instead of failing the script.
@@ -761,6 +790,7 @@ void LuaService::push_scene_api(lua_State* l, LuaService* service) {
     lua_newtable(l);
     lua_pushlightuserdata(l, service); lua_pushcclosure(l, scene_call, 1); lua_setfield(l, -2, "switch");
     lua_pushlightuserdata(l, service); lua_pushcclosure(l, scene_current, 1); lua_setfield(l, -2, "current");
+    lua_pushlightuserdata(l, service); lua_pushcclosure(l, scene_state, 1); lua_setfield(l, -2, "state");
     lua_setfield(l, -2, "scene"); lua_setglobal(l, "mistlane");
 }
 void LuaService::websocket_callback(const char* name, std::uint64_t id, std::string_view payload, const std::string& path) {
