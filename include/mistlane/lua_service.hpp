@@ -64,6 +64,7 @@ public:
     // success, otherwise 0 and a short machine-readable word ("disabled" for
     // no data endpoint, "unreachable"/"refused"/"INVALID"/... /"timeout").
     virtual void grant(std::string_view realm, std::string_view character,
+        std::string_view instance,
         std::function<void(std::uint64_t generation, std::string_view reason)> answer) = 0;
 };
 // Cross-return sender adapter (crossServer): the framework owns the MLD1

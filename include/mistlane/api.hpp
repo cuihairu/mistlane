@@ -127,13 +127,30 @@ class ApiSurface {
 public:
     // Lookup must read authoritative HOME facts, never the coordinator route.
     using Lookup = std::function<std::optional<HomeOwnership>(const MigrationKey&)>;
-    ApiSurface(const ApiVerifier& verifier, ApiAcceptanceStore& store, Lookup lookup)
-      : verifier_(verifier), store_(store), lookup_(std::move(lookup)) {}
+    // The async half: the node's home-data leg is an event-loop ask, so the
+    // /mla1 intercept completes the HTTP reply from the callback instead of
+    // blocking the loop. Reason is a short refusal word ("disabled",
+    // "unreachable"/"refused"/"timeout"/...) for the node's logs only — every
+    // failure answers NotFound, never an invented owner.
+    using AsyncLookup = std::function<void(const MigrationKey&,
+        std::function<void(std::optional<HomeOwnership>, std::string reason)>)>;
+    ApiSurface(const ApiVerifier& verifier, ApiAcceptanceStore& store, Lookup lookup,
+        AsyncLookup async_lookup = {})
+      : verifier_(verifier), store_(store), lookup_(std::move(lookup)),
+        async_lookup_(std::move(async_lookup)) {}
     ApiReply handle(const ApiRequest& request, std::uint64_t now) const;
+    // The async face the event-loop intercept uses: identical answers, but
+    // an Owner ask with a wired async lookup answers from the callback.
+    void handle(const ApiRequest& request, std::uint64_t now,
+        std::function<void(ApiReply reply)> answer) const;
 private:
+    // The post-verification body both faces share; verify consumes the nonce,
+    // so it must run exactly once per accepted request.
+    ApiReply handle_checked(const ApiRequest& request) const;
     const ApiVerifier& verifier_;
     ApiAcceptanceStore& store_;
     Lookup lookup_;
+    AsyncLookup async_lookup_;
 };
 // MLA1 wire body: the canonical bytes followed by the raw 32-byte signature.
 // Parsing is byte-exact — exactly the ten framed fields, then exactly the

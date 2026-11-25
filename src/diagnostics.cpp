@@ -58,7 +58,8 @@ Diagnostics::Diagnostics(const Config& config) {
         auto& record_family = prometheus::BuildCounter().Name("mistlane_record_results_total")
             .Help("Record endpoint verdicts on the data role.").Labels(labels).Register(*registry_);
         for (const auto* result : {"loaded", "empty", "accepted", "duplicate", "stale", "seq", "invalid",
-                                   "full", "granted", "ungranted"})
+                                   "full", "granted", "ungranted", "fenced", "nofence", "storage",
+                                   "none", "owned", "owned-anon"})
             record_results_[result] = &record_family.Add({{"result", result}});
         // Entity transport verdicts: the endpoint's result words, one per
         // handled MLE1 frame. Same closed-label discipline as record results.

@@ -585,14 +585,23 @@ int LuaService::grant_call(lua_State* l) {
     };
     const auto realm = word(1, "realm");
     const auto character = word(2, "character");
-    if (!lua_isfunction(l, 3)) throw std::runtime_error("last argument must be a callback function");
-    lua_pushvalue(l, 3);
+    // (realm, character, callback) or (realm, character, instance, callback):
+    // the instance names the placed target host so the lease records a live
+    // owner, and an anonymous grant stays available for callers that place
+    // elsewhere.
+    const int arguments = lua_gettop(l);
+    std::string instance;
+    const int callback_index = arguments >= 4 ? 4 : 3;
+    if (arguments >= 4) instance = word(3, "instance");
+    if (!lua_isfunction(l, callback_index))
+        throw std::runtime_error("last argument must be a callback function");
+    lua_pushvalue(l, callback_index);
     const auto callback = luaL_ref(l, LUA_REGISTRYINDEX);
     const auto life = service->async_context_;
     if (!service->grant_sink_)
         return finish_lua(life, callback, "grant is disabled; start with --data IP:PORT",
             [](lua_State* l) { lua_pushnil(l); }), 0;
-    service->grant_sink_->grant(realm, character,
+    service->grant_sink_->grant(realm, character, instance,
         [life, callback](std::uint64_t generation, std::string_view reason) {
             if (!reason.empty())
                 return finish_lua(life, callback, std::string(reason), [](lua_State* l) { lua_pushnil(l); });

@@ -373,7 +373,8 @@ struct MigrationJournal::Impl {
         sqlite_record_exec(db,
             "CREATE TABLE IF NOT EXISTS record_grant ("
             "version INTEGER NOT NULL, realm TEXT NOT NULL, character TEXT NOT NULL,"
-            "generation INTEGER NOT NULL, PRIMARY KEY(realm, character))");
+            "generation INTEGER NOT NULL, owner TEXT NOT NULL DEFAULT '-',"
+            " PRIMARY KEY(realm, character))");
         sqlite_exec(db,
             "CREATE TABLE IF NOT EXISTS placement ("
             "version INTEGER NOT NULL, namespace TEXT NOT NULL, scope TEXT NOT NULL,"
@@ -386,9 +387,10 @@ struct MigrationJournal::Impl {
             "incarnation INTEGER NOT NULL, entity_id INTEGER NOT NULL,"
             "generation INTEGER NOT NULL, revision INTEGER NOT NULL, snapshot BLOB NOT NULL,"
             "PRIMARY KEY(scope, type_id, incarnation, entity_id))");
-        // Version 1 files predate the scene column; migrate them in place and
-        // remember the new row format. A future incompatible writer refuses
-        // anything it does not recognize instead of silently decoding garbage.
+        // Version 1 files predate the scene column; version 2 files predate the
+        // grant owner column. Migrate both in place and remember the new row
+        // format. A future incompatible writer refuses anything it does not
+        // recognize instead of silently decoding garbage.
         Statement version(db, "PRAGMA user_version");
         version.step();
         const auto file_version = sqlite3_column_int(version.get(), 0);
@@ -398,7 +400,20 @@ struct MigrationJournal::Impl {
                 nullptr, nullptr, nullptr, nullptr, nullptr) == SQLITE_OK;
             if (!scene_exists) sqlite_exec(db, "ALTER TABLE placement ADD COLUMN scene TEXT NOT NULL DEFAULT '-'");
             sqlite_exec(db, "PRAGMA user_version=2");
-        } else if (file_version != 2) throw std::runtime_error("placement schema version unsupported");
+        } else if (file_version > 3) throw std::runtime_error("placement schema version unsupported");
+        if (file_version <= 2) {
+            if (sqlite3_table_column_metadata(db, nullptr, "record_grant", "generation",
+                    nullptr, nullptr, nullptr, nullptr, nullptr) != SQLITE_OK)
+                sqlite_record_exec(db,
+                    "CREATE TABLE IF NOT EXISTS record_grant ("
+                    "version INTEGER NOT NULL, realm TEXT NOT NULL, character TEXT NOT NULL,"
+                    "generation INTEGER NOT NULL, owner TEXT NOT NULL DEFAULT '-',"
+                    " PRIMARY KEY(realm, character))");
+            else if (sqlite3_table_column_metadata(db, nullptr, "record_grant", "owner",
+                    nullptr, nullptr, nullptr, nullptr, nullptr) != SQLITE_OK)
+                sqlite_exec(db, "ALTER TABLE record_grant ADD COLUMN owner TEXT NOT NULL DEFAULT '-'");
+            sqlite_exec(db, "PRAGMA user_version=3");
+        }
     }
     ~Impl() { if (db) sqlite3_close(db); }
     std::string path;
@@ -610,13 +625,15 @@ void MigrationJournal::save_grant(const GenerationAuthority::Grant& grant) {
     if (!record_identifier(grant.key.first) || !record_identifier(grant.key.second)
             || !grant.generation)
         throw std::invalid_argument("invalid record grant key or generation");
-    RecordStatement upsert(impl_->db, "INSERT INTO record_grant(version, realm, character, generation) "
-        "VALUES(?, ?, ?, ?) ON CONFLICT(realm, character) DO UPDATE SET "
-        "version=excluded.version, generation=excluded.generation");
+    RecordStatement upsert(impl_->db,
+        "INSERT INTO record_grant(version, realm, character, generation, owner) "
+        "VALUES(?, ?, ?, ?, ?) ON CONFLICT(realm, character) DO UPDATE SET "
+        "version=excluded.version, generation=excluded.generation, owner=excluded.owner");
     upsert.bind_int(1, static_cast<int>(kVersion));
     upsert.bind_text(2, grant.key.first);
     upsert.bind_text(3, grant.key.second);
     upsert.bind_u64(4, grant.generation);
+    upsert.bind_text(5, grant.owner.empty() ? std::string("-") : grant.owner);
     upsert.step("record grant save step failed");
 }
 
@@ -624,7 +641,7 @@ std::vector<GenerationAuthority::Grant> MigrationJournal::restore_grants() const
     if (impl_->db == nullptr) throw std::runtime_error("record store is closed");
     std::vector<GenerationAuthority::Grant> grants;
     RecordStatement query(impl_->db,
-        "SELECT version, realm, character, generation FROM record_grant "
+        "SELECT version, realm, character, generation, owner FROM record_grant "
         "ORDER BY realm, character");
     for (;;) {
         const int code = sqlite3_step(query.get());
@@ -636,14 +653,22 @@ std::vector<GenerationAuthority::Grant> MigrationJournal::restore_grants() const
         const int realm_size = sqlite3_column_bytes(query.get(), 1);
         const int character_size = sqlite3_column_bytes(query.get(), 2);
         const sqlite3_int64 generation = sqlite3_column_int64(query.get(), 3);
+        const auto* owner = reinterpret_cast<const char*>(sqlite3_column_text(query.get(), 4));
+        const int owner_size = sqlite3_column_bytes(query.get(), 4);
         std::string key_realm(realm ? realm : "", static_cast<std::size_t>(realm_size));
         std::string key_character(character ? character : "",
             static_cast<std::size_t>(character_size));
+        std::string lease_owner(owner && owner_size ? std::string(owner, static_cast<std::size_t>(owner_size))
+                                                    : std::string{});
+        // '-' is the unnamed lease a pre-owner row restores as; anything else
+        // must still be an identifier.
+        if (lease_owner == "-") lease_owner.clear();
         if (version != static_cast<int>(kVersion) || !record_identifier(key_realm)
-                || !record_identifier(key_character) || generation <= 0)
+                || !record_identifier(key_character) || generation <= 0
+                || (!lease_owner.empty() && !record_identifier(lease_owner)))
             throw std::runtime_error("record grant row corrupted");
         grants.push_back({{std::move(key_realm), std::move(key_character)},
-            static_cast<std::uint64_t>(generation)});
+            static_cast<std::uint64_t>(generation), std::move(lease_owner)});
     }
     return grants;
 }

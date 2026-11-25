@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
+#include <algorithm>
 #include <cstdint>
 #include <map>
 #include <optional>
@@ -16,7 +17,8 @@ namespace mistlane {
 //   MLD1 LOAD <realm> <character>
 //   MLD1 SUBMIT <realm> <character> gen <n> seq <m> [<payload>]
 //   MLD1 FENCE <realm> <character> gen <n>
-//   MLD1 GRANT <realm> <character>
+//   MLD1 GRANT <realm> <character> [<instance>]
+//   MLD1 OWNERSHIP <realm> <character>
 // Replies:
 //   MLD1 EMPTY
 //   MLD1 STATE gen <n> seq <m> [<payload>]
@@ -24,19 +26,32 @@ namespace mistlane {
 //   MLD1 FENCED gen <n> seq <m>
 //   MLD1 GRANTED gen <n>
 //   MLD1 ACK durable <realm> <character> gen <n> seq <m>
+//   MLD1 OWNER NONE
+//   MLD1 OWNER AT <instance|-> gen <n> <ACTIVE|FENCED>
 //   MLD1 ERR INVALID | STALE gen <n> | SEQ seq <n> | FULL | NOFENCE | STORAGE
 // Without a durable backend RECEIVED is a receipt, never a durability claim.
 // With one, acceptance is acknowledged with ACK durable only after the home
 // write is durable, so a restart never loses an acknowledged change-set.
 // GRANT is the data-issued hosting generation (the login entry flow): the
-// caller names the participant only and never a generation, because this
-// endpoint is the sole authority that hands them out.
+// caller names the participant and never a generation, because this endpoint
+// is the sole authority that hands them out. The optional trailing instance
+// is the target host the entry flow placed the participant on; when present,
+// the lease records it, which is what makes OWNERSHIP able to name a live
+// owner. OWNERSHIP is the read-only home-facts lookup (the apiServer MLA1
+// OWNER callback): it never reserves a generation or changes a lease, and it
+// answers what the data side honestly knows — the record/lease generation,
+// the named lease owner while the lease is the live top, and FENCED while the
+// top generation is frozen mid-lease. It never invents an owner: NONE means
+// no record and no lease exist at all.
 struct RecordRequest {
-    enum class Type { Load, Submit, Fence, Grant };
+    enum class Type { Load, Submit, Fence, Grant, Ownership };
     Type type = Type::Load;
     std::string realm, character;
     std::uint64_t generation = 0, sequence = 0;
     std::string payload;
+    // GRANT only: the target host instance the lease should record (empty =
+    // an anonymous grant, the lease stays unnamed).
+    std::string instance;
 };
 inline bool record_identifier(std::string_view s) {
     if (s.empty() || s.size() > 64) return false;
@@ -108,12 +123,22 @@ inline RecordRequest parse_record(std::string_view payload) {
             throw std::invalid_argument("INVALID");
         r.type = RecordRequest::Type::Fence;
     } else if (command == "GRANT") {
-        // The grant names the participant and nothing else: a generation the
-        // caller tried to choose or advance would defeat the sole authority
-        // this endpoint is, so the frame carries no gen to accept.
+        // The grant names the participant and never a generation, because a
+        // generation the caller tried to choose or advance would defeat the
+        // sole authority this endpoint is. The optional trailing word is the
+        // target host instance the lease should record — an identity, nothing
+        // else; anything past it is a malformed frame.
+        std::string extra;
+        if (!(in >> r.realm >> r.character)) throw std::invalid_argument("INVALID");
+        if (in >> r.instance) {
+            if (!record_identifier(r.instance)) throw std::invalid_argument("INVALID");
+            if (in >> extra) throw std::invalid_argument("INVALID");
+        }
+        r.type = RecordRequest::Type::Grant;
+    } else if (command == "OWNERSHIP") {
         std::string extra;
         if (!(in >> r.realm >> r.character) || (in >> extra)) throw std::invalid_argument("INVALID");
-        r.type = RecordRequest::Type::Grant;
+        r.type = RecordRequest::Type::Ownership;
     } else throw std::invalid_argument("INVALID");
     if (!record_identifier(r.realm) || !record_identifier(r.character))
         throw std::invalid_argument("INVALID");
@@ -185,6 +210,8 @@ public:
     struct Grant {
         Key key;
         std::uint64_t generation = 0;
+        // The target host instance the grant was issued to (empty = unnamed).
+        std::string owner;
         bool operator==(const Grant&) const = default;
     };
     // Restore a persisted grant. A grant is immutable once issued, so
@@ -192,13 +219,18 @@ public:
     // changed row is refused fail-closed rather than silently rewritten.
     bool restore(const Grant& grant) {
         if (!record_identifier(grant.key.first) || !record_identifier(grant.key.second)
-                || !grant.generation) return false;
-        const auto [it, inserted] = grants_.try_emplace(grant.key, grant.generation);
-        return inserted || it->second == grant.generation;
+                || !grant.generation
+                || (!grant.owner.empty() && !record_identifier(grant.owner))) return false;
+        const auto [it, inserted] = grants_.try_emplace(grant.key, grant);
+        return inserted || it->second == grant;
+    }
+    std::optional<Grant> lease(const Key& key) const {
+        const auto found = grants_.find(key);
+        return found == grants_.end() ? std::nullopt : std::optional(found->second);
     }
     std::optional<std::uint64_t> current(const Key& key) const {
         const auto found = grants_.find(key);
-        return found == grants_.end() ? std::nullopt : std::optional(found->second);
+        return found == grants_.end() ? std::nullopt : std::optional(found->second.generation);
     }
     // The generation a new grant would receive: strictly greater than the
     // last one issued for the key and at least one past `floor` (the record's
@@ -212,20 +244,23 @@ public:
         return candidate > base ? std::optional<std::uint64_t>(candidate) : std::nullopt;
     }
     // Record an allocated grant after the durable write succeeded. A later
-    // allocation advances the high-water mark; the same row is idempotent (a
-    // retry of a grant the store already committed); a lower one is refused
+    // allocation advances the high-water mark and takes the lease's owner
+    // name; the same row is idempotent (a retry of a grant the store already
+    // committed keeps the first lease's owner — one generation was issued to
+    // one host, and a retry cannot rename it); a lower one is refused
     // fail-closed — the authority is a monotone cursor, never a suggestion.
     bool grant(const Grant& grant) {
-        if (!grant.generation) return false;
-        const auto [it, inserted] = grants_.try_emplace(grant.key, grant.generation);
+        if (!grant.generation
+                || (!grant.owner.empty() && !record_identifier(grant.owner))) return false;
+        const auto [it, inserted] = grants_.try_emplace(grant.key, grant);
         if (inserted) return true;
-        if (grant.generation == it->second) return true;
-        if (grant.generation < it->second) return false;
-        it->second = grant.generation;
+        if (grant.generation == it->second.generation) return true;
+        if (grant.generation < it->second.generation) return false;
+        it->second = grant;
         return true;
     }
 private:
-    std::map<Key, std::uint64_t> grants_;
+    std::map<Key, Grant> grants_;
 };
 // Storage boundary for the data role's persistent record store. The SQLite
 // backend lives beside the coordinator journal and reuses its versioned-BLOB
@@ -326,7 +361,7 @@ public:
             const auto next = generation_authority_.next(key,
                 it == records_.end() ? 0 : it->second.generation);
             if (!next) { result = "storage"; return "MLD1 ERR STORAGE"; }
-            const GenerationAuthority::Grant grant{key, *next};
+            const GenerationAuthority::Grant grant{key, *next, request.instance};
             if (backend_) {
                 try { backend_->save_grant(grant); }
                 catch (const std::exception&) {
@@ -369,6 +404,33 @@ public:
             return "MLD1 FENCED gen " + std::to_string(pin->generation)
                  + " seq " + std::to_string(pin->sequence);
         }
+        // The read-only home-facts lookup (the apiServer MLA1 OWNER callback's
+        // source). It reads only what this store already holds — the record's
+        // committed generation, the issued lease and the final-cursor pin —
+        // and never reserves a generation or touches a lease. The generation
+        // answered is the hosting top: the lease while one stands above the
+        // record, else the record itself (the implicit lease of a migration-era
+        // or never-granted record). The owner is named only while the named
+        // lease IS that top: a resumed writer past a fence arrived at a
+        // coordinator-issued generation this endpoint never named, and a
+        // frozen top is a fenced gap with no owner at all. NONE means no
+        // record and no lease exist — the one honest NotFound.
+        if (request.type == RecordRequest::Type::Ownership) {
+            const auto lease = generation_authority_.lease(key);
+            const auto pin = sequence_authority_.pin(key);
+            const std::uint64_t record_gen = it == records_.end() ? 0 : it->second.generation;
+            const std::uint64_t lease_gen = lease ? lease->generation : 0;
+            const std::uint64_t top = std::max(record_gen, lease_gen);
+            if (!top) { result = "none"; return "MLD1 OWNER NONE"; }
+            const bool fenced = pin && pin->generation == top;
+            // The fence wins over a standing lease: the frozen gap names no
+            // one, even when the source's lease still sits at the pinned top.
+            const bool named = !fenced && lease_gen == top && !lease->owner.empty();
+            result = fenced ? "fenced" : (named ? "owned" : "owned-anon");
+            return "MLD1 OWNER AT " + (named ? lease->owner : std::string("-"))
+                 + " gen " + std::to_string(top)
+                 + (fenced ? " FENCED" : " ACTIVE");
+        }
         // The durable-write lease: when home data has allocated a generation
         // for the key, a submission is authorized only at exactly that granted
         // generation. A writer below it is the superseded host (STALE, named at
@@ -378,14 +440,14 @@ public:
         // granted keeps the record-relative fence below (migration-era records
         // carry their own generation as the implicit lease, and the coordinator
         // handoff authorizes the destination past a FENCE).
-        if (const auto lease = generation_authority_.current(key)) {
-            if (request.generation < *lease) {
+        if (const auto lease = generation_authority_.lease(key)) {
+            if (request.generation < lease->generation) {
                 result = "stale";
-                return "MLD1 ERR STALE gen " + std::to_string(*lease);
+                return "MLD1 ERR STALE gen " + std::to_string(lease->generation);
             }
-            if (request.generation > *lease) {
+            if (request.generation > lease->generation) {
                 result = "ungranted";
-                return "MLD1 ERR UNGRANTED gen " + std::to_string(*lease);
+                return "MLD1 ERR UNGRANTED gen " + std::to_string(lease->generation);
             }
         }
         if (it != records_.end() && request.generation < it->second.generation) {

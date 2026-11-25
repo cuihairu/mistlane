@@ -244,12 +244,14 @@ public:
     // data endpoint for the data-issued hosting generation through Lua. The
     // identity is the member token (--upstream-token presents MLS1 when the
     // data endpoint is tokened), the same leg crossServer's data sender uses.
-    void grant(std::string_view realm, std::string_view character,
+    // The entry flow names the placed target host, which is what lets the
+    // lease record a live owner the apiServer's ownership callback can read.
+    void grant(std::string_view realm, std::string_view character, std::string_view instance,
         std::function<void(std::uint64_t generation, std::string_view reason)> answer) override {
         if (config_.data.address.empty()) return answer(0, "disabled");
         RecordFetcher::grant(io_.get_executor(), config_.data,
             config_.upstream_token.empty() ? std::string{} : service_hello(config_),
-            realm, character, std::move(answer));
+            realm, character, instance, std::move(answer));
     }
     // One record read, one connection: the login charlist face asks the home
     // data endpoint for a participant's record through Lua — the same leg the
@@ -565,10 +567,33 @@ public:
                 else
                     api_store_ = std::make_unique<ApiMemoryAcceptanceStore>();
                 api_verifier_ = std::make_unique<ApiVerifier>(audience, api_credentials(credential), api_replay_);
-                // Ownership needs the home transaction aggregate; until that
-                // source is wired the endpoint answers NotFound, never invents.
+                // Ownership reads the home-facts source: with --data the ask
+                // rides one MLD1 OWNERSHIP leg (the same identity discipline
+                // as the other record legs), otherwise it answers NotFound —
+                // never an invented owner.
                 api_surface_ = std::make_unique<ApiSurface>(*api_verifier_, *api_store_,
-                    [](const MigrationKey&) { return std::nullopt; });
+                    [](const MigrationKey&) { return std::nullopt; },
+                    [this](const MigrationKey& key,
+                        std::function<void(std::optional<HomeOwnership>, std::string reason)> answer) {
+                        if (config_.data.address.empty()) return answer(std::nullopt, "disabled");
+                        RecordFetcher::ownership(io_.get_executor(), config_.data,
+                            config_.upstream_token.empty() ? std::string{} : service_hello(config_),
+                            key.first, key.second,
+                            [answer = std::move(answer), realm = key.first](
+                                RecordFetcher::Ownership facts, std::string reason) mutable {
+                                if (!facts.present)
+                                    return answer(std::nullopt,
+                                        reason.empty() ? std::string("none") : std::move(reason));
+                                HomeOwnership ownership;
+                                ownership.owner = MigrationOwner{
+                                    MigrationScope{MigrationScope::Kind::Realm, realm, {}, {}},
+                                    {}, facts.owner, {}};
+                                ownership.generation = facts.generation;
+                                ownership.state = facts.fenced ? HomeOwnershipState::Fenced
+                                                               : HomeOwnershipState::Active;
+                                answer(std::move(ownership), {});
+                            });
+                    });
             }
         }
         for (const auto& e : config_.upstreams) (void)parse_address(e.address);
@@ -618,19 +643,22 @@ public:
                             if (stopping_) return complete({503, {}, "Service Unavailable"});
                             // Native MLA1 route, no script in the path. Bodies are
                             // the canonical bytes plus the raw signature; replies
-                            // are five framed words, self-describing without a
-                            // content type.
+                            // are framed words, self-describing without a
+                            // content type. The ownership ask rides the event
+                            // loop's home-data leg, so the reply completes from
+                            // the ask's callback instead of blocking the loop.
                             if (api_surface_ && request.method == "POST" && request.path == "/mla1") {
-                                ApiReply reply;
                                 ApiRequest parsed;
-                                if (!parse_api_body(request.body, parsed)) reply.auth = ApiAuth::Invalid;
-                                else {
-                                    const auto now = static_cast<std::uint64_t>(
-                                        std::chrono::duration_cast<std::chrono::seconds>(
-                                            std::chrono::system_clock::now().time_since_epoch()).count());
-                                    reply = api_surface_->handle(parsed, now);
-                                }
-                                return complete({api_http_status(reply), {}, api_reply_body(reply)});
+                                if (!parse_api_body(request.body, parsed))
+                                    return complete({400, {}, api_reply_body(ApiReply{})});
+                                const auto now = static_cast<std::uint64_t>(
+                                    std::chrono::duration_cast<std::chrono::seconds>(
+                                        std::chrono::system_clock::now().time_since_epoch()).count());
+                                api_surface_->handle(parsed, now,
+                                    [complete](ApiReply reply) mutable {
+                                        complete({api_http_status(reply), {}, api_reply_body(reply)});
+                                    });
+                                return;
                             }
                             if (!service_) return complete({503, {}, "Service Unavailable"});
                             const auto started = std::chrono::steady_clock::now();

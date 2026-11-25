@@ -484,9 +484,11 @@ int main(int argc, char** argv) {
         if (!config.coordinator_enabled && (namespace_selected || scope_selected))
             throw std::invalid_argument("--namespace and --scope require --coordinator");
         if (!config.coordinator_enabled && !config.upstream_token.empty() && config.role != "gateway"
-                && config.role != "crossServer" && config.role != "login")
-            // Members present this identity when they register; anywhere else
-            // the flag would silently do nothing.
+                && config.role != "crossServer" && config.role != "login"
+                && !(config.role == "apiServer" && !config.data.address.empty()))
+            // Members present this identity when they register; an apiServer
+            // presents it on its MLD1 ownership leg; anywhere else the flag
+            // would silently do nothing.
             throw std::invalid_argument("--upstream-token applies to gateway or coordinator members");
         if (config.role == "crossServer" && !config.upstream_token.empty()
                 && !config.coordinator_enabled && config.data.address.empty())
@@ -538,11 +540,13 @@ int main(int argc, char** argv) {
             throw std::invalid_argument("--service-token does not apply to cross routing");
         if (!config.upstream_token.empty() && config.routing == "cross")
             throw std::invalid_argument("--upstream-token does not apply to cross routing");
-        // The framework return sender is crossServer-only and the login entry
-        // flow's data-issued generation grant is login-only; any other role
-        // would silently ignore the endpoint, so refuse the misconfiguration.
-        if (!config.data.address.empty() && config.role != "crossServer" && config.role != "login")
-            throw std::invalid_argument("--data applies to crossServer or login");
+        // The framework return sender is crossServer-only, the login entry
+        // flow's data legs are login-only, and the MLA1 ownership callback's
+        // home-facts source is apiServer-only; any other role would silently
+        // ignore the endpoint, so refuse the misconfiguration.
+        if (!config.data.address.empty() && config.role != "crossServer" && config.role != "login"
+                && config.role != "apiServer")
+            throw std::invalid_argument("--data applies to crossServer, login or apiServer");
         // Multiplexing is the internal mode: only identified peers may upgrade
         // a shared connection, so an anonymous upstream link cannot be offered it.
         if (config.upstream_multiplex) {

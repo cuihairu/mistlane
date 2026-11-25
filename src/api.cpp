@@ -118,6 +118,11 @@ ApiReply ApiSurface::handle(const ApiRequest& request, std::uint64_t now) const 
     ApiReply reply;
     reply.auth = verifier_.verify(request, now);
     if (reply.auth != ApiAuth::Ok) return reply;
+    return handle_checked(request);
+}
+ApiReply ApiSurface::handle_checked(const ApiRequest& request) const {
+    ApiReply reply;
+    reply.auth = ApiAuth::Ok;
     if (request.operation == ApiOperation::Accept) {
         reply.acceptance = store_.create({{request.audience, request.principal, request.character,
             request.idempotency_key}, request.payload});
@@ -127,6 +132,26 @@ ApiReply ApiSurface::handle(const ApiRequest& request, std::uint64_t now) const 
             std::move(current)};
     }
     return reply;
+}
+void ApiSurface::handle(const ApiRequest& request, std::uint64_t now,
+    std::function<void(ApiReply reply)> answer) const {
+    ApiReply reply;
+    reply.auth = verifier_.verify(request, now);
+    if (reply.auth != ApiAuth::Ok) return answer(std::move(reply));
+    // Everything but an async Owner ask answers exactly like the sync face
+    // does; verify must not run twice, since it consumes the nonce.
+    if (request.operation != ApiOperation::Owner || !async_lookup_)
+        return answer(handle_checked(request));
+    async_lookup_(request.character, [answer = std::move(answer)](
+        std::optional<HomeOwnership> current, std::string reason) {
+        (void)reason; // the refusal word is the node's log concern, never a verdict
+        ApiReply reply;
+        reply.auth = ApiAuth::Ok;
+        reply.ownership = ApiOwnershipReply{
+            current ? ApiOwnershipReply::Status::Found : ApiOwnershipReply::Status::NotFound,
+            std::move(current)};
+        answer(std::move(reply));
+    });
 }
 bool parse_api_body(std::string_view body, ApiRequest& out) {
     if (body.substr(0, 4) != "MLA1") return false;
@@ -185,6 +210,18 @@ std::string api_reply_body(const ApiReply& reply) {
     }
     field(bytes, reply.ownership
         ? (reply.ownership->status == ApiOwnershipReply::Status::Found ? "FOUND" : "NOT_FOUND") : "");
+    // A Found answer names its facts when the source produced them (the
+    // owner instance, the hosting generation and the state word); a Found
+    // without current (a sync model surface) and every NotFound stay bare,
+    // so a consumer reads facts by field count.
+    if (reply.ownership && reply.ownership->status == ApiOwnershipReply::Status::Found
+            && reply.ownership->current) {
+        const auto& current = *reply.ownership->current;
+        field(bytes, current.owner && !current.owner->instance.empty() ? current.owner->instance : "-");
+        field(bytes, std::to_string(current.generation));
+        field(bytes, current.state == HomeOwnershipState::Active ? "ACTIVE"
+            : current.state == HomeOwnershipState::Draining ? "DRAINING" : "FENCED");
+    }
     return bytes;
 }
 unsigned api_http_status(const ApiReply& reply) {

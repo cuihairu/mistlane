@@ -38,6 +38,16 @@ public:
     // The write side of the record protocol (SUBMIT / FENCE): ok=true on the
     // success verdict, ok=false with the short reason word otherwise.
     using WriteAnswer = std::function<void(bool ok, std::string reason)>;
+    // One read-only home-facts answer (the MLA1 OWNER callback's source).
+    // present=false means MLD1 OWNER NONE (no record and no lease exist),
+    // not a failure.
+    struct Ownership {
+        std::string owner; // empty = the lease is unnamed
+        std::uint64_t generation = 0;
+        bool fenced = false;
+        bool present = false;
+    };
+    using OwnershipAnswer = std::function<void(Ownership facts, std::string reason)>;
     // Answers exactly once, on the executor's thread that started it: present=true with
     // the STATE bytes on success; present=false with reason "EMPTY" when the
     // data node holds no record; otherwise present=false with a short reason —
@@ -61,11 +71,29 @@ public:
     // reason (the same words load() uses, plus "EMPTY" never applies — a grant
     // allocates, so it always produces a generation or a refusal).
     static void grant(asio::any_io_executor executor, Endpoint data, std::string identity,
-                      std::string_view realm, std::string_view character, GrantAnswer answer) {
+                      std::string_view realm, std::string_view character,
+                      std::string_view instance, GrantAnswer answer) {
         std::shared_ptr<RecordFetcher> self(
             new RecordFetcher(std::move(executor), data, std::move(identity), Kind::Grant));
-        self->question_ = "MLD1 GRANT " + std::string(realm) + " " + std::string(character);
+        self->question_ = "MLD1 GRANT " + std::string(realm) + " " + std::string(character)
+            + (instance.empty() ? "" : " " + std::string(instance));
         self->grant_answer_ = std::move(answer);
+        self->start();
+    }
+    // The apiServer's read-only home-facts lookup (MLA1 OWNER's source): asks
+    // the data endpoint what it knows about one participant's ownership and
+    // never changes it. Answers exactly once with the facts and an empty
+    // reason, present=false with reason "NONE" when the participant is unknown
+    // to the home store, or present=false with a short failure reason ("the
+    // same words load() uses"). The facts' owner is empty while the lease is
+    // unnamed, and fenced=true while the top generation is frozen mid-lease.
+    static void ownership(asio::any_io_executor executor, Endpoint data, std::string identity,
+                          std::string_view realm, std::string_view character,
+                          OwnershipAnswer answer) {
+        std::shared_ptr<RecordFetcher> self(
+            new RecordFetcher(std::move(executor), data, std::move(identity), Kind::Ownership));
+        self->question_ = "MLD1 OWNERSHIP " + std::string(realm) + " " + std::string(character);
+        self->ownership_answer_ = std::move(answer);
         self->start();
     }
     // The source transfer's final change: submit the state snapshot as the
@@ -102,7 +130,7 @@ public:
         self->start();
     }
 private:
-    enum class Kind { Load, Grant, Submit, Fence };
+    enum class Kind { Load, Grant, Submit, Fence, Ownership };
     RecordFetcher(asio::any_io_executor executor, Endpoint data, std::string identity, Kind kind)
       : endpoint_(tcp::endpoint(parse_address(data.address), data.port)),
         identity_(std::move(identity)), kind_(kind),
@@ -151,6 +179,27 @@ private:
             // not the record frame — a tokened data endpoint answered it.
             if (payload.starts_with("MLS1")) return answer({}, "refused");
             return answer({}, "unexpected");
+        }
+        // MLD1 OWNER NONE / MLD1 OWNER AT <instance|-> gen <n> <ACTIVE|FENCED>.
+        if (kind_ == Kind::Ownership) {
+            if (payload == "MLD1 OWNER NONE") return ownership({}, "NONE");
+            if (payload.starts_with("MLD1 OWNER AT ")) {
+                std::istringstream in(payload);
+                std::string magic, owner_word, owner_tag, owner, gen_tag, gen, state;
+                std::uint64_t generation = 0;
+                if (!(in >> magic >> owner_word >> owner_tag >> owner >> gen_tag >> gen >> state)
+                        || magic != "MLD1" || owner_word != "OWNER" || owner_tag != "AT"
+                        || gen_tag != "gen"
+                        || !record_decimal(gen, generation)
+                        || (state != "ACTIVE" && state != "FENCED")
+                        || (owner != "-" && !record_identifier(owner)))
+                    return ownership({}, "unexpected");
+                return ownership({owner == "-" ? "" : owner, generation,
+                    state == "FENCED", true}, {});
+            }
+            if (payload.starts_with("MLD1 ERR ")) return ownership({}, payload.substr(9));
+            if (payload.starts_with("MLS1")) return ownership({}, "refused");
+            return ownership({}, "unexpected");
         }
         // MLD1 SUBMIT / MLD1 FENCE: the success verdict is all the caller
         // needs (the echoed generation and sequence are its own frame's), the
@@ -226,11 +275,19 @@ private:
         channel_->close();
         write_answer_(ok, std::move(reason));
     }
+    void ownership(Ownership facts, std::string reason) {
+        if (done_) return;
+        done_ = true;
+        timer_.cancel();
+        channel_->close();
+        ownership_answer_(std::move(facts), std::move(reason));
+    }
     // Every refusal that is not a protocol verdict — no leg, a refused
     // handshake, a deadline — is delivered to whichever question was asked.
     void fail(std::string reason) {
         if (kind_ == Kind::Load) return answer({}, std::move(reason));
         if (kind_ == Kind::Grant) return grant_answer(0, std::move(reason));
+        if (kind_ == Kind::Ownership) return ownership({}, std::move(reason));
         return write_answer(false, std::move(reason));
     }
     tcp::endpoint endpoint_;
@@ -241,6 +298,7 @@ private:
     Answer answer_;
     GrantAnswer grant_answer_;
     WriteAnswer write_answer_;
+    OwnershipAnswer ownership_answer_;
     bool done_ = false;
 };
 }
