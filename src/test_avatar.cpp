@@ -1309,6 +1309,9 @@ void avatar_transfer_destination() {
 }
 )avatar");
     write(c.path("echo.lua"), echo);
+    // The transfer names room-1 as the landed avatar's scene, so the
+    // destination declares it a resident instance.
+    write(c.path("room.map"), "rooms: 1\n");
     const auto registry = port(), data_port = port(), dest_port = port();
     const auto journal = c.path("dest-transfer.sqlite");
     c.node("coordinator", registry, {"--journal", journal.string()});
@@ -1318,7 +1321,8 @@ void avatar_transfer_destination() {
     // runtime, and with --data + --coordinator it polls for the gaps it awaits.
     auto& destination = c.node("crossServer", dest_port, {"--script", script.string(),
         "--data", endpoint(data_port), "--coordinator", endpoint(registry),
-        "--scope", "arena2", "--service-name", "xs-b"});
+        "--scope", "arena2", "--service-name", "xs-b",
+        "--scene-def", "room=" + c.path("room.map").string(), "--scene", "room-1=room"});
     const auto send_frame = [](RawSocket& raw, std::string_view payload) {
         std::string frame(4, '\0');
         auto length = static_cast<std::uint32_t>(payload.size());
@@ -1446,6 +1450,9 @@ return {
 }
 )avatar");
     write(c.path("echo.lua"), echo);
+    // The transfer names room-1 as the landed avatar's scene, so the
+    // destination declares it a resident instance.
+    write(c.path("room.map"), "rooms: 1\n");
     const auto registry = port(), data_port = port(), source_port = port(), dest_port = port();
     const auto journal = c.path("full-transfer.sqlite");
     c.node("coordinator", registry, {"--journal", journal.string()});
@@ -1457,7 +1464,8 @@ return {
     auto& destination = c.node("crossServer", dest_port,
         {"--script", c.path("transfer_in.lua").string(),
         "--data", endpoint(data_port), "--coordinator", endpoint(registry),
-        "--scope", "arena2", "--service-name", "xs-b"});
+        "--scope", "arena2", "--service-name", "xs-b",
+        "--scene-def", "room=" + c.path("room.map").string(), "--scene", "room-1=room"});
     const auto send_frame = [](RawSocket& raw, std::string_view payload) {
         std::string frame(4, '\0');
         auto length = static_cast<std::uint32_t>(payload.size());
@@ -1582,8 +1590,15 @@ return {
   avatar_detach = function(context, avatar) note("detach:" .. avatar.name) end,
 }
 )avatar");
+    // The switch destinations are real resident instances on the node: one
+    // definition's file, three instances prepared from it, so the entry gate
+    // accepts the switch into a ready scene.
+    const auto room_map = c.path("room.map");
+    write(room_map, "rooms: 3\n");
     const auto listen = port();
-    c.node("crossServer", listen, {"--script", script.string()});
+    c.node("crossServer", listen,
+           {"--script", script.string(), "--scene-def", "room=" + room_map.string(),
+            "--scene", "room-1=room", "--scene", "room-2=room", "--scene", "room-3=room"});
     // A runtimeless host: the API is registered, so the call answers the
     // disabled reason instead of failing the script.
     const auto disabled_script = c.path("avatar_scene_runtimeless.lua");
@@ -1631,8 +1646,13 @@ return {
     {
         RawSocket raw(listen);
         equal(join(raw, "hero"), "MLC1 OK 1");
-        send_frame(raw, "switch");
-        equal(read_frame(raw), "switched:OK:room-2");
+        // The resident instances ready on the node's first ticks; the entry
+        // gate refuses a not-ready destination, so the switch is retried until
+        // room-2 accepts.
+        eventually([&] {
+            send_frame(raw, "switch");
+            return read_frame(raw) == "switched:OK:room-2";
+        }, 5s, "the scene switch did not move the avatar to room-2");
         send_frame(raw, "read");
         const auto seen = read_frame(raw);
         require(has(seen, "load:hero") && has(seen, "enter:hero"),
@@ -1674,6 +1694,121 @@ return {
     }
     std::cout << "avatar.scene.switch: active avatar keeps state, only the scene reference "
         "moves -- no save, no reload; non-active and runtimeless hosts refuse [PASS]\n";
+}
+
+// The serving-path wiring of docs/scene-lifecycle.md on a real node: the
+// resident instances prepare from their definition's file and become ready,
+// a switched avatar becomes a participant of the new instance and leaves the
+// old one (the tick's reconciliation against held_scenes), a not-ready or
+// absent instance refuses entry, and an avatar that closes (grace sweep) or a
+// SIGHUP retirement leaves its instance while the instances themselves stay
+// resident. The Lua state read exposes the serving facts.
+void scene_serving() {
+    Context c;
+    const auto script = c.path("scene_serving.lua");
+    write(script, R"avatar(return {
+  message = function(payload, ctx)
+    if payload == "state" then
+      local word, count = mistlane.scene.state("room-1")
+      local other, other_count = mistlane.scene.state("room-2")
+      local absent = mistlane.scene.state("ghost")
+      return "state:" .. tostring(word) .. ":" .. tostring(count)
+        .. "|" .. tostring(other) .. ":" .. tostring(other_count)
+        .. "|" .. tostring(absent)
+    end
+    if payload == "enter-room-1" then
+      local ok, reason = mistlane.scene.switch(ctx.realm, ctx.character, "room-1")
+      if not ok then return "switched:ERR:" .. tostring(reason) end
+      return "switched:OK"
+    end
+    if payload == "switch" then
+      local ok, reason = mistlane.scene.switch(ctx.realm, ctx.character, "room-2")
+      if not ok then return "switched:ERR:" .. tostring(reason) end
+      return "switched:OK"
+    end
+    if payload == "switch-absent" then
+      local ok, reason = mistlane.scene.switch(ctx.realm, ctx.character, "ghost")
+      if not ok then return "switched:ERR:" .. tostring(reason) end
+      return "switched:OK"
+    end
+    return payload
+  end,
+  avatar_load = function(context, state)
+    return { name = context.character }
+  end,
+  avatar_enter = function(context, avatar) return true end,
+  avatar_save = function(context, avatar) return true end,
+}
+)avatar");
+    // One definition file, two resident instances: the digest is pinned at
+    // startup and the load resolves on the node's first ticks.
+    write(c.path("serving.map"), "rooms: 2\n");
+    const auto listen = port();
+    auto& node = c.node("crossServer", listen,
+        {"--script", script.string(), "--scene-def", "room=" + c.path("serving.map").string(),
+         "--scene", "room-1=room", "--scene", "room-2=room"});
+    const auto send_frame = [](RawSocket& raw, std::string_view payload) {
+        std::string frame(4, '\0');
+        auto length = static_cast<std::uint32_t>(payload.size());
+        for (int i = 3; i >= 0; --i) { frame[i] = static_cast<char>(length & 255); length >>= 8; }
+        raw.send(frame+std::string(payload));
+    };
+    const auto read_frame = [](RawSocket& raw) {
+        std::size_t length = 0;
+        for (unsigned char ch : raw.receive(4)) length = (length << 8) | ch;
+        return raw.receive(length);
+    };
+    const auto join = [&](RawSocket& raw, std::string_view character) {
+        send_frame(raw, "MLC1 1 home g r1 ch " + std::string(character) + " gen 5 ret home g r1");
+        return read_frame(raw);
+    };
+    const auto reply = [&](RawSocket& raw, std::string_view payload) {
+        send_frame(raw, payload);
+        return read_frame(raw);
+    };
+
+    // Business frames need a join, so a persistent probe session (its avatar
+    // holds no scene) reads the serving state while the avatar under test
+    // lives on its own session.
+    RawSocket probe(listen);
+    equal(join(probe, "probe"), "MLC1 OK 1");
+    // The load resolves without any participant: both instances go ready and
+    // stay resident; the absent name has no state at all.
+    eventually([&] { return reply(probe, "state") == "state:ready:0|ready:0|nil"; },
+               5s, "the resident instances never prepared to ready");
+    // A joined avatar names room-1 (the switch is the only scene-setter), the
+    // tick's reconciliation enters it, and a switch to room-2 moves the
+    // participant to the new instance and empties the old one.
+    {
+        RawSocket raw(listen);
+        equal(join(raw, "hero"), "MLC1 OK 1");
+        equal(reply(raw, "enter-room-1"), "switched:OK");
+        eventually([&] { return reply(probe, "state") == "state:ready:1|ready:0|nil"; },
+                   5s, "the avatar never entered room-1");
+        equal(reply(raw, "switch"), "switched:OK");
+        eventually([&] { return reply(probe, "state") == "state:ready:0|ready:1|nil"; },
+                   5s, "the switch did not move the participant from room-1 to room-2");
+        // An absent name refuses the switch without touching the reference.
+        equal(reply(raw, "switch-absent"), "switched:ERR:no such scene");
+        equal(reply(probe, "state"), "state:ready:0|ready:1|nil");
+        // The disconnect suspends the avatar but it still holds room-2: only a
+        // closed avatar leaves its instance, so the participant stays while
+        // the grace window runs.
+    }
+    eventually([&] { return reply(probe, "state") == "state:ready:0|ready:1|nil"; },
+               5s, "a suspended avatar lost its scene participation");
+    // A reload retires the VM's avatars; the instances survive as empty
+    // residents (a node is not a scene lifecycle owner).
+    node.signal(SIGHUP);
+    node.ready("script reloaded");
+    RawSocket reconnected(listen);
+    equal(join(reconnected, "probe"), "MLC1 OK 1");
+    eventually([&] { return reply(reconnected, "state") == "state:ready:0|ready:0|nil"; },
+               5s, "the SIGHUP retirement did not leave the instance");
+    node.signal(SIGTERM);
+    require(node.wait() == 0, "scene serving node graceful shutdown failed");
+    std::cout << "scene.serving: resident instances load and host avatar participants; "
+        "switch and retirement reconcile membership [PASS]\n";
 }
 
 // The scene lifecycle model of docs/scene-lifecycle.md: the map-definition
@@ -1775,6 +1910,14 @@ void scene_lifecycle() {
                 "a resolved reference did not land the instance ready");
         require(scenes.enter("room-1", 1) && scenes.enter("room-1", 2), "a ready instance refused entry");
         require(scenes.participants("room-1") == 2, "the participants were not recorded");
+        // The serving-wiring accessors are copies: the host iterates the
+        // registered names and reads each participant set for reconciliation.
+        const auto names = scenes.instance_names();
+        require(names.size() == 1 && names[0] == "room-1", "the instance names were not exposed");
+        const auto participants = scenes.participants_of("room-1");
+        require(participants.size() == 2 && participants[0] == 1 && participants[1] == 2,
+                "the participant set was not exposed for reconciliation");
+        require(scenes.participants_of("ghost").empty(), "an absent instance exposed participants");
         require(!scenes.create("room-1", "town", "d1", 100), "a duplicate instance name was accepted");
         // Entering an instance on a process that already holds the definition
         // ready loads nothing: the second instance resolves immediately.
