@@ -51,7 +51,7 @@ apiServer 已实现且保持现状；本节记录其契约边界。
 | 传输 | 默认 HTTP/HTTPS；按现有监听模型可选 WS/WSS message 监听 |
 | 对端 | 入向：平台/运营系统。它不在玩家路径上，也不得成为隐蔽的游戏消息路由器 |
 | Lua 面 | `http(request)` 带 `before_request`/`after_request`/`on_error` 钩子；升级的监听上有 WS 生命周期钩子 |
-| 身份 | 当前为可信网络；`MLS1` 不适用于 HTTP。平台回调认证已定为类型化 `MLA1` 契约（规范字节 + `HMAC-SHA256` + 防重放窗，[协议分析](./protocol-analysis.md#external-api-surface-first-slice)），并已作为原生 `POST /mla1` 拦截接通 HTTP 栈，凭据仅由环境变量注入；轮换/撤销已决定并测试（凭据行可选 `valid_until`）；`--journal FILE` 已接通持久受理后端（`DURABLE` 只在 SQLite 提交后报告，重启恢复），`--data` 已接线归属事实来源（一条只读 `MLD1 OWNERSHIP` 腿；来源缺席或不可达时答 `NOT_FOUND`，绝不编造 owner） |
+| 身份 | 当前为可信网络；`MLS1` 不适用于 HTTP。平台回调认证已定为类型化 `MLA1` 契约（规范字节 + `HMAC-SHA256` + 防重放窗，[协议分析](./protocol-analysis.md#external-api-surface-first-slice)），并已作为原生 `POST /mla1` 拦截接通 HTTP 栈，凭据仅由环境变量注入；轮换/撤销已决定并测试（凭据行可选 `valid_until`）；`--journal FILE` 已接通持久受理后端（`DURABLE` 只在 SQLite 提交后报告，重启恢复），`--data` 已接线归属事实来源（一条只读 `MLD1 OWNERSHIP` 腿；来源缺席或不可达时答 `NOT_FOUND`，绝不编造 owner）。回调类与多监听验收已钉住（api.callback：HTTP 面上返回后 `mistlane.data.load` 回调、每个监听上带签名的 `/mla1` 拦截与 Lua 路由、跨监听共享的受理去重表） |
 | 幂等 | 类型化受理语义已定：`(audience, principal, realm, character, idempotency_key)` 的 create-or-read，区分 `Inserted`/`Existing`/`Conflict`，附只读归属查询。在线处理器仍是请求作用域（未接线）；持久受理后端已按 `--journal FILE` 接通 |
 | 寻址 | 触达玩家走角色的归属服务，绝不固化进程地址；apiServer 没有注册表成员身份，也不做承载决策 |
 
