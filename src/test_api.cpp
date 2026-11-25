@@ -945,6 +945,119 @@ void api_ownership_source() {
     std::cout << "api.ownership.source: signed OWNER asks read the real lease/fence "
         "facts from --data, absent or unreachable sources fail closed [PASS]\n";
 }
+// The apiServer's callback-class and multi-listener acceptance: one apiServer
+// serves the same script face on two http listeners, and an HTTP handler asks
+// the home data leg through mistlane.data.load -- the answer cannot ride the
+// HTTP response (the leg is a fresh connection and the callback fires after
+// the handler returned), so the script stashes it where a later request reads
+// it. Pins the callback-after-return shape with the error-first answers (an
+// absent participant is EMPTY, a node without --data answers disabled), and
+// that the signed /mla1 intercept and Lua routing answer on EVERY listener,
+// with one acceptance dedup table shared across them.
+void api_callback() {
+    Context c;
+    write(c.path("echo.lua"), echo);
+    write(c.path("cb.lua"), R"cb(local state = {}
+return {
+  http = function(r)
+    local realm, character = r.path:match('^/load/(%w+)/(%w+)$')
+    if realm then
+      mistlane.data.load(realm, character, function(err, record)
+        state[realm..':'..character] = err and ('ERR '..err)
+          or (record and ('REC '..record.generation..' '..record.sequence..' '..record.payload) or 'EMPTY')
+      end)
+      return {status=202, body='asked'}
+    end
+    local asked, name = r.path:match('^/result/(%w+)/(%w+)$')
+    if asked then return {status=200, body=state[asked..':'..name] or 'PENDING'} end
+    return {status=404, body='missing'}
+  end,
+}
+)cb");
+    ApiSecret secret{};
+    for (auto& byte : secret) byte = 0x37;
+    static const char digits[] = "0123456789abcdef";
+    std::string hex;
+    for (unsigned char byte : secret) { hex += digits[byte/16]; hex += digits[byte%16]; }
+    ScopedEnv audience("MISTLANE_MLA1_AUDIENCE", "platform");
+    ScopedEnv credentials("MISTLANE_MLA1_CREDENTIAL", "ops-callback:key-2026:"+hex+":realm1");
+    const auto data = port(), primary = port(), second = port(), bare = port();
+    c.node("data", data, {"--script", c.path("echo.lua").string(),
+        "--journal", c.path("cb.sqlite").string()});
+    equal(tcp(data)->request("MLD1 SUBMIT alpha hero gen 1 seq 1 hp=10"),
+        "MLD1 ACK durable alpha hero gen 1 seq 1");
+    auto& api = c.node("apiServer", primary, {"--script", c.path("cb.lua").string(),
+        "--data", endpoint(data),
+        "--listener", "http://127.0.0.1:"+std::to_string(second)});
+    api.ready("ready apiServer 127.0.0.1:"+std::to_string(second));
+    const auto one = "http://"+endpoint(primary), two = "http://"+endpoint(second);
+    // The handler answers 202 before the callback can have answered: the ask
+    // rides a fresh connection the script cannot synchronously await.
+    auto sent = http(one+"/load/alpha/hero");
+    require(sent.status == 202, "the load ask did not answer before the callback");
+    equal(sent.body, "asked");
+    // The callback fires after the handler returned; the answer becomes
+    // visible to a later request -- read from the OTHER listener.
+    eventually([&] { return http(two+"/result/alpha/hero").body == "REC 1 1 hp=10"; },
+        5s, "the post-return callback never recorded the load answer");
+    // An absent participant is the normal first login, not a refusal.
+    sent = http(two+"/load/alpha/novice");
+    require(sent.status == 202, "the absent-record ask did not answer 202");
+    eventually([&] { return http(one+"/result/alpha/novice").body == "EMPTY"; },
+        5s, "the absent record did not answer EMPTY");
+    // Lua routing answers on every listener.
+    equal(http(one+"/nowhere", "POST", "ping").body, "missing");
+    equal(http(two+"/nowhere", "POST", "ping").body, "missing");
+    // The signed intercept rides both listeners and the acceptance dedup
+    // table is shared across them: INSERTED on one, EXISTING on the other.
+    const auto now = static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::seconds>(
+        std::chrono::system_clock::now().time_since_epoch()).count());
+    unsigned counter = 0;
+    const auto nonce = [&counter] {
+        char digits[33];
+        std::snprintf(digits, sizeof digits, "%032x", ++counter);
+        return std::string(digits);
+    };
+    const auto accept_body = [&](const char* idempotency) {
+        ApiRequest request;
+        request.operation = ApiOperation::Accept;
+        request.audience = "platform";
+        request.principal = "ops-callback";
+        request.key_id = "key-2026";
+        request.timestamp = now;
+        request.nonce = nonce();
+        request.character = {"realm1", "char42"};
+        request.idempotency_key = idempotency;
+        request.payload = "grant";
+        request.signature = api_sign(request, secret);
+        return api_canonical(request) + std::string(request.signature.begin(), request.signature.end());
+    };
+    const auto reply_body = [](std::initializer_list<std::string_view> values) {
+        std::string bytes = "MLA1";
+        for (const auto& value : values) {
+            const auto size = static_cast<std::uint32_t>(value.size());
+            for (int shift : {24, 16, 8, 0}) bytes.push_back(static_cast<char>((size >> shift) & 255));
+            bytes.append(value);
+        }
+        return bytes;
+    };
+    sent = http(one+"/mla1", "POST", accept_body("cb-1"));
+    require(sent.status == 200, "a signed acceptance was not 200 on the primary listener");
+    equal(sent.body, reply_body({"OK", "INSERTED", "VOLATILE", "grant", ""}));
+    sent = http(two+"/mla1", "POST", accept_body("cb-1"));
+    require(sent.status == 200, "a retried acceptance was not 200 on the second listener");
+    equal(sent.body, reply_body({"OK", "EXISTING", "VOLATILE", "grant", ""}));
+    // A node without --data answers the disabled word through the same
+    // callback shape instead of failing the script.
+    auto& lonely = c.node("apiServer", bare, {"--script", c.path("cb.lua").string()});
+    lonely.ready();
+    require(http("http://"+endpoint(bare)+"/load/alpha/hero").status == 202,
+        "the bare ask did not answer 202");
+    eventually([&] { return http("http://"+endpoint(bare)+"/result/alpha/hero").body == "ERR disabled"; },
+        5s, "a bare apiServer did not answer the disabled word");
+    std::cout << "api.callback: the post-return callback records the home-data answer, "
+        "both listeners share the script and dedup faces [PASS]\n";
+}
 void login_ticket_wire() {
     Context c;
     write(c.path("login.lua"),

@@ -83,6 +83,7 @@ void api_acceptance();
 void api_sqlite_acceptance();
 void api_ownership();
 void api_ownership_source();
+void api_callback();
 void api_wire();
 void login_ticket();
 void api_http();
@@ -240,6 +241,7 @@ int run_tests(int argc, char** argv) {
         {"api.acceptance.sqlite","api",test::api_sqlite_acceptance},
         {"api.ownership","api",test::api_ownership},
         {"api.ownership.source","api",test::api_ownership_source},
+        {"api.callback","api",test::api_callback},
         {"api.wire","api",test::api_wire},
         {"login.ticket","api",test::login_ticket},
         {"api.http","api",test::api_http},
