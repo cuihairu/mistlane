@@ -1,6 +1,6 @@
 # 场景生命周期：地图定义、空间缓存与实例
 
-状态：已定设计（2026-10-19）。当前框架只有连接、帧协议和 Lua 消息执行，没有场景、地图或实体对象——本页不改变任何 CLI 行为；生命周期模型已存在（include/mistlane/scene_runtime.hpp，由 scene.lifecycle 模型测试钉住），而服务路径接线——真实加载器、节点接线、真正承载 Avatar 的实例——尚未实现，故下面描述的运行行为均未经验证。本页回答[模型页](./player-scene-model.md)留下的设计空白（"进程内共享缓存的准备、加载/失败、引用与释放规则"），并为后续 coordinator/gameServer 迁移切片提供前置项；职责边界仍是[进程职责页](./process-roles.md)。跨服参与的所有权与唯一写入权归[跨服回传与唯一写入权协议](./cross-return-protocol.md)；旧证据与缺口见[gameServer 能力评估](./gameserver-capabilities.md)与模型页。
+状态：已定设计（2026-10-19）。生命周期模型已存在（include/mistlane/scene_runtime.hpp，由 scene.lifecycle 模型测试钉住），其服务路径已接到 gameServer/crossServer 节点（scene.serving）：启动时从真实文件注册定义（`--scene-def NAME=FILE`）、常驻实例（`--scene NAME=DEF`）配摘要校验的加载器，以及按 tick 与运行中 Avatar 对齐的成员关系；CLI 开关列在[指南](./guide.md)中。开放式的 Lua 实例创建/关闭接口与完整运行期验收仍是后续切片，下文未经测试的行为均未宣称已验证。本页回答[模型页](./player-scene-model.md)留下的设计空白（"进程内共享缓存的准备、加载/失败、引用与释放规则"），并为后续 coordinator/gameServer 迁移切片提供前置项；职责边界仍是[进程职责页](./process-roles.md)。跨服参与的所有权与唯一写入权归[跨服回传与唯一写入权协议](./cross-return-protocol.md)；旧证据与缺口见[gameServer 能力评估](./gameserver-capabilities.md)与模型页。
 
 ## 三层，各一条规则
 
@@ -107,6 +107,6 @@ stateDiagram-v2
 
 ## 验证
 
-生命周期模型已实现并有模型测试（scene.lifecycle）：定义注册幂等、缓存的加载/完成/失败/逐出纪律（无引用的 Loading 条目存活到 resolve 或 fail 为止；resolve 在引用归零时完成则立即逐出）、逐请求失败规则（一次失败加载不污染已就绪条目）、经注入时钟的准备预算与进入纪律（只有 ready 实例接受进入；close 拒绝有参与者的实例；failed 实例被回收而非关闭）均被钉住。服务路径——真实加载器、节点接线、真正承载 Avatar 的实例——尚未实现，故本页运行验收仍无，验证记录不得据此声称框架中的场景行为。
+生命周期模型已实现并有模型测试（scene.lifecycle）：定义注册幂等、缓存的加载/完成/失败/逐出纪律（无引用的 Loading 条目存活到 resolve 或 fail 为止；resolve 在引用归零时完成则立即逐出）、逐请求失败规则（一次失败加载不污染已就绪条目）、经注入时钟的准备预算与进入纪律（只有 ready 实例接受进入；close 拒绝有参与者的实例；failed 实例被回收而非关闭）均被钉住。服务路径已接到 gameServer/crossServer 节点上（scene.serving 测试）：地图定义在启动时按 `--scene-def NAME=FILE` 文件注册，常驻实例按 `--scene NAME=DEF` 在启动时创建，并从其定义的真实源文件准备——摘要在启动时钉住，加载器每个 tick 重读文件并校验摘要，因此文件变了就是新的摘要、绝不静默改写——一个 tick 泵送加载、预算轮次与回收，随后把每个实例的参与者与运行中 Avatar 的 `held_scenes()` 对齐：一套机制覆盖所有进入与离开，任何退出路径都不需要自己的场景离开。切换只在目标实例就绪时进入它（缺失或未就绪的名字以 `no such scene` / `scene is <state>` 拒绝），对账在切换时移动参与者，suspended 或 transferring 的 Avatar 保持自己的场景（只有 closed 的失去它），SIGHUP 退役清空实例而实例保持常驻——节点不是场景生命周期属主。状态读取 `mistlane.scene.state` 暴露状态词与参与者数量；Lua 侧实例开/关与运行期验收仍是后续切片。
 
 相关：[玩家、场景与跨服模型](./player-scene-model.md)、[gameServer 能力评估](./gameserver-capabilities.md)、[跨服回传与唯一写入权协议](./cross-return-protocol.md)、[进程职责与命名](./process-roles.md)。
