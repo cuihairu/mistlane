@@ -63,6 +63,8 @@ stateDiagram-v2
 
 这些钩子是现有模块契约的补充；`message`/`http` 职责不变。钩子名与签名已在代码中固定：LuaService 实现本钩子面，avatar.lua 模型测试钉住参数封送、avatar 句柄回传与失败即拒。`avatar_load` 是准入开关——脚本未声明它则不承载任何 Avatar，节点也不驱动生命周期。脚本未声明的钩子不是错误：该步骤无事可做；格式错误或抛错的钩子失败即拒。框架把 `avatar_load` 返回的表作为 `avatar` 参数传给后续每个钩子，因此同一个脚本侧 Avatar 到达每一个钩子。
 
+每个钩子的 `context` 携带 `realm`、`character`、`generation`——以及 `session`，运行时已绑定到该 Avatar 的可信会话 id，绝不是客户端自报的字段。未绑定时为 0（归属路径上的 `avatar_load`、刚落地的 transfer-in、断开后的悬挂）；从归属路径的 `avatar_enter` 起它就是加入的那个会话——运行时在入口钩子运行前完成绑定，这使 `avatar_enter` 成为 login/home 绑定时刻：承载合约实体的脚本在 `avatar_load` 里生成其按角色的实体、并在此处归属会话（`mistlane.entity.set_owner(scope, type, incarnation, entity_id, context.session)`），于是加入会话的第一个 owner 调用——先于任何其它业务帧——即按 `caller="owner"` 分派（由 entity.owner.home 钉住）。宽限内重连不驱动任何钩子，故重连会话从旧绑定出发；tick 是刷新点（重复的 `set_owner` 幂等）。
+
 | 钩子 | 何时调用 | 参数 → 返回 | 出错或超时 |
 |---|---|---|---|
 | `avatar_load` | 本宿主从加载的记录创建 Avatar | `(context, state)` → avatar 表；`state` 是归属加入从其数据端点取到的加载记录（`MLD1 STATE` 载荷，不透明字节串），首次登录（`MLD1 EMPTY`）为 nil | 加载失败：不发布 Avatar，带原因拒绝进入 |
