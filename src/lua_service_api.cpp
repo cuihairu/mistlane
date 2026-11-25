@@ -898,11 +898,16 @@ void LuaService::websocket_close(std::uint64_t id) {
 // avatar handle is the registry ref of the table avatar_load returned, so the
 // same script-side avatar reaches every later hook.
 namespace {
-void push_avatar_context(lua_State* l, const AvatarKey& key) {
-    lua_createtable(l, 0, 3);
+void push_avatar_context(lua_State* l, const AvatarKey& key, std::uint64_t session) {
+    lua_createtable(l, 0, 4);
     lua_pushlstring(l, key.realm.data(), key.realm.size()); lua_setfield(l, -2, "realm");
     lua_pushlstring(l, key.character.data(), key.character.size()); lua_setfield(l, -2, "character");
     lua_pushinteger(l, static_cast<lua_Integer>(key.generation)); lua_setfield(l, -2, "generation");
+    // The trusted session the runtime has bound to this avatar — never a
+    // client-reported field. Zero while unbound (avatar_load on the home path,
+    // a landed transfer-in, a detached suspension); from avatar_enter on it is
+    // the joined session, which is the login/home binding moment.
+    lua_pushinteger(l, static_cast<lua_Integer>(session)); lua_setfield(l, -2, "session");
 }
 void push_avatar_ref(lua_State* l, const std::string& ref) {
     // The runtime stores "r" plus the registry ref of the avatar table. A ref
@@ -935,7 +940,7 @@ LuaService::AvatarHookOutcome LuaService::avatar_hook(const char* name, const Av
         out.raised = true;
         return out;
     }
-    push_avatar_context(state_, key);
+    push_avatar_context(state_, key, avatar_enabled_ ? avatar_runtime_.session_of(key) : 0);
     if (with_avatar) push_avatar_ref(state_, ref);
     if (!reason.empty()) lua_pushlstring(state_, reason.data(), reason.size());
     int arguments = 1 + (with_avatar ? 1 : 0) + (reason.empty() ? 0 : 1);

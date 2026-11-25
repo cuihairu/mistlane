@@ -239,11 +239,17 @@ public:
         switch (e->state) {
             case AvatarState::Loading: {
                 std::string reason;
+                // The binding lands before the edge hook: avatar_enter is the
+                // login/home binding moment, and its context.session must be
+                // the trusted session being bound. A refusal rolls the whole
+                // edge back — the session unbinds with the close.
+                bind(e, session_id);
                 if (!hooks_.on_enter(key, e->ref, reason)) {
+                    e->bound = false;
+                    e->session = 0;
                     e->state = AvatarState::Closed;
                     return {AvatarError::EnterRefused, reason.empty() ? "avatar_enter refused" : reason};
                 }
-                bind(e, session_id);
                 e->state = AvatarState::Active;
                 return {AvatarError::Ok, ""};
             }
