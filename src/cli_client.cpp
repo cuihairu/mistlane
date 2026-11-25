@@ -122,6 +122,19 @@ struct SocketState {
     std::mutex mutex;
     std::shared_ptr<Pending> pending;
 };
+// drogon 1.9.14's WebSocketClientImpl::stop() touches the live connection
+// from the caller's thread while the loop thread may be tearing that same
+// connection down — a pure-virtual call into a half-destroyed object when
+// the peer closed first. Serialize stop onto the client's own loop thread.
+void stop_ws_client(trantor::EventLoopThread& loop, drogon::WebSocketClient& client) {
+    std::promise<void> done;
+    auto stopped = done.get_future();
+    loop.getLoop()->queueInLoop([&client, &done] {
+        try { client.stop(); } catch (...) {}
+        done.set_value();
+    });
+    stopped.wait();
+}
 class WsClient final : public Client {
 public:
     WsClient(const Url& url, const ClientOptions& options)
@@ -152,9 +165,9 @@ public:
             else ready->fail("WebSocket handshake/TLS failed");
         });
         try { (void)await(future); }
-        catch (...) { client_->stop(); throw; }
+        catch (...) { stop_ws_client(loop_, *client_); throw; }
     }
-    ~WsClient() override { client_->stop(); }
+    ~WsClient() override { stop_ws_client(loop_, *client_); }
     std::string request(std::string_view payload, unsigned timeout_ms) override {
         if (payload.size() > max_frame) throw std::invalid_argument("payload exceeds 1 MiB");
         auto pending = std::make_shared<Pending>();
