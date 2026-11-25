@@ -549,6 +549,176 @@ return service)");
     std::cout << "entity.owner.bind: an unattributed session stays FORBIDDEN [PASS]\n";
 }
 
+// The production login/home binding caller (docs/entity-contract.md): the
+// avatar host's admission edge attributes the joined session. avatar_enter's
+// context.session is the trusted session the runtime just bound (the join is
+// the entry), so a script hosting entities spawns and binds there, and the
+// joined session's first owner call — before any other business frame —
+// already dispatches as owner. The ticketed MLC1 join is the normal-login
+// admission the login composes; the entry composition itself stays pinned by
+// login.entry. A reattach within grace has no hook, so the reconnected
+// session starts FORBIDDEN until the tick's idempotent refresh re-binds it.
+void entity_owner_home() {
+    const std::string xml =
+        "<Contracts><Entity name=\"Avatar\" id=\"1\"><ServerMethods>"
+        "<Method name=\"claim\" id=\"1\" mode=\"request\" caller=\"owner\">"
+        "<Returns><Field name=\"ok\" id=\"0\" type=\"UINT16\"/></Returns></Method>"
+        "</ServerMethods></Entity></Contracts>";
+    Context c;
+    const auto def = c.path("avatar.def");
+    write(def, xml);
+    const auto login_script = c.path("login.lua");
+    write(login_script,
+        "return {message=function(p)\n"
+        " local realm, character, instance, generation, expires = p:match('issue (%S+) (%S+) (%S+) (%S+) (%S+)')\n"
+        " if not realm then return 'usage: issue realm character instance generation expires' end\n"
+        " local ticket, err = mistlane.ticket.issue(realm, character, instance, tonumber(generation), tonumber(expires))\n"
+        " if not ticket then return 'ERR '..err end\n"
+        " return ticket\n"
+        "end}");
+    const auto host_script = c.path("host.lua");
+    write(host_script, R"(local service = {}
+local ids = { hero = 42, guest = 43 }
+service.entities = {
+    Avatar = {
+        claim = function(args, ctx)
+            return { ok = (ctx.caller_kind == "owner") and 7 or 0 }
+        end,
+    },
+}
+function service.avatar_load(context)
+    return { name = context.character }
+end
+function service.avatar_enter(context)
+    -- The login/home binding moment: context.session is the trusted session
+    -- the admission just bound, never a client-reported field.
+    local id = ids[context.character]
+    mistlane.entity.spawn(1, 1, 3, id)
+    return mistlane.entity.set_owner(1, 1, 3, id, context.session)
+end
+function service.avatar_tick(context)
+    -- A reattach within grace drives no hook, so the tick refreshes the
+    -- binding (idempotent) and a reconnected session re-owns its entity.
+    local id = ids[context.character]
+    if id and context.session > 0 then
+        mistlane.entity.set_owner(1, 1, 3, id, context.session)
+    end
+end
+function service.message(payload) return nil end
+return service)");
+    ApiSecret secret{};
+    for (std::size_t i = 0; i < secret.size(); ++i) secret[i] = static_cast<unsigned char>(i*13+5);
+    static const char digits[] = "0123456789abcdef";
+    std::string hex;
+    for (unsigned char byte : secret) { hex += digits[byte/16]; hex += digits[byte%16]; }
+    const auto now = std::chrono::duration_cast<std::chrono::seconds>(
+        std::chrono::system_clock::now().time_since_epoch()).count();
+    EntityContract contract(xml);
+    SprotoCodec codec(contract);
+    const ContractMethod* claim = nullptr;
+    for (const auto& e : contract.entities())
+        for (const auto& m : e.server_methods)
+            if (m.name == "claim") claim = &m;
+    require(claim != nullptr, "test contract lost the claim method");
+    const auto login = port(), host = port();
+    {
+        ScopedEnv secrets("MISTLANE_TICKET_SECRETS", "alpha:"+hex);
+        c.node("login", login, {"--script", login_script.string()});
+        c.node("crossServer", host, {"--script", host_script.string(),
+            "--contract", def.string(), "--service-name", "xs-home"});
+    }
+    const auto issue = [&](const std::string& character) {
+        return tcp(login)->request("issue alpha "+character+" xs-home 7 "+std::to_string(now+120));
+    };
+    const auto send_frame = [](RawSocket& raw, const std::string& body) {
+        std::string header(4, '\0');
+        const auto length = static_cast<std::uint32_t>(body.size());
+        for (unsigned i = 0; i < 4; ++i) header[i] = static_cast<char>(length >> (24 - i*8));
+        raw.send(header + body);
+    };
+    const auto read_frame = [](RawSocket& raw) {
+        std::string header = raw.receive(4);
+        std::uint32_t length = 0;
+        for (unsigned i = 0; i < 4; ++i) length = length << 8 | static_cast<unsigned char>(header[i]);
+        return raw.receive(length);
+    };
+    const auto join_frame = [&](RawSocket& raw, const std::string& character, const std::string& ticket) {
+        send_frame(raw, "MLC1 1 alpha arena r1 ch "+character+" gen 7 ret alpha arena r1 tk "+ticket);
+    };
+    const auto call = [&](RawSocket& raw, std::uint64_t correlation, std::int64_t entity) {
+        send_frame(raw, "MLE1" + encode_entity_envelope({1, 1, 3, entity, kEntitySideServer,
+            static_cast<std::uint16_t>(claim->id), correlation, 0, 0, {}}));
+        return read_frame(raw);
+    };
+    const auto correlation_of = [](const std::string& body) {
+        require(body.size() >= 12, "reply frame too short");
+        std::uint64_t value = 0;
+        for (std::size_t i = 4; i < 12; ++i) value = value << 8 | static_cast<unsigned char>(body[i]);
+        return value;
+    };
+    const auto verdict_of = [&](const std::string& body, std::uint64_t correlation) {
+        require(correlation_of(body) == correlation, "the owner call lost its correlation");
+        require(body.size() >= 12 && body.starts_with("MLE1"), "expected an MLE1 reply frame");
+        const auto decoded = decode_entity_reply(std::string_view(body).substr(12));
+        require(decoded.has_value(), "reply body did not decode");
+        return *decoded;
+    };
+    const auto grants_owner = [&](const EntityReply& reply) {
+        if (reply.is_error) return false;
+        EntityValues values;
+        std::string reason;
+        return codec.decode_args(claim->returns, reply.payload, values, reason) && reason.empty()
+            && std::get<std::int64_t>(values.at("ok").data) == 7;
+    };
+
+    // The admission edge is the binding: the hero's first payload after the
+    // join reply is already an owner call on its own entity.
+    const auto ticket = issue("hero");
+    require(parse_entry_ticket(ticket).has_value(), "the login script failed to issue a ticket");
+    {
+        RawSocket hero(host);
+        join_frame(hero, "hero", ticket);
+        equal(read_frame(hero), "MLC1 OK 1");
+        const auto reply = verdict_of(call(hero, 77, 42), 77);
+        require(grants_owner(reply),
+            "the admission-bound session's first owner call did not dispatch as owner");
+        std::cout << "entity.owner.home: the home join's admission bound the session as owner [PASS]\n";
+
+        // A guest binds its own entity at its own admission; another
+        // character's entity stays out of its reach.
+        const auto guest_ticket = issue("guest");
+        require(parse_entry_ticket(guest_ticket).has_value(), "the guest ticket failed to issue");
+        RawSocket guest(host);
+        join_frame(guest, "guest", guest_ticket);
+        equal(read_frame(guest), "MLC1 OK 1");
+        const auto foreign = verdict_of(call(guest, 88, 42), 88);
+        require(foreign.is_error && foreign.error == EntityError::FORBIDDEN,
+            "another character's session was not FORBIDDEN the hero's entity");
+        require(grants_owner(verdict_of(call(guest, 89, 43), 89)),
+            "the guest's own admission-bound entity did not dispatch as owner");
+        std::cout << "entity.owner.home: each avatar owns only its own entity [PASS]\n";
+    }
+    // Reconnect within grace: the reattach drives no hook, so the new session
+    // starts FORBIDDEN on the stale binding and the tick's refresh re-owns it.
+    const auto fresh = issue("hero");
+    require(parse_entry_ticket(fresh).has_value() && fresh != ticket,
+        "the fresh hero ticket failed to issue");
+    RawSocket hero2(host);
+    join_frame(hero2, "hero", fresh);
+    equal(read_frame(hero2), "MLC1 OK 1");
+    const auto stale = verdict_of(call(hero2, 90, 42), 90);
+    require(stale.is_error && stale.error == EntityError::FORBIDDEN,
+        "the reattached session inherited the dead session's binding");
+    std::uint64_t attempt = 100;
+    eventually([&] {
+        const auto correlation = ++attempt; // sequenced before the call, not beside its ++
+        return grants_owner(verdict_of(call(hero2, correlation, 42), correlation));
+    }, 8s, "the tick never refreshed the reattached session's binding");
+    std::cout << "entity.owner.home: the tick refreshed the reattached session [PASS]\n";
+    require(!grants_owner(verdict_of(call(hero2, 91, 43), 91)),
+        "attribution leaked across entities after the refresh");
+}
+
 // Static entity host-routes on a multiplexing gateway (--entity-route): the
 // gateway fronts two contract hosts, and the entity the table routes to
 // upstream index 1 answers there even on a client session whose round-robin

@@ -36,6 +36,7 @@ void entity_transport_gateway();
 void entity_push();
 void entity_save_runtime();
 void entity_owner_bind();
+void entity_owner_home();
 void entity_route();
 void entity_route_dynamic();
 void entity_cross_correlation();
@@ -198,6 +199,7 @@ int run_tests(int argc, char** argv) {
         {"entity.save.periodic","contract",test::entity_save_periodic},
         {"entity.save.runtime","contract",test::entity_save_runtime},
         {"entity.owner.bind","contract",test::entity_owner_bind},
+        {"entity.owner.home","contract",test::entity_owner_home},
         {"entity.route","contract",test::entity_route},
         {"entity.route.dynamic","contract",test::entity_route_dynamic},
         {"entity.cross.correlation","contract",test::entity_cross_correlation},

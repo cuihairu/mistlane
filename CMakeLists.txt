@@ -87,7 +87,7 @@ if(BUILD_TESTING)
       entity.state.store
       entity.save.periodic
       entity.save.runtime
-      entity.owner.bind
+      entity.owner.bind entity.owner.home
       entity.route
       entity.cross.correlation
       avatar.lifecycle avatar.lua avatar.session avatar.home avatar.home.record avatar.return avatar.transfer.source avatar.transfer.destination avatar.transfer.full avatar.scene.switch scene.serving scene.lifecycle
