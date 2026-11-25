@@ -1,6 +1,6 @@
 # 跨服会话与租约生命周期
 
-状态：已定设计（2026-11-22）。crossServer 角色、MLC1 握手、准入配额与 PROBE1 就绪探测已存在；MLD1 记录/ACK 通路与发送端队列已实现；运行时租约权威与 Avatar 场景运行时尚未实现。除上述之外，本文内容均未实现、未验证。本文是台账 PL-4：跨服会话对象生命周期（创建/活跃/归还/异常终止，`transferring` 落定为 `visiting` 态面）/writer 租约管理面（租约表/心跳/接管/过期回收）/准入控制钩子（`onCrossVisitAdmit`）与过载降级序/事件钩子（`onCrossVisitStart`/`End`、`onLeaseTaken`/`Lost`）。必须与 MLD1 零冲突。机器可读形式：`contracts/cross-server-lifecycle.json`。
+状态：已定设计（2026-11-22）。crossServer 角色、MLC1 握手、准入配额与 PROBE1 就绪探测已存在；MLD1 记录/ACK 通路与发送端队列已实现；协调器协调的移交租约路径已端到端接线（avatar.transfer.source/.destination/.full、coordinator.migration.client），Avatar 场景运行时已在节点上承载 Avatar（scene.serving）。除上述之外，本文内容均未实现、未验证（离线接管/恢复场景与组合的正常登录验收仍为后续切片）。本文是台账 PL-4：跨服会话对象生命周期（创建/活跃/归还/异常终止，`transferring` 落定为 `visiting` 态面）/writer 租约管理面（租约表/心跳/接管/过期回收）/准入控制钩子（`onCrossVisitAdmit`）与过载降级序/事件钩子（`onCrossVisitStart`/`End`、`onLeaseTaken`/`Lost`）。必须与 MLD1 零冲突。机器可读形式：`contracts/cross-server-lifecycle.json`。
 跨语言页面：[English](../cross-server-lifecycle.md)。
 
 ## 它调和什么
@@ -134,6 +134,6 @@ sequenceDiagram
 
 - **机器可查：** `contracts/cross-server-lifecycle.json` 钉住 visiting 阶段、租约面、降级序、事件钩子、四路径与 MLD1 零冲突规则；fixture 断言这些不变量，漂移即测试失败。
 - **Mermaid：** 四张验收图可渲染；`docs:check` 覆盖可渲染性、桌面/移动、亮/暗与展开。
-- **运行时验收：** 部分——crossServer 角色、准入、PROBE1 与 MLD1 记录/ACK 通路已实现并验证（验证记录）；租约权威、Avatar 场景运行时与事件钩子未实现。
+- **运行时验收：** 部分——crossServer 角色、准入、PROBE1 与 MLD1 记录/ACK 通路已实现并验证（验证记录）；Avatar 事件钩子在 VM 中运行（avatar.lua、avatar.session），协调器协调的移交租约路径端到端驱动（avatar.transfer.source/.destination/.full、coordinator.migration.client），场景运行时在节点上承载 Avatar（scene.serving）——离线接管/恢复场景与组合的正常登录验收仍为后续切片。
 
 相关：[跨服回传与唯一写入权协议](./cross-return-protocol.md)、[跨服与过载保护](./cross-server.md)、[Avatar 全生命周期](./avatar-lifecycle.md)、[进程职责与命名](./process-roles.md)。

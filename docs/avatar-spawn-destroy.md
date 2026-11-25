@@ -180,8 +180,9 @@ sequenceDiagram
   drift fails the test.
 - **Mermaid:** the four acceptance diagrams render; `docs:check` covers renderability,
   desktop/mobile, light/dark and expansion.
-- **Runtime acceptance:** none today — no end-to-end Avatar runtime exists; the oracle model is
-  model-tested (avatar.lifecycle) but wiring is not.
+- **Runtime acceptance:** none today — the composed spawn paths are not driven end-to-end; the
+  model (avatar.lifecycle) and its wiring (session, transfer and scene faces) are implemented
+  and pinned (avatar.home, avatar.session, avatar.transfer.*, scene.serving).
 
 Related: [Avatar lifecycle](./avatar-lifecycle.md), [Avatar runtime](./avatar-runtime.md),
 [scene lifecycle](./scene-lifecycle.md), [cross return and single-writer protocol](./cross-return-protocol.md).

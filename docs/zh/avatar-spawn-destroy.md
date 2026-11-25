@@ -146,6 +146,6 @@ sequenceDiagram
 
 - **可机器校验：** `contracts/avatar-spawn-destroy.json` 钉住义务顺序、必填字段与默认值、四路径与失败补偿；夹具 `tests/test_avatar_contract.py`（ctest `mistlane_avatar_contract`）断言不变量（义务顺序、四路径、补偿覆盖、中途回收 never 规则），意外漂移即测试失败。
 - **Mermaid：** 四张验收图渲染；`docs:check` 覆盖可渲染、桌面/移动、明暗与展开。
-- **运行时验收：** 今天无——无端到端 Avatar 运行时；预言机模型已经模型测试（avatar.lifecycle），但接线尚未。
+- **运行时验收：** 今天无——组合的出生路径未端到端驱动；模型（avatar.lifecycle）及其接线（会话、移交与场景面）已实现并钉住（avatar.home、avatar.session、avatar.transfer.*、scene.serving）。
 
 相关：[Avatar 生命周期](./avatar-lifecycle.md)、[Avatar 运行时](./avatar-runtime.md)、[场景生命周期](./scene-lifecycle.md)、[跨服回传与唯一写入权协议](./cross-return-protocol.md)。

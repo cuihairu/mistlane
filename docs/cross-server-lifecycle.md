@@ -2,8 +2,11 @@
 
 Status: decided design (2026-11-22). The crossServer role, the MLC1 handshake, admission
 quotas and the PROBE1 readiness probe exist; the MLD1 record/ACK path and sender-side queue
-are implemented; the runtime lease authority and the Avatar scene runtime are not. Nothing
-below is implemented or validated beyond those. This page is the ledger's PL-4: the
+are implemented; the coordinator-coordinated transfer lease path is wired end-to-end
+(avatar.transfer.source/.destination/.full; coordinator.migration.client) and the Avatar scene runtime
+hosts avatars on the node (scene.serving). Nothing below is implemented or
+validated beyond those, except the offline takeover and recovery scenarios
+and the composed normal-login acceptance. This page is the ledger's PL-4: the
 cross-server session object lifecycle (create/active/return/abnormal termination, with
 `transferring` settling into the `visiting` state face), the writer lease management plane
 (lease table, heartbeat, takeover, expiry reclaim), the admission control hook

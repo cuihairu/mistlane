@@ -152,6 +152,6 @@ sequenceDiagram
 
 - **可机器校验：** `contracts/avatar-reconnect-cutover.json` 钉住子态、双泳道判定、三条重连路径、三层触碰顺序与失败补偿；夹具断言不变量，漂移即测试失败。
 - **Mermaid：** 四张验收图（三重连路径 + 日切）渲染；`docs:check` 覆盖可渲染、桌面/移动、明暗与展开。
-- **运行时验收：** 今天无——无端到端 Avatar 运行时；预言机模型已经模型测试（avatar.lifecycle），但接线尚未。
+- **运行时验收：** 今天无——组合的重连/切换路径未端到端驱动；模型（avatar.lifecycle）及其接线（宽限内 reattach、移交、场景）已实现并钉住（avatar.home、avatar.transfer.*、scene.serving）。
 
 相关：[Avatar 生命周期](./avatar-lifecycle.md)、[Avatar 创建/回收契约](./avatar-spawn-destroy.md)、[Avatar 运行时](./avatar-runtime.md)、[跨服回传与唯一写入权协议](./cross-return-protocol.md)、[实体契约与代码生成](./entity-contract.md)。

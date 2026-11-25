@@ -188,8 +188,9 @@ rows, and the transition rows for `suspended` expand:
   compensation; the fixture asserts the invariants so drift fails the test.
 - **Mermaid:** the four acceptance diagrams (three reconnect paths + daily cutover) render;
   `docs:check` covers renderability, desktop/mobile, light/dark and expansion.
-- **Runtime acceptance:** none today — no end-to-end Avatar runtime exists; the oracle model is
-  model-tested (avatar.lifecycle) but wiring is not.
+- **Runtime acceptance:** none today — the composed reconnect/cutover paths are not driven
+  end-to-end; the model (avatar.lifecycle) and its wiring (grace reattach, transfer, scene)
+  are implemented and pinned (avatar.home, avatar.transfer.*, scene.serving).
 
 Related: [Avatar lifecycle](./avatar-lifecycle.md), [Avatar spawn/destroy contract](./avatar-spawn-destroy.md),
 [Avatar runtime](./avatar-runtime.md), [cross return and single-writer protocol](./cross-return-protocol.md),
