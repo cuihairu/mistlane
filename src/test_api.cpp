@@ -826,6 +826,125 @@ void api_http() {
     std::cout << "api.http surface: signed POST /mla1 inserts, dedupes, refuses [PASS]\n";
     std::cout << "api.http config: env-only enablement, malformed credentials refuse startup [PASS]\n";
 }
+// The home-facts source end to end: a signed MLA1 OWNER ask answers from the
+// home data endpoint's read-only MLD1 OWNERSHIP leg — a record alone is an
+// unnamed active lease at its own generation, a named grant is owned, a fence
+// freezes the top into an unnamed FENCED gap, and an unknown participant is a
+// bare NOT_FOUND. The apiServer without --data, and one with an unreachable
+// data address, fail closed: the owner callback never invents a fact.
+void api_ownership_source() {
+    Context c;
+    write(c.path("echo.lua"), echo);
+    write(c.path("api.lua"), http_lua);
+    ApiSecret secret{};
+    for (auto& byte : secret) byte = 0x37;
+    std::string hex;
+    for (std::size_t i = 0; i < secret.size(); ++i) hex += "37";
+    const auto now = static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::seconds>(
+        std::chrono::system_clock::now().time_since_epoch()).count());
+    unsigned counter = 0;
+    const auto nonce = [&counter] {
+        char digits[33];
+        std::snprintf(digits, sizeof digits, "%032x", ++counter);
+        return std::string(digits);
+    };
+    const auto owner_body = [&](const std::string& realm, const std::string& character) {
+        ApiRequest request;
+        request.operation = ApiOperation::Owner;
+        request.audience = "platform";
+        request.principal = "ops-callback";
+        request.key_id = "key-2026";
+        request.timestamp = now;
+        request.nonce = nonce();
+        request.character = {realm, character};
+        request.signature = api_sign(request, secret);
+        return api_canonical(request) + std::string(request.signature.begin(), request.signature.end());
+    };
+    const auto reply_body = [](std::initializer_list<std::string_view> values) {
+        std::string bytes = "MLA1";
+        for (const auto& value : values) {
+            const auto size = static_cast<std::uint32_t>(value.size());
+            for (int shift : {24, 16, 8, 0}) bytes.push_back(static_cast<char>((size >> shift) & 255));
+            bytes.append(value);
+        }
+        return bytes;
+    };
+    const auto send_frame = [](RawSocket& raw, std::string_view payload) {
+        std::string frame(4, '\0');
+        auto length = static_cast<std::uint32_t>(payload.size());
+        for (int i = 3; i >= 0; --i) { frame[i] = static_cast<char>(length & 255); length >>= 8; }
+        raw.send(frame+std::string(payload));
+    };
+    const auto read_frame = [](RawSocket& raw) {
+        std::size_t length = 0;
+        for (unsigned char ch : raw.receive(4)) length = (length << 8) | ch;
+        return raw.receive(length);
+    };
+    const auto ask = [&](unsigned listen, const std::string& line) {
+        RawSocket raw(listen);
+        send_frame(raw, line);
+        return read_frame(raw);
+    };
+    const auto data_port = port();
+    c.node("data", data_port, {"--script", c.path("echo.lua").string(),
+        "--journal", c.path("ownership.sqlite").string()});
+    {
+        ScopedEnv audience("MISTLANE_MLA1_AUDIENCE", "platform");
+        ScopedEnv credentials("MISTLANE_MLA1_CREDENTIAL", "ops-callback:key-2026:"+hex+":home,other");
+        const auto listen = port();
+        c.node("apiServer", listen, {"--script", c.path("api.lua").string(),
+            "--data", endpoint(data_port)});
+        const auto base = "http://"+endpoint(listen);
+        // An unknown participant has no record and no lease: the one honest
+        // NotFound, never an invented owner.
+        auto sent = http(base+"/mla1", "POST", owner_body("home", "novice"));
+        require(sent.status == 404, "an unknown participant was not 404");
+        equal(sent.body, reply_body({"OK", "", "", "", "NOT_FOUND"}));
+        // A record without any grant owns itself but names no one: the implicit
+        // lease of a migration-era or never-granted record.
+        equal(ask(data_port, "MLD1 SUBMIT home leased gen 2 seq 1 hp=1"),
+            "MLD1 ACK durable home leased gen 2 seq 1");
+        sent = http(base+"/mla1", "POST", owner_body("home", "leased"));
+        require(sent.status == 200, "a record-backed owner ask was not 200");
+        equal(sent.body, reply_body({"OK", "", "", "", "FOUND", "-", "2", "ACTIVE"}));
+        // A named grant is owned: the entry face names its placed instance.
+        equal(ask(data_port, "MLD1 GRANT home leased xs-a"), "MLD1 GRANTED gen 3");
+        sent = http(base+"/mla1", "POST", owner_body("home", "leased"));
+        equal(sent.body, reply_body({"OK", "", "", "", "FOUND", "xs-a", "3", "ACTIVE"}));
+        // The write consumes the granted generation; a fence freezes the top
+        // into an unnamed FENCED gap even while the lease sits at it.
+        equal(ask(data_port, "MLD1 SUBMIT home leased gen 3 seq 2 hp=2"),
+            "MLD1 ACK durable home leased gen 3 seq 2");
+        equal(ask(data_port, "MLD1 FENCE home leased gen 3"), "MLD1 FENCED gen 3 seq 2");
+        sent = http(base+"/mla1", "POST", owner_body("home", "leased"));
+        equal(sent.body, reply_body({"OK", "", "", "", "FOUND", "-", "3", "FENCED"}));
+        // The same character name in another realm stays scoped to its own key.
+        sent = http(base+"/mla1", "POST", owner_body("other", "leased"));
+        require(sent.status == 404, "a foreign realm ask was not 404");
+        equal(sent.body, reply_body({"OK", "", "", "", "NOT_FOUND"}));
+    }
+    // Without --data every ask fails closed; so does an unreachable data leg.
+    ScopedEnv audience("MISTLANE_MLA1_AUDIENCE", "platform");
+    ScopedEnv credentials("MISTLANE_MLA1_CREDENTIAL", "ops-callback:key-2026:"+hex+":home,other");
+    {
+        const auto listen = port();
+        c.node("apiServer", listen, {"--script", c.path("api.lua").string()});
+        const auto sent = http("http://"+endpoint(listen)+"/mla1", "POST", owner_body("home", "leased"));
+        require(sent.status == 404, "a sourceless owner ask was not 404");
+        equal(sent.body, reply_body({"OK", "", "", "", "NOT_FOUND"}));
+    }
+    {
+        const auto dead = port();
+        const auto listen = port();
+        c.node("apiServer", listen, {"--script", c.path("api.lua").string(),
+            "--data", endpoint(dead)});
+        const auto sent = http("http://"+endpoint(listen)+"/mla1", "POST", owner_body("home", "leased"));
+        require(sent.status == 404, "an unreachable source did not fail closed");
+        equal(sent.body, reply_body({"OK", "", "", "", "NOT_FOUND"}));
+    }
+    std::cout << "api.ownership.source: signed OWNER asks read the real lease/fence "
+        "facts from --data, absent or unreachable sources fail closed [PASS]\n";
+}
 void login_ticket_wire() {
     Context c;
     write(c.path("login.lua"),
@@ -1080,7 +1199,7 @@ void login_entry() {
   if eRealm then
     mistlane.place('crossServer', nil, 'arena', function(err, address)
       if err then return mistlane.session.send(c.session, 'ERR place '..err) end
-      mistlane.grant(eRealm, eChar, function(err, gen)
+      mistlane.grant(eRealm, eChar, instance, function(err, gen)
         if err then return mistlane.session.send(c.session, 'ERR grant '..err) end
         local ticket, terr = mistlane.ticket.issue(eRealm, eChar, instance, gen, tonumber(expires))
         if not ticket then return mistlane.session.send(c.session, 'ERR ticket '..terr) end

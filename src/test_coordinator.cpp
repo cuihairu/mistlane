@@ -1414,7 +1414,7 @@ void coordinator_placement_schema() {
         require(sqlite3_prepare_v2(raw, "PRAGMA user_version", -1, &statement, nullptr) == SQLITE_OK,
                 "cannot read placement schema version");
         require(sqlite3_step(statement) == SQLITE_ROW, "placement schema version row missing");
-        require(sqlite3_column_int(statement, 0) == 2, "placement schema was not upgraded");
+        require(sqlite3_column_int(statement, 0) == 3, "placement schema was not upgraded");
         sqlite3_finalize(statement);
         require(sqlite3_prepare_v2(raw, "SELECT scene FROM placement", -1, &statement, nullptr) == SQLITE_OK,
                 "cannot read placement scene column");

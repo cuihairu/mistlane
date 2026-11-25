@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "test_common.hpp"
 #include "record_fetch.hpp"
+#include <sqlite3.h>
 namespace mistlane::test {
 void cross_admission() {
     Context c; write(c.path("cross.lua"),
@@ -841,10 +842,43 @@ void record_grant() {
     // grant at all.
     equal(store.handle("MLD1 GRANT home hero gen 9", result), "MLD1 ERR INVALID");
     equal(store.handle("MLD1 GRANT home", result), "MLD1 ERR INVALID");
-    equal(store.handle("MLD1 GRANT home bad char", result), "MLD1 ERR INVALID");
+    // The optional instance word is one word exactly: a second trailing word
+    // is not a grant at all.
+    equal(store.handle("MLD1 GRANT home bad char extra", result), "MLD1 ERR INVALID");
+    // The read-only home-facts lookup (the apiServer MLA1 OWNER's source): a
+    // named lease owns while it is the live top, a frozen top is a fenced gap
+    // with no owner, a resume past the fence is active but unnamed (the
+    // coordinator issued that generation, home data never named its writer),
+    // and an unknown participant is NONE — never an invented owner.
+    equal(store.handle("MLD1 OWNERSHIP home nobody", result), "MLD1 OWNER NONE");
+    equal(store.handle("MLD1 GRANT home leased xs-a", result), "MLD1 GRANTED gen 1");
+    equal(store.handle("MLD1 OWNERSHIP home leased", result), "MLD1 OWNER AT xs-a gen 1 ACTIVE");
+    equal(store.handle("MLD1 GRANT home leased xs-b", result), "MLD1 GRANTED gen 2");
+    equal(store.handle("MLD1 OWNERSHIP home leased", result), "MLD1 OWNER AT xs-b gen 2 ACTIVE");
+    equal(store.handle("MLD1 SUBMIT home leased gen 2 seq 1 hp=1", result), "MLD1 RECEIVED gen 2 seq 1");
+    equal(store.handle("MLD1 FENCE home leased gen 2", result), "MLD1 FENCED gen 2 seq 1");
+    equal(store.handle("MLD1 OWNERSHIP home leased", result), "MLD1 OWNER AT - gen 2 FENCED");
+    // The resume past the fence is authorized by an unnamed lease (the
+    // coordinator handoff asks home data for a generation without naming the
+    // writer): the write lands and the ownership answer stays active but
+    // unnamed at the resumed top.
+    equal(store.handle("MLD1 GRANT home leased", result), "MLD1 GRANTED gen 3");
+    equal(store.handle("MLD1 SUBMIT home leased gen 3 seq 2 hp=2", result), "MLD1 RECEIVED gen 3 seq 2");
+    equal(store.handle("MLD1 OWNERSHIP home leased", result), "MLD1 OWNER AT - gen 3 ACTIVE");
+    equal(store.handle("MLD1 GRANT home leased xs-c", result), "MLD1 GRANTED gen 4");
+    equal(store.handle("MLD1 OWNERSHIP home leased", result), "MLD1 OWNER AT xs-c gen 4 ACTIVE");
+    // A record whose lease never named a writer is the same face: active with
+    // an unnamed owner at the lease's generation.
+    equal(store.handle("MLD1 OWNERSHIP away hero", result), "MLD1 OWNER AT - gen 8 ACTIVE");
+    // Malformed asks stay malformed.
+    equal(store.handle("MLD1 OWNERSHIP home", result), "MLD1 ERR INVALID");
+    equal(store.handle("MLD1 OWNERSHIP home a b", result), "MLD1 ERR INVALID");
+    equal(store.handle("MLD1 GRANT home leased bad!name", result), "MLD1 ERR INVALID");
+    equal(store.handle("MLD1 GRANT home leased xs-a extra", result), "MLD1 ERR INVALID");
     std::cout << "record.grant: the data side alone allocates a strictly greater "
         "hosting generation per participant, never accepts a caller-chosen one, "
-        "and fences durable writes at the granted lease [PASS]\n";
+        "fences durable writes at the granted lease, and answers read-only "
+        "ownership facts [PASS]\n";
 }
 void record_grant_journal() {
     // The allocated generation is durable: a restart of the data node keeps
@@ -875,11 +909,15 @@ void record_grant_journal() {
     };
     equal(ask(first, "MLD1 GRANT home hero"), "MLD1 GRANTED gen 1");
     equal(ask(first, "MLD1 GRANT home hero"), "MLD1 GRANTED gen 2");
+    // A lease that names its host survives the restart with the name intact —
+    // the home-facts answer must not forget who it leased to.
+    equal(ask(first, "MLD1 GRANT home leased xs-a"), "MLD1 GRANTED gen 1");
     initial.signal(SIGTERM);
     require(initial.wait() == 0, "record grant node did not stop cleanly");
     c.node("data", second, {"--script", c.path("echo.lua").string(),
         "--journal", journal.string()});
     equal(ask(second, "MLD1 GRANT home hero"), "MLD1 GRANTED gen 3");
+    equal(ask(second, "MLD1 OWNERSHIP home leased"), "MLD1 OWNER AT xs-a gen 1 ACTIVE");
     // The restored high-water mark is also the durable-write lease: the write
     // at exactly the restored grant lands, and a host naming a generation the
     // restored node never issued is refused with the lease as the ceiling.
@@ -893,12 +931,57 @@ void record_grant_journal() {
         must_fail([&] { (void)store.save_grant({{"bad realm", "hero"}, 1}); });
         must_fail([&] { (void)store.save_grant({{"away", "hero"}, 0}); });
         const auto rows = store.restore_grants();
-        require(rows.size() == 2
+        require(rows.size() == 3
                 && rows[0] == GenerationAuthority::Grant{{"away", "hero"}, 9}
-                && rows[1] == GenerationAuthority::Grant{{"home", "hero"}, 3},
+                && rows[1] == GenerationAuthority::Grant{{"home", "hero"}, 3}
+                && rows[2] == GenerationAuthority::Grant{{"home", "leased"}, 1, "xs-a"},
             "grant restore lost or reordered rows");
     }
-    std::cout << "record.grant.journal: the durable grant survives a restart and "
-        "the next allocation stays strictly greater [PASS]\n";
+    // A pre-owner (schema v2) journal upgrades in place: the lease rows
+    // restore unnamed and the next named lease persists through the new
+    // column at schema version 3.
+    {
+        const auto legacy = c.path("record-grant-v2.sqlite");
+        sqlite3* raw = nullptr;
+        require(sqlite3_open(legacy.string().c_str(), &raw) == SQLITE_OK,
+            "cannot create record grant v2 journal");
+        require(sqlite3_exec(raw,
+                "CREATE TABLE record_grant ("
+                "version INTEGER NOT NULL, realm TEXT NOT NULL, character TEXT NOT NULL,"
+                "generation INTEGER NOT NULL, PRIMARY KEY(realm, character));"
+                "INSERT INTO record_grant VALUES (1, 'home', 'old', 4);"
+                "PRAGMA user_version=2", nullptr, nullptr, nullptr) == SQLITE_OK,
+            "cannot seed record grant v2 journal");
+        sqlite3_close(raw);
+        {
+            MigrationJournal migrated(legacy.string());
+            const auto rows = migrated.restore_grants();
+            require(rows.size() == 1
+                    && rows[0] == GenerationAuthority::Grant{{"home", "old"}, 4, {}},
+                "a v2 grant row did not restore as an unnamed lease");
+            migrated.save_grant({{"home", "old"}, 5, "gs-2"});
+        }
+        require(sqlite3_open(legacy.string().c_str(), &raw) == SQLITE_OK,
+            "cannot reopen record grant migration journal");
+        sqlite3_stmt* statement = nullptr;
+        require(sqlite3_prepare_v2(raw, "PRAGMA user_version", -1, &statement, nullptr) == SQLITE_OK,
+            "cannot read record grant schema version");
+        require(sqlite3_step(statement) == SQLITE_ROW
+                && sqlite3_column_int(statement, 0) == 3,
+            "record grant schema was not upgraded");
+        sqlite3_finalize(statement);
+        require(sqlite3_prepare_v2(raw, "SELECT owner, generation FROM record_grant",
+                -1, &statement, nullptr) == SQLITE_OK,
+            "cannot read record grant owner column");
+        require(sqlite3_step(statement) == SQLITE_ROW
+                && std::string(reinterpret_cast<const char*>(sqlite3_column_text(statement, 0))) == "gs-2"
+                && sqlite3_column_int64(statement, 1) == 5,
+            "record grant owner did not survive the migration");
+        sqlite3_finalize(statement);
+        sqlite3_close(raw);
+    }
+    std::cout << "record.grant.journal: the durable grant survives a restart, "
+        "the named lease keeps its owner, and the next allocation stays "
+        "strictly greater [PASS]\n";
 }
 }
