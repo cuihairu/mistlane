@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "test_common.hpp"
 #include "mistlane/entity_sync_wire.hpp"
+#include "mistlane/node.hpp"
 #include <optional>
 namespace mistlane::test {
 void entity_transport() {
@@ -447,6 +448,246 @@ return service)");
         require(row.has_value() && row->generation == 1 && row->committed_revision == 1,
                 "a shutdown save did not land the mid-dirty record");
         std::cout << "entity.save.runtime shutdown: mid-dirty stop still lands the row [PASS]\n";
+    }
+}
+
+// The data role as the durable entity-state owner (MLD2): a contract host
+// with --data opens no local journal at all — its forced saves land as rows
+// on the data journal, and the receipt confirms on the durable ACK. A raw
+// MLD2 leg reads the row and fences superseded writers; a fresh host
+// restores the snapshot on spawn, adopting the row's generation into its
+// hosting fence; a mid-dirty shutdown drains over the same leg; and a
+// volatile data node keeps the host honestly dirty (RECEIVED is never a
+// durability claim).
+void entity_state_data() {
+    const std::string xml =
+        "<Contracts><Entity name=\"Avatar\" id=\"1\"><Properties>"
+        "<gold id=\"1\" type=\"INT32\" default=\"0\" persistent=\"true\"/>"
+        "<title id=\"2\" type=\"INT32\" default=\"0\"/>"
+        "</Properties></Entity></Contracts>";
+    Context c;
+    const auto def = c.path("avatar.def");
+    write(def, xml);
+    const auto script = c.path("avatar.lua");
+    write(script, R"(local service = {}
+local function state_text()
+    local st = mistlane.entity.state(1, 1, 3, 42)
+    if st == nil then return "absent" end
+    return string.format("%d,%d,%d,%s", st.generation, st.revision,
+                         st.committed_revision, tostring(st.dirty))
+end
+function service.message(payload)
+    if payload == "spawn" then
+        local spawned = mistlane.entity.spawn(1, 1, 3, 42, 1)
+        if not spawned then return "duplicate" end
+        return (mistlane.entity.properties(1, 1, 3, 42) ~= nil) and "spawned" or "no-view"
+    end
+    if payload == "write" then
+        local props = mistlane.entity.properties(1, 1, 3, 42)
+        props.gold = 5   -- persistent: marks the record dirty
+        props.title = 9  -- transient: never touches the revision
+        return state_text()
+    end
+    if payload == "write7" then
+        mistlane.entity.properties(1, 1, 3, 42).gold = 7
+        return state_text()
+    end
+    if payload == "state" then return state_text() end
+    if payload == "gold" then
+        local props = mistlane.entity.properties(1, 1, 3, 42)
+        return props and tostring(props.gold) or "absent"
+    end
+    if payload == "title" then
+        local props = mistlane.entity.properties(1, 1, 3, 42)
+        return props and tostring(props.title) or "absent"
+    end
+    local st = mistlane.entity.state(1, 1, 3, 99)
+    return "other="..(st == nil and "absent" or "present")..":"..state_text()
+end
+return service)");
+    const EntityContract contract(xml);
+    SprotoCodec codec(contract);
+    const auto row_of = [&](const fs::path& journal) -> std::optional<EntityStateSnapshot> {
+        MigrationJournal reopened(journal.string());
+        for (const auto& row : reopened.restore_states())
+            if (row.scope == 1 && row.type_id == 1 && row.incarnation == 3 && row.entity_id == 42)
+                return row;
+        return std::nullopt;
+    };
+    const auto send_frame = [](RawSocket& raw, std::string_view payload) {
+        std::string frame(4, '\0');
+        auto length = static_cast<std::uint32_t>(payload.size());
+        for (int i = 3; i >= 0; --i) { frame[i] = static_cast<char>(length & 255); length >>= 8; }
+        raw.send(frame + std::string(payload));
+    };
+    const auto read_frame = [](RawSocket& raw) {
+        std::size_t length = 0;
+        for (unsigned char ch : raw.receive(4)) length = (length << 8) | ch;
+        return raw.receive(length);
+    };
+    const auto ask = [&send_frame, &read_frame](RawSocket& raw, std::string_view payload) {
+        send_frame(raw, payload);
+        return read_frame(raw);
+    };
+    const auto unhex = [](const std::string& hex) {
+        require(hex.size() % 2 == 0, "odd hex from the data endpoint");
+        std::string out;
+        for (std::size_t i = 0; i < hex.size(); i += 2) {
+            const auto nibble = [](char ch) {
+                if (ch >= '0' && ch <= '9') return ch-'0';
+                if (ch >= 'a' && ch <= 'f') return ch-'a'+10;
+                require(false, "non-lowercase hex from the data endpoint");
+                return 0;
+            };
+            out.push_back(static_cast<char>((nibble(hex[i]) << 4) | nibble(hex[i+1])));
+        }
+        return out;
+    };
+    const auto& entity = contract.entities()[0];
+    const auto gold_of = [&](const EntityStateSnapshot& row) -> std::int64_t {
+        EntityValues loaded;
+        std::string reason;
+        require(codec.decode_persistent(entity, row.snapshot, loaded, reason) && reason.empty(),
+                "the durable snapshot did not decode");
+        require(loaded.count("gold") == 1, "the durable snapshot lost the persistent value");
+        return std::get<std::int64_t>(loaded.at("gold").data);
+    };
+    const auto launch_host = [&](unsigned listen, const mistlane::Endpoint& data, const std::string& period) -> Child& {
+        std::vector<std::string> options{"--script", script.string(), "--contract", def.string(),
+            "--data", data.address+":"+std::to_string(data.port), "--upstream-token", "d5cret",
+            "--service-token", "h0st", "--entity-save-period", period};
+        return c.node("gameServer", listen, std::move(options));
+    };
+    const auto handshake_host = [](cli::Client& peer) {
+        equal(peer.request("MLS1 gameServer inst-1 h0st"), "MLS1 OK");
+    };
+
+    // Periodic half: the dirty record lands on the data journal inside the
+    // period (the ACK clears dirty), the host keeps no local journal, and
+    // the row fences superseded writers on a raw leg.
+    const auto data_journal = c.path("entity-data.sqlite");
+    const auto data_port = port(), host1 = port();
+    write(c.path("echo.lua"), echo);
+    c.node("data", data_port, {"--script", c.path("echo.lua").string(),
+        "--journal", data_journal.string(), "--service-token", "d5cret"});
+    const mistlane::Endpoint data{"127.0.0.1", data_port};
+    {
+        auto& host = launch_host(host1, data, "200");
+        auto peer = tcp(host1);
+        handshake_host(*peer);
+        equal(peer->request("spawn"), "spawned");
+        equal(peer->request("write"), "1,1,0,true");
+        eventually([&] { return peer->request("state") == "1,1,1,false"; }, 8s,
+                   "the periodic pass did not land the dirty record on data");
+        peer.reset();
+        host.signal(SIGTERM);
+        host.wait();
+        require(!fs::exists(c.path("host1-local.sqlite")),
+                "a --data host must not open a local journal");
+        const auto row = row_of(data_journal);
+        require(row.has_value(), "the periodic save left no durable row on the data journal");
+        require(row->generation == 1 && row->committed_revision == 1,
+                "the durable row lost its fence values");
+        require(gold_of(*row) == 5, "the durable snapshot lost the persistent value");
+        EntityValues loaded;
+        std::string reason;
+        require(codec.decode_persistent(entity, row->snapshot, loaded, reason)
+                && loaded.count("title") == 0, "a transient property leaked into the durable snapshot");
+        std::cout << "entity.state.data periodic: the dirty record lands on the data journal [PASS]\n";
+    }
+
+    // Raw MLD2: an identified leg loads the row, a malformed or superseded
+    // writer is fenced (INVALID for zero generation, CONFLICT below the
+    // committed revision, STALE below the held generation), an equal
+    // generation+revision is the idempotent retry, and the fence probes on
+    // a second key leave the first row pristine for the restore tests.
+    {
+        RawSocket leg(data.port);
+        equal(ask(leg, "MLS1 probe p1 d5cret"), "MLS1 OK");
+        const auto state42 = ask(leg, "MLD2 LOAD 1 1 3 42");
+        require(state42.starts_with("MLD2 STATE 1 1 3 42 gen 1 rev 1 "),
+                "the data endpoint did not answer the expected STATE header");
+        EntityStateSnapshot decoded;
+        decoded.snapshot = unhex(state42.substr(state42.rfind(' ')+1));
+        require(gold_of(decoded) == 5, "the loaded snapshot lost the persistent value");
+        equal(ask(leg, "MLD2 LOAD 1 1 3 99"), "MLD2 EMPTY");
+        equal(ask(leg, "MLD2 SAVE 1 1 3 42 gen 0 rev 5 7a"), "MLD2 ERR INVALID");
+        equal(ask(leg, "MLD2 SAVE 1 1 3 43 gen 1 rev 1 7a7a"), "MLD2 ACK 1 1 3 43 gen 1 rev 1");
+        equal(ask(leg, "MLD2 SAVE 1 1 3 43 gen 1 rev 0 7a7a"), "MLD2 ERR CONFLICT rev 1");
+        equal(ask(leg, "MLD2 SAVE 1 1 3 43 gen 2 rev 0 7a7a"), "MLD2 ACK 1 1 3 43 gen 2 rev 0");
+        equal(ask(leg, "MLD2 SAVE 1 1 3 43 gen 1 rev 9 7a7a"), "MLD2 ERR STALE gen 2");
+        equal(ask(leg, "MLD2 LOAD 1 1 3 43"), std::string("MLD2 STATE 1 1 3 43 gen 2 rev 0 7a7a"));
+        // Advance the fence on the first key with its own bytes, so a fresh
+        // host spawning below the held generation must adopt gen 2.
+        const auto hex42 = state42.substr(state42.rfind(' ')+1);
+        equal(ask(leg, "MLD2 SAVE 1 1 3 42 gen 2 rev 0 " + hex42),
+              "MLD2 ACK 1 1 3 42 gen 2 rev 0");
+        std::cout << "entity.state.data wire: the fence refuses superseded writers [PASS]\n";
+    }
+
+    // Restore half: a fresh host spawning below the held generation adopts
+    // the data row's generation and restores the snapshot (persistent value
+    // back, transient defaulted).
+    {
+        const auto host2 = port();
+        auto& host = launch_host(host2, data, "200");
+        auto peer = tcp(host2);
+        handshake_host(*peer);
+        equal(peer->request("spawn"), "spawned");
+        eventually([&] { return peer->request("state") == "2,0,0,false"; }, 8s,
+                   "the fresh host did not adopt the data row's generation");
+        equal(peer->request("gold"), "5");
+        equal(peer->request("title"), "0");
+        peer.reset();
+        host.signal(SIGTERM);
+        host.wait();
+        std::cout << "entity.state.data restore: a fresh host loads and adopts the row [PASS]\n";
+    }
+
+    // Shutdown half: a period the test never outwaits, so the only pass
+    // that can land the write is the stop() one — the drain rides MLD2 and
+    // the ACK lands the row before the process exits.
+    {
+        const auto host3 = port();
+        auto& host = launch_host(host3, data, "60000");
+        auto peer = tcp(host3);
+        handshake_host(*peer);
+        equal(peer->request("spawn"), "spawned");
+        eventually([&] { return peer->request("state") == "2,0,0,false"; }, 8s,
+                   "the fresh host did not adopt the data row's generation");
+        equal(peer->request("write7"), "2,1,0,true");
+        peer.reset();
+        host.signal(SIGTERM);
+        host.wait();
+        const auto row = row_of(data_journal);
+        require(row.has_value() && row->generation == 2 && row->committed_revision == 1
+                    && gold_of(*row) == 7,
+                "a shutdown save did not land the mid-dirty record on data");
+        std::cout << "entity.state.data shutdown: a mid-dirty stop drains over MLD2 [PASS]\n";
+    }
+
+    // Volatile half: data without --journal answers RECEIVED — the host
+    // aborts its receipt and stays dirty instead of pretending the save
+    // was durable.
+    {
+        const auto plain = port();
+        c.node("data", plain, {"--script", c.path("echo.lua").string()});
+        const mistlane::Endpoint volatile_data{"127.0.0.1", plain};
+        RawSocket leg(volatile_data.port);
+        equal(ask(leg, "MLD2 SAVE 9 9 9 9 gen 1 rev 1 7a"),
+              "MLD2 RECEIVED 9 9 9 9 gen 1 rev 1");
+        const auto host4 = port();
+        auto& host = launch_host(host4, volatile_data, "200");
+        auto peer = tcp(host4);
+        handshake_host(*peer);
+        equal(peer->request("spawn"), "spawned");
+        equal(peer->request("write"), "1,1,0,true");
+        std::this_thread::sleep_for(700ms);  // several save periods
+        equal(peer->request("state"), "1,1,0,true");
+        peer.reset();
+        host.signal(SIGTERM);
+        host.wait();
+        std::cout << "entity.state.data volatile: RECEIVED keeps the record dirty [PASS]\n";
     }
 }
 

@@ -36,6 +36,7 @@ void entity_transport();
 void entity_transport_gateway();
 void entity_push();
 void entity_save_runtime();
+void entity_state_data();
 void entity_owner_bind();
 void entity_owner_home();
 void entity_route();
@@ -201,6 +202,7 @@ int run_tests(int argc, char** argv) {
         {"entity.state.store","contract",test::entity_state_store},
         {"entity.save.periodic","contract",test::entity_save_periodic},
         {"entity.save.runtime","contract",test::entity_save_runtime},
+        {"entity.state.data","contract",test::entity_state_data},
         {"entity.owner.bind","contract",test::entity_owner_bind},
         {"entity.owner.home","contract",test::entity_owner_home},
         {"entity.route","contract",test::entity_route},

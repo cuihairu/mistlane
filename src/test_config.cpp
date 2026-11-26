@@ -132,7 +132,7 @@ void config_file() {
             {{"--role", "gateway", "--listen", endpoint(port()), "--upstream", endpoint(port()),
                 "--contract", "x.def"}, "--contract applies to gameServer/crossServer only"},
             {{"--role", "gateway", "--listen", endpoint(port()), "--upstream", endpoint(port()),
-                "--data", endpoint(port())}, "--data applies to crossServer, login or apiServer"},
+                "--data", endpoint(port())}, "--data applies to crossServer, login, apiServer or an entity host with --contract"},
             {{"--role", "gateway", "--listen", endpoint(port()), "--upstream", endpoint(port()),
                 "--overload-ratio", "2"}, "overload ratio must be in (0,1]"},
             {{"--role", "gateway", "--upstream-multiplex", "maybe"}, "expected on|off for maybe"},

@@ -87,6 +87,7 @@ if(BUILD_TESTING)
       entity.state.store
       entity.save.periodic
       entity.save.runtime
+      entity.state.data
       entity.owner.bind entity.owner.home
       entity.route
       entity.cross.correlation
