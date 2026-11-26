@@ -152,7 +152,7 @@ sequenceDiagram
 - Lease duration, heartbeat interval and reclaim thresholds: measurement.
 - A cross-process lease table or distributed lease store: out of scope (the lease is
   process-local at the crossServer; durability is MLD1's).
-- Business settlement, rewards and ranking on return: later crossServer slices.
+- Business settlement (rewards, ranking) on return: game-side, later crossServer slices. The framework's own settlement face — the visit's final account carried home before the release — is wired: the settle edge captures `avatar_save`'s string return as the return queue's tail change (see [avatar runtime](./avatar-runtime.md)).
 - The `MLR1 ROUTE` binding for reattach routing: still absent (avatar-runtime).
 
 ## Verification

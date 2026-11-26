@@ -127,7 +127,7 @@ sequenceDiagram
 
 - 租约时长、心跳间隔与回收阈值：待测量。
 - 跨进程租约表或分布式租约存储：超出范围（租约在 crossServer 进程内；持久化是 MLD1 的事）。
-- 归还时的业务结算、奖励与排名：后续 crossServer 切片。
+- 归还时的业务结算（奖励、排名）：游戏侧的后续 crossServer 切片。框架自身的结算面——访问的最终账目在释放前带回归属——已接线：结算边捕获 `avatar_save` 的字符串返回作为回传队列的尾部变更（见 [Avatar 运行时契约](./avatar-runtime.md)）。
 - 重挂路由的 `MLR1 ROUTE` 绑定：仍缺失（avatar-runtime）。
 
 ## 验证

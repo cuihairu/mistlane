@@ -93,7 +93,7 @@ MLD1 ERR INVALID | MLD1 ERR STALE gen <n> | MLD1 ERR SEQ seq <n> | MLD1 ERR FULL
 ## 已定决策与剩余工作
 
 - MLD1 的线格式与分帧：随端点实现一并定稿——语法与应答词表见上节；分帧沿用共享的 u32 BE 长度帧。
-- 结算、奖励与排行业务规则、跨服场景模板、实际的 Avatar/场景运行时：归后续 crossServer 切片与实体契约链。Avatar/会话运行时契约已在 [Avatar 运行时契约](./avatar-runtime.md) 页定稿；实体属性运行时仍归实体契约链。
+- 奖励与排行业务规则、跨服场景模板：归游戏侧后续 crossServer 切片与实体契约链。Avatar/会话运行时契约已在 [Avatar 运行时契约](./avatar-runtime.md) 页定稿；实体属性运行时仍归实体契约链。框架的结算边已接线（`avatar.settle`）：优雅回传把访问的最终账目作为最后一条顺序 `SUBMIT` 提交——发送方按耐久游标解析其序号，排在参与者持有的每个变更之后，未补种者按需补种——释放仍由其 `ACK durable` 排空门控。账目之上的奖励与排名规则仍归游戏侧。
 - 租约时长、队列界与重试预算：实现时以测量依据给出默认值的配置项，不由本页拍数字。
 - 入场凭据签名与签发方已在 login 契约决定：HMAC-SHA256、login、区服密钥。C++ 签发/验证原语、规范凭据编码与传输已实现（`mistlane.ticket.issue` 在 `MISTLANE_TICKET_SECRETS` 下的 login 节点签发、crossServer 在握手上验证）；初始 generation 及推进生命周期见[服务契约](./service-contracts.md#login)。其中 data 签发的授权经 `MLD1 GRANT` 已接线，其持久写租约把 `MLD1 SUBMIT` 栅栏在该精确 generation 上。
 
