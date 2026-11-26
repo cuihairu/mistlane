@@ -1449,6 +1449,8 @@ void entity_state_store() {
         struct FailingBackend : EntityStateBackend {
             void save_state(const EntityStateSnapshot&) override { throw std::runtime_error("backend down"); }
             std::vector<EntityStateSnapshot> restore_states() const override { return {}; }
+            void save_entity_fence(const EntityStateKey&, std::uint64_t) override { throw std::runtime_error("backend down"); }
+            std::map<EntityStateKey, std::uint64_t> restore_entity_fences() const override { return {}; }
         } down;
         PropertyStore store(contract, 1);
         PersistentStore persist(store);
@@ -1611,6 +1613,8 @@ void entity_save_periodic() {
         struct FailingBackend : EntityStateBackend {
             void save_state(const EntityStateSnapshot&) override { throw std::runtime_error("backend down"); }
             std::vector<EntityStateSnapshot> restore_states() const override { return {}; }
+            void save_entity_fence(const EntityStateKey&, std::uint64_t) override { throw std::runtime_error("backend down"); }
+            std::map<EntityStateKey, std::uint64_t> restore_entity_fences() const override { return {}; }
         } down;
         MigrationJournal retry_backend(c.path("save-retry.sqlite").string());
         PropertyStore store(contract, 1);

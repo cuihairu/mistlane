@@ -37,6 +37,8 @@ void entity_transport_gateway();
 void entity_push();
 void entity_save_runtime();
 void entity_state_data();
+void entity_migrate_full();
+void entity_migrate_abort();
 void entity_owner_bind();
 void entity_owner_home();
 void entity_route();
@@ -90,6 +92,8 @@ void api_wire();
 void login_ticket();
 void api_http();
 void lua_lifecycle();
+void lua_reload_handoff();
+void lua_reload_isolation();
 void lua_http();
 void cross_admission();
 void cross_ticket();
@@ -203,6 +207,8 @@ int run_tests(int argc, char** argv) {
         {"entity.save.periodic","contract",test::entity_save_periodic},
         {"entity.save.runtime","contract",test::entity_save_runtime},
         {"entity.state.data","contract",test::entity_state_data},
+        {"entity.migrate.full","contract",test::entity_migrate_full},
+        {"entity.migrate.abort","contract",test::entity_migrate_abort},
         {"entity.owner.bind","contract",test::entity_owner_bind},
         {"entity.owner.home","contract",test::entity_owner_home},
         {"entity.route","contract",test::entity_route},
@@ -250,6 +256,8 @@ int run_tests(int argc, char** argv) {
         {"login.ticket","api",test::login_ticket},
         {"api.http","api",test::api_http},
         {"lua.lifecycle","lua",test::lua_lifecycle},
+        {"entity.reload.safe","lua",test::lua_reload_handoff},
+        {"entity.reload.isolation","lua",test::lua_reload_isolation},
         {"lua.http","lua",test::lua_http},
         {"cross.admission","cross",test::cross_admission},
         {"cross.ticket","cross",test::cross_ticket},

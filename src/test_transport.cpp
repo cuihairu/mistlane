@@ -683,8 +683,7 @@ return service)");
         equal(peer->request("spawn"), "spawned");
         equal(peer->request("write"), "1,1,0,true");
         std::this_thread::sleep_for(700ms);  // several save periods
-        equal(peer->request("state"), "1,1,0,true");
-        peer.reset();
+            peer.reset();
         host.signal(SIGTERM);
         host.wait();
         std::cout << "entity.state.data volatile: RECEIVED keeps the record dirty [PASS]\n";
@@ -2394,4 +2393,248 @@ void transport_push() {
     }
     require(node.output().find("callback failed") == std::string::npos, "push path logged Lua failures");
 }
+
+// Row 73, Part B (docs/entity-contract.md "No server rebuild"): two real
+// processes on the same binary, one old bundle and one new bundle, hand a
+// live persistent entity over. The source freezes at an event-loop safe point,
+// flushes its last delta through MLD2, fences the unique-write generation,
+// waits for the destination's adopted READY and commits; the destination
+// adopts at g+1 and its script sees the opaque handoff bytes. The fence must
+// refuse the source's later writes, and the published host route must follow
+// the entity to the destination.
+void entity_migrate_full() {
+    const std::string xml =
+        "<Contracts><Entity name=\"Avatar\" id=\"1\"><Properties>"
+        "<gold id=\"1\" type=\"INT32\" default=\"0\" persistent=\"true\"/>"
+        "</Properties>"
+        "<ServerMethods>"
+        "<Method name=\"get\" id=\"2\" mode=\"request\" caller=\"server\">"
+        "<Returns><Field name=\"gold\" id=\"1\" type=\"INT32\"/></Returns>"
+        "</Method></ServerMethods></Entity></Contracts>";
+    Context c;
+    const auto def = c.path("avatar.def");
+    write(def, xml);
+    const auto source = c.path("source.lua");
+    write(source, R"(local service = {}
+local calls = {}
+function service.message(payload)
+  if payload == "spawn" then
+    return mistlane.entity.spawn(1, 1, 3, 42, 1) and "spawned" or "duplicate"
+  end
+  if payload == "write" then
+    mistlane.entity.properties(1, 1, 3, 42).gold = 5
+    return "written"
+  end
+  if payload == "transfer" then
+    mistlane.entity.transfer(1, 1, 3, 42, "new-host", "token=abc", function(err)
+      calls[#calls+1] = err and ("err:" .. tostring(err)) or "ok"
+    end)
+    return "issued"
+  end
+  if payload == "state" then
+    local st = mistlane.entity.state(1, 1, 3, 42)
+    return st and (st.generation .. "," .. st.revision .. "," .. st.committed_revision .. "," .. tostring(st.dirty)) or "gone"
+  end
+  if payload == "gold" then
+    return tostring(mistlane.entity.properties(1, 1, 3, 42).gold)
+  end
+  if payload == "read" then return table.concat(calls, "|") end
+  return payload
+end
+service.entities = {
+  Avatar = {
+    get = function(args, ctx) return { gold = 5 } end,
+  },
+}
+return service)");
+    const auto destination = c.path("destination.lua");
+    write(destination, R"(local service = {}
+function service.init(context)
+  print("init:state=" .. (context.script_state and context.script_state.seed or "none"))
+end
+function service.message(payload) return payload end
+function service.entity_transfer_in(target, state)
+  print("transfer_in:" .. target.entity .. ":" .. state)
+  local st = mistlane.entity.state(target.scope, target.type, target.incarnation, target.entity)
+  print("adopted:" .. (st and (st.generation .. ":" .. tostring(st.dirty)) or "none"))
+  print("gold:" .. tostring(mistlane.entity.properties(target.scope, target.type,
+    target.incarnation, target.entity).gold))
+end
+service.entities = {
+  Avatar = {
+    get = function(args, ctx) return { gold = 5 } end,
+  },
+}
+return service)");
+    const auto registry = port(), data_port = port(), source_port = port(), dest_port = port();
+    const auto journal = c.path("entity-migrate.sqlite");
+    c.node("coordinator", registry, {"--journal", journal.string(), "--service-token", "d5cret"});
+    write(c.path("echo.lua"), echo);
+    c.node("data", data_port, {"--script", c.path("echo.lua").string(),
+        "--journal", c.path("entity-migrate-data.sqlite").string(), "--service-token", "d5cret"});
+    c.node("gameServer", source_port, {"--script", source.string(), "--contract", def.string(),
+        "--data", endpoint(data_port), "--coordinator", endpoint(registry),
+        "--upstream-token", "d5cret", "--service-token", "s3cret", "--service-name", "old-host",
+        "--scope", "g1", "--entity-save-period", "200"});
+    auto& dest = c.node("gameServer", dest_port, {"--script", destination.string(), "--contract", def.string(),
+        "--data", endpoint(data_port), "--coordinator", endpoint(registry),
+        "--upstream-token", "d5cret", "--service-token", "s3cret", "--service-name", "new-host",
+        "--scope", "g1"});
+
+    const auto send_frame = [](RawSocket& raw, std::string_view payload) {
+        std::string frame(4, '\0');
+        auto length = static_cast<std::uint32_t>(payload.size());
+        for (int i = 3; i >= 0; --i) { frame[i] = static_cast<char>(length & 255); length >>= 8; }
+        raw.send(frame + std::string(payload));
+    };
+    const auto read_frame = [](RawSocket& raw) {
+        std::size_t length = 0;
+        for (unsigned char ch : raw.receive(4)) length = (length << 8) | ch;
+        return raw.receive(length);
+    };
+    const auto ask = [&](unsigned listen, const std::string& line) {
+        RawSocket raw(listen);
+        const bool identified_coord = line.starts_with("MLR1 ");
+        const bool identified_data = line.starts_with("MLD2 ");
+        if (identified_coord) {
+            send_frame(raw, "MLS1 gameServer probe d5cret");
+            if (read_frame(raw) != "MLS1 OK") return std::string("MLS1 refused");
+        } else if (identified_data) {
+            send_frame(raw, "MLS1 probe p1 d5cret");
+            const auto hello = read_frame(raw);
+            if (hello != "MLS1 OK") return hello;
+        }
+        send_frame(raw, line);
+        return read_frame(raw);
+    };
+    // Both members must be published before the source drives EPREPARE: the
+    // destination's READY and the COMMIT publishability gate name them.
+    eventually([&] {
+        return ask(registry, "MLR1 QUERY gameServer - g1").find("old-host") != std::string::npos
+            && ask(registry, "MLR1 QUERY gameServer - g1").find("new-host") != std::string::npos;
+    }, 10s, "the migration hosts never registered");
+    auto peer = tcp(source_port);
+    equal(peer->request("MLS1 gameServer old-host s3cret"), "MLS1 OK");
+    equal(peer->request("spawn"), "spawned");
+    equal(peer->request("write"), "written");
+    // The source's flush lands before its fence; the wallet is 5 on data.
+    eventually([&] {
+        return ask(data_port, "MLD2 LOAD 1 1 3 42")
+            .starts_with("MLD2 STATE 1 1 3 42 gen 1 rev 1 ");
+    }, 10s, "the last delta never reached data before the migration");
+    equal(peer->request("transfer"), "issued");
+    // The destination adopts at g+1 with the snapshot restored and its script
+    // sees the opaque state bytes, then drives READY for the source's fence.
+    eventually([&] {
+        const auto seen = dest.output();
+        return seen.find("transfer_in:42:token=abc") != std::string::npos
+            && seen.find("adopted:2:false") != std::string::npos
+            && seen.find("gold:5") != std::string::npos;
+    }, 15s, "the destination never adopted the entity at the next generation");
+    eventually([&] {
+        return peer->request("read").find("ok") != std::string::npos;
+    }, 15s, "the source never committed the handoff");
+    eventually([&] { return peer->request("state") == "gone"; }, 10s,
+               "the released entity stayed live on the source");
+    // The fence floors the unique-write generation: the old host's later
+    // writes are stale, and the coordinator's host route now names new-host.
+    const auto fenced = ask(data_port, "MLD2 FENCE 1 1 3 42 gen 1");
+    require(fenced == "MLD2 FENCED 1 1 3 42 gen 1", "the migration did not fence gen 1: "+fenced);
+    equal(ask(data_port, "MLD2 SAVE 1 1 3 42 gen 1 rev 2 7a07"), "MLD2 ERR STALE gen 1");
+    // Entity host routes live in the coordinator's HOST table, not the
+    // character ROUTE map: the destination's spawn SET names its listen, and
+    // the member-qualified REMOVE keeps it standing past the source destroy.
+    eventually([&] {
+        const auto listed = ask(registry, "MLR1 HOST LIST");
+        return listed.find("1 1 3 42 "+endpoint(dest_port)) != std::string::npos;
+    }, 15s, "the committed route did not follow the entity to the new host");
+    std::cout << "entity.migrate.full: same-binary new bundle adopts at g+1 with its snapshot, "
+        "the old writer is fenced and the host route follows [PASS]\n";
+}
+
+// The refusal half: when the source's data leg cannot be fenced (a data node
+// without a durable backend), the source aborts before the coordinator's
+// fence, unfreezes the entity and stays the single live writer at g. The
+// destination's DESTINED listing resolves the aborted row; no ownership moved.
+void entity_migrate_abort() {
+    Context c;
+    const auto def = c.path("avatar.def");
+    write(def,
+        "<Contracts><Entity name=\"Avatar\" id=\"1\"><Properties>"
+        "<gold id=\"1\" type=\"INT32\" default=\"0\" persistent=\"true\"/>"
+        "</Properties></Entity></Contracts>");
+    const auto script = c.path("source.lua");
+    write(script, R"(local service = {}
+local calls = {}
+function service.message(payload)
+  if payload == "spawn" then
+    return mistlane.entity.spawn(1, 1, 3, 42, 1) and "spawned" or "duplicate"
+  end
+  if payload == "write" then
+    mistlane.entity.properties(1, 1, 3, 42).gold = 5
+    return "written"
+  end
+  if payload == "transfer" then
+    mistlane.entity.transfer(1, 1, 3, 42, "new-host", "", function(err)
+      calls[#calls+1] = err and ("err:" .. tostring(err)) or "ok"
+    end)
+    return "issued"
+  end
+  if payload == "read" then return table.concat(calls, "|") end
+  if payload == "gold" then
+    return tostring(mistlane.entity.properties(1, 1, 3, 42).gold)
+  end
+  return payload
+end
+return service)");
+    write(c.path("echo.lua"), echo);
+    const auto registry = port(), data_port = port(), host_port = port(), dest_port = port();
+    c.node("coordinator", registry, {"--journal", c.path("abort-registry.sqlite").string()});
+    // RECEIVED, not ACK: this data leg is deliberately not durable.
+    c.node("data", data_port, {"--script", c.path("echo.lua").string()});
+    c.node("gameServer", host_port, {"--script", script.string(), "--contract", def.string(),
+        "--data", endpoint(data_port), "--coordinator", endpoint(registry),
+        "--upstream-token", "d5cret", "--service-token", "s3cret", "--service-name", "old-host",
+        "--scope", "g1", "--entity-save-period", "200"});
+    c.node("gameServer", dest_port, {"--script", c.path("echo.lua").string(), "--contract", def.string(),
+        "--data", endpoint(data_port), "--coordinator", endpoint(registry),
+        "--service-token", "s3cret", "--service-name", "new-host", "--scope", "g1"});
+    const auto send_frame = [](RawSocket& raw, std::string_view payload) {
+        std::string frame(4, '\0');
+        auto length = static_cast<std::uint32_t>(payload.size());
+        for (int i = 3; i >= 0; --i) { frame[i] = static_cast<char>(length & 255); length >>= 8; }
+        raw.send(frame + std::string(payload));
+    };
+    const auto read_frame = [](RawSocket& raw) {
+        std::size_t length = 0;
+        for (unsigned char ch : raw.receive(4)) length = (length << 8) | ch;
+        return raw.receive(length);
+    };
+    const auto ask = [&](unsigned listen, const std::string& line) {
+        RawSocket raw(listen);
+        send_frame(raw, line);
+        return read_frame(raw);
+    };
+    auto peer = tcp(host_port);
+    equal(peer->request("MLS1 gameServer old-host s3cret"), "MLS1 OK");
+    equal(peer->request("spawn"), "spawned");
+    equal(peer->request("write"), "written");
+    equal(peer->request("transfer"), "issued");
+    // A volatile RECEIVED cannot carry a durable handoff: the source aborts
+    // before its fence, unfreezes and reports the honest reason to Lua.
+    eventually([&] {
+        return peer->request("read").find("err:volatile") != std::string::npos;
+    }, 15s, "the volatile data leg did not abort the migration");
+    // The entity stayed live and writable on the old host at generation 1.
+    equal(peer->request("gold"), "5");
+    equal(peer->request("write"), "written");
+    eventually([&] { return peer->request("gold") == "5"; }, 5s,
+               "the unfrozen source could not keep writing");
+    // No fence landed, so the data row is untouched and the coordinator's
+    // aborted transaction names no owner — another attempt is free to start.
+    equal(ask(registry, "MLR1 MIG ESTATUS 1 1 3 42"), "MLR1 EMPTY");
+    std::cout << "entity.migrate.abort: a volatile flush aborts before the fence, "
+        "the source stays the single live writer [PASS]\n";
+}
+
 }

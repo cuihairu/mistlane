@@ -131,4 +131,221 @@ void lua_http() {
     require(hooks == std::vector<std::string>{"HOOK init v1","HOOK start v1","HOOK init v2","HOOK start v2",
         "HOOK stop v1","HOOK shutdown v1","HOOK stop v2","HOOK shutdown v2"}, "Lua lifecycle order changed");
 }
+// Row 73, Part A (docs/entity-contract.md "No server rebuild"): SIGHUP hands
+// the replacement VM the outgoing one's plain-data declaration through
+// context.script_state, and the shadow VM runs init/start against a sealed
+// API — every mutating face raises instead of touching the live runtime — so
+// a candidate that writes on boot is rejected before it is promoted. A
+// refusal anywhere (handoff, init, bindings) retains the old service, its
+// handlers and its module state.
+void lua_reload_handoff() {
+    Context c;
+    const std::string xml =
+        "<Contracts><Entity name=\"Avatar\" id=\"1\"><ServerMethods>"
+        "<Method name=\"get\" id=\"2\" mode=\"request\" caller=\"server\">"
+        "<Returns><Field name=\"level\" id=\"1\" type=\"UINT16\"/></Returns>"
+        "</Method></ServerMethods></Entity></Contracts>";
+    const auto def = c.path("avatar.def");
+    write(def, xml);
+    const auto script = c.path("service.lua");
+    write(script, R"(local service = {}
+local counter = 0
+function service.init(context)
+  counter = (context.script_state and context.script_state.counter) or 0
+  service.tag = "v1"
+end
+function service.handoff()
+  return { counter = counter }
+end
+function service.message(payload)
+  if payload == "spawn" then
+    return mistlane.entity.spawn(1, 1, 3, 42) and "spawned" or "duplicate"
+  end
+  if payload == "bump" then counter = counter + 1 end
+  if payload == "count" then return service.tag..":"..counter end
+  return "echo:"..payload
+end
+service.entities = {
+  Avatar = {
+    get = function(args, ctx) return { level = counter } end,
+  },
+}
+return service)");
+    const auto listen = port();
+    auto& node = c.node("gameServer", listen,
+        {"--script", script.string(), "--contract", def.string(), "--service-token", "s3cret"});
+    auto peer = tcp(listen);
+    equal(peer->request("MLS1 gameServer inst-1 s3cret"), "MLS1 OK");
+    equal(peer->request("spawn"), "spawned");
+    equal(peer->request("bump"), "echo:bump");
+    equal(peer->request("count"), "v1:1");
+    // The entity handler reads the live VM's module state through the
+    // dispatcher, so a typed call pins which bundle is bound.
+    EntityContract contract(xml);
+    SprotoCodec codec(contract);
+    const auto frame = [](std::uint64_t correlation, const std::string& body) {
+        return "MLE1" + encode_entity_envelope({1, 1, 3, 42, kEntitySideServer,
+            2, correlation, 1, 0, body});
+    };
+    const auto reply_of = [](const std::string& body) -> EntityReply {
+        require(body.size() >= 12 && body.starts_with("MLE1"), "expected an MLE1 reply");
+        const auto decoded = decode_entity_reply(std::string_view(body).substr(12));
+        require(decoded.has_value(), "reply did not decode");
+        return *decoded;
+    };
+    auto reply = reply_of(peer->request(frame(7, {})));
+    require(!reply.is_error, "the v1 handler was not bound");
+    EntityValues got;
+    std::string reason;
+    const auto* method = &contract.entities()[0].server_methods[0];
+    require(codec.decode_args(method->returns, reply.payload, got, reason) && reason.empty()
+            && std::get<std::int64_t>(got.at("level").data) == 1,
+        "the v1 handler did not read the module counter");
+    // The replacement bundle tags itself v2 and adopts the handed-off counter;
+    // nothing else changes, so every observable after the reload must name v2
+    // with the carried state.
+    write(script, R"(local service = {}
+local counter = 0
+function service.init(context)
+  counter = (context.script_state and context.script_state.counter) or 0
+  service.tag = "v2"
+end
+function service.handoff()
+  return { counter = counter }
+end
+function service.message(payload)
+  if payload == "spawn" then
+    return mistlane.entity.spawn(1, 1, 3, 42) and "spawned" or "duplicate"
+  end
+  if payload == "bump" then counter = counter + 1 end
+  if payload == "count" then return service.tag..":"..counter end
+  return "echo:"..payload
+end
+service.entities = {
+  Avatar = {
+    get = function(args, ctx) return { level = counter } end,
+  },
+}
+return service)");
+    node.signal(SIGHUP);
+    node.ready("script reloaded");
+    equal(peer->request("count"), "v2:1");
+    equal(peer->request("bump"), "echo:bump");
+    equal(peer->request("count"), "v2:2");
+    reply = reply_of(peer->request(frame(8, {})));
+    require(!reply.is_error, "the reloaded handlers were not re-bound");
+    require(codec.decode_args(method->returns, reply.payload, got, reason) && reason.empty()
+            && std::get<std::int64_t>(got.at("level").data) == 2,
+        "the reloaded handler did not read the carried counter");
+    equal(peer->request("spawn"), "duplicate");
+    peer.reset();
+    node.signal(SIGTERM);
+    require(node.wait() == 0, "gameServer graceful shutdown failed");
+    std::cout << "entity.reload.safe: handoff carries module state, the promoted VM serves it [PASS]\n";
+}
+// Every refusal face of the same seam: a throwing init, a handoff that is not
+// a function, an init that writes through the sealed API, and a broken
+// implementation table each keep the old service — its handlers, its module
+// state and the live runtime untouched (the sealed spawn of the shadow never
+// lands, so the address is still free on the live plane).
+void lua_reload_isolation() {
+    Context c;
+    const auto def = c.path("avatar.def");
+    write(def,
+        "<Contracts><Entity name=\"Avatar\" id=\"1\"><ServerMethods>"
+        "<Method name=\"get\" id=\"2\" mode=\"request\" caller=\"server\">"
+        "<Returns><Field name=\"level\" id=\"1\" type=\"UINT16\"/></Returns>"
+        "</Method></ServerMethods></Entity></Contracts>");
+    const auto good = R"(local service = {}
+local counter = 0
+function service.init(context)
+  counter = (context.script_state and context.script_state.counter) or 0
+  service.tag = "v1"
+end
+function service.message(payload)
+  if payload == "spawn" then
+    return mistlane.entity.spawn(1, 1, 3, 42) and "spawned" or "duplicate"
+  end
+  if payload == "spawn99" then
+    return mistlane.entity.spawn(1, 1, 3, 99) and "spawned" or "duplicate"
+  end
+  if payload == "bump" then counter = counter + 1 end
+  if payload == "count" then return service.tag..":"..counter end
+  return "echo:"..payload
+end
+service.entities = {
+  Avatar = {
+    get = function(args, ctx) return { level = counter } end,
+  },
+}
+return service)";
+    const auto script = c.path("service.lua");
+    write(script, good);
+    const auto listen = port();
+    auto& node = c.node("gameServer", listen,
+        {"--script", script.string(), "--contract", def.string(), "--service-token", "s3cret"});
+    auto peer = tcp(listen);
+    equal(peer->request("MLS1 gameServer inst-1 s3cret"), "MLS1 OK");
+    equal(peer->request("spawn"), "spawned");
+    equal(peer->request("bump"), "echo:bump");
+    equal(peer->request("count"), "v1:1");
+    const auto rejected = [&](const std::string& bundle, std::string_view why,
+                              const std::string& count) {
+        write(script, bundle);
+        node.signal(SIGHUP);
+        node.ready("reload rejected");
+        require(peer->request("count") == count, std::string(why)+": old service not retained");
+    };
+    rejected("return {}", "a bundle without message is rejected", "v1:1");
+    rejected("return {init=function() error('boom') end, message=function(p) return p end}",
+        "a throwing init is rejected", "v1:1");
+    // A bad handoff is only visible on the FOLLOWING reload (the outgoing VM
+    // runs it), so the bad bundle is promoted first and the next reload must
+    // refuse: the metatable table refuses the plain-data walk.
+    write(script, R"(local service = {}
+local counter = 0
+function service.init(context)
+  counter = (context.script_state and context.script_state.counter) or 0
+  service.tag = "v2"
+end
+local sealed = setmetatable({}, {})
+function service.handoff() return sealed end
+function service.message(payload)
+  if payload == "spawn99" then
+    return mistlane.entity.spawn(1, 1, 3, 99) and "spawned" or "duplicate"
+  end
+  if payload == "bump" then counter = counter + 1 end
+  if payload == "count" then return service.tag..":"..counter end
+  return "echo:"..payload
+end
+service.entities = {
+  Avatar = {
+    get = function(args, ctx) return { level = counter } end,
+  },
+}
+return service)");
+    node.signal(SIGHUP);
+    node.ready("script reloaded");
+    equal(peer->request("count"), "v2:0");
+    write(script, good);
+    node.signal(SIGHUP);
+    node.ready("reload rejected");
+    require(peer->request("count") == "v2:0", "a metatable handoff must retain the old service");
+    // The shadow writes through the sealed entity API during init: the raise
+    // must fail the reload, and the live runtime must not hold the address.
+    rejected("return {init=function() mistlane.entity.spawn(1, 1, 3, 99) end,"
+        "message=function(p) return p end}",
+        "a sealed spawn in init is rejected", "v2:0");
+    equal(peer->request("spawn99"), "spawned");
+    require(peer->request("spawn99") == "duplicate",
+        "the shadow's sealed spawn leaked onto the live runtime");
+    rejected("return {message=function(p) return p end, entities={Avatar={get=123}}}",
+        "a broken implementation table is rejected", "v2:0");
+    equal(peer->request("spawn99"), "duplicate");
+    // The surviving bundle is the one the refusals kept: its handlers still
+    // answer through the dispatcher, bound to the untouched VM.
+    node.signal(SIGTERM);
+    require(node.wait() == 0, "gameServer graceful shutdown failed");
+    std::cout << "entity.reload.isolation: every refusal keeps the old service and runtime [PASS]\n";
+}
 }
