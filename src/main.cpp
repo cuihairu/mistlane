@@ -326,7 +326,8 @@ int main(int argc, char** argv) {
                              "  login: --coordinator IP:PORT [--namespace NAME] [--scope NAME] enables\n"
                              "      mistlane.place(role, namespace?, scope?, callback) placement lookups\n"
                              "      (no registration)\n"
-                             "  data: answers MLD1 LOAD/SUBMIT record frames on framed TCP;\n"
+                             "  data: answers MLD1 LOAD/SUBMIT record frames and MLD2 SAVE/LOAD\n"
+                             "      entity-state frames on framed TCP;\n"
                              "      --journal FILE enables durable writes and ACK durable\n"
                              "  --transport tcp|ws|wss|http|https (wss/https require --cert FILE --key FILE)\n"
                              "  --listener PROTO://IP:PORT (repeat; independent extra listener, mixed\n"
@@ -349,9 +350,12 @@ int main(int argc, char** argv) {
                              "  --data IP:PORT (home data MLD1 endpoint: crossServer return sender\n"
                              "    retries enqueued changes in a bounded queue until ACK durable;\n"
                              "    login asks it for the data-issued hosting generation, whose\n"
-                             "    mistlane.grant(realm, character, callback) answers the entry flow)\n"
+                             "    mistlane.grant(realm, character, callback) answers the entry flow;\n"
+                             "    a gameServer with --contract saves entity state over MLD2 and\n"
+                             "    loads it back on spawn, with --upstream-token presenting MLS1)\n"
                              "  entity host (gameServer/crossServer with --contract): --journal FILE\n"
-                             "    adds durable entity save rows to that journal; --entity-save-period N\n"
+                             "    adds durable entity save rows to that journal (--data replaces it:\n"
+                             "    the data role becomes the single durable owner); --entity-save-period N\n"
                              "    (ms, default 1000) drives the periodic forced-save pass and a shutdown\n"
                              "    save always runs at stop\n"
                              "SIGHUP: transactional script reload (state is reset)\n"
@@ -485,10 +489,12 @@ int main(int argc, char** argv) {
             throw std::invalid_argument("--namespace and --scope require --coordinator");
         if (!config.coordinator_enabled && !config.upstream_token.empty() && config.role != "gateway"
                 && config.role != "crossServer" && config.role != "login"
-                && !(config.role == "apiServer" && !config.data.address.empty()))
+                && !(config.role == "apiServer" && !config.data.address.empty())
+                && !(config.role == "gameServer" && !config.data.address.empty()))
             // Members present this identity when they register; an apiServer
-            // presents it on its MLD1 ownership leg; anywhere else the flag
-            // would silently do nothing.
+            // presents it on its MLD1 ownership leg and a gameServer on its
+            // MLD2 entity-state leg; anywhere else the flag would silently
+            // do nothing.
             throw std::invalid_argument("--upstream-token applies to gateway or coordinator members");
         if (config.role == "crossServer" && !config.upstream_token.empty()
                 && !config.coordinator_enabled && config.data.address.empty())
@@ -541,12 +547,14 @@ int main(int argc, char** argv) {
         if (!config.upstream_token.empty() && config.routing == "cross")
             throw std::invalid_argument("--upstream-token does not apply to cross routing");
         // The framework return sender is crossServer-only, the login entry
-        // flow's data legs are login-only, and the MLA1 ownership callback's
-        // home-facts source is apiServer-only; any other role would silently
-        // ignore the endpoint, so refuse the misconfiguration.
+        // flow's data legs are login-only, the MLA1 ownership callback's
+        // home-facts source is apiServer-only, and an entity host's MLD2
+        // save/load leg is a contract-carrying gameServer; any other role
+        // would silently ignore the endpoint, so refuse the misconfiguration.
         if (!config.data.address.empty() && config.role != "crossServer" && config.role != "login"
-                && config.role != "apiServer")
-            throw std::invalid_argument("--data applies to crossServer, login or apiServer");
+                && config.role != "apiServer"
+                && !(config.role == "gameServer" && !config.contract.empty()))
+            throw std::invalid_argument("--data applies to crossServer, login, apiServer or an entity host with --contract");
         // Multiplexing is the internal mode: only identified peers may upgrade
         // a shared connection, so an anonymous upstream link cannot be offered it.
         if (config.upstream_multiplex) {

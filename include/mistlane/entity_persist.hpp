@@ -16,6 +16,10 @@ struct SaveReceipt {
 
 struct SaveOutcome {
     bool ok = false;
+    // deferred=true: the receipt is confirmed later by the async durability
+    // sink (the data leg's ACK), not inside save() — ok here means "handed
+    // to the sink cleanly", not "landed".
+    bool deferred = false;
     EntityError error = EntityError::INVALID;
     std::string reason;  // "generation" | "revision" | "in-flight" | ""
     SaveReceipt receipt;

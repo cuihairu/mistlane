@@ -40,11 +40,30 @@ public:
 // never landed aborts its own in-flight receipt (dirty survives, the slot
 // frees for a retry). restore() loads a persisted snapshot back with explicit
 // version conversion and the same whole-load refusal.
+//
+// The durable step has two shapes. With a backend the write is synchronous
+// and confirm follows it inline. With a sink (set_async_sink — the data-leg
+// transport) the encoded snapshot is handed to the sink and save() returns
+// deferred; the sink's completion calls complete_deferred, which confirms on
+// a durable ACK and aborts otherwise — dirty survives every non-durable
+// outcome and the next period retries. Everything runs on the node's serial
+// loop (the sink posts its completion there), so no additional
+// synchronization is needed; a multi-threaded node would have to strand
+// these calls first.
 class EntityStateStore {
 public:
     EntityStateStore(EntityTarget address, PersistentStore& persist,
                      const SprotoCodec* codec, EntityStateBackend* backend)
         : address_(address), persist_(persist), codec_(codec), backend_(backend) {}
+    ~EntityStateStore() { *alive_ = false; }  // outstanding sink completions become no-ops
+
+    // The async durability sink: one call per save, given the wire-ready
+    // snapshot and a done callback that must fire exactly once (on the
+    // node's loop). The sink owns the transport leg; the store keeps the
+    // receipt until done() names the outcome.
+    using AsyncSink = std::function<void(const EntityStateSnapshot&, std::function<void(bool, const std::string&)>)>;
+    void set_async_sink(AsyncSink sink) { sink_ = std::move(sink); }
+    bool async() const { return static_cast<bool>(sink_); }
 
     SaveOutcome save(std::uint64_t generation, std::uint64_t expected_revision) {
         SaveOutcome outcome = persist_.save(generation, expected_revision);
@@ -55,6 +74,22 @@ public:
             outcome.ok = false;
             outcome.error = EntityError::INVALID;
             outcome.reason = "snapshot not encodable";
+            return outcome;
+        }
+        if (sink_) {
+            // Deferred durability: the receipt stays in flight until the
+            // sink answers. The alive guard makes a completion that arrives
+            // after this store died (its entity destroyed) a no-op instead
+            // of a dangling confirm/abort.
+            auto alive = alive_;
+            EntityStateSnapshot wire{address_.scope, address_.type_id, address_.incarnation,
+                                     address_.entity_id, generation, expected_revision, *encoded};
+            sink_(wire, [this, alive, save_id = outcome.receipt.save_id](bool landed, const std::string&) {
+                if (!*alive) return;
+                if (landed) persist_.confirm(save_id);
+                else persist_.abort(save_id);
+            });
+            outcome.deferred = true;
             return outcome;
         }
         if (backend_) {
@@ -99,5 +134,9 @@ private:
     PersistentStore& persist_;
     const SprotoCodec* codec_;
     EntityStateBackend* backend_;
+    AsyncSink sink_;
+    // Shared with every outstanding completion: destroyed() flips it, so a
+    // late done() sees false and does not touch the dead persist_.
+    std::shared_ptr<bool> alive_ = std::make_shared<bool>(true);
 };
 }

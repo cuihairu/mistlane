@@ -20,6 +20,7 @@
 #include "observability.hpp"
 #include "tcp_channel.hpp"
 #include "return_sender.hpp"
+#include "entity_state_fetch.hpp"
 #include "transfer_driver.hpp"
 #include "registry_service.hpp"
 #include "scene_host.hpp"
@@ -348,6 +349,12 @@ public:
             record_journal_ = std::make_unique<MigrationJournal>(config_.journal);
             records_.attach_backend(record_journal_.get());
         }
+        // The durable entity-state endpoint lives with the record endpoint:
+        // one journal, one fence seed, the same honest degradation without a
+        // backend (MLD2 RECEIVED, never a durability claim).
+        if (config_.role == "data")
+            entity_state_service_ = std::make_unique<EntityStateService>(
+                record_journal_ ? record_journal_.get() : nullptr);
         if (config_.probe_enabled) {
             probe_ = std::make_shared<ProbeServer>(io_, config_.probe_listen,
                 [this](std::string_view command) {
@@ -438,11 +445,32 @@ public:
             // An entity host with --journal keeps its forced-save rows in the
             // same SQLite store the durable roles use; without it the chain
             // still runs (records and revision fences stay in process), so a
-            // contract alone never disables persistence observability.
-            if (!config_.journal.empty())
+            // contract alone never disables persistence observability. With
+            // --data the durable owner is the data role over MLD2, so no
+            // local journal is opened at all — one writer of record, not two.
+            const bool durable_via_data = !config_.data.address.empty();
+            if (!durable_via_data && !config_.journal.empty())
                 entity_journal_ = std::make_unique<MigrationJournal>(config_.journal);
             entity_endpoint_ = std::make_unique<EntityEndpoint>(*entity_contract_, entity_codec_.get(),
                 entity_codec_.get(), entity_journal_.get(), config_.entity_save_period_ms);
+            if (durable_via_data) {
+                // Save side: every forced save rides MLD2 to the data role;
+                // the store's receipt confirms on the ACK and aborts on any
+                // refusal, both re-entering this loop through the fetcher.
+                state_identity_ = config_.upstream_token.empty() ? std::string{} : service_hello(config_);
+                auto& runtime = entity_endpoint_->runtime();
+                runtime.set_state_sink([this](const EntityStateSnapshot& snapshot,
+                                              std::function<void(bool, const std::string&)> done) {
+                    EntityStateFetcher::save(io_.get_executor(), config_.data, state_identity_, snapshot, std::move(done));
+                });
+                // Load side: a fresh spawn asks data for the durable row and
+                // restores it (the runtime adopts the row's generation first,
+                // so the hosting fence stays ahead of the restored record).
+                runtime.set_state_loader([this](const EntityStateKey& key,
+                                                EntityStateFetcher::LoadDone done) {
+                    EntityStateFetcher::load(io_.get_executor(), config_.data, state_identity_, key, std::move(done));
+                });
+            }
             // Property pushes are a framework frame (MLP1), routed to whichever
             // session the script subscribed by id; the runtime's sink is what
             // closes the send-side wiring. A vanished session drops the frame
@@ -723,6 +751,7 @@ private:
             // path only; link sessions are keyed by their logical id instead.
             config_.upstream_multiplex ? nullptr : gateway_correlation_.get(), next_connection_++,
             entity_routes_.get(), return_sender_.get(),
+            entity_state_service_.get(),
             [this](AvatarKey key) { return_releases_[{key.realm, key.character}] = key; });
         sessions_.insert(session);
         publish_active();
@@ -769,7 +798,8 @@ private:
                         if (i->get() == ptr) { sessions_.erase(i); break; }
                     publish_active();
                 }, nullptr, nullptr, true, config_.role == "data" ? &records_ : nullptr,
-                ticket_verifier_.get(), entity_endpoint_.get(), nullptr, 0);
+                ticket_verifier_.get(), entity_endpoint_.get(), nullptr, 0,
+                nullptr, nullptr, entity_state_service_.get());
             sessions_.insert(session);
             publish_active();
             session->start();
@@ -1071,10 +1101,14 @@ private:
         // Shutdown save: the same single forced-save entry, period ignored,
         // driven once while the entity runtime and its backend are still open.
         // A stop never silently drops a refused save — the report names it.
+        // A deferred count is honest here: the fetchers keep asio work alive,
+        // so run() keeps pumping until every ACK (or deadline) lands after
+        // this report prints.
         if (entity_endpoint_) {
             const auto saves = entity_endpoint_->runtime().shutdown_save();
             if (saves.attempted || saves.refused())
                 std::cerr << "shutdown save: landed=" << saves.landed << " attempted=" << saves.attempted
+                          << " deferred=" << saves.deferred
                           << " refused=" << saves.refused() << '\n';
         }
         // Drain cancellation handlers before destroying Lua/Node state.
@@ -1111,6 +1145,12 @@ private:
     // nullptr and keeps MLD1 as plain script traffic.
     RecordStore records_;
     std::unique_ptr<MigrationJournal> record_journal_;
+    // The MLD2 entity-state endpoint, same ownership: data serves it, every
+    // other role passes nullptr. Journal-backed when --journal is set.
+    std::unique_ptr<EntityStateService> entity_state_service_;
+    // The MLS1 identity an entity host presents to its --data endpoint
+    // (empty on a plain data leg), computed once when the sink is wired.
+    std::string state_identity_;
     // MLA1 external API: native route beside the Lua HTTP callbacks.
     ApiReplayGuard api_replay_;
     std::unique_ptr<ApiAcceptanceStore> api_store_;

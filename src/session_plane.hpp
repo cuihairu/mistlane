@@ -22,6 +22,7 @@
 #include "mistlane/entity_endpoint.hpp"
 #include "mistlane/entity_gateway.hpp"
 #include "mistlane/entity_route.hpp"
+#include "mistlane/entity_state_wire.hpp"
 #include <cctype>
 #include <charconv>
 #include <deque>
@@ -414,12 +415,13 @@ public:
             const TicketVerifier* tickets = nullptr, EntityEndpoint* entities = nullptr,
             GatewayEntityCorrelation* gateway = nullptr, std::uint64_t connection = 0,
             const EntityHostRoutes* entity_routes = nullptr, ReturnSink* return_sink = nullptr,
+            EntityStateService* states = nullptr,
             std::function<void(AvatarKey)> on_return_pending = {})
       : client_(std::move(client)), service_(service),
         timer_(client_->executor()), config_(config), admission_(admission), diagnostics_(diagnostics),
         registry_(registry), on_close_(std::move(on_close)), mux_upgrade_(std::move(mux_upgrade)),
         internal_(internal), records_(records), ticket_verifier_(tickets), entities_(entities),
-        gateway_(gateway), connection_(connection) {
+        gateway_(gateway), connection_(connection), states_(states) {
         // The mux hub and the route table are borrowed pointers assigned here
         // rather than in the init list: the hub decides the link, so the table
         // is only meaningful on the path that has one. Declaration order already
@@ -554,6 +556,16 @@ private:
             if (!internal_ && !config_.service_token.empty() && !service_ok_)
                 return refuse_service("MLS1", "TOKEN");
             return serve_record(std::move(payload));
+        }
+        // Entity-state frames belong to the framework exactly like MLD1, and
+        // ride the same gate: the data role is the durable entity store, and
+        // the fence lives here, not in the script. Checked before the
+        // handshake window, so a tokened node answers the first frame with
+        // the token refusal instead of routing it anywhere.
+        if (states_ && payload.starts_with("MLD2")) {
+            if (!internal_ && !config_.service_token.empty() && !service_ok_)
+                return refuse_service("MLS1", "TOKEN");
+            return serve_state(std::move(payload));
         }
         // Handshake window: MLS1 identifies an internal peer, MLC2 turns on
         // correlation and MLM1 upgrades an identified leg to the shared link,
@@ -818,6 +830,15 @@ private:
         std::string_view result;
         auto verdict = records_->handle(payload, result);
         diagnostics_.record_result(result);
+        reply(std::move(verdict));
+    }
+    // Entity-state legs behave the same: one identified host saves and loads
+    // many snapshots over one connection. No dedicated metric label yet —
+    // the result word feeds the record counter only when a backend labels
+    // it, so this stays a plain reply until a wire metric is worth a gate.
+    void serve_state(std::string payload) {
+        std::string_view result;
+        auto verdict = states_->handle(payload, result);
         reply(std::move(verdict));
     }
     // A refused service handshake closes the connection after the verdict:
@@ -1132,6 +1153,9 @@ private:
     Diagnostics& diagnostics_;
     GameSessions* registry_;
     RecordStore* records_ = nullptr;
+    // Non-null only on a data node: the MLD2 entity-state endpoint. Every
+    // other role passes nullptr and keeps MLD2 as plain script traffic.
+    EntityStateService* states_ = nullptr;
     // Non-null only on a node that loaded an entity contract: MLE1 frames go to
     // the endpoint instead of the script, and non-entity frames pass through.
     // Non-const: handle() dispatches into the Lua state, which mutates it.

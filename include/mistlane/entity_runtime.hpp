@@ -4,6 +4,7 @@
 #include "mistlane/entity_persist.hpp"
 #include "mistlane/entity_save.hpp"
 #include "mistlane/entity_state.hpp"
+#include "mistlane/entity_state_wire.hpp"
 #include "mistlane/entity_sync.hpp"
 #include <functional>
 #include <map>
@@ -33,6 +34,7 @@ public:
  // routes the encoded frame by observer id without re-deriving the audience.
  using PropertyPush = std::function<void(const EntityTarget&, const std::string& observer, const SyncMessage&)>;
  explicit EntityRuntime(const EntityContract& contract) : dispatcher_(contract) {}
+ ~EntityRuntime() { *alive_ = false; }  // outstanding load completions become no-ops
  EntityDispatcher& dispatcher() { return dispatcher_; }
  // Switch on the persistence chain. The codec is what a snapshot is encoded
  // with, the backend the durable boundary (null keeps everything in process),
@@ -44,6 +46,21 @@ public:
    backend_ = backend;
    driver_.emplace(period_ms);
  }
+ // The async durability sink (the data leg): every new EntityStateStore hands
+ // its snapshots here instead of writing a local backend; the sink's done()
+ // callback completes the deferred receipt. The loader is the load half: one
+ // ask per spawned declared entity, answering (present, generation,
+ // revision, bytes); on success the runtime adopts the row's generation into
+ // its hosting fence (MLE1 STALE compares against it) before restoring the
+ // snapshot. Both run on the node's serial loop — the node wires them to its
+ // --data endpoint when configured; without them the chain keeps its local
+ // backend exactly as before.
+ using StateSink = std::function<void(const EntityStateSnapshot&, std::function<void(bool, const std::string&)>)>;
+ using StateLoader = std::function<void(const EntityStateKey&,
+     std::function<void(bool present, std::uint64_t generation, std::uint64_t revision,
+                        const std::string& bytes, const std::string& reason)>)>;
+ void set_state_sink(StateSink sink) { state_sink_ = std::move(sink); }
+ void set_state_loader(StateLoader loader) { state_loader_ = std::move(loader); }
  bool persistence_enabled() const { return codec_ != nullptr; }
  bool spawn(EntityTarget ref, std::uint32_t hosting_generation = 1) {
    if (!ref.scope || !ref.type_id || !ref.entity_id || !ref.incarnation || !hosting_generation) return false;
@@ -63,9 +80,14 @@ public:
        auto owned = std::make_unique<PersistentStore>(*store);
        owned->assume(hosting_generation);
        auto record = std::make_unique<EntityStateStore>(ref, *owned, codec_, backend_);
+       if (state_sink_) record->set_async_sink(state_sink_);
        driver_->add(record.get());
        records_.emplace(address(ref), std::move(record));
        owned_state_.emplace(address(ref), std::move(owned));
+       // The load ask goes out after the record sits in the map: the
+       // completion resolves the store through state_store(), which reads
+       // this map (and guards on the answer being for a live entity).
+       if (state_loader_) load_state(ref);
      }
      break;
    }
@@ -248,6 +270,28 @@ private:
  using Address=std::tuple<std::uint32_t,std::uint32_t,std::int64_t,std::uint32_t>;
  static Address address(const EntityTarget& r) { return {r.scope,r.type_id,r.entity_id,r.incarnation}; }
  static EntityDispatchResult fail(EntityError e) { EntityDispatchResult r;r.error=e;return r; }
+ // One load ask for a just-spawned entity. The completion first checks the
+ // runtime itself is still alive (the ask may outlive it in a test harness),
+ // then that the address is still live (the entity may have been destroyed
+ // while the ask was in flight), adopts the row's generation into the
+ // hosting fence — spawn's generation is the floor, a data row proves a
+ // strictly newer assignment — and restores the snapshot;
+ // PersistentStore::restore keeps its whole-load refusal, defaulting and
+ // generation monotonicity.
+ void load_state(const EntityTarget& ref) {
+   const auto a = address(ref);
+   auto alive = alive_;
+   state_loader_({ref.scope, ref.type_id, ref.incarnation, ref.entity_id},
+       [this, ref, a, alive](bool present, std::uint64_t generation, std::uint64_t revision,
+                             const std::string& bytes, const std::string&) {
+     if (!*alive) return;
+     if (!present || !entities_.contains(a)) return;
+     auto& held = entities_[a];
+     if (generation > held) held = static_cast<std::uint32_t>(std::min<std::uint64_t>(generation, ~0ull>>32));
+     if (auto* store = state_store(ref))
+       store->restore(generation, revision, bytes);
+   });
+ }
  // Per-entity tombstone retention: once an entity holds more than this many
  // live correlations, the oldest are evicted (a replay older than the window
  // may double-deliver, matching the bounded at-least-once contract).
@@ -272,6 +316,11 @@ private:
  EntityStateBackend* backend_ = nullptr;
  PropertyPush push_;
  HostRoute host_route_;
+ StateSink state_sink_;
+ StateLoader state_loader_;
+ // Shared with every load completion: destruction flips it, so a late
+ // answer never touches this dead runtime.
+ std::shared_ptr<bool> alive_ = std::make_shared<bool>(true);
 };
 
 // Single-threaded RPC lifecycle model driven by a monotonic clock supplied by tests.

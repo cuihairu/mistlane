@@ -37,6 +37,7 @@ public:
     struct Report {
         std::size_t attempted = 0;  // dirty stores given a save this tick
         std::size_t landed = 0;     // a save confirmed
+        std::size_t deferred = 0;   // handed to the async sink, awaiting its ACK
         std::size_t in_flight = 0;  // skipped: an unconfirmed save is pending
         std::size_t conflict = 0;   // skipped: the observed revision moved on
         std::size_t stale = 0;      // skipped: the record's generation changed
@@ -71,6 +72,7 @@ private:
             ++report.attempted;
             try {
                 const auto outcome = store->save(store->generation(), store->revision());
+                if (outcome.ok && outcome.deferred) { ++report.deferred; continue; }
                 if (outcome.ok) { ++report.landed; continue; }
                 if (outcome.reason == "in-flight") { ++report.in_flight; continue; }
                 if (outcome.reason == "revision") { ++report.conflict; continue; }
