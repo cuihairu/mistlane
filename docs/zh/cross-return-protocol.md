@@ -77,6 +77,8 @@ MLD1 ERR INVALID | MLD1 ERR STALE gen <n> | MLD1 ERR SEQ seq <n> | MLD1 ERR FULL
 
 [coordinator 迁移事务第一片](./protocol-analysis.md#coordinator-migration-transaction-first-slice)已复用租约闸门实现独立类型协议模型：prepare/commit、中止/清理、检查点恢复。home 栅栏前可清理目标并恢复源；栅栏后只能等待目标确认并向前提交。内存检查点不提供上述持久权威或运行时接线。
 
+**实体交接接线（2026-11-26）：**同一 active(g) → fenced(g) → active(g+1) 序列现已在实体侧由四个真实进程驱动（见[实体契约](./entity-contract.md#服务器不重编的边界和两种更新)）：源侧冻结并经唯一强制保存入口冲刷到耐久 `MLD2 ACK`，随后 EPREPARE → 目的地 READY（从未栅栏的行在 `g+1` 采纳）→ `MLD2 FENCE gen g` → ECOMMIT → 源销毁，终结行由目的地 CLEANUP。易失 `RECEIVED` 在栅栏前中止、源保持唯一活写者；栅栏后的拒绝让实体保持冻结/已栅栏，由目的地轮询或严格更新的 generation 恢复。在途处理器按事件循环串行；Lua `tick` 钩子是唯一计时器面，tick 状态随纯数据 `handoff()` bundle 携带（不发明计时器线格式）。SIGHUP 的 validate-only 影子 VM 现已执行代码替换；它不是本进程迁移的替代品。客户端版本协商与新旧客户端混合矩阵仍未落地。
+
 ## 故障处理
 
 | 故障 | 规则 |

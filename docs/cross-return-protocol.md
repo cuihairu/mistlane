@@ -79,6 +79,8 @@ The home data service is the sole generation authority. The state sequence is `a
 
 The [coordinator migration transaction first slice](./protocol-analysis.md#coordinator-migration-transaction-first-slice) now implements a separate typed protocol model for prepare/commit, abort/cleanup and checkpoint recovery, reusing this lease gate. Before the home fence, abort cleans up the target and restores the source; after the fence recovery waits for target acknowledgement and commits forward. Its in-memory checkpoints do not supply the durable authority or runtime wiring required above.
 
+**Entity handoff wiring (2026-11-26):** the same active(g) → fenced(g) → active(g+1) sequence is now driven on the entity side by four real processes (see [entity contract](./entity-contract.md#no-server-rebuild-limits-and-two-update-modes)): the source freezes and flushes through the single forced-save entry to a durable `MLD2 ACK`, then EPREPARE → destination READY (adoption at `g+1` from the still-unfenced row) → `MLD2 FENCE gen g` → ECOMMIT → source destroy, with the destination resolving the terminal row via CLEANUP. A volatile `RECEIVED` aborts before the fence and the source stays the single live writer; a refusal after the fence leaves the entity frozen/fenced for the destination's poll or a strictly newer generation. In-flight handlers are event-loop serialized; the Lua `tick` hook is the only timer surface and tick state travels in the plain-data `handoff()` bundle (no timer wire format is invented). SIGHUP's validate-only shadow VM now performs the code-only replacement; it is not a substitute for this process migration. Client version negotiation and the mixed old/new client matrix remain open.
+
 ## Failure handling
 
 | Failure | Rule |
