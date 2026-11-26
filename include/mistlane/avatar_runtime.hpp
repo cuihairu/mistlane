@@ -122,6 +122,18 @@ public:
     // in active, suspended, visiting and reclaiming. Nothing else clears dirty
     // state or triggers a save by side effect.
     virtual bool on_save(const AvatarKey&, const std::string& avatar_ref) = 0;
+    // avatar_save at the settle edge (结算): invoked after the visit
+    // relinquished its lease, with the state captured. A string return is the
+    // visit's final account as opaque bytes (the representation
+    // avatar_transfer_out produces and a home LOAD carries back), submitted
+    // home as the final change before the release; a truthy return without a
+    // string is notification-only — the changes the script already enqueued
+    // are the account. Failure is best effort: the settle settles nothing and
+    // the release still waits on the drain. Defaults vacuous like the
+    // cross-event faces so a host that does not capture state behaves as
+    // today.
+    virtual bool on_settle(const AvatarKey&, const std::string& avatar_ref,
+                           std::string& snapshot) { return true; }
     // avatar_transfer_out (context) -> state snapshot. Valid at the
     // active -> transferring edge; abort returns to active. The snapshot is the
     // avatar's final state as an opaque byte string (the same representation a
@@ -393,6 +405,26 @@ public:
         return {AvatarError::Ok, ""};
     }
 
+    // Settlement (结算): the graceful return's final account. Valid only in
+    // transferring — the caller settles after cross_leave succeeded, so the
+    // avatar being settled is exactly the one whose account travels. Runs the
+    // save hook with capture (Hooks::on_settle); the string return, if any, is
+    // the caller's payload for the final MLD1 change. No state changes and no
+    // oracle edge runs here — release still closes transferring, and the
+    // release's "no save" rule stands: the account left through the settle
+    // change instead. A vacuous save (no hook, or a truthy return without a
+    // string) leaves the snapshot empty and settles nothing; the caller's
+    // sink-side settle is what turns a non-empty snapshot into the tail of
+    // the ordered return queue.
+    Result settle(AvatarKey key, std::string& snapshot) {
+        Entry* e = find(key);
+        if (!e) return {AvatarError::NoAvatar, "no avatar"};
+        if (e->state != AvatarState::Transferring)
+            return {state_refusal(e->state), std::string("avatar is ") + to_string(e->state)};
+        (void)hooks_.on_settle(key, e->ref, snapshot); // best effort by contract
+        return {AvatarError::Ok, ""};
+    }
+
     // Same-process scene switch (docs/avatar-runtime.md: the avatar stays
     // `active`; only its instance reference changes. No save, no state
     // round-trip — nothing travels, and the scene-lifecycle no-repeat rule
@@ -438,14 +470,16 @@ public:
 
     // E_RETURN_RELEASE: transferring -> closed (the source released). This is
     // the return flow's terminal on the crossServer: the visit relinquished the
-    // lease (E_CROSS_LEAVE put it in transferring) and every change has since
-    // been acknowledged durably, so the avatar is no longer a participant of
-    // record and closes. Unlike close_visit (abnormal termination, best-effort
-    // save) this runs no save — the durable changes already landed via MLD1 —
-    // but fires onCrossVisitEnd for a cross-source avatar (the cross scope
-    // ends here); a host-to-host transfer avatar (source home or transfer-in)
-    // has no cross scope to end. Valid only in transferring; a transfer that
-    // already aborted to active or was accepted to loading is not the source's.
+    // lease (E_CROSS_LEAVE put it in transferring), the caller settled the
+    // visit's final account at that edge (settle), and every change — the
+    // account included — has since been acknowledged durably, so the avatar is
+    // no longer a participant of record and closes. Unlike close_visit
+    // (abnormal termination, best-effort save) this runs no save — the durable
+    // changes already landed via MLD1 — but fires onCrossVisitEnd for a
+    // cross-source avatar (the cross scope ends here); a host-to-host transfer
+    // avatar (source home or transfer-in) has no cross scope to end. Valid only
+    // in transferring; a transfer that already aborted to active or was
+    // accepted to loading is not the source's.
     Result release(AvatarKey key) {
         Entry* e = find(key);
         if (!e) return {AvatarError::NoAvatar, "no avatar"};
@@ -492,9 +526,9 @@ public:
 
     // Node retirement face (docs/avatar-runtime.md's reload rule): every avatar
     // in a replaced or stopping VM gets a best-effort avatar_save (valid states
-    // only — a transferring avatar's final snapshot already left with
-    // avatar_transfer_out, and a loading avatar never published) and then
-    // closes. A visiting avatar that closes fires onCrossVisitEnd. This is the
+    // only — a transferring avatar's final account already left through its
+    // settle change or transfer snapshot, and a loading avatar never published)
+    // and then closes. A visiting avatar that closes fires onCrossVisitEnd. This is the
     // framework retiring the whole VM, not a per-state lifecycle transition, so
     // no edge is driven; the dirty claim of an unsaved record belongs to the
     // sender queue and the data side.

@@ -16,6 +16,7 @@ void avatar_session();
 void avatar_home();
 void avatar_home_record();
 void avatar_return();
+void avatar_settle();
 void avatar_transfer_source();
 void avatar_transfer_destination();
 void avatar_transfer_full();
@@ -174,6 +175,7 @@ int run_tests(int argc, char** argv) {
         {"avatar.home","contract",test::avatar_home},
         {"avatar.home.record","contract",test::avatar_home_record},
         {"avatar.return","contract",test::avatar_return},
+        {"avatar.settle","contract",test::avatar_settle},
         {"avatar.transfer.source","contract",test::avatar_transfer_source},
         {"avatar.transfer.destination","contract",test::avatar_transfer_destination},
         {"avatar.transfer.full","contract",test::avatar_transfer_full},

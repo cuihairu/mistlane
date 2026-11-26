@@ -106,6 +106,37 @@ public:
             return {};
         } catch (const std::exception&) { return "invalid"; }
     }
+    // The graceful return's settlement: one final change the framework itself
+    // owns. The sequence is not chosen by the caller — it resolves against the
+    // durable cursor (one past every change this participant holds) at the
+    // moment the cursor exists, so the settle change always lands after
+    // whatever the script queued, whenever the seed LOAD answers. Until then
+    // it is held like a pre-load change, and drained() keeps the participant a
+    // participant of record for exactly as long as the settle change is not
+    // durably acknowledged.
+    std::string settle(std::string_view realm, std::string_view character,
+                       std::uint64_t generation, std::string_view payload) override {
+        try {
+            const Key key{std::string(realm), std::string(character)};
+            if (!generation) throw std::invalid_argument("invalid generation");
+            if (settle_holds_.contains(key)) throw std::invalid_argument("settle already pending");
+            // The sequence resolves only once the cursor exists, so budget the
+            // frame against a worst-case header (20-digit sequence and
+            // generation) now: a near-limit payload must be refused here, not
+            // after it waited for a cursor it can never fit.
+            const auto header = 12 + key.first.size() + 1 + key.second.size()
+                + 5 + 20 + 5 + 20 + 1;
+            if (header + payload.size() > max_frame)
+                throw std::invalid_argument("payload too large for MLD1 frame");
+            if (!seeded_.contains(key) && !seed(realm, character).empty())
+                throw std::invalid_argument("unseeded participant");
+            if (loaded_cursor_.contains(key)) {
+                resolve_settle(key, generation, payload);
+            } else settle_holds_[key] = {generation, std::string(payload)};
+            send_next();
+            return {};
+        } catch (const std::exception&) { return "invalid"; }
+    }
 private:
     using Key = std::pair<std::string, std::string>;
     using Change = ReturnSendQueue::Change;
@@ -252,6 +283,7 @@ private:
     }
     void send_next() {
         if (stopping_ || phase_ != Phase::ready || writing_) return;
+        resolve_settles();
         if (!load_in_flight_ && !submitted_) {
             for (const auto& key : seeded_)
                 if (!loaded_cursor_.contains(key)) { load_in_flight_ = key; break; }
@@ -284,6 +316,31 @@ private:
             + " gen "+std::to_string(change.generation)
             + " seq "+std::to_string(change.sequence)
             + (change.payload.empty() ? "" : " "+change.payload));
+    }
+    // The cursor for this participant just became known: a held settle change
+    // can now take its place at the tail of the ordered queue. The frame budget
+    // was pre-checked in settle() against the worst-case header, so the only
+    // throw here is a full queue.
+    void resolve_settle(const Key& key, std::uint64_t generation, std::string_view payload) {
+        Change change{key.first, key.second, generation,
+            queue_.next_sequence(key.first, key.second), std::string(payload)};
+        const auto header = submit_header(change);
+        if (header + change.payload.size() > max_frame)
+            throw std::invalid_argument("payload too large for MLD1 frame");
+        queue_.enqueue(std::move(change));
+    }
+    // Resolve every held settle whose cursor has since answered, at the head
+    // of each pump. A full queue keeps the hold: ACKs free capacity and the
+    // next pump retries, so the account is never stranded — it lands once it
+    // fits, still one past everything the participant holds.
+    void resolve_settles() {
+        for (auto held = settle_holds_.begin(); held != settle_holds_.end();) {
+            if (!loaded_cursor_.contains(held->first)) { ++held; continue; }
+            try {
+                resolve_settle(held->first, held->second.first, held->second.second);
+            } catch (const std::exception&) { return; }
+            held = settle_holds_.erase(held);
+        }
     }
     // After a seed LOAD answers, feed any changes the script enqueued before
     // the cursor existed into the ordered queue (per-participant order kept).
@@ -362,6 +419,7 @@ private:
     std::string identity_;
     std::set<Key> seeded_, loaded_cursor_;
     std::map<Key, std::vector<Change>> pending_before_load_;
+    std::map<Key, std::pair<std::uint64_t, std::string>> settle_holds_;
     std::size_t pending_before_load_count_ = 0;
     std::optional<Key> load_in_flight_, submitted_;
     std::uint64_t submitted_sequence_ = 0;

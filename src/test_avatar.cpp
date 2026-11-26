@@ -30,6 +30,13 @@ struct RecordingHooks final : AvatarHooks {
         calls.push_back("save:" + r);
         return !fail_save;
     }
+    bool fail_settle = false;
+    std::string settle_snapshot;
+    bool on_settle(const AvatarKey&, const std::string& r, std::string& snapshot) override {
+        calls.push_back("settle:" + r);
+        snapshot = settle_snapshot;
+        return !fail_settle;
+    }
     bool on_transfer_out(const AvatarKey&, const std::string& r, std::string& snapshot) override {
         calls.push_back("transfer_out:" + r);
         snapshot = transfer_snapshot;
@@ -390,6 +397,8 @@ void avatar_lifecycle() {
         std::string snapshot;
         r = runtime.transfer_out(key, snapshot);
         require(r.code == AvatarError::Visiting, "transfer out from visiting did not refuse AVATAR_VISITING");
+        r = runtime.settle(key, snapshot);
+        require(r.code == AvatarError::Visiting, "settle from visiting did not refuse AVATAR_VISITING");
         // Return complete: back to home authority.
         r = runtime.return_complete(key);
         require(r.ok() && runtime.state(key) == AvatarState::Active, "return complete did not restore active");
@@ -428,6 +437,18 @@ void avatar_lifecycle() {
         r = runtime.cross_leave(other);
         require(r.ok() && runtime.state(other) == AvatarState::Transferring,
                 "cross leave did not move to transferring");
+        // Settlement: the leave edge captures the visit's final account. Valid
+        // only in transferring — a refusal in any other state with that
+        // state's code; the capture writes no state and the release's no-save
+        // rule stands after it.
+        std::string account;
+        r = runtime.settle(key, account);
+        require(!r.ok(), "settle outside transferring did not refuse");
+        require(account.empty(), "a refused settle captured a state");
+        hooks.settle_snapshot = "final hp=99";
+        r = runtime.settle(other, account);
+        require(r.ok() && account == "final hp=99", "settle did not capture the final account");
+        require(runtime.state(other) == AvatarState::Transferring, "settle moved the avatar");
         const auto saves_before = hooks.count("save");
         r = runtime.release(other);
         require(r.ok() && runtime.state(other) == AvatarState::Closed,
@@ -435,6 +456,19 @@ void avatar_lifecycle() {
         require(hooks.count("cross_end") == 1, "release did not fire onCrossVisitEnd exactly once");
         require(hooks.count("save") == saves_before,
                 "release ran a save (the change-set was already durable)");
+        // settle of a closed avatar refuses, and the vacuous face (a save that
+        // captures nothing) settles an empty snapshot without complaint.
+        r = runtime.settle(other, account);
+        require(r.code == AvatarError::Closed, "settle of a closed avatar did not refuse");
+        hooks.settle_snapshot.clear();
+        require(runtime.admit_visit(other, 9, 100).ok() && runtime.cross_leave(other).ok(),
+                "vacuous setup failed");
+        account.clear();
+        require(runtime.settle(other, account).ok() && account.empty(),
+                "a vacuous settle did not stay vacuous");
+        require(hooks.count("settle") == 2, "settle did not run the capture exactly twice");
+        require(runtime.release(other).ok() && runtime.state(other) == AvatarState::Closed,
+                "the vacuous visit did not close again");
         // release of a closed avatar refuses.
         r = runtime.release(other);
         require(r.code == AvatarError::Closed, "release of a closed avatar did not refuse");
@@ -1104,7 +1138,11 @@ return {
             "the drained visitor did not release on disconnect");
         const auto seen = trace(raw);
         require(has(seen, "start:hero"), "the visit never started");
-        require(!has(seen, "save:hero"), "the graceful release ran a best-effort save");
+        // The settle edge captures the leave exactly once (vacuously here: the
+        // save returns true, so nothing extra enqueues); the release itself
+        // still runs no save.
+        require(tally(seen, "save:hero") == 1,
+                "the settle edge did not capture the leave exactly once");
         require(!has(seen, "leave:hero"), "leaving cross scope ran avatar_leave");
     }
     // A visitor holding an unacknowledged change stays a participant of record:
@@ -1137,13 +1175,184 @@ return {
         eventually([&] { return tally(trace(raw), "end:hero") == 2; }, 10s,
             "the drained change did not release the held visitor");
         const auto seen = trace(raw);
-        require(!has(seen, "save:hero"), "the drained release ran a best-effort save");
+        // Two leaves, two settle captures, and no save at the drained release
+        // itself: the account left at the settle edges, not the release.
+        require(tally(seen, "save:hero") == 2,
+                "the drained release ran a save of its own");
         store.signal(SIGTERM);
     }
     node.signal(SIGTERM);
     require(node.wait() == 0, "crossServer graceful shutdown failed");
     std::cout << "avatar.return: cross visit returns through the durable queue, "
         "release on the drain [PASS]\n";
+}
+// Settlement (结算): the graceful return's final account. avatar_save's string
+// return at the leave edge is the visit's final state as opaque bytes; the
+// return sink seeds the participant if needed and orders the account one past
+// every change already queued, so the release — always drain-gated — now waits
+// on the account's durable ACK too. A vacuous save (true) and a refusing one
+// (an error) are both best effort: they settle nothing and release on the
+// drain as before, and they leave no record behind.
+void avatar_settle() {
+    Context c;
+    const auto script = c.path("avatar_settle.lua");
+    write(script, R"avatar(local calls = {}
+return {
+  message = function(payload)
+    if payload == "read" then return table.concat(calls, "|") end
+    if payload == "seed" then
+      local ok, reason = mistlane.returning.seed("home", "hero")
+      return ok and "SEEDED" or ("SEEDFAIL:" .. tostring(reason))
+    end
+    if payload == "send1" then
+      local ok, reason = mistlane.returning.enqueue("home", "hero", 5, 1, "hp=10")
+      return ok and "ENQUEUED" or ("ENQFAIL:" .. tostring(reason))
+    end
+    if payload == "send2" then
+      local ok, reason = mistlane.returning.enqueue("home", "hero", 5, 2, "hp=20")
+      return ok and "ENQUEUED" or ("ENQFAIL:" .. tostring(reason))
+    end
+    return "noop"
+  end,
+  avatar_load = function(context, state)
+    calls[#calls+1] = "load:" .. context.character
+    return { name = context.character, generation = context.generation }
+  end,
+  avatar_save = function(context, avatar)
+    calls[#calls+1] = "save:" .. context.character
+    if context.character == "watcher" then return true end
+    if context.character == "grump" then error("no settlement for the grump") end
+    return "settled " .. context.character
+  end,
+  onCrossVisitStart = function(context) calls[#calls+1] = "start:" .. context.character end,
+  onCrossVisitEnd = function(context) calls[#calls+1] = "end:" .. context.character end,
+}
+)avatar");
+    write(c.path("echo.lua"), echo);
+    const auto data = port(), cross = port();
+    // Home data on a port nothing listens on yet: nothing can drain, so every
+    // release below is unreachable without the account's durable ACK.
+    auto& node = c.node("crossServer", cross, {"--script", script.string(),
+        "--data", endpoint(data)});
+    const auto send_frame = [](RawSocket& raw, std::string_view payload) {
+        std::string frame(4, '\0');
+        auto length = static_cast<std::uint32_t>(payload.size());
+        for (int i = 3; i >= 0; --i) { frame[i] = static_cast<char>(length & 255); length >>= 8; }
+        raw.send(frame + std::string(payload));
+    };
+    const auto read_frame = [](RawSocket& raw) {
+        std::size_t length = 0;
+        for (unsigned char ch : raw.receive(4)) length = (length << 8) | ch;
+        return raw.receive(length);
+    };
+    const auto join = [&](RawSocket& raw, std::string_view character) {
+        send_frame(raw, "MLC1 1 arena g r1 ch " + std::string(character) + " gen 5 ret home g r1");
+        return read_frame(raw);
+    };
+    const auto trace = [&](RawSocket& raw) {
+        send_frame(raw, "read");
+        return read_frame(raw);
+    };
+    const auto ask_data = [&](const std::string& line) {
+        RawSocket raw(data);
+        send_frame(raw, line);
+        return read_frame(raw);
+    };
+    const auto has = [](std::string_view haystack, std::string_view needle) {
+        return haystack.find(needle) != std::string_view::npos;
+    };
+    const auto tally = [](std::string_view haystack, std::string_view needle) {
+        std::size_t n = 0;
+        for (std::size_t at = 0;;) {
+            const auto pos = haystack.find(needle, at);
+            if (pos == std::string_view::npos) return n;
+            ++n;
+            at = pos + needle.size();
+        }
+    };
+    // The visit holds two script changes and an account: disconnecting after
+    // the enqueues settles hero ("settled hero", the save hook's string
+    // return) behind them. Home data is still down, so the release cannot have
+    // come from the drain — the visitor stays a participant of record. Every
+    // tracer below is a one-shot character: a rejoin would race the previous
+    // visit's pending release.
+    {
+        RawSocket raw(cross);
+        equal(join(raw, "hero"), "MLC1 OK 1");
+        send_frame(raw, "seed");
+        equal(read_frame(raw), "SEEDED");
+        send_frame(raw, "send1");
+        equal(read_frame(raw), "ENQUEUED");
+        send_frame(raw, "send2");
+        equal(read_frame(raw), "ENQUEUED");
+    }
+    {
+        RawSocket raw(cross);
+        equal(join(raw, "spotter"), "MLC1 OK 1");
+        for (int round = 0; round != 10; ++round) {
+            require(tally(trace(raw), "end:hero") == 0,
+                    "the unsettled visitor released before its account landed");
+            std::this_thread::sleep_for(200ms);
+        }
+    }
+    // Home data comes up: the script changes drain in order and the settle
+    // change takes the tail (one past everything queued), and only its durable
+    // ACK releases the visit — without a save of its own.
+    auto& store = c.node("data", data, {"--script", c.path("echo.lua").string(),
+        "--journal", c.path("avatar-settle-records.sqlite").string()});
+    {
+        RawSocket raw(cross);
+        equal(join(raw, "meter"), "MLC1 OK 1");
+        eventually([&] { return tally(trace(raw), "end:hero") == 1; }, 10s,
+                "the settled account did not release the held visit");
+        const auto seen = trace(raw);
+        require(!has(seen, "leave:hero"), "leaving cross scope ran avatar_leave");
+    }
+    // The account IS the record's tail: sequence 3, past both script changes.
+    equal(ask_data("MLD1 LOAD home hero"), "MLD1 STATE gen 5 seq 3 settled hero");
+    // An unseeded visitor still settles: the sink seeds it, the EMPTY cursor
+    // makes the account itself the first acceptance, and its ACK releases.
+    {
+        RawSocket raw(cross);
+        equal(join(raw, "novice"), "MLC1 OK 1");
+    }
+    {
+        RawSocket raw(cross);
+        equal(join(raw, "meter2"), "MLC1 OK 1");
+        eventually([&] { return tally(trace(raw), "end:novice") == 1; }, 10s,
+                "the auto-seeded settle did not land");
+    }
+    equal(ask_data("MLD1 LOAD home novice"), "MLD1 STATE gen 5 seq 1 settled novice");
+    // A vacuous save (watcher returns true) settles nothing and releases at
+    // the stop boundary; the grump's raising save is best effort the same
+    // way. Neither leaves a record behind.
+    {
+        RawSocket raw(cross);
+        equal(join(raw, "watcher"), "MLC1 OK 1");
+    }
+    {
+        RawSocket raw(cross);
+        equal(join(raw, "meter3"), "MLC1 OK 1");
+        eventually([&] { return tally(trace(raw), "end:watcher") == 1; }, 5s,
+                "the vacuous visitor did not release at the stop boundary");
+    }
+    equal(ask_data("MLD1 LOAD home watcher"), "MLD1 EMPTY");
+    {
+        RawSocket raw(cross);
+        equal(join(raw, "grump"), "MLC1 OK 1");
+    }
+    {
+        RawSocket raw(cross);
+        equal(join(raw, "meter4"), "MLC1 OK 1");
+        eventually([&] { return tally(trace(raw), "end:grump") == 1; }, 5s,
+                "the refused settle did not stay best effort");
+    }
+    equal(ask_data("MLD1 LOAD home grump"), "MLD1 EMPTY");
+    store.signal(SIGTERM);
+    node.signal(SIGTERM);
+    require(node.wait() == 0, "crossServer graceful shutdown failed");
+    std::cout << "avatar.settle: the visit's final account settles home before "
+        "the release [PASS]\n";
 }
 // The source-side production caller of a cross-process transfer: the script
 // names realm + character and a destination, the node drives OWNER -> PREPARE

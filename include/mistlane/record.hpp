@@ -625,6 +625,20 @@ public:
     void owner_generation(std::string realm, std::string character, std::uint64_t generation) {
         owner_generation_[{std::move(realm), std::move(character)}] = generation;
     }
+    // The next sequence a caller may assign for this participant: one past the
+    // send cursor and every pending (or in-flight) change, so a framework
+    // change enqueued here lands after everything the caller already queued.
+    // Zero when the participant is unseeded — there is no cursor to be past.
+    std::uint64_t next_sequence(std::string_view realm, std::string_view character) const {
+        const auto key = std::pair{std::string(realm), std::string(character)};
+        const auto cursor = send_cursor_.find(key);
+        if (cursor == send_cursor_.end()) return 0;
+        std::uint64_t highest = cursor->second;
+        const auto rows = pending_.find(key);
+        if (rows != pending_.end() && !rows->second.empty())
+            highest = std::max(highest, rows->second.rbegin()->first);
+        return highest + 1;
+    }
     // Whether this participant holds no pending change. The sender's in-flight
     // set and pre-load pool are the sender's, so drained() on the queue alone
     // is only the pending map — the ReturnSender composes all three.

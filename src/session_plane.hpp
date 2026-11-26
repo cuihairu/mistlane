@@ -465,11 +465,13 @@ public:
         // save, onCrossVisitEnd, closed) — abnormal termination, because there
         // is no durable return to wait on. With a data endpoint the graceful
         // return runs instead: the visit relinquishes the lease (visiting ->
-        // transferring, avatar_leave), and the avatar stays a participant of
-        // record until its final change-set is acknowledged durably — so a
-        // drained participant releases now (avatar_leave, onCrossVisitEnd,
-        // closed, no save: the changes already landed) and an undrained one is
-        // handed to the node, which releases it when the sender's queue drains.
+        // transferring), settles its final account (avatar_save's string
+        // return becomes the queue's tail change), and the avatar stays a
+        // participant of record until its final change-set — the account
+        // included — is acknowledged durably — so a drained participant
+        // releases now (onCrossVisitEnd, closed, no save: the changes already
+        // landed) and an undrained one is handed to the node, which releases
+        // it when the sender's queue drains.
         // After a reload the service_ reference points at the new VM, whose
         // runtime has no such avatar, so this is a no-op (the old VM retired it
         // already).
@@ -481,6 +483,22 @@ public:
                 } else if (!return_sink_) {
                     runtime->close_visit(*avatar_key_);
                 } else if (runtime->cross_leave(*avatar_key_).ok()) {
+                    // Settlement (结算): the visit's final account must be home
+                    // before the release. avatar_save's string return at this
+                    // edge is the account as opaque bytes; the sink seeds the
+                    // participant if needed and orders the change one past
+                    // everything queued, so the drain below — and the release
+                    // it gates — now waits on the account's durable ACK too. A
+                    // vacuous save settles nothing (the enqueued changes are
+                    // the account) and a refused settle is best effort: the
+                    // release still waits on the drain, never on the settle.
+                    std::string snapshot;
+                    if (runtime->settle(*avatar_key_, snapshot).ok() && !snapshot.empty()) {
+                        const auto reason = return_sink_->settle(avatar_key_->realm,
+                            avatar_key_->character, avatar_key_->generation, snapshot);
+                        if (!reason.empty())
+                            std::cerr << "avatar settle refused: " << reason << '\n';
+                    }
                     if (return_sink_->drained(avatar_key_->realm, avatar_key_->character))
                         (void)runtime->release(*avatar_key_);
                     else if (on_return_pending_)

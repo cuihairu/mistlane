@@ -1010,6 +1010,19 @@ bool LuaService::on_save(const AvatarKey& key, const std::string& avatar_ref) {
     if (!result.present) return true; // nothing declared to save: vacuous success
     return !result.raised && result.truthy;
 }
+// The settle edge runs the same avatar_save hook with the state captured: a
+// string return is the visit's final account as opaque bytes (avatar_load's
+// state argument travels the same way); a truthy return without a string is
+// notification-only and settles nothing; a raised or refusing hook settles
+// nothing — the caller treats an empty snapshot as vacuous, best effort.
+bool LuaService::on_settle(const AvatarKey& key, const std::string& avatar_ref,
+                           std::string& snapshot) {
+    const auto result = avatar_hook("avatar_save", key, avatar_ref, true, {}, false);
+    if (!result.present) return true; // nothing declared to save: vacuous
+    if (result.raised || !result.truthy) return false;
+    if (result.has_text) snapshot = result.text;
+    return true;
+}
 bool LuaService::on_transfer_out(const AvatarKey& key, const std::string& avatar_ref,
                                  std::string& snapshot) {
     const auto result = avatar_hook("avatar_transfer_out", key, avatar_ref, true, {}, false);

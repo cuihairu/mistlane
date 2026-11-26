@@ -80,6 +80,14 @@ public:
     // Enqueues one change for ordered return; returns "" or a short reason.
     virtual std::string enqueue(std::string_view realm, std::string_view character,
         std::uint64_t generation, std::uint64_t sequence, std::string_view payload) = 0;
+    // Settles the visit's final account: seeds the participant if needed and
+    // orders one last change — `payload` under `generation`, sequenced one
+    // past everything the caller already queued — so the durable cursor
+    // cannot pass it. The change is held until the seed LOAD answers, then
+    // sent like any other; drained() stays false until its durable ACK.
+    // Returns "" or a short reason.
+    virtual std::string settle(std::string_view realm, std::string_view character,
+        std::uint64_t generation, std::string_view payload) = 0;
     // Whether every change queued for this participant has been durably
     // acknowledged: no pending, in-flight or pre-load-held change remains. A
     // participant never seeded holds nothing and is drained. This is the
@@ -278,6 +286,8 @@ private:
     void on_leave(const AvatarKey& key, const std::string& avatar_ref) override;
     void on_tick(const AvatarKey& key, const std::string& avatar_ref) override;
     bool on_save(const AvatarKey& key, const std::string& avatar_ref) override;
+    bool on_settle(const AvatarKey& key, const std::string& avatar_ref,
+                   std::string& snapshot) override;
     bool on_transfer_out(const AvatarKey& key, const std::string& avatar_ref,
                          std::string& snapshot) override;
     bool on_transfer_in(const AvatarKey& key, const std::string& avatar_ref) override;
