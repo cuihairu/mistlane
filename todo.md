@@ -18,7 +18,7 @@
 
 - [x] 整理目标进程职责及实际实现边界：docs/process-roles.md 与 docs/zh/process-roles.md；首页和架构图移除 router 必经层假设
   证据：commit 8c138c8
-- [ ] 按目标职责迁移运行角色（禁止只改名字冒充实现）：gateway、login、coordinator、gameServer、crossServer、data、可选 apiServer；保持单二进制方案可用，目录/target/CLI 一次性迁移并清理别名（部分完成）（BLOCKED）— 跳过：MLD1 唯一写入权/持久化确认/离线回服故障恢复协议已设计并实现（docs/cross-return-protocol.md，含四步移交测试 coordinator_migration_fourstep），但 Avatar 运行时移交（含场景/回服）与 login/data/apiServer 契约运行时验收仍未实现（docs/avatar-runtime.md 无 Avatar 类型），父项仍依赖下述三个未完成子项（跨服移交/结算/回服故障恢复、login/data/apiServer 契约与运行时接线、角色校验/脚手架/文档同步验收）。复核注记（2026-11-06）：所缺条件仍缺——include/src 非测试代码无 Avatar/Scene/Map 类型；docs/avatar-runtime.md 仍明示 Avatar 不存在；子项（行 30/31/34）仍未勾，父项保持 BLOCKED。复核注记（2026-11-26 续）：结算已实现并推送（commits ebd9547/8075f96/27e1fb0）——旧注记所述父项剩余条件（结算）已清空：行 30 的子项全部落地（跨服移交、结算、回服故障恢复均已实现并钉住），行 34 的运行时验收全部钉住（正常登录、双向消息、同进程切场景、跨进程/跨服移交、回调与多监听，外加结算）。本行勾选
+- [x] 按目标职责迁移运行角色（禁止只改名字冒充实现）：gateway、login、coordinator、gameServer、crossServer、data、可选 apiServer；保持单二进制方案可用，目录/target/CLI 一次性迁移并清理别名（部分完成）（BLOCKED）— 跳过：MLD1 唯一写入权/持久化确认/离线回服故障恢复协议已设计并实现（docs/cross-return-protocol.md，含四步移交测试 coordinator_migration_fourstep），但 Avatar 运行时移交（含场景/回服）与 login/data/apiServer 契约运行时验收仍未实现（docs/avatar-runtime.md 无 Avatar 类型），父项仍依赖下述三个未完成子项（跨服移交/结算/回服故障恢复、login/data/apiServer 契约与运行时接线、角色校验/脚手架/文档同步验收）。复核注记（2026-11-06）：所缺条件仍缺——include/src 非测试代码无 Avatar/Scene/Map 类型；docs/avatar-runtime.md 仍明示 Avatar 不存在；子项（行 30/31/34）仍未勾，父项保持 BLOCKED。复核注记（2026-11-26 续）：结算已实现并推送（commits ebd9547/8075f96/27e1fb0）——旧注记所述父项剩余条件（结算）已清空：行 30 的子项全部落地（跨服移交、结算、回服故障恢复均已实现并钉住），行 34 的运行时验收全部钉住（正常登录、双向消息、同进程切场景、跨进程/跨服移交、回调与多监听，外加结算）。本行勾选
   - [x] 定义服务身份、会话身份、请求关联和有界双向消息；替换强制一问一答路径，补推送/广播及服务连接复用
   证据：commit 0f720ff
   - [x] 实现 coordinator 的进程注册/就绪/负载、角色与场景归属、迁移状态；区服与跨服组明确作用域，router 不直接改名顶替该能力
