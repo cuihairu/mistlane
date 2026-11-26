@@ -3,11 +3,22 @@
 #include "mistlane/entity_codec.hpp"
 #include "mistlane/entity_dispatch.hpp"
 #include "mistlane/entity_persist.hpp"
+#include <map>
 #include <string>
 #include <string_view>
+#include <tuple>
 #include <vector>
 
 namespace mistlane {
+// One entity address: the key of every entity-state row and fence.
+struct EntityStateKey {
+    std::uint32_t scope = 0, type_id = 0, incarnation = 0;
+    std::int64_t entity_id = 0;
+    auto tie() const { return std::tie(scope, type_id, incarnation, entity_id); }
+    bool operator<(const EntityStateKey& o) const { return tie() < o.tie(); }
+    bool operator==(const EntityStateKey& o) const { return tie() == o.tie(); }
+};
+
 // One durable entity-state row: the owned home snapshot for one entity
 // address, fenced by the writer's hosting generation and the committed
 // revision the snapshot captured. The bytes are the descriptor's persistent
@@ -17,6 +28,22 @@ struct EntityStateSnapshot {
     std::int64_t entity_id = 0;
     std::uint64_t generation = 0, committed_revision = 0;
     std::string snapshot;
+};
+
+// One persisted entity-migration transaction (the coordinator journal): the
+// unique-write handoff of one entity address. `generation` is the declared
+// handoff generation the source flushed at; `destination` names the member
+// whose DESTINED poll takes the entity over; `state` is the step word
+// (prepared/ready/fenced/committed/aborted/cleanup); `state_hex` is the
+// opaque bundle state the source's script handed off and the destination's
+// script consumes — the framework carries it, never interprets it.
+struct EntityMigrationRecord {
+    EntityStateKey key;
+    std::string id;
+    std::uint64_t generation = 0;
+    std::string destination;
+    std::string state;
+    std::string state_hex;
 };
 
 // Storage boundary for the owning data side's entity state — the durable half
@@ -30,6 +57,11 @@ public:
     virtual ~EntityStateBackend() = default;
     virtual void save_state(const EntityStateSnapshot&) = 0;
     virtual std::vector<EntityStateSnapshot> restore_states() const = 0;
+    // A transfer's unique-write fence: no save at or below this generation may
+    // ever be acknowledged again. Tombstones can name a key with no row — an
+    // entity with zero persistent properties leaves no snapshot row at all.
+    virtual void save_entity_fence(const EntityStateKey&, std::uint64_t generation) = 0;
+    virtual std::map<EntityStateKey, std::uint64_t> restore_entity_fences() const = 0;
 };
 
 // The owning-data persistence driver: one PersistentStore per entity over a
@@ -65,6 +97,17 @@ public:
     void set_async_sink(AsyncSink sink) { sink_ = std::move(sink); }
     bool async() const { return static_cast<bool>(sink_); }
 
+    // One-shot transfer observer: armed by the migration driver right before
+    // its forced flush, fired once with the durability verdict once an
+    // accepted save's outcome is known (after the receipt's confirm/abort,
+    // inline or from the sink completion), then disarmed — a later periodic
+    // save never re-invokes a spent wait. A save refused before capture (a
+    // racing in-flight receipt) fires nothing for itself, so a driver that
+    // saw the refusal disarms with set_flush_observer(nullptr); a completion
+    // of that racing save then honors the disarm and fires nothing.
+    using FlushObserver = std::function<void(bool landed)>;
+    void set_flush_observer(FlushObserver observer) { flush_observer_ = std::move(observer); }
+
     SaveOutcome save(std::uint64_t generation, std::uint64_t expected_revision) {
         SaveOutcome outcome = persist_.save(generation, expected_revision);
         if (!outcome.ok) return outcome;
@@ -88,6 +131,7 @@ public:
                 if (!*alive) return;
                 if (landed) persist_.confirm(save_id);
                 else persist_.abort(save_id);
+                fire_flush_observer(landed);
             });
             outcome.deferred = true;
             return outcome;
@@ -105,8 +149,10 @@ public:
             outcome.ok = false;
             outcome.error = EntityError::CONFLICT;
             outcome.reason = "save id";
+            fire_flush_observer(false);
             return outcome;
         }
+        fire_flush_observer(true);
         return outcome;
     }
 
@@ -130,11 +176,22 @@ public:
     std::uint64_t generation() const { return persist_.generation(); }
 
 private:
+    // The one-shot half of the flush observer: disarmed before it fires, so a
+    // later periodic save cannot re-invoke a spent migration wait, and a
+    // driver that disarmed (its forced save was refused) is honored by a
+    // racing in-flight completion.
+    void fire_flush_observer(bool landed) {
+        if (!flush_observer_) return;
+        auto fire = std::move(flush_observer_);
+        flush_observer_ = nullptr;
+        fire(landed);
+    }
     EntityTarget address_;
     PersistentStore& persist_;
     const SprotoCodec* codec_;
     EntityStateBackend* backend_;
     AsyncSink sink_;
+    FlushObserver flush_observer_;
     // Shared with every outstanding completion: destroyed() flips it, so a
     // late done() sees false and does not touch the dead persist_.
     std::shared_ptr<bool> alive_ = std::make_shared<bool>(true);

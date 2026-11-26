@@ -55,8 +55,24 @@ public:
         self->load_done_ = std::move(done);
         self->start();
     }
+    // The transfer's unique-write tombstone. fenced=false is a refusal (the
+    // data row already outlives the asked generation, the leg refused, or a
+    // volatile node answered a receipt it cannot honor durably); fenced=true
+    // carries the floor the data node now holds.
+    using FenceDone = std::function<void(bool fenced, std::uint64_t generation, std::string reason)>;
+    static void fence(asio::any_io_executor executor, Endpoint data, std::string identity,
+                      EntityStateKey key, std::uint64_t generation, FenceDone done) {
+        std::shared_ptr<EntityStateFetcher> self(
+            new EntityStateFetcher(std::move(executor), data, std::move(identity), Kind::Fence,
+                                   std::chrono::seconds(2)));
+        self->question_ = "MLD2 FENCE " + std::to_string(key.scope) + " "
+            + std::to_string(key.type_id) + " " + std::to_string(key.incarnation) + " "
+            + std::to_string(key.entity_id) + " gen " + std::to_string(generation);
+        self->fence_done_ = std::move(done);
+        self->start();
+    }
 private:
-    enum class Kind { Save, Load };
+    enum class Kind { Save, Load, Fence };
     EntityStateFetcher(asio::any_io_executor executor, Endpoint data, std::string identity,
                        Kind kind, std::chrono::seconds deadline)
       : endpoint_(tcp::endpoint(parse_address(data.address), data.port)),
@@ -113,6 +129,22 @@ private:
             if (payload.starts_with("MLS1")) return load_result(false, 0, 0, {}, "refused");
             return load_result(false, 0, 0, {}, "unexpected");
         }
+        if (kind_ == Kind::Fence) {
+            if (payload.starts_with("MLD2 FENCED ")) {
+                std::istringstream in(payload);
+                std::string magic, fenced, scope, type, incarnation, entity, gen_tag, gen;
+                std::uint64_t generation = 0;
+                if (!(in >> magic >> fenced >> scope >> type >> incarnation >> entity
+                      >> gen_tag >> gen)
+                        || magic != "MLD2" || fenced != "FENCED" || gen_tag != "gen"
+                        || !state_decimal(gen, generation))
+                    return fence_result(false, 0, "unexpected");
+                return fence_result(true, generation, {});
+            }
+            if (payload.starts_with("MLD2 ERR ")) return fence_result(false, 0, payload.substr(9));
+            if (payload.starts_with("MLS1")) return fence_result(false, 0, "refused");
+            return fence_result(false, 0, "unexpected");
+        }
         // Only the durable ACK completes the receipt. A volatile RECEIVED is
         // an honest non-durability receipt: the sender aborts and the record
         // stays dirty for the next period, exactly like an MLD1 sender left
@@ -144,8 +176,16 @@ private:
         channel_->close();
         if (load_done_) load_done_(present, gen, rev, std::move(bytes), std::move(reason));
     }
+    void fence_result(bool fenced, std::uint64_t generation, std::string reason) {
+        if (finished_) return;
+        finished_ = true;
+        timer_.cancel();
+        channel_->close();
+        if (fence_done_) fence_done_(fenced, generation, std::move(reason));
+    }
     void fail(std::string reason) {
         if (kind_ == Kind::Load) return load_result(false, 0, 0, {}, std::move(reason));
+        if (kind_ == Kind::Fence) return fence_result(false, 0, std::move(reason));
         return finish(false, std::move(reason));
     }
     tcp::endpoint endpoint_;
@@ -156,6 +196,7 @@ private:
     asio::steady_timer timer_;
     Done done_;
     LoadDone load_done_;
+    FenceDone fence_done_;
     bool finished_ = false;
 };
 }

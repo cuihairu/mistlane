@@ -7,6 +7,7 @@
 #include "tcp_channel.hpp"
 #include "return_sender.hpp"
 #include "mistlane/cross.hpp"
+#include "mistlane/entity_state_wire.hpp"
 #include "mistlane/journal.hpp"
 #include "mistlane/migration.hpp"
 #include "mistlane/record.hpp"
@@ -132,6 +133,19 @@ public:
                           record.generation}).second)
                 throw std::invalid_argument("placement journal contains a duplicate route");
         }
+        // Entity-migration transactions: one live unique-write handoff per
+        // entity address, restored verbatim so a coordinator restart keeps
+        // exactly one clear owner — the source keeps polling a transaction
+        // that still exists, the destination re-lists on its next DESTINED
+        // poll, and neither side resumes writing past the other.
+        for (const auto& record : journal_->restore_entity_migrations()) {
+            if (!valid_entity_migration_state(record.state) || !record.generation)
+                throw std::invalid_argument("entity migration journal state invalid");
+            EntityMigrationEntry entry{record.id, record.generation, record.destination,
+                                       record.state, record.state_hex};
+            if (!entity_migrations_.emplace(record.key, std::move(entry)).second)
+                throw std::invalid_argument("entity migration journal duplicate address");
+        }
     }
     struct Member {
         std::string role, instance, scope, namespace_, listen;
@@ -216,6 +230,17 @@ public:
         return members_.count(member_key(namespace_, realm_scope ? owner.scope.realm : owner.scope.cross_group,
             owner.role, owner.instance)) != 0;
     }
+    // The instance-name form for the entity handoffs: an entity's destination
+    // names only the member instance (the entity address is globally owned,
+    // so the destination carries no realm/cross scope of its own), and any
+    // live member carrying that instance name can receive the commit.
+    bool route_publishable(const std::string& instance, const std::string& namespace_) const {
+        for (const auto& [key, entry] : members_) {
+            const auto& member = entry.first;
+            if (member.instance == instance && member.namespace_ == namespace_) return true;
+        }
+        return false;
+    }
     std::optional<RouteAnswer> route(const std::string& namespace_, const std::string& realm,
                                      const std::string& character) const {
         const MigrationKey key{realm, character};
@@ -263,8 +288,16 @@ public:
         return true;
     }
     bool remove_entity_host_route(std::uint32_t scope, std::uint32_t type_id,
-                                  std::uint32_t incarnation, std::int64_t entity_id) {
-        return entity_host_routes_.erase({scope, type_id, incarnation, entity_id}) != 0;
+                                  std::uint32_t incarnation, std::int64_t entity_id,
+                                  const std::string& member_listen) {
+        // Member-qualified: a transfer's destination publishes its own SET for
+        // the same address before the source withdraws, so a removal that
+        // ignores who is calling would erase the new owner's route. Only the
+        // member whose endpoint the route still names may remove it.
+        const auto it = entity_host_routes_.find({scope, type_id, incarnation, entity_id});
+        if (it == entity_host_routes_.end() || it->second != member_listen) return false;
+        entity_host_routes_.erase(it);
+        return true;
     }
     const std::map<EntityHostRouteKey, std::string>& entity_host_routes() const {
         return entity_host_routes_;
@@ -351,6 +384,133 @@ public:
     static MigrationKey migration_key(const std::string& namespace_, const MigrationKey& key) {
         return {namespace_+'\x1'+key.first+'\x1'+key.second, ""};
     }
+    // Entity-migration transactions (docs/entity-contract.md "No server
+    // rebuild"): the unique-write handoff of one entity address, one live
+    // transaction per address at a time. The steps run prepared → ready →
+    // fenced → committed: the destination adopts and readies from the still
+    // unfenced row (the source is frozen, so the row is stable), then the
+    // source raises the data fence at the declared generation, and only a
+    // fenced transaction commits. Abort stays reachable while not fenced —
+    // past the fence the tombstone stands and recovery is the destination's
+    // poll or a strictly newer generation — and cleanup purges a terminal
+    // listing. Like entity host routes the key is the bare address (not
+    // namespace-qualified): the address names its owner globally. A strictly
+    // newer generation supersedes a standing transaction (the takeover path:
+    // the old handoff's fence already floors everything below it, so only a
+    // writer that outlived it can name a higher one).
+    static bool valid_entity_migration_state(const std::string& state) {
+        return state == "prepared" || state == "ready" || state == "fenced"
+            || state == "committed" || state == "aborted" || state == "cleanup";
+    }
+    struct EntityMigrationEntry {
+        std::string id;
+        std::uint64_t generation = 0;
+        std::string destination;
+        std::string state;
+        std::string state_hex;
+    };
+    enum class EntityMigrationResult { Applied, Duplicate, Conflict, Capacity, Stale, Order, Invalid };
+    static constexpr std::size_t kEntityMigrationCapacity = 1024;
+    EntityMigrationResult prepare_entity_migration(const EntityStateKey& key, const std::string& id,
+            std::uint64_t generation, const std::string& destination, const std::string& state_hex) {
+        auto it = entity_migrations_.find(key);
+        if (it != entity_migrations_.end()) {
+            if (it->second.id == id) return it->second.generation == generation
+                ? EntityMigrationResult::Duplicate : EntityMigrationResult::Conflict;
+            // A strictly newer generation supersedes anything. The same
+            // generation may re-prepare only over an aborted predecessor: the
+            // abort certifies no fence landed, so the source's generation is
+            // still live and a script retry after an abort must not be stuck
+            // at CONFLICT forever. A committed/cleaned predecessor fenced the
+            // data row — only a strictly higher writer may follow it.
+            if (generation < it->second.generation) return EntityMigrationResult::Conflict;
+            if (generation == it->second.generation && it->second.state != "aborted")
+                return EntityMigrationResult::Conflict;
+        } else if (entity_migrations_.size() >= kEntityMigrationCapacity) {
+            return EntityMigrationResult::Capacity;
+        }
+        EntityMigrationEntry entry{id, generation, destination, "prepared", state_hex};
+        entity_migrations_.insert_or_assign(key, std::move(entry));
+        persist_entity_migration(key);
+        return EntityMigrationResult::Applied;
+    }
+    EntityMigrationResult apply_entity_event(const EntityStateKey& key, const std::string& id,
+            std::uint64_t generation, const std::string& word, std::string& state_out) {
+        const auto it = entity_migrations_.find(key);
+        if (it == entity_migrations_.end()) return EntityMigrationResult::Invalid;
+        auto& entry = it->second;
+        if (entry.id != id) return EntityMigrationResult::Conflict;
+        if (entry.generation != generation) return EntityMigrationResult::Stale;
+        if (word == "READY") {
+            if (entry.state == "prepared" || entry.state == "ready") {
+                entry.state = "ready";
+                persist_entity_migration(key);
+            } else if (entry.state != "committed") return EntityMigrationResult::Order;
+        } else if (word == "FENCE") {
+            if (entry.state == "ready") {
+                entry.state = "fenced";
+                persist_entity_migration(key);
+            } else if (entry.state != "fenced") return EntityMigrationResult::Order;
+        } else if (word == "CLEANUP") {
+            if (entry.state == "committed" || entry.state == "aborted") {
+                entry.state = "cleanup";
+                persist_entity_migration(key);
+            } else return EntityMigrationResult::Order;
+        } else return EntityMigrationResult::Invalid;
+        state_out = entry.state;
+        return EntityMigrationResult::Applied;
+    }
+    EntityMigrationResult commit_entity_migration(const EntityStateKey& key, const std::string& id,
+            std::uint64_t generation, std::string& destination_out) {
+        const auto it = entity_migrations_.find(key);
+        if (it == entity_migrations_.end()) return EntityMigrationResult::Invalid;
+        auto& entry = it->second;
+        if (entry.id != id) return EntityMigrationResult::Conflict;
+        if (entry.generation != generation) return EntityMigrationResult::Stale;
+        if (entry.state == "committed") {
+            destination_out = entry.destination;
+            return EntityMigrationResult::Duplicate;
+        }
+        // Commit only past the fence: the unique-write tombstone is what makes
+        // the destination's higher generation the single live writer.
+        if (entry.state != "fenced") return EntityMigrationResult::Order;
+        entry.state = "committed";
+        persist_entity_migration(key);
+        destination_out = entry.destination;
+        return EntityMigrationResult::Applied;
+    }
+    EntityMigrationResult abort_entity_migration(const EntityStateKey& key, const std::string& id,
+            std::uint64_t generation, std::string& state_out) {
+        const auto it = entity_migrations_.find(key);
+        if (it == entity_migrations_.end()) return EntityMigrationResult::Invalid;
+        auto& entry = it->second;
+        if (entry.id != id) return EntityMigrationResult::Conflict;
+        if (entry.generation != generation) return EntityMigrationResult::Stale;
+        if (entry.state == "aborted") {
+            state_out = entry.state;
+            return EntityMigrationResult::Duplicate;
+        }
+        if (entry.state != "prepared" && entry.state != "ready") return EntityMigrationResult::Order;
+        entry.state = "aborted";
+        persist_entity_migration(key);
+        state_out = entry.state;
+        return EntityMigrationResult::Applied;
+    }
+    const EntityMigrationEntry* entity_migration(const EntityStateKey& key) const {
+        const auto found = entity_migrations_.find(key);
+        return found == entity_migrations_.end() ? nullptr : &found->second;
+    }
+    // The rows one destination member must still see: everything it may adopt,
+    // re-ready, learn the commit from, or learn the abort from. Only a cleaned
+    // transaction stops listing.
+    std::vector<std::pair<EntityStateKey, EntityMigrationEntry>> destined_entities(
+            const std::string& instance) const {
+        std::vector<std::pair<EntityStateKey, EntityMigrationEntry>> out;
+        for (const auto& [key, entry] : entity_migrations_)
+            if (entry.destination == instance && entry.state != "cleanup")
+                out.push_back({key, entry});
+        return out;
+    }
     void persist_transaction(const std::string& namespace_, const MigrationKey& key,
                              const MigrationTransaction& transaction) {
         if (!journal_) return;
@@ -422,6 +582,14 @@ private:
     void persist_transaction(const MigrationEntry& entry) {
         persist_transaction(entry.namespace_, entry.key, *entry.transaction);
     }
+    void persist_entity_migration(const EntityStateKey& key) {
+        if (!journal_) return;
+        const auto found = entity_migrations_.find(key);
+        if (found == entity_migrations_.end()) return;
+        journal_->save_entity_migration({key, found->second.id, found->second.generation,
+                                         found->second.destination, found->second.state,
+                                         found->second.state_hex});
+    }
     void persist_placement(const std::string& namespace_, const std::string& scope,
                            const std::string& realm, const std::string& character,
                            const std::string& role, const std::string& instance,
@@ -435,6 +603,7 @@ private:
     // are republished by the host that owns the entity and die with the host.
     std::map<EntityHostRouteKey, std::string> entity_host_routes_;
     std::map<MigrationKey, MigrationEntry> migrations_;
+    std::map<EntityStateKey, EntityMigrationEntry> entity_migrations_;
     std::unique_ptr<MigrationJournal> journal_;
 };
 // One coordinator control connection: a member registration with its heartbeat
@@ -497,8 +666,9 @@ private:
         close_with(std::string(magic)+" ERR "+reason);
     }
     void dispatch(std::string payload) {
-        // Registry lines are tiny; a migration line carries two owners.
-        if (payload.size() > (payload.starts_with("MLR1 MIG") ? 1024 : 256)) return refuse("INVALID");
+        // Registry lines are tiny; a migration line carries two owners, and an
+        // entity handoff line carries the bundle's opaque transfer state.
+        if (payload.size() > (payload.starts_with("MLR1 MIG") ? 8192 : 256)) return refuse("INVALID");
         std::istringstream in(payload);
         std::string magic;
         in >> magic;
@@ -789,7 +959,7 @@ private:
             if (!registry_.set_entity_host_route(s, t, i, entity_id, member_->listen))
                 return refuse("CAPACITY");
         } else {
-            registry_.remove_entity_host_route(s, t, i, entity_id);
+            registry_.remove_entity_host_route(s, t, i, entity_id, member_->listen);
         }
         // The member leg's verdict grammar is the heartbeat's: every reply is
         // "MLR1 OK" or "MLR1 ERR <reason>", so anything else makes the member
@@ -825,6 +995,31 @@ private:
     //     (a member query: the fenced transfers its own destination lease
     //     awaits; <scope> is the realm or cross-group name, <role> is
     //     gameServer or crossServer and <instance> names the member)
+    //   MLR1 MIG EPREPARE [NS <namespace>] <scope> <type> <incarnation> <entity>
+    //     <id> <generation> <destination-instance> <state-hex|->
+    //   MLR1 MIG EEVENT   [NS <namespace>] <scope> <type> <incarnation> <entity>
+    //     <id> <generation> <READY|FENCE|CLEANUP>
+    //   MLR1 MIG ECOMMIT  [NS <namespace>] <scope> <type> <incarnation> <entity>
+    //     <id> <generation>
+    //   MLR1 MIG EABORT   [NS <namespace>] <scope> <type> <incarnation> <entity>
+    //     <id> <generation>
+    //   MLR1 MIG ESTATUS  [NS <namespace>] <scope> <type> <incarnation> <entity>
+    // where the entity verbs address one unique-write handoff by the entity
+    // address (the NS group parses for symmetry and is ignored — the address
+    // names its owner globally, like the host routes), and <state-hex> is the
+    // source bundle's opaque transfer state the destination bundle consumes.
+    // The step order is prepared → ready → fenced → committed: the destination
+    // adopts from the still unfenced row (the source is frozen, so the row is
+    // stable), then the source raises the data fence at the declared
+    // generation, and only a fenced transaction commits; abort stays reachable
+    // while not fenced, and cleanup purges a terminal listing. The listing is
+    // the destination's only news channel, so the source never cleans up: a
+    // terminal row (committed/aborted) stays listed until the DESTINATION
+    // resolves it — unfreeze on committed, destroy on aborted — and sends the
+    // CLEANUP itself. One transaction per address at a time; a strictly newer
+    // generation supersedes a standing one (the takeover path), and the same
+    // generation may re-prepare only over an aborted predecessor (a script
+    // retry after an abort).
     // where <namespace> is the optional "NS <identifier>" group — "-" or
     // omitted names the default group, and a bare positional namespace is
     // refused so an older frame keeps meaning the default group — and
@@ -832,10 +1027,16 @@ private:
     //   -> MLR1 MIG OWNER OK | PREPARED <id> <generation> | STEP <id> <STATE>
     //    | COMMITTED <id> <owner> <generation> | ABORTING <id> | ABORTED <id>
     //    | PENDING <id> | DESTINED <count> [<realm> <character> <id>
-    //      <generation> <scene>]...
+    //      <generation> <scene>]... ENTITIES <count> [<scope> <type>
+    //      <incarnation> <entity> <id> <generation> <state> <state-hex|->]...
+    //    | EPREPARED <id> <generation> | ESTEP <id> <state>
+    //    | ECOMMITTED <id> <destination> <generation> | EABORTED <id>
+    //    | ESTATE <id> <state> <generation> | ERR PENDING (a fenced ECOMMIT
+    //      whose destination stopped publishing; the source re-drives)
     //    | STATE idle <owner> <generation> | STATE <id> <STATE> <drained|open>
     //      <fenced|unfenced> <ready|notready> <generation>
     //    | MLR1 EMPTY | MLR1 ERR INVALID | STALE | CONFLICT | ORDER | UNEXPECTED
+    //      | CAPACITY | EMPTY
     // Owner wire text: "<realm|cross> NS <namespace> <scope> <role>
     // <instance> <scene>" — the same NS group as the registry verbs, so a
     // namespaced owner and a default-group owner never read alike.
@@ -894,6 +1095,34 @@ private:
         if (!(in >> token.id >> generation) || !record_identifier(token.id)) return false;
         return migration_generation(generation, token.generation);
     }
+    // The entity-migration verbs parse the address exactly the way the MLD2
+    // endpoint does (the state_decimal/state_int64 wire helpers), so a key the
+    // data node would refuse can never name a transaction.
+    static bool entity_address_fields(std::istream& in, EntityStateKey& key) {
+        std::string scope, type, incarnation, entity;
+        if (!(in >> scope >> type >> incarnation >> entity)) return false;
+        std::uint64_t wide = 0;
+        const auto narrow = [&](const std::string& text, std::uint32_t& out) {
+            if (!state_decimal(text, wide) || wide > ~0ull>>32) return false;
+            out = static_cast<std::uint32_t>(wide);
+            return true;
+        };
+        return narrow(scope, key.scope) && narrow(type, key.type_id)
+            && narrow(incarnation, key.incarnation)
+            && state_int64(entity, key.entity_id) && key.entity_id > 0
+            && key.scope && key.type_id && key.incarnation;
+    }
+    // The bundle state rides as lowercase hex, "-" for none; the frame-line
+    // cap bounds it, and the odd/even rule matches the MLD2 payload rule.
+    static bool entity_state_hex(const std::string& text, std::string& out) {
+        out.clear();
+        if (text == "-") return true;
+        if (text.empty() || text.size() % 2 || text.size() > 4096) return false;
+        for (char ch : text)
+            if (!((ch >= '0' && ch <= '9') || (ch >= 'a' && ch <= 'f'))) return false;
+        out = text;
+        return true;
+    }
     static std::string migration_state(MigrationState state) {
         switch (state) {
         case MigrationState::Preparing: return "PREPARING";
@@ -931,6 +1160,8 @@ private:
     std::string migration_line(const std::string& payload) {
         std::istringstream in(payload);
         std::string magic, tag, verb, namespace_, realm, character, generation, event, extra;
+        std::uint64_t token_generation_scratch = 0;
+        std::string prepare_hex;
         if (!(in >> magic >> tag)) return "MLR1 ERR UNEXPECTED";
         if (tag != "MIG") return "MLR1 ERR INVALID";
         if (!(in >> verb)) return "MLR1 ERR UNEXPECTED";
@@ -953,7 +1184,107 @@ private:
             for (const auto& item : list)
                 out << ' ' << item.key.first << ' ' << item.key.second << ' '
                     << item.id << ' ' << item.generation << ' ' << item.scene;
+            // The entity rows ride the same poll: the destination lease awaits
+            // both avatar transfers and entity handoffs.
+            const auto entities = registry_.destined_entities(instance);
+            out << " ENTITIES " << entities.size();
+            for (const auto& [key, entry] : entities)
+                out << ' ' << key.scope << ' ' << key.type_id << ' ' << key.incarnation << ' '
+                    << key.entity_id << ' ' << entry.id << ' ' << entry.generation << ' '
+                    << entry.state << ' ' << (entry.state_hex.empty() ? "-" : entry.state_hex);
             return out.str();
+        }
+        if (verb == "EPREPARE" || verb == "EEVENT" || verb == "ECOMMIT" || verb == "EABORT"
+                || verb == "ESTATUS") {
+            // Entity-migration verbs, addressed by the entity address instead
+            // of (realm, character). The NS group parses for grammar symmetry
+            // and is ignored: the address names its owner globally, like the
+            // host routes.
+            EntityStateKey key;
+            if (!entity_address_fields(in, key)) return "MLR1 ERR INVALID";
+            if (verb == "ESTATUS") {
+                const auto* entry = registry_.entity_migration(key);
+                if (!entry) return "MLR1 EMPTY";
+                std::ostringstream out;
+                out << "MLR1 MIG ESTATE " << entry->id << ' ' << entry->state << ' '
+                    << entry->generation;
+                return out.str();
+            }
+            std::string id, generation;
+            if (!(in >> id >> generation) || !record_identifier(id)
+                    || !migration_generation(generation, token_generation_scratch))
+                return "MLR1 ERR INVALID";
+            if (verb == "EPREPARE") {
+                std::string destination, state_hex, extra2;
+                if (!(in >> destination >> state_hex) || (in >> extra2)
+                        || !record_identifier(destination) || !entity_state_hex(state_hex, prepare_hex))
+                    return "MLR1 ERR INVALID";
+                const auto result = registry_.prepare_entity_migration(
+                    key, id, token_generation_scratch, destination, prepare_hex);
+                if (result == Registry::EntityMigrationResult::Applied
+                        || result == Registry::EntityMigrationResult::Duplicate)
+                    return "MLR1 MIG EPREPARED " + id + " " + generation;
+                return std::string("MLR1 ERR ")
+                    + (result == Registry::EntityMigrationResult::Conflict ? "CONFLICT"
+                       : result == Registry::EntityMigrationResult::Capacity ? "CAPACITY"
+                       : result == Registry::EntityMigrationResult::Stale ? "STALE" : "INVALID");
+            }
+            if (verb == "EEVENT") {
+                // The step word is the verb's own payload, not a trailing
+                // extra: parse it before enforcing the frame ends here.
+                std::string word, state_out, extra2;
+                if (!(in >> word) || (word != "READY" && word != "FENCE" && word != "CLEANUP")
+                        || (in >> extra2))
+                    return "MLR1 ERR INVALID";
+                const auto result = registry_.apply_entity_event(key, id, token_generation_scratch,
+                                                                 word, state_out);
+                if (result == Registry::EntityMigrationResult::Applied
+                        || result == Registry::EntityMigrationResult::Duplicate)
+                    return "MLR1 MIG ESTEP " + id + " " + state_out;
+                return std::string("MLR1 ERR ")
+                    + (result == Registry::EntityMigrationResult::Order ? "ORDER"
+                       : result == Registry::EntityMigrationResult::Stale ? "STALE"
+                       : result == Registry::EntityMigrationResult::Conflict ? "CONFLICT"
+                       : result == Registry::EntityMigrationResult::Invalid ? "EMPTY" : "INVALID");
+            }
+            std::string extra2;
+            if (in >> extra2) return "MLR1 ERR INVALID";
+            if (verb == "ECOMMIT") {
+                // A fenced commit to a destination that stopped publishing
+                // would strand the entity (the source destroys its copy on
+                // commit), so it downgrades to PENDING like the avatar COMMIT:
+                // the source re-drives after the destination is back.
+                if (const auto* entry = registry_.entity_migration(key);
+                        entry && entry->id == id
+                        && entry->generation == token_generation_scratch
+                        && entry->state == "fenced"
+                        && !registry_.route_publishable(entry->destination, namespace_))
+                    return "MLR1 ERR PENDING";
+                std::string destination;
+                const auto result = registry_.commit_entity_migration(key, id,
+                                                                      token_generation_scratch,
+                                                                      destination);
+                if (result == Registry::EntityMigrationResult::Applied
+                        || result == Registry::EntityMigrationResult::Duplicate)
+                    return "MLR1 MIG ECOMMITTED " + id + " " + destination + " " + generation;
+                return std::string("MLR1 ERR ")
+                    + (result == Registry::EntityMigrationResult::Order ? "ORDER"
+                       : result == Registry::EntityMigrationResult::Stale ? "STALE"
+                       : result == Registry::EntityMigrationResult::Conflict ? "CONFLICT"
+                       : result == Registry::EntityMigrationResult::Invalid ? "EMPTY" : "INVALID");
+            }
+            // EABORT
+            std::string state_out;
+            const auto result = registry_.abort_entity_migration(key, id, token_generation_scratch,
+                                                                 state_out);
+            if (result == Registry::EntityMigrationResult::Applied
+                    || result == Registry::EntityMigrationResult::Duplicate)
+                return "MLR1 MIG EABORTED " + id;
+            return std::string("MLR1 ERR ")
+                + (result == Registry::EntityMigrationResult::Order ? "ORDER"
+                   : result == Registry::EntityMigrationResult::Stale ? "STALE"
+                   : result == Registry::EntityMigrationResult::Conflict ? "CONFLICT"
+                   : result == Registry::EntityMigrationResult::Invalid ? "EMPTY" : "INVALID");
         }
         if (!(in >> realm >> character) || !record_identifier(realm)
                 || !record_identifier(character))

@@ -387,6 +387,26 @@ struct MigrationJournal::Impl {
             "incarnation INTEGER NOT NULL, entity_id INTEGER NOT NULL,"
             "generation INTEGER NOT NULL, revision INTEGER NOT NULL, snapshot BLOB NOT NULL,"
             "PRIMARY KEY(scope, type_id, incarnation, entity_id))");
+        // The migration tombstone of the same address: floors the entity's
+        // generation across a restart exactly like the rows do. A fence may
+        // exist with no row (an entity with no persistent properties).
+        sqlite_record_exec(db,
+            "CREATE TABLE IF NOT EXISTS entity_fence ("
+            "scope INTEGER NOT NULL, type_id INTEGER NOT NULL,"
+            "incarnation INTEGER NOT NULL, entity_id INTEGER NOT NULL,"
+            "generation INTEGER NOT NULL,"
+            "PRIMARY KEY(scope, type_id, incarnation, entity_id))");
+        // One live entity-migration transaction per address: the coordinator's
+        // durable unique-write handoff. Restored at open, so a coordinator
+        // restart mid-transfer keeps one clear owner instead of orphaning both
+        // sides of the handoff.
+        sqlite_record_exec(db,
+            "CREATE TABLE IF NOT EXISTS entity_migration ("
+            "scope INTEGER NOT NULL, type_id INTEGER NOT NULL,"
+            "incarnation INTEGER NOT NULL, entity_id INTEGER NOT NULL,"
+            "id TEXT NOT NULL, generation INTEGER NOT NULL,"
+            "destination TEXT NOT NULL, state TEXT NOT NULL, state_hex TEXT NOT NULL,"
+            "PRIMARY KEY(scope, type_id, incarnation, entity_id))");
         // Version 1 files predate the scene column; version 2 files predate the
         // grant owner column. Migrate both in place and remember the new row
         // format. A future incompatible writer refuses anything it does not
@@ -756,6 +776,104 @@ std::vector<EntityStateSnapshot> MigrationJournal::restore_states() const {
         states.push_back(std::move(row));
     }
     return states;
+}
+
+void MigrationJournal::save_entity_fence(const EntityStateKey& key, std::uint64_t generation) {
+    if (impl_->db == nullptr) throw std::runtime_error("entity state store is closed");
+    if (!generation || !key.scope || !key.type_id || !key.incarnation || key.entity_id <= 0)
+        throw std::invalid_argument("invalid entity fence key");
+    RecordStatement upsert(impl_->db,
+        "INSERT INTO entity_fence(scope, type_id, incarnation, entity_id, generation) "
+        "VALUES(?, ?, ?, ?, ?) ON CONFLICT(scope, type_id, incarnation, entity_id) DO UPDATE SET "
+        "generation=excluded.generation");
+    upsert.bind_int(1, static_cast<int>(key.scope));
+    upsert.bind_int(2, static_cast<int>(key.type_id));
+    upsert.bind_int(3, static_cast<int>(key.incarnation));
+    upsert.bind_u64(4, static_cast<std::uint64_t>(key.entity_id));
+    upsert.bind_u64(5, generation);
+    upsert.step("entity fence save step failed");
+}
+
+std::map<EntityStateKey, std::uint64_t> MigrationJournal::restore_entity_fences() const {
+    if (impl_->db == nullptr) throw std::runtime_error("entity state store is closed");
+    std::map<EntityStateKey, std::uint64_t> fences;
+    RecordStatement query(impl_->db,
+        "SELECT scope, type_id, incarnation, entity_id, generation FROM entity_fence");
+    for (;;) {
+        const int code = sqlite3_step(query.get());
+        if (code == SQLITE_DONE) break;
+        if (code != SQLITE_ROW) sqlite_throw(impl_->db, "entity fence restore step failed");
+        const sqlite3_int64 scope = sqlite3_column_int64(query.get(), 0);
+        const sqlite3_int64 type_id = sqlite3_column_int64(query.get(), 1);
+        const sqlite3_int64 incarnation = sqlite3_column_int64(query.get(), 2);
+        const sqlite3_int64 entity_id = sqlite3_column_int64(query.get(), 3);
+        const sqlite3_int64 generation = sqlite3_column_int64(query.get(), 4);
+        if (scope <= 0 || type_id <= 0 || incarnation <= 0 || entity_id <= 0 || generation <= 0)
+            throw std::runtime_error("entity fence row corrupted");
+        fences.emplace(EntityStateKey{static_cast<std::uint32_t>(scope),
+                                      static_cast<std::uint32_t>(type_id),
+                                      static_cast<std::uint32_t>(incarnation), entity_id},
+                       static_cast<std::uint64_t>(generation));
+    }
+    return fences;
+}
+
+void MigrationJournal::save_entity_migration(const EntityMigrationRecord& record) {
+    if (impl_->db == nullptr) throw std::runtime_error("entity state store is closed");
+    if (!record.generation || !record.key.scope || !record.key.type_id || !record.key.incarnation
+            || record.key.entity_id <= 0 || !record_identifier(record.id)
+            || !record_identifier(record.destination) || !record_identifier(record.state))
+        throw std::invalid_argument("invalid entity migration record");
+    RecordStatement upsert(impl_->db,
+        "INSERT INTO entity_migration(scope, type_id, incarnation, entity_id, id, generation,"
+        " destination, state, state_hex) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)"
+        " ON CONFLICT(scope, type_id, incarnation, entity_id) DO UPDATE SET"
+        " id=excluded.id, generation=excluded.generation, destination=excluded.destination,"
+        " state=excluded.state, state_hex=excluded.state_hex");
+    upsert.bind_int(1, static_cast<int>(record.key.scope));
+    upsert.bind_int(2, static_cast<int>(record.key.type_id));
+    upsert.bind_int(3, static_cast<int>(record.key.incarnation));
+    upsert.bind_u64(4, static_cast<std::uint64_t>(record.key.entity_id));
+    upsert.bind_text(5, record.id);
+    upsert.bind_u64(6, record.generation);
+    upsert.bind_text(7, record.destination);
+    upsert.bind_text(8, record.state);
+    upsert.bind_text(9, record.state_hex);
+    upsert.step("entity migration save step failed");
+}
+
+std::vector<EntityMigrationRecord> MigrationJournal::restore_entity_migrations() const {
+    if (impl_->db == nullptr) throw std::runtime_error("entity state store is closed");
+    std::vector<EntityMigrationRecord> rows;
+    RecordStatement query(impl_->db,
+        "SELECT scope, type_id, incarnation, entity_id, id, generation, destination, state, state_hex"
+        " FROM entity_migration ORDER BY scope, type_id, incarnation, entity_id");
+    for (;;) {
+        const int code = sqlite3_step(query.get());
+        if (code == SQLITE_DONE) break;
+        if (code != SQLITE_ROW) sqlite_throw(impl_->db, "entity migration restore step failed");
+        EntityMigrationRecord row;
+        row.key.scope = static_cast<std::uint32_t>(sqlite3_column_int64(query.get(), 0));
+        row.key.type_id = static_cast<std::uint32_t>(sqlite3_column_int64(query.get(), 1));
+        row.key.incarnation = static_cast<std::uint32_t>(sqlite3_column_int64(query.get(), 2));
+        row.key.entity_id = sqlite3_column_int64(query.get(), 3);
+        const auto* id = sqlite3_column_text(query.get(), 4);
+        const sqlite3_int64 generation = sqlite3_column_int64(query.get(), 5);
+        const auto* destination = sqlite3_column_text(query.get(), 6);
+        const auto* state = sqlite3_column_text(query.get(), 7);
+        const auto* state_hex = sqlite3_column_text(query.get(), 8);
+        if (!id || !destination || !state || !state_hex || generation <= 0
+                || row.key.scope <= 0 || row.key.type_id <= 0 || row.key.incarnation <= 0
+                || row.key.entity_id <= 0)
+            throw std::runtime_error("entity migration row corrupted");
+        row.id = reinterpret_cast<const char*>(id);
+        row.generation = static_cast<std::uint64_t>(generation);
+        row.destination = reinterpret_cast<const char*>(destination);
+        row.state = reinterpret_cast<const char*>(state);
+        row.state_hex = reinterpret_cast<const char*>(state_hex);
+        rows.push_back(std::move(row));
+    }
+    return rows;
 }
 
 void MigrationJournal::save_placement(const PlacementRecord& record) {

@@ -3,6 +3,7 @@
 #include "mistlane/entity_state.hpp"
 #include "mistlane/migration.hpp"
 #include "mistlane/record.hpp"
+#include <map>
 #include <memory>
 #include <string>
 #include <vector>
@@ -80,6 +81,10 @@ public:
     std::vector<GenerationAuthority::Grant> restore_grants() const override;
     void save_state(const EntityStateSnapshot&) override;
     std::vector<EntityStateSnapshot> restore_states() const override;
+    void save_entity_fence(const EntityStateKey&, std::uint64_t generation) override;
+    std::map<EntityStateKey, std::uint64_t> restore_entity_fences() const override;
+    void save_entity_migration(const EntityMigrationRecord&);
+    std::vector<EntityMigrationRecord> restore_entity_migrations() const;
 private:
     struct Impl;
     std::unique_ptr<Impl> impl_;

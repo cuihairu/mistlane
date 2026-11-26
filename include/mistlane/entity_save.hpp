@@ -30,6 +30,13 @@ public:
     void add(EntityStateStore* store) { stores_.push_back(store); }
     void remove(EntityStateStore* store) { std::erase(stores_, store); }
     std::size_t registered() const { return stores_.size(); }
+    // A hold on individual stores: a true answer skips the store this pass,
+    // leaving its dirty flag untouched (the write is held, not dropped). The
+    // migration destination holds its freshly adopted copy until the source's
+    // fence commits — a save at the adopted generation would move the data row
+    // past the fence the source is about to raise and strand the handoff.
+    using Skip = std::function<bool(const EntityStateStore&)>;
+    void set_skip(Skip skip) { skip_ = std::move(skip); }
 
     // What one tick did. `attempted` is the number of dirty stores the tick
     // tried to save; the rest of the counts are the ways a save was refused or
@@ -68,6 +75,7 @@ public:
 private:
     Report attempt(Report report) {
         for (auto* store : stores_) {
+            if (skip_ && skip_(*store)) continue;
             if (!store->dirty()) continue;
             ++report.attempted;
             try {
@@ -99,6 +107,7 @@ private:
     Clock now_ms_;
     std::uint64_t last_ = 0;
     bool has_ticked_ = false;
+    Skip skip_;
     std::vector<EntityStateStore*> stores_;
 };
 }

@@ -14,6 +14,7 @@
 #pragma once
 #include "tcp_channel.hpp"
 #include "node_internal.hpp"
+#include "mistlane/entity_state_wire.hpp"
 #include "mistlane/migration.hpp"
 #include <chrono>
 #include <cstdint>
@@ -49,6 +50,14 @@ public:
         struct DestinedTransfer { std::string realm, character, id, scene;
                                   std::uint64_t generation = 0; };
         std::vector<DestinedTransfer> destined;
+        // The ENTITIES tail of the same answer: the entity handoffs this
+        // member awaits. `state` is the step word (prepared/ready/fenced/
+        // committed/aborted/cleanup) and `state_hex` the source bundle's
+        // opaque transfer state (empty when the wire said "-").
+        struct EntityDestined { EntityStateKey key; std::string id;
+                                std::uint64_t generation = 0;
+                                std::string state, state_hex; };
+        std::vector<EntityDestined> entity_destined;
     };
     using Answer = std::function<void(Verdict)>;
     // Answers exactly once, on the executor's thread that started it.
@@ -137,6 +146,43 @@ public:
         out << ' ' << scope << ' ' << role << ' ' << instance;
         return out.str();
     }
+    // The entity-migration verbs, addressed by the entity 4-tuple the way the
+    // MLD2 endpoint names a key. The NS group parses for grammar symmetry and
+    // is ignored by the coordinator, so these builders never emit one. The
+    // address fields print through state_decimal's family — the same helpers
+    // the data leg parses keys with, so a key this side emits the data node
+    // would accept.
+    static std::string entity_head(std::string_view verb, const EntityStateKey& key) {
+        std::ostringstream out;
+        out << "MLR1 MIG " << verb << ' ' << key.scope << ' ' << key.type_id << ' '
+            << key.incarnation << ' ' << key.entity_id;
+        return out.str();
+    }
+    // EPREPARE: bind a request id, the source's flushed generation, the
+    // destination member and the opaque bundle state (empty hex prints "-").
+    static std::string entity_prepare_frame(const EntityStateKey& key, std::string_view id,
+                                            std::uint64_t generation,
+                                            std::string_view destination_instance,
+                                            const std::string& state_hex) {
+        return entity_head("EPREPARE", key) + " " + std::string(id) + " "
+            + std::to_string(generation) + " " + std::string(destination_instance) + " "
+            + (state_hex.empty() ? "-" : state_hex);
+    }
+    // EEVENT: drive one step (READY/FENCE/CLEANUP) for a request.
+    static std::string entity_event_frame(const EntityStateKey& key, std::string_view id,
+                                          std::uint64_t generation, std::string_view step) {
+        return entity_head("EEVENT", key) + " " + std::string(id) + " "
+            + std::to_string(generation) + " " + std::string(step);
+    }
+    // ECOMMIT / EABORT: the terminal verbs for a request.
+    static std::string entity_token_frame(std::string_view verb, const EntityStateKey& key,
+                                          std::string_view id, std::uint64_t generation) {
+        return entity_head(verb, key) + " " + std::string(id) + " " + std::to_string(generation);
+    }
+    // ESTATUS: the coordinator's live view of one entity handoff.
+    static std::string entity_status_frame(const EntityStateKey& key) {
+        return entity_head("ESTATUS", key);
+    }
 private:
     MigrationClient(asio::any_io_executor executor, Endpoint coordinator, std::string identity)
       : endpoint_(tcp::endpoint(parse_address(coordinator.address), coordinator.port)),
@@ -146,7 +192,9 @@ private:
         deadline();
         channel_->socket().async_connect(endpoint_, [self=shared_from_this()](Error ec) {
             if (self->done_) return;
-            if (ec) return self->fail("unreachable");
+            if (ec) {
+                return self->fail("unreachable");
+            }
             if (self->identity_.empty()) return self->ask();
             // A tokened coordinator refuses every MLR1 frame until the peer
             // identifies (registry_service: refuse_service MLS1 TOKEN).
@@ -242,6 +290,79 @@ private:
                         || !record_decimal(gen, generation))
                     return fail("unexpected");
                 v.destined.push_back({realm, character, id, scene, generation});
+            }
+            std::string extra;
+            if (in >> extra && extra != "ENTITIES") return fail("unexpected");
+            if (extra == "ENTITIES") {
+                // ENTITIES <count> [<scope> <type> <incarnation> <entity> <id>
+                // <generation> <state> <state-hex|->]... — the entity handoffs
+                // ride the same poll. The count accepts zero like the avatar
+                // count; the address fields parse exactly the way the MLD2
+                // endpoint and the registry's own entity verbs do.
+                std::string entity_count;
+                if (!(in >> entity_count)) return fail("unexpected");
+                std::uint64_t m = 0;
+                bool entity_digits = !entity_count.empty() && entity_count.size() <= 10;
+                for (unsigned char ch : entity_count) {
+                    if (ch < '0' || ch > '9') { entity_digits = false; break; }
+                    m = m*10 + ch-'0';
+                }
+                if (!entity_digits) return fail("unexpected");
+                for (std::uint64_t i = 0; i < m; ++i) {
+                    Verdict::EntityDestined row;
+                    std::string scope, type, incarnation, entity, gen;
+                    std::uint64_t wide = 0;
+                    if (!(in >> scope >> type >> incarnation >> entity >> row.id >> gen
+                            >> row.state >> row.state_hex))
+                        return fail("unexpected");
+                    const auto narrow = [&](const std::string& text, std::uint32_t& out) {
+                        if (!state_decimal(text, wide) || wide > ~0ull>>32) return false;
+                        out = static_cast<std::uint32_t>(wide);
+                        return true;
+                    };
+                    std::int64_t entity_id = 0;
+                    if (!narrow(scope, row.key.scope) || !narrow(type, row.key.type_id)
+                            || !narrow(incarnation, row.key.incarnation)
+                            || !state_int64(entity, entity_id) || !entity_id
+                            || !state_decimal(gen, row.generation)
+                            || row.state_hex.size() > 4096 || row.state_hex.size() % 2)
+                        return fail("unexpected");
+                    row.key.entity_id = entity_id;
+                    if (row.state_hex == "-") row.state_hex.clear();
+                    v.entity_destined.push_back(std::move(row));
+                }
+                std::string tail;
+                if (in >> tail) return fail("unexpected");
+            }
+            return done(std::move(v));
+        }
+        if (payload.starts_with("MLR1 MIG EPREPARED ")
+                || payload.starts_with("MLR1 MIG ESTEP ")
+                || payload.starts_with("MLR1 MIG ECOMMITTED ")
+                || payload.starts_with("MLR1 MIG EABORTED ")
+                || payload.starts_with("MLR1 MIG ESTATE ")) {
+            // The entity-migration answers. Every one names the request id;
+            // the caller already knows the address (it built the frame), so
+            // the verdict carries only what the caller cannot derive: the
+            // coordinator's step word, the committed destination member and
+            // the generation. ECOMMITTED's destination is one identifier
+            // word, so the trailing generation parses positionally.
+            Verdict v; v.applied = true;
+            std::istringstream in(payload);
+            std::string magic, mig, verb, id;
+            if (!(in >> magic >> mig >> verb >> id)) return fail("unexpected");
+            v.id = id;
+            if (verb == "ESTEP" || verb == "ESTATE") {
+                if (!(in >> v.state)) return fail("unexpected");
+            } else if (verb == "ECOMMITTED") {
+                if (!(in >> v.owner)) return fail("unexpected");
+            }
+            // ESTEP and EABORTED end at the state word / id; only ESTATE and
+            // ECOMMITTED carry the generation.
+            if (verb == "ESTATE" || verb == "ECOMMITTED" || verb == "EPREPARED") {
+                std::string gen;
+                if (!(in >> gen) || !record_decimal(gen, v.generation))
+                    return fail("unexpected");
             }
             std::string extra;
             if (in >> extra) return fail("unexpected");

@@ -21,6 +21,7 @@
 #include "tcp_channel.hpp"
 #include "return_sender.hpp"
 #include "entity_state_fetch.hpp"
+#include "entity_transfer_out.hpp"
 #include "transfer_driver.hpp"
 #include "registry_service.hpp"
 #include "scene_host.hpp"
@@ -299,6 +300,33 @@ public:
             std::move(answer))
             ->start(realm, character, source_scene);
     }
+    // One entity's unique-write handoff (docs/entity-contract.md "No server
+    // rebuild", docs/cross-return-protocol.md): the script names the entity's
+    // address, the destination member and its opaque bundle state; this host
+    // freezes the entity, flushes its final snapshot through the single
+    // forced-save entry (durable ACK required), raises the MLD2 fence at the
+    // declared generation and commits through the coordinator — the entity
+    // then lives on the destination at generation g+1. The declared handoff
+    // generation is recovered from the entity's own store, so the script need
+    // not know it. The source owner is this host (role by config, instance by
+    // the same derivation as the avatar face), the address globally named.
+    void entity_transfer(EntityTarget target, std::string_view destination_instance,
+        std::string_view state_hex, std::function<void(std::string error)> answer) override {
+        if (!config_.coordinator_enabled || config_.data.address.empty())
+            return answer("transfer is disabled; start with --coordinator and --data");
+        if (!entity_contract_ || !entity_endpoint_)
+            return answer("transfer is disabled; start with an entity contract");
+        // The bundle state rides as opaque lowercase hex on the wire; the
+        // frame cap bounds it, so an over-cap state from the script refuses
+        // before any leg opens rather than truncating mid-flight.
+        std::string hex(state_hex);
+        if (!hex.empty() && (hex.size() % 2 || hex.size() > 4096))
+            return answer("INVALID");
+        std::make_shared<EntityTransferDriver>(io_.get_executor(), config_.coordinator, config_.data,
+            config_.upstream_token.empty() ? std::string{} : service_hello(config_),
+            &entity_endpoint_->runtime(), std::move(answer))
+            ->start(target, std::string(destination_instance), hex);
+    }
     // Same-process scene switch (docs/avatar-runtime.md): the script names
     // realm + character, the node recovers the generation from the runtime and
     // changes only the avatar's scene reference — the avatar stays active, no
@@ -406,7 +434,8 @@ public:
         // needs no node-side change.
         const auto* role_definition = find_role(config_.role);
         const bool script_role = role_definition && role_definition->script;
-        service_context_ = ServiceContext{config_.role, config_.transport, config_.route_epoch, game_sessions, http_service};
+        service_context_ = ServiceContext{config_.role, config_.transport, config_.route_epoch,
+                                          game_sessions, http_service, {}, false};
         if (config_.role == "coordinator") registry_ = std::make_unique<Registry>(config_.journal);
         if (config_.coordinator_enabled && config_.role != "login"
                 && config_.role != "gateway")
@@ -831,18 +860,34 @@ private:
             if (value == SIGHUP) {
                 if (service_) {
                     try {
-                        auto replacement = std::make_shared<LuaService>(config_.script, service_context_, redis_,
+                        // The outgoing VM declares its plain-data state first:
+                        // a refusal keeps the old service and its handlers
+                        // untouched. A missing hook is an empty hand-off.
+                        EntityValues handoff;
+                        std::string error;
+                        if (!service_->handoff(handoff, error)) {
+                            throw std::runtime_error("handoff: "+error);
+                        }
+                        auto context = service_context_;
+                        context.script_state = std::move(handoff);
+                        context.validate_only = true;
+                        auto replacement = std::make_shared<LuaService>(config_.script, context, redis_,
                             websockets_.get(), game_sessions_.get(), this,
                             entity_endpoint_ ? &entity_endpoint_->runtime() : nullptr,
                             ticket_issuer_.get(), return_sender_.get(), metrics_sink_.get(), this, this, this, this);
+                        // The shadow runs init/start against sealed mutators:
+                        // a candidate that writes on boot is rejected before
+                        // it is promoted. Rebinding is the last fallible step
+                        // before the swap, so a bad implementation table also
+                        // keeps both the old service and its handlers.
                         replacement->start();
-                        // Rebinding under the new state happens before the swap,
-                        // so a bad implementation table keeps the old service.
-                        std::string error;
                         if (!bind_entities(*replacement, error))
                             throw std::runtime_error("entity bindings: "+error);
+                        // Unseal the promoted VM BEFORE the swap: afterwards
+                        // `replacement` names the outgoing service instead.
+                        replacement->unseal();
                         service_.swap(replacement);
-                        std::cout << "script reloaded; module state reset" << std::endl;
+                        std::cout << "script reloaded; state handed off" << std::endl;
                     } catch (const std::exception& e) {
                         std::cerr << "reload rejected, previous service retained: " << e.what() << '\n';
                     }
@@ -916,7 +961,10 @@ private:
     void poll_destined_transfers() {
         if (!config_.coordinator_enabled || config_.data.address.empty() || destined_pull_)
             return;
-        if (!service_ || !service_->avatar_runtime()) return;
+        // The entity handoffs ride the same poll: a host with only an entity
+        // contract (no avatar-load script) still owns destination leases, so
+        // requiring an avatar runtime here would strand every entity transfer.
+        if ((!service_ || !service_->avatar_runtime()) && !entity_endpoint_) return;
         destined_pull_ = true;
         const std::string identity = config_.upstream_token.empty() ? std::string{} : service_hello(config_);
         MigrationClient::ask(io_.get_executor(), config_.coordinator, identity,
@@ -927,7 +975,117 @@ private:
                 if (!verdict.applied) return;
                 for (const auto& t : verdict.destined)
                     drive_destination_transfer(t.realm, t.character, t.id, t.generation, t.scene);
+                for (const auto& e : verdict.entity_destined)
+                    drive_destination_entity(e);
             });
+    }
+    // The destination half of one entity handoff. The DESTINED answer repeats
+    // every non-cleaned row, so this callback is the whole terminal machine:
+    // prepared/ready -> adopt from the still-unfenced row and READY; fenced ->
+    // re-send READY (a replay is idempotent); committed -> unfreeze (this host
+    // is now the single live writer) and CLEANUP; aborted -> destroy the
+    // half-built copy (nothing was dirtied) and CLEANUP. The destination —
+    // never the source — resolves the terminal row so the news cannot be
+    // cleaned up before it is seen.
+    void drive_destination_entity(const MigrationClient::Verdict::EntityDestined& row) {
+        if (!entity_endpoint_) return;
+        auto& runtime = entity_endpoint_->runtime();
+        const EntityTarget ref{row.key.scope, row.key.type_id, row.key.incarnation,
+                               static_cast<std::int64_t>(row.key.entity_id)};
+        if (row.state == "committed" || row.state == "aborted") {
+            // A terminal row we have not adopted (a destination that joined
+            // late, or a coordinator restart) has no local copy: only the
+            // CLEANUP matters, so the listing stops either way. The pending
+            // entry clears here too — a READY whose answer was lost may have
+            // applied on the coordinator, leaving this key marked in flight.
+            entity_transfer_pending_.erase(row.key);
+            if (row.state == "committed") runtime.unfreeze(ref);
+            else if (runtime.frozen(ref)) runtime.destroy(ref);
+            entity_cleanup(key_of(ref), row.id, row.generation);
+            return;
+        }
+        if (entity_transfer_pending_.contains(row.key)) return; // already driven
+        // Re-READY without rebuilding: a prior READY answer lost on the wire
+        // left the adopted copy frozen and held; the row is still listed, so
+        // re-send rather than adopt twice (spawn would refuse Exists).
+        if (runtime.frozen(ref)) {
+            entity_send_ready(row.key, row.id, row.generation);
+            return;
+        }
+        entity_transfer_pending_.insert(row.key);
+        const std::string identity = config_.upstream_token.empty() ? std::string{} : service_hello(config_);
+        EntityStateFetcher::load(io_.get_executor(), config_.data, identity, row.key,
+            [this, row, ref](bool present, std::uint64_t generation, std::uint64_t revision,
+                             std::string bytes, std::string reason) {
+                auto it = entity_transfer_pending_.find(row.key);
+                if (it == entity_transfer_pending_.end()) return;
+                if (!reason.empty() && reason != "empty") {
+                    entity_transfer_pending_.erase(it);
+                    return;
+                }
+                if (!entity_endpoint_) { entity_transfer_pending_.erase(it); return; }
+                auto& runtime = entity_endpoint_->runtime();
+                // Restore refusals surface: an entity that cannot be rebuilt
+                // from the durable row is not adopted and the transfer is
+                // left to the coordinator's takeover path.
+                const auto adopted = runtime.adopt_migration(ref, row.generation,
+                    present ? generation : 0, present ? revision : 0, std::move(bytes));
+                if (!adopted.ok) { entity_transfer_pending_.erase(it); return; }
+                // Hold the new copy until the source's fence commits: a script
+                // write at the adopted generation would move the data row past
+                // the fence the source is about to raise.
+                runtime.freeze(ref);
+                // The opaque bundle state is the source script's own format —
+                // the framework only decodes the wire hex and hands the bytes
+                // to the destination script's entity_transfer_in hook.
+                std::string state;
+                if (!row.state_hex.empty() && !state_hex_decode(row.state_hex, state)) {
+                    runtime.destroy(ref);
+                    entity_transfer_pending_.erase(it);
+                    return;
+                }
+                try {
+                    service_->entity_transfer_in(ref, state);
+                } catch (const std::exception& e) {
+                    std::cerr << "entity transfer_in failed: " << e.what() << '\n';
+                    runtime.destroy(ref);
+                    entity_transfer_pending_.erase(it);
+                    return;
+                }
+                entity_send_ready(row.key, row.id, row.generation);
+            });
+    }
+    void entity_send_ready(EntityStateKey key, std::string id, std::uint64_t generation) {
+        entity_transfer_pending_.insert(key);
+        const std::string identity = config_.upstream_token.empty() ? std::string{} : service_hello(config_);
+        MigrationClient::ask(io_.get_executor(), config_.coordinator, identity,
+            MigrationClient::entity_event_frame(key, id, generation, "READY"),
+            [this, key = std::move(key)](MigrationClient::Verdict verdict) {
+                if (verdict.applied) { entity_transfer_pending_.erase(key); return; }
+                // A transient refusal is retried on the next poll — READY is
+                // idempotent. A hard refusal means the transaction was
+                // superseded: discard the half-built copy.
+                if (verdict.reason == "unreachable" || verdict.reason == "timeout") return;
+                entity_transfer_pending_.erase(key);
+                if (entity_endpoint_) {
+                    auto& runtime = entity_endpoint_->runtime();
+                    const EntityTarget ref{key.scope, key.type_id, key.incarnation,
+                                           static_cast<std::int64_t>(key.entity_id)};
+                    if (runtime.frozen(ref)) runtime.destroy(ref);
+                }
+            });
+    }
+    // Terminal rows stay listed until the DESTINATION acknowledges them; a
+    // best-effort leg is enough — a refusal leaves the row listed and the next
+    // poll re-sends (CLEANUP is idempotent).
+    void entity_cleanup(EntityStateKey key, std::string id, std::uint64_t generation) {
+        const std::string identity = config_.upstream_token.empty() ? std::string{} : service_hello(config_);
+        MigrationClient::ask(io_.get_executor(), config_.coordinator, identity,
+            MigrationClient::entity_event_frame(key, id, generation, "CLEANUP"),
+            [](MigrationClient::Verdict) {});
+    }
+    static EntityStateKey key_of(const EntityTarget& ref) {
+        return EntityStateKey{ref.scope, ref.type_id, ref.incarnation, ref.entity_id};
     }
     void drive_destination_transfer(std::string realm, std::string character,
                                     std::string id, std::uint64_t generation, std::string scene) {
@@ -1179,6 +1337,10 @@ private:
     // Keys being taken in on this host: a transfer-in load + READY spans more
     // than one pull, so a key already in flight is not re-driven.
     std::set<AvatarKey> transfer_in_pending_;
+    // Entity addresses whose adoption + READY spans more than one DESTINED
+    // pull: one in-flight take-over per address (the entity 4-tuple is the
+    // transaction key, not the avatar's (realm, character) pair).
+    std::set<EntityStateKey> entity_transfer_pending_;
     static constexpr std::uint64_t kTransferInGraceMs = 30000;
     std::uint64_t next_connection_ = 1;
     // MLT1 host verification on the crossServer join path. The claims are

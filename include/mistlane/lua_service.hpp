@@ -23,6 +23,13 @@ struct ServiceContext {
     // What the listeners of this node require from the script: framed game
     // sessions (tcp/ws/wss) and/or the Lua HTTP service (http/https).
     bool game_sessions = true, http_service = false;
+    // A Lua-safe replacement (docs/entity-contract.md "No server rebuild"):
+    // the outgoing VM's handoff() table, carried into the shadow's init as
+    // `context.script_state`. Plain data only — functions/userdata refuse the
+    // swap. The node promotes the shadow only after its init/start and the
+    // entity-binding rebind all succeed.
+    EntityValues script_state;
+    bool validate_only = false;
 };
 // Push adapter for Lua websocket sessions; implemented by the node. All calls
 // run on the node's event loop thread, so implementations need no locking.
@@ -124,6 +131,20 @@ public:
     virtual void transfer(std::string_view realm, std::string_view character,
         MigrationOwner destination, std::string_view source_scene,
         std::function<void(std::string error)> answer) = 0;
+    // The entity handoff face of the same seam (docs/entity-contract.md
+    // "No server rebuild"): the script names one live entity's address, the
+    // destination member and the opaque bundle state already encoded as
+    // lowercase hex ("" = none); the node freezes the entity, flushes its
+    // final snapshot, fences the data row and commits through the
+    // coordinator. Answers once with the same verdict vocabulary (plus "no
+    // store" for an address without a persistence chain). The default
+    // implementation answers "disabled" so a node that never wired the seam
+    // refuses honestly instead of aborting the script.
+    virtual void entity_transfer(EntityTarget target, std::string_view destination_instance,
+        std::string_view state_hex, std::function<void(std::string error)> answer) {
+        (void)target; (void)destination_instance; (void)state_hex;
+        answer("disabled");
+    }
 };
 // Same-process scene switch adapter (the avatar's scene reference;
 // docs/avatar-runtime.md "Same-process scene switch"). The script names realm +
@@ -215,6 +236,24 @@ public:
     // not declare avatar_load (the opt-in gate): a node drives load/attach/
     // detach/save/reclaim from the session lifecycle only when this is non-null.
     AvatarRuntime* avatar_runtime() { return avatar_enabled_ ? &avatar_runtime_ : nullptr; }
+    // The destination half of the entity handoff, called by the node after it
+    // rebuilds the entity from the source's durable snapshot (docs/entity-
+    // contract.md "No server rebuild"): runs module.entity_transfer_in(target,
+    // state) if the script declares it, so the bundle can re-hydrate whatever
+    // it keeps outside the durable row. The state is the source script's
+    // opaque bytes (the same bytes mistlane.entity.transfer carried). A
+    // missing hook is a no-op; a raise destroys the adopted copy honestly.
+    void entity_transfer_in(const EntityTarget& target, const std::string& state);
+    // The outgoing VM's state hand-off (docs/entity-contract.md "No server
+    // rebuild"): calls an optional module.handoff() and converts its plain-data
+    // table into EntityValues. Returns false with a reason when the hook raises
+    // or returns anything that is not a plain table (functions/userdata refuse
+    // the swap — arbitrary script objects are not serializable state).
+    bool handoff(EntityValues& state, std::string& error) const;
+    bool validate_only() const { return context_.validate_only; }
+    // Restores the real closures over a validate-only shadow's sealed faces
+    // (re-runs the constructor's push sequence); no-op on a live service.
+    void unseal();
 private:
     static int stream_create_group(lua_State*);
     static int stream_publish(lua_State*);
@@ -252,7 +291,8 @@ private:
     static int entity_flush(lua_State*);
     static int entity_set_owner(lua_State*);
     static int entity_state_inspect(lua_State*);
-    static void push_entity_api(lua_State*, EntityRuntime*);
+    static int entity_transfer(lua_State*);
+    static void push_entity_api(lua_State*, LuaService*);
     static int ticket_issue(lua_State*);
     static void push_ticket_api(lua_State*, LuaService*);
     static int return_seed(lua_State*);

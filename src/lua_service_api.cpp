@@ -6,6 +6,7 @@
 #include "lua_service_internal.hpp"
 #include "mistlane/transport.hpp" // max_frame bounds websocket pushes
 #include "mistlane/entity_lua.hpp"
+#include "mistlane/entity_state_wire.hpp" // state_hex_encode: the bundle state rides the wire
 #include "mistlane/entry_ticket.hpp"
 #include <boost/asio/ssl.hpp>
 #include <openssl/ssl.h>
@@ -66,11 +67,12 @@ void LuaService::push_placement_api(lua_State* l, LuaService* service) {
     lua_setfield(l, -2, "place");
     lua_setglobal(l, "mistlane");
 }
-void LuaService::push_entity_api(lua_State* l, EntityRuntime* runtime) {
-    if (!runtime) return; // no contract bundle on this node
+void LuaService::push_entity_api(lua_State* l, LuaService* service) {
+    if (!service->entity_runtime_) return; // no contract bundle on this node
     lua_getglobal(l, "mistlane");
     if (!lua_istable(l, -1)) { lua_pop(l, 1); lua_newtable(l); }
     lua_newtable(l);
+    EntityRuntime* runtime = service->entity_runtime_;
     lua_pushlightuserdata(l, runtime); lua_pushcclosure(l, entity_spawn, 1); lua_setfield(l, -2, "spawn");
     lua_pushlightuserdata(l, runtime); lua_pushcclosure(l, entity_destroy, 1); lua_setfield(l, -2, "destroy");
     lua_pushlightuserdata(l, runtime); lua_pushcclosure(l, entity_properties, 1); lua_setfield(l, -2, "properties");
@@ -79,6 +81,7 @@ void LuaService::push_entity_api(lua_State* l, EntityRuntime* runtime) {
     lua_pushlightuserdata(l, runtime); lua_pushcclosure(l, entity_flush, 1); lua_setfield(l, -2, "flush");
     lua_pushlightuserdata(l, runtime); lua_pushcclosure(l, entity_set_owner, 1); lua_setfield(l, -2, "set_owner");
     lua_pushlightuserdata(l, runtime); lua_pushcclosure(l, entity_state_inspect, 1); lua_setfield(l, -2, "state");
+    lua_pushlightuserdata(l, service); lua_pushcclosure(l, entity_transfer, 1); lua_setfield(l, -2, "transfer");
     lua_setfield(l, -2, "entity"); lua_setglobal(l, "mistlane");
 }
 void LuaService::push_ticket_api(lua_State* l, LuaService* service) {
@@ -362,6 +365,85 @@ int LuaService::entity_state_inspect(lua_State* l) {
     lua_pushboolean(l, record->dirty() ? 1 : 0);
     lua_setfield(l, -2, "dirty");
     return 1;
+}
+// mistlane.entity.transfer(scope, type, incarnation, entity_id, destination,
+//                          [state], callback):
+// hands one live entity to another member (docs/entity-contract.md "No server
+// rebuild"). `state` is the bundle's own opaque string (at most 2048 bytes) —
+// it rides the transfer verbatim and reaches the destination's
+// entity_transfer_in hook; omit it when the bundle keeps everything in the
+// durable row. The callback answers true once the entity released here, or
+// nil with a reason and the entity stays live. The destination is the target
+// member's instance name (the registry's member identity, like
+// mistlane.transfer's destination.instance).
+int LuaService::entity_transfer(lua_State* l) {
+    auto* service = static_cast<LuaService*>(lua_touserdata(l, lua_upvalueindex(1)));
+    EntityRuntime* runtime = service->entity_runtime_;
+    std::uint32_t scope, type, incarnation;
+    if (!lua_u32(l, 1, scope) || !lua_u32(l, 2, type) || !lua_u32(l, 3, incarnation)
+            || !lua_isinteger(l, 4))
+        return luaL_error(l, "entity.transfer expects scope, type, incarnation, entity_id integers");
+    const std::int64_t entity_id = static_cast<std::int64_t>(lua_tointeger(l, 4));
+    if (!entity_id) return luaL_error(l, "entity.transfer entity_id must be positive");
+    if (!lua_isstring(l, 5)) return luaL_error(l, "destination must be an instance name");
+    std::size_t destination_size = 0;
+    const auto* destination_data = lua_tolstring(l, 5, &destination_size);
+    const std::string destination(destination_data, destination_size);
+    if (destination.empty() || destination.size() > 64)
+        return luaL_error(l, "destination instance name length is invalid");
+    int index = 6;
+    std::string state;
+    if (lua_isstring(l, index)) {
+        std::size_t state_size = 0;
+        const auto* state_data = lua_tolstring(l, index, &state_size);
+        if (state_size > 2048)
+            return luaL_error(l, "entity.transfer state must be at most 2048 bytes");
+        state.assign(state_data, state_size);
+        ++index;
+    }
+    if (!lua_isfunction(l, index))
+        return luaL_error(l, "last argument must be a callback function");
+    lua_pushvalue(l, index);
+    const auto callback = luaL_ref(l, LUA_REGISTRYINDEX);
+    const auto life = service->async_context_;
+    if (!service->transfer_sink_)
+        return finish_lua(life, callback, "transfer is disabled; start with --coordinator and --data",
+            [](lua_State* l) { lua_pushnil(l); }), 0;
+    // The opaque bytes ride the wire as lowercase hex (2 chars per byte), so
+    // the frame stays whitespace-scannable exactly like the MLD2 snapshots.
+    std::string hex;
+    if (!state.empty()) state_hex_encode(state, hex);
+    service->transfer_sink_->entity_transfer({scope, type, incarnation, entity_id}, destination, hex,
+        [life, callback](std::string error) {
+            if (!error.empty())
+                return finish_lua(life, callback, std::move(error), [](lua_State* l) { lua_pushnil(l); });
+            finish_lua(life, callback, {}, [](lua_State* l) { lua_pushboolean(l, 1); });
+        });
+    return 0;
+}
+// The destination half: the node calls this after the adopted entity holds the
+// source's durable snapshot (docs/entity-contract.md "No server rebuild"). The
+// hook receives the target table and the opaque state bytes the source handed
+// to mistlane.entity.transfer; a missing hook keeps the entity as restored.
+void LuaService::entity_transfer_in(const EntityTarget& target, const std::string& state) {
+    if (!state_) return;
+    StackGuard guard(state_);
+    lua_rawgeti(state_, LUA_REGISTRYINDEX, module_);
+    lua_getfield(state_, -1, "entity_transfer_in");
+    if (lua_isnil(state_, -1)) return;
+    if (!lua_isfunction(state_, -1))
+        throw std::runtime_error("entity_transfer_in must be a function");
+    lua_createtable(state_, 0, 4);
+    lua_pushinteger(state_, static_cast<lua_Integer>(target.scope));
+    lua_setfield(state_, -2, "scope");
+    lua_pushinteger(state_, static_cast<lua_Integer>(target.type_id));
+    lua_setfield(state_, -2, "type");
+    lua_pushinteger(state_, static_cast<lua_Integer>(target.incarnation));
+    lua_setfield(state_, -2, "incarnation");
+    lua_pushinteger(state_, target.entity_id);
+    lua_setfield(state_, -2, "entity");
+    lua_pushlstring(state_, state.data(), state.size());
+    check(protected_call(state_, 2, 0, guard.top+1));
 }
 // Entity method implementations are the script's `entities` table:
 // service.entities[type][method] = function(args, ctx) -> returns-table|nil.

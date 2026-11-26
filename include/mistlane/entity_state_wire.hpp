@@ -18,10 +18,12 @@ namespace mistlane {
 // it gets its own marker rather than overloading the record endpoint:
 //   MLD2 SAVE <scope> <type> <incarnation> <entity> gen <n> rev <m> <hex>
 //   MLD2 LOAD <scope> <type> <incarnation> <entity>
+//   MLD2 FENCE <scope> <type> <incarnation> <entity> gen <n>
 // Replies:
 //   MLD2 ACK <scope> <type> <incarnation> <entity> gen <n> rev <m>
 //   MLD2 RECEIVED <scope> <type> <incarnation> <entity> gen <n> rev <m>
 //   MLD2 STATE <scope> <type> <incarnation> <entity> gen <n> rev <m> <hex>
+//   MLD2 FENCED <scope> <type> <incarnation> <entity> gen <n>
 //   MLD2 EMPTY
 //   MLD2 ERR INVALID | STALE gen <n> | CONFLICT rev <m> | STORAGE
 // The hex payload is the lowercase encoding of the encoded persistent
@@ -35,13 +37,14 @@ namespace mistlane {
 // have been lost — the row is rewritten and acknowledged again. Rows are
 // seeded from the backend at construction, so a restarted data node
 // resumes the fence from what it durably holds.
-struct EntityStateKey {
-    std::uint32_t scope = 0, type_id = 0, incarnation = 0;
-    std::int64_t entity_id = 0;
-    auto tie() const { return std::tie(scope, type_id, incarnation, entity_id); }
-    bool operator<(const EntityStateKey& o) const { return tie() < o.tie(); }
-    bool operator==(const EntityStateKey& o) const { return tie() == o.tie(); }
-};
+// FENCE is the migration tombstone (the unique-write handoff): it floors
+// the key's generation — every later SAVE at or below the floor answers
+// STALE gen <floor> until a strictly higher generation lands. A replay of
+// the standing floor is an idempotent FENCED; a floor below the durable
+// row's generation is refused (the row already outlives it); a key with no
+// row may still be fenced — an entity whose contract declares no persistent
+// properties leaves no snapshot row at all. Floors ride the backend like
+// rows, so a restarted data node keeps refusing superseded writers.
 inline bool state_decimal(std::string_view s, std::uint64_t& out, bool allow_zero = false) {
     // Strict unsigned decimal, width-bounded. Unlike record_decimal this
     // accepts zero: revision 0 is the legitimate initial committed revision
@@ -103,7 +106,7 @@ inline bool state_hex_decode(std::string_view hex, std::string& out) {
     return true;
 }
 struct EntityStateRequest {
-    enum class Type { Save, Load };
+    enum class Type { Save, Load, Fence };
     Type type = Type::Load;
     EntityStateKey key;
     std::uint64_t generation = 0, revision = 0;
@@ -145,6 +148,14 @@ inline EntityStateRequest parse_entity_state(std::string_view payload) {
         if (!read_key(r.key)) throw std::invalid_argument("INVALID");
         return r;
     }
+    if (command == "FENCE") {
+        std::string gen_tag, gen;
+        if (!read_key(r.key)) throw std::invalid_argument("INVALID");
+        if (!(in >> gen_tag >> gen) || gen_tag != "gen" || !state_decimal(gen, r.generation))
+            throw std::invalid_argument("INVALID");
+        r.type = EntityStateRequest::Type::Fence;
+        return r;
+    }
     throw std::invalid_argument("INVALID");
 }
 // The data-side service over one EntityStateBackend. Backend-less it keeps
@@ -162,6 +173,8 @@ public:
             EntityStateKey key{row.scope, row.type_id, row.incarnation, row.entity_id};
             rows_.emplace(key, Fence{row.generation, row.committed_revision});
         }
+        for (const auto& [key, generation] : backend_->restore_entity_fences())
+            fenced_.emplace(key, generation);
     }
     // Handles one frame and returns the reply; the result word feeds the
     // bounded result label, mirroring RecordStore::handle.
@@ -175,6 +188,13 @@ public:
                 + std::to_string(key.type_id) + " " + std::to_string(key.incarnation) + " "
                 + std::to_string(key.entity_id) + " gen " + std::to_string(gen)
                 + " rev " + std::to_string(rev);
+        };
+        // The tombstone carries no revision: it floors a generation, so its
+        // documented grammar ends at the gen word.
+        const auto fence_render = [key](std::uint64_t gen) {
+            return "MLD2 FENCED " + std::to_string(key.scope) + " "
+                + std::to_string(key.type_id) + " " + std::to_string(key.incarnation) + " "
+                + std::to_string(key.entity_id) + " gen " + std::to_string(gen);
         };
         const auto it = rows_.find(key);
         const Fence held = it == rows_.end() ? Fence{0, 0} : it->second;
@@ -204,9 +224,46 @@ public:
             result = "loaded";
             return render("STATE", held.generation, held.revision) + " " + hex;
         }
-        // Save. The fence precedes the write: a superseded writer never
-        // reaches storage, and an equal generation+revision is the retry
-        // path (rewrite + re-acknowledge).
+        if (request.type == EntityStateRequest::Type::Fence) {
+            // The unique-write tombstone. A fence below what the store
+            // durably holds is refused (the row already outlives it); a
+            // replay of the standing floor (or of anything below it — the
+            // floor only rises) is the idempotent FENCED; otherwise the
+            // durable write precedes the verdict exactly like a save.
+            // Without a backend FENCED is a receipt in memory — the same
+            // honest non-durability as RECEIVED.
+            const auto floor = fenced_.find(key);
+            if (floor != fenced_.end() && floor->second >= request.generation) {
+                result = "fenced";
+                return fence_render(floor->second);
+            }
+            if (it != rows_.end() && held.generation > request.generation) {
+                result = "stale";
+                return "MLD2 ERR STALE gen " + std::to_string(held.generation);
+            }
+            if (backend_) {
+                try {
+                    backend_->save_entity_fence(key, request.generation);
+                } catch (const std::exception&) {
+                    result = "storage";
+                    return "MLD2 ERR STORAGE";
+                }
+            }
+            fenced_[key] = request.generation;
+            result = "fenced";
+            return fence_render(request.generation);
+        }
+        // Save. The tombstone floor precedes the row fence: once a
+        // migration fenced this key, every writer at or below that
+        // generation is superseded no matter what the row holds. Then the
+        // row fence itself: a superseded writer never reaches storage, and
+        // an equal generation+revision is the retry path (rewrite +
+        // re-acknowledge).
+        const auto floor = fenced_.find(key);
+        if (floor != fenced_.end() && request.generation <= floor->second) {
+            result = "stale";
+            return "MLD2 ERR STALE gen " + std::to_string(floor->second);
+        }
         if (request.generation < held.generation) {
             result = "stale";
             return "MLD2 ERR STALE gen " + std::to_string(held.generation);
@@ -235,6 +292,11 @@ private:
     struct Fence { std::uint64_t generation = 0, revision = 0; };
     EntityStateBackend* backend_;
     std::map<EntityStateKey, Fence> rows_;
+    // Migration tombstones: the fenced floor per key. A key may be fenced
+    // with no row (an entity with no persistent properties), so this map is
+    // independent of rows_; a landed save above the floor never clears it —
+    // the floor only rises.
+    std::map<EntityStateKey, std::uint64_t> fenced_;
     std::map<EntityStateKey, std::string> last_bytes_;
 };
 }

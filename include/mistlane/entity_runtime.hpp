@@ -45,6 +45,15 @@ public:
    codec_ = codec;
    backend_ = backend;
    driver_.emplace(period_ms);
+   // A frozen entity holds its writes in process: the save pass skips it
+   // until unfrozen. The migration destination is frozen from adoption until
+   // the coordinator's commit, so nothing it does can move the data row past
+   // the fence its source is about to raise (a held write lands on the first
+   // pass after the unfreeze, at the adopted generation — correct, because
+   // by then this host is the one live writer).
+   driver_->set_skip([this](const EntityStateStore& store) {
+     return frozen_.contains(address(store.address()));
+   });
  }
  // The async durability sink (the data leg): every new EntityStateStore hands
  // its snapshots here instead of writing a local backend; the sink's done()
@@ -138,7 +147,13 @@ public:
  // the sender may retry under a fresh id. The transport endpoint calls this
  // before the wire codec so a stale or duplicate call spends no decode work.
  std::optional<EntityError> fence(const EntityInvocation& call, std::uint64_t correlation_id) {
-   const auto a=address(call.target); const auto it=entities_.find(a);
+   const auto a=address(call.target);
+   // The transfer gate (docs/entity-contract.md "No server rebuild"): a frozen
+   // entity is not being served — NOT_READY before any route or fence check,
+   // and a fenced call still consumes no correlation slot, so the sender's
+   // retry under a fresh id is clean.
+   if (frozen_.contains(a)) return EntityError::NOT_READY;
+   const auto it=entities_.find(a);
    if (it==entities_.end()) {
      for (const auto& [known,generation]:entities_) {
        (void)generation;
@@ -171,6 +186,7 @@ public:
    const auto a = address(ref);
    if (entities_.erase(a) == 0) return false;
    owners_.erase(a); // ownership dies with the entity
+   frozen_.erase(a);
    channels_.erase(a);
    stores_.erase(a);
    // The record leaves the periodic driver with its entity. A dirty record is
@@ -185,6 +201,63 @@ public:
    std::erase_if(delivered_, [a](const auto& row) { return row.first == a; });
    if (host_route_) host_route_(ref, false);
    return true;
+ }
+ // The transfer freeze (docs/entity-contract.md "No server rebuild"): the
+ // source stops serving one entity at an event-loop safe point while the
+ // migration driver flushes its final snapshot and fences the data row.
+ // fence() answers NOT_READY for a frozen entity; an abort before the fence
+ // unfreezes, so nothing but the gate moved.
+ bool freeze(EntityTarget ref) { return frozen_.insert(address(ref)).second; }
+ bool unfreeze(EntityTarget ref) { return frozen_.erase(address(ref)) > 0; }
+ bool frozen(EntityTarget ref) const { return frozen_.contains(address(ref)); }
+ // The migration destination's admission: the entity lands here on the
+ // source's durable snapshot and leaves holding a strictly higher hosting
+ // generation than anything the superseded writer may still save, so the
+ // data node answers its retries STALE from this host's first save on. The
+ // order is load-bearing: spawn at a floor, restore the row (a refusal
+ // surfaces — a migration that cannot honestly rebuild the entity must not
+ // pretend it did), then advance past the row; assuming g+1 before the
+ // restore would refuse the snapshot (restore only moves forward). The
+ // incarnation never changes: the data row is keyed by it, and DESTINED
+ // adoption reuses the source's address verbatim.
+ struct AdoptionReport {
+   bool ok = false;
+   EntityError error = EntityError::INVALID;
+   std::string refused;               // the failed step or the store's refusal
+   std::vector<std::string> defaulted; // contract grew; these took descriptor defaults
+ };
+ AdoptionReport adopt_migration(EntityTarget ref, std::uint64_t declared_generation,
+                                std::uint64_t row_generation, std::uint64_t row_revision,
+                                const std::string& bytes) {
+   AdoptionReport out;
+   // The spawn floor is 1: assume() refuses equal-or-lower, so the advance
+   // below needs a floor strictly below the row's generation.
+   if (!spawn(ref, 1)) { out.refused = "spawn"; return out; }
+   const auto a = address(ref);
+   if (auto* store = state_store(ref)) {
+     if (!bytes.empty()) {
+       const auto restored = store->restore(row_generation, row_revision, bytes);
+       if (!restored.ok) {
+         destroy(ref); // honest: an entity that could not be rebuilt does not stay live
+         out.error = restored.error;
+         out.refused = restored.refused.empty() ? "restore" : restored.refused;
+         return out;
+       }
+       out.defaulted = std::move(restored.defaulted);
+     }
+     // The next generation clears the source's: the declared transaction
+     // generation names the handoff even when the row is absent (an entity
+     // with no persistent properties leaves no snapshot row at all).
+     const std::uint64_t next = std::max(declared_generation, row_generation) + 1;
+     if (!owned_state_[a] || !owned_state_[a]->assume(next)) {
+       destroy(ref);
+       out.refused = "assume";
+       return out;
+     }
+     entities_[a] = static_cast<std::uint32_t>(std::min<std::uint64_t>(next, ~0ull>>32));
+   }
+   out.ok = true;
+   return out;
  }
  // The controlled store of one live entity, seeded with its declared defaults.
  // Null for an unrouted, destroyed or undeclared address.
@@ -298,6 +371,9 @@ private:
  static constexpr std::size_t correlation_cap = 4096, correlation_evict = 256;
  EntityDispatcher dispatcher_;
  std::map<Address,std::uint32_t> entities_;
+ // The transfer freeze: addresses whose fence answers NOT_READY (destroy
+ // clears the entry with its entity).
+ std::set<Address> frozen_;
  // Owner attribution: the trusted session bound to one entity. A client leg
  // never reports its owner — the runtime matches the caller's session id
  // against this table (see resolve_caller).
