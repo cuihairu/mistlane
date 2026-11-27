@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <cstdint>
 #include <map>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -54,6 +55,18 @@ struct SyncMessage {
 struct PropertyDelivery {
     std::string observer;
     SyncMessage message;
+};
+
+// One negotiated client view of an entity's properties (docs/entity-contract.md,
+// "One entity may have owners/observers on different client versions"): the
+// property ids and names the client's compiled contract declares. A stream
+// projected onto a view never carries an id the client cannot decode, and
+// because sequences are assigned after the filter, every projected stream stays
+// gapless exactly like an unfiltered one. A null view is the unfiltered host
+// stream (today's behavior, and the host's own version).
+struct SyncView {
+    std::set<std::uint32_t> ids;
+    std::set<std::string> names;
 };
 
 // One receiver's replica: it replays the deltas that reached it into its own
@@ -169,10 +182,12 @@ public:
 
     // Entry and re-entry are distinct calls: a stream that already exists is
     // not reset silently, so a duplicate registration is refused instead of
-    // swallowing the observer's history.
-    bool observe(const std::string& id, bool is_owner) {
+    // swallowing the observer's history. The optional view projects the stream
+    // onto one negotiated client contract version: a null view is the host's
+    // own stream (everything the audience filter admits).
+    bool observe(const std::string& id, bool is_owner, const SyncView* view = nullptr) {
         if (audience_.count(id)) return false;
-        audience_.emplace(id, Audience{is_owner, 1, taken_ + store_->pending_changes()});
+        audience_.emplace(id, Audience{is_owner, 1, taken_ + store_->pending_changes(), view});
         pending_.emplace(id, 1);
         return true;
     }
@@ -199,10 +214,12 @@ public:
         for (auto it = audience_.begin(); it != audience_.end(); ++it) {
             const std::size_t waiting = pending_.count(it->first) ? pending_[it->first] : 0;
             pending_.erase(it->first);
+            const SyncView* const view = it->second.view;
             for (std::size_t i = 0; i < waiting; ++i) {
                 PropertyDelivery delivery;
                 delivery.observer = it->first;
                 delivery.message.baseline = store_->client_view(it->second.is_owner);
+                if (view) project_baseline(delivery.message.baseline, *view);
                 out.push_back(std::move(delivery));
             }
             SyncMessage batch;
@@ -210,6 +227,10 @@ public:
             for (std::size_t i = 0; i < changes.size(); ++i) {
                 if (first + i < it->second.entry) continue;
                 if (!visible(changes[i].property, it->second.is_owner)) continue;
+                // A view filters before sequences are assigned, so a projected
+                // stream never numbers a delta it dropped: the receiver's
+                // gapless discipline holds by construction.
+                if (view && !view->names.count(changes[i].property)) continue;
                 if (batch.deltas.empty()) batch.sequence = it->second.next;
                 batch.deltas.push_back(to_delta(changes[i], it->second.next++));
             }
@@ -238,13 +259,16 @@ public:
     SyncMessage resync(const std::string& id) {
         const auto it = audience_.find(id);
         bool is_owner = false;
+        const SyncView* view = nullptr;
         if (it != audience_.end()) {
             it->second.next = 1;
             it->second.entry = taken_ + store_->pending_changes();
             is_owner = it->second.is_owner;
+            view = it->second.view;
         }
         SyncMessage baseline;
         baseline.baseline = store_->client_view(is_owner);
+        if (view) project_baseline(baseline.baseline, *view);
         return baseline;
     }
 private:
@@ -252,7 +276,15 @@ private:
         bool is_owner = false;
         std::uint64_t next = 1;
         std::uint64_t entry = 0;  // journal position the baseline already covers
+        const SyncView* view = nullptr;
     };
+
+    static void project_baseline(EntityValues& baseline, const SyncView& view) {
+        for (auto it = baseline.begin(); it != baseline.end();) {
+            if (view.names.count(it->first)) ++it;
+            else it = baseline.erase(it);
+        }
+    }
 
     bool visible(const std::string& name, bool is_owner) const {
         const auto& props = store_->entity().properties;

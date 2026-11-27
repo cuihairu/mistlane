@@ -66,7 +66,7 @@ add_executable(mistlane-mysql-probe examples/mysql_probe.cpp)
 target_link_libraries(mistlane-mysql-probe PRIVATE mistlane_mysql)
 include(CTest)
 if(BUILD_TESTING)
-  foreach(test_case IN ITEMS core.contracts contract.tool entity.versions sproto.golden rpc.lifecycle core.roles transport.tcp transport.websocket transport.http transport.listeners
+  foreach(test_case IN ITEMS core.contracts contract.tool entity.versions entity.client.versions sproto.golden rpc.lifecycle core.roles transport.tcp transport.websocket transport.http transport.listeners
       transport.push transport.correlate transport.identity transport.multiplex transport.hostname coordinator.registry
       entity.envelope
       entity.properties

@@ -106,6 +106,21 @@ std::vector<ApiCredential> api_credentials(std::string_view text) {
     }
     return credentials;
 }
+// Published client locks for MLV1 negotiation, read at startup like the
+// contract itself. A missing or unreadable file throws before the node is
+// ready; a bad lock throws from EntityVersionGate and refuses the load.
+std::vector<std::string> client_lock_texts(const std::vector<std::string>& paths) {
+    std::vector<std::string> out;
+    out.reserve(paths.size());
+    for (const auto& path : paths) {
+        std::ifstream in(path, std::ios::binary);
+        if (!in) throw std::runtime_error("cannot read client contract lock: "+path);
+        std::ostringstream text;
+        text << in.rdbuf();
+        out.push_back(text.str());
+    }
+    return out;
+}
 // MLT1 per-realm secrets, comma-separated "realm:<64 lowercase hex>" rows.
 // Injected through the environment like the MLA1 credentials: no loader, CLI
 // secret flag or real secret ships inside the framework.
@@ -481,7 +496,8 @@ public:
             if (!durable_via_data && !config_.journal.empty())
                 entity_journal_ = std::make_unique<MigrationJournal>(config_.journal);
             entity_endpoint_ = std::make_unique<EntityEndpoint>(*entity_contract_, entity_codec_.get(),
-                entity_codec_.get(), entity_journal_.get(), config_.entity_save_period_ms);
+                entity_codec_.get(), entity_journal_.get(), config_.entity_save_period_ms,
+                client_lock_texts(config_.client_contracts));
             if (durable_via_data) {
                 // Save side: every forced save rides MLD2 to the data role;
                 // the store's receipt confirms on the ACK and aborts on any
@@ -507,8 +523,19 @@ public:
             // session_send lives on the public sink interface (the concrete
             // GameSessions hides it behind a private override), so the push
             // routes through the same adapter Lua's mistlane.session uses.
+            // The observer view resolver maps a session id onto the client
+            // contract version its MLV1 handshake negotiated, so a subscribe
+            // projects that stream onto the client's declared property set.
             if (game_sessions_) {
                 GameSessionSink* sink = game_sessions_.get();
+                auto& sessions = *game_sessions_;
+                entity_endpoint_->runtime().set_view_resolver(
+                    [&sessions](const std::string& observer) -> const SyncView* {
+                        char* end = nullptr;
+                        const auto id = std::strtoull(observer.c_str(), &end, 10);
+                        if (!end || *end != '\0' || end == observer.c_str()) return nullptr;
+                        return sessions.client_view(id);
+                    });
                 entity_endpoint_->runtime().set_property_push(
                     [this, sink](const EntityTarget& target, const std::string& observer, const SyncMessage& message) {
                         std::string reason;

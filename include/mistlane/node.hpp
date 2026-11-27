@@ -47,6 +47,12 @@ struct Config {
     // runtime and answers MLE1 frames instead of passing them to the script.
     // Only the entity-hosting roles may load one (gameServer/crossServer).
     std::string contract;
+    // Published client locks (MLV1 negotiation): each names one client
+    // contract version this host admits — its digest passes the handshake and
+    // its declared property set projects the session's observers. Requires
+    // --contract; every lock must parse and be additions-only into the host
+    // model or startup refuses.
+    std::vector<std::string> client_contracts;
     // How often an entity host drives its forced-save pass (ms). The node
     // ticks its own periodic driver on its 100ms loop; 0 removes the period
     // gate so each pass attempts every dirty record. A shutdown save always

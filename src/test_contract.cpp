@@ -2672,6 +2672,263 @@ return service)");
     require(node2.wait() == 0, "v2 gameServer shutdown failed");
     std::cout << "entity.versions: same binary, two bundles, additions-only compat green [PASS]\n";
 }
+
+// Acceptance item 5, client half (docs/entity-contract.md "Client handshakes
+// identify their compiled contract digest/version" and mixed observers): the
+// MLV1 session handshake admits a client whose published lock is additions-only
+// into the host model, refuses a newer client and a malformed digest, and
+// projects each observer's property stream onto the admitted lock's declared
+// set — an old observer on a new host never receives the new property's id,
+// while a new observer on the same entity keeps the full stream, both gapless.
+// Clients that never negotiate keep the unfiltered host stream.
+void entity_client_versions() {
+    const std::string v1 =
+        "<Contracts><Entity name=\"Avatar\" id=\"1\">"
+        "<Properties><gold id=\"2\" type=\"INT64\" flags=\"ALL_CLIENTS\" default=\"-5\"/></Properties>"
+        "<ServerMethods><Method name=\"getLevel\" id=\"2\" mode=\"request\" caller=\"server\">"
+        "<Returns><Field name=\"level\" id=\"1\" type=\"UINT16\"/></Returns>"
+        "</Method></ServerMethods></Entity></Contracts>";
+    const std::string v2 =
+        "<Contracts><Entity name=\"Avatar\" id=\"1\">"
+        "<Properties><gold id=\"2\" type=\"INT64\" flags=\"ALL_CLIENTS\" default=\"-5\"/>"
+        "<nickname id=\"6\" type=\"STRING\" flags=\"ALL_CLIENTS\" default=\"anon\"/></Properties>"
+        "<ServerMethods><Method name=\"getLevel\" id=\"2\" mode=\"request\" caller=\"server\">"
+        "<Returns><Field name=\"level\" id=\"1\" type=\"UINT16\"/></Returns>"
+        "</Method>"
+        "<Method name=\"getNick\" id=\"3\" mode=\"request\" caller=\"server\">"
+        "<Returns><Field name=\"nick\" id=\"1\" type=\"STRING\"/></Returns>"
+        "</Method></ServerMethods></Entity></Contracts>";
+    EntityContract host(v2), older(v1);
+    const auto hex16 = [](std::uint64_t value) {
+        std::ostringstream out;
+        out << std::hex << std::setw(16) << std::setfill('0') << value;
+        return out.str();
+    };
+    const auto v1_digest = older.digest(), v2_digest = host.digest();
+    // Handshake codec: the digest is the identity, sixteen lowercase hex digits.
+    require(parse_entity_handshake("MLV1 " + hex16(v1_digest)).value_or(0) == v1_digest,
+            "handshake parse lost the digest");
+    require(!parse_entity_handshake("MLV1 " + hex16(v1_digest).substr(1)), "short digest accepted");
+    require(!parse_entity_handshake("MLE1 " + hex16(v1_digest)), "wrong marker accepted");
+    require(!parse_entity_handshake("MLV1 " + hex16(v2_digest).substr(0, 8) + "XXXXXXXX"), "uppercase accepted");
+    equal(entity_handshake_ok(v2_digest), "MLV1 OK " + hex16(v2_digest));
+    equal(entity_handshake_error("VERSION"), "MLV1 ERR VERSION");
+    // The gate: the host's own lock and the older lock are admitted, the
+    // projections differ exactly in the added property, and a client newer
+    // than the host is refused at registration (breaking runs client -> host).
+    EntityVersionGate gate(host);
+    gate.add_client_lock(host.lock());
+    gate.add_client_lock(older.lock());
+    require(gate.admits(v2_digest) && gate.admits(v1_digest), "published locks refused");
+    require(!gate.admits(v1_digest ^ 0xdeadbeef), "unknown digest admitted");
+    const auto* new_view = gate.view_for(v2_digest);
+    const auto* old_view = gate.view_for(v1_digest);
+    require(new_view && new_view->names.count("gold") && new_view->names.count("nickname"),
+        "the host's own view lost a property");
+    require(old_view && old_view->names.count("gold") && !old_view->names.count("nickname"),
+        "the older view did not project out the added property");
+    EntityVersionGate backwards(older);
+    must_fail([&] { backwards.add_client_lock(host.lock()); });
+    EntityVersionGate junk(host);
+    must_fail([&] { junk.add_client_lock("not a lock\n"); });
+    std::cout << "entity.client.versions gate: locks admitted, projections differ, newer refused [PASS]\n";
+    // Projection at the channel: sequences are assigned after the filter, so
+    // the old observer's stream is gapless with the nickname deltas missing
+    // while the new observer's numbers the same journal in full.
+    PropertyStore store(host, 1);
+    PropertyChannel channel(&store);
+    require(channel.observe("new", true), "new observer refused");
+    require(channel.observe("old", true, old_view), "old observer refused");
+    const auto baselines = channel.deliver_tagged();
+    require(baselines.size() == 2, "entry did not deliver two baselines");
+    for (const auto& delivery : baselines) {
+        require(delivery.message.kind == SyncMessage::Kind::BASELINE, "entry delivered deltas");
+        const bool has_nick = delivery.message.baseline.count("nickname") != 0;
+        require(delivery.observer == "new" ? has_nick : !has_nick,
+            "the baseline projection followed the wrong view");
+    }
+    require(store.set("gold", EntityValue{std::int64_t{5}}), "gold write refused");
+    require(store.set("nickname", EntityValue{std::string{"hero"}}), "nickname write refused");
+    const auto deltas = channel.deliver_tagged();
+    require(deltas.size() == 2, "one journal write did not reach both observers");
+    for (const auto& delivery : deltas) {
+        require(delivery.message.kind == SyncMessage::Kind::DELTAS, "write delivered a baseline");
+        const auto& batch = delivery.message.deltas;
+        if (delivery.observer == "new") {
+            require(batch.size() == 2 && batch[0].property_id == 2 && batch[1].property_id == 6
+                    && batch[0].sequence == 1 && batch[1].sequence == 2,
+                "the new observer's batch lost a delta or its order");
+        } else {
+            require(batch.size() == 1 && batch[0].property_id == 2 && batch[0].sequence == 1,
+                "the old observer received the added property or a gapped stream");
+        }
+    }
+    require(store.set("gold", EntityValue{std::int64_t{7}}), "second gold write refused");
+    for (const auto& delivery : channel.deliver_tagged()) {
+        const auto& batch = delivery.message.deltas;
+        require(batch.size() == 1 && batch[0].property_id == 2
+                    && batch[0].sequence == (delivery.observer == "new" ? 3 : 2),
+            "projected streams did not stay gapless per observer");
+    }
+    const auto again = channel.resync("old");
+    require(again.kind == SyncMessage::Kind::BASELINE && again.baseline.count("gold")
+            && !again.baseline.count("nickname"), "resync ignored the negotiated view");
+    std::cout << "entity.client.versions projection: filtered deltas stay gapless [PASS]\n";
+
+    Context c;
+    const auto def1 = c.path("v1.def"), def2 = c.path("v2.def");
+    write(def1, v1);
+    write(def2, v2);
+    const auto bundle1 = c.path("bundle-v1"), bundle2 = c.path("bundle-v2");
+    require(c.command({self().string(), "contract", "build", "--out", bundle1.string(), def1.string()}) == 0,
+            "v1 bundle build failed");
+    require(c.command({self().string(), "contract", "build", "--out", bundle2.string(), def2.string()}) == 0,
+            "v2 bundle build failed");
+    const auto framed = [](RawSocket& raw, const std::string& body) {
+        std::string header(4, '\0');
+        const auto length = static_cast<std::uint32_t>(body.size());
+        for (unsigned i = 0; i < 4; ++i) header[i] = static_cast<char>(length >> (24 - i*8));
+        raw.send(header + body);
+    };
+    const auto unframed = [](RawSocket& raw) {
+        std::string header = raw.receive(4);
+        std::uint32_t length = 0;
+        for (unsigned i = 0; i < 4; ++i) length = length << 8 | static_cast<unsigned char>(header[i]);
+        return raw.receive(length);
+    };
+    // An older host: a client compiled against the newer lock is refused,
+    // a malformed digest is refused, the matching lock is admitted, and a
+    // negotiation after business traffic answers LATE instead of resetting.
+    const auto script1 = c.path("service-v1.lua");
+    write(script1, "local service = {}\nfunction service.message(payload) return \"echo:\"..payload end\nreturn service");
+    const auto listen1 = port();
+    c.node("gameServer", listen1, {"--script", script1.string(), "--contract", def1.string(),
+        "--client-contract", (bundle1/"v1.lock").string()});
+    {
+        RawSocket peer(listen1);
+        framed(peer, "MLV1 " + hex16(v2_digest));
+        equal(unframed(peer), "MLV1 ERR VERSION");
+        framed(peer, "MLV1 0123456789abcdefg");
+        equal(unframed(peer), "MLV1 ERR INVALID");
+        framed(peer, "MLV1 " + hex16(v1_digest));
+        equal(unframed(peer), "MLV1 OK " + hex16(v1_digest));
+        framed(peer, "hello");
+        equal(unframed(peer), "echo:hello");
+        framed(peer, "MLV1 " + hex16(v1_digest));
+        equal(unframed(peer), "MLV1 ERR LATE");
+    }
+    // A newer host carrying both published locks: the same binary now serves
+    // two client versions. The old client's stream projects the added property
+    // away; the new client's keeps it; a session that never negotiated keeps
+    // the unfiltered host stream.
+    const auto script2 = c.path("service-v2.lua");
+    write(script2, R"(local service = {}
+local spawned = false
+function service.message(payload, ctx)
+    if payload == "sub" then
+        if not spawned then
+            assert(mistlane.entity.spawn(1, 1, 3, 42), "spawn failed")
+            spawned = true
+        end
+        assert(mistlane.entity.observe(1, 1, 3, 42, ctx.session, true), "observe failed")
+        assert(mistlane.entity.flush(1, 1, 3, 42), "flush failed")
+        return "subscribed"
+    end
+    if payload == "push" then
+        local props = mistlane.entity.properties(1, 1, 3, 42)
+        props.gold = props.gold + 5
+        props.nickname = "n" .. tostring(props.gold)
+        assert(mistlane.entity.flush(1, 1, 3, 42), "flush failed")
+        return "pushed"
+    end
+    return "echo:"..payload
+end
+return service)");
+    const auto listen2 = port();
+    c.node("gameServer", listen2, {"--script", script2.string(), "--contract", def2.string(),
+        "--client-contract", (bundle1/"v1.lock").string(),
+        "--client-contract", (bundle2/"v2.lock").string()});
+    EntityContract contract2(v2);
+    const auto decode_push = [&](const std::string& frame, EntityTarget& target, SyncMessage& message) {
+        std::string reason;
+        require(decode_property_push(contract2, frame, target, message, reason), reason.c_str());
+        require(target.entity_id == 42, "property push targeted the wrong entity");
+    };
+    RawSocket legacy(listen2);
+    framed(legacy, "sub");
+    {
+        EntityTarget target;
+        SyncMessage message;
+        decode_push(unframed(legacy), target, message);
+        require(message.kind == SyncMessage::Kind::BASELINE && message.baseline.count("gold")
+                && message.baseline.count("nickname"),
+            "the un-negotiated session lost the full host baseline");
+    }
+    equal(unframed(legacy), "subscribed");
+    std::cout << "entity.client.versions legacy: no handshake keeps the unfiltered stream [PASS]\n";
+    RawSocket new_client(listen2);
+    framed(new_client, "MLV1 " + hex16(v2_digest));
+    equal(unframed(new_client), "MLV1 OK " + hex16(v2_digest));
+    framed(new_client, "sub");
+    {
+        EntityTarget target;
+        SyncMessage message;
+        decode_push(unframed(new_client), target, message);
+        require(message.kind == SyncMessage::Kind::BASELINE && message.baseline.count("gold")
+                && message.baseline.count("nickname"),
+            "the new client's baseline lost the added property");
+    }
+    equal(unframed(new_client), "subscribed");
+    RawSocket old_client(listen2);
+    framed(old_client, "MLV1 " + hex16(v1_digest));
+    equal(unframed(old_client), "MLV1 OK " + hex16(v2_digest)); // the host's own digest echoes
+    framed(old_client, "sub");
+    {
+        EntityTarget target;
+        SyncMessage message;
+        decode_push(unframed(old_client), target, message);
+        require(message.kind == SyncMessage::Kind::BASELINE && message.baseline.count("gold")
+                && !message.baseline.count("nickname"),
+            "the old client's baseline carried the added property");
+    }
+    equal(unframed(old_client), "subscribed");
+    std::cout << "entity.client.versions negotiate: v1 and v2 admitted on one host [PASS]\n";
+    // One write of both properties: the new client numbers both deltas, the
+    // old client receives only the shared one, and both streams stay gapless.
+    framed(new_client, "push");
+    {
+        EntityTarget target;
+        SyncMessage message;
+        decode_push(unframed(new_client), target, message);
+        require(message.kind == SyncMessage::Kind::DELTAS && message.deltas.size() == 2
+                && message.deltas[0].property_id == 2 && message.deltas[1].property_id == 6
+                && message.deltas[0].sequence == 1 && message.deltas[1].sequence == 2,
+            "the new client's delta batch lost a property or its numbering");
+        decode_push(unframed(old_client), target, message);
+        require(message.kind == SyncMessage::Kind::DELTAS && message.deltas.size() == 1
+                && message.deltas[0].property_id == 2 && message.deltas[0].sequence == 1,
+            "the old client received the added property's delta");
+    }
+    equal(unframed(new_client), "pushed");
+    // A second push from the other session: the projections keep their own
+    // consecutive sequences across writes from any session (the reply goes
+    // only to the session that sent the frame).
+    framed(old_client, "push");
+    {
+        EntityTarget target;
+        SyncMessage message;
+        decode_push(unframed(new_client), target, message);
+        require(message.kind == SyncMessage::Kind::DELTAS && message.deltas.size() == 2
+                && message.deltas[0].sequence == 3 && message.deltas[1].sequence == 4,
+            "the new client's stream numbered the next write gapped");
+        decode_push(unframed(old_client), target, message);
+        require(message.kind == SyncMessage::Kind::DELTAS && message.deltas.size() == 1
+                && message.deltas[0].sequence == 2,
+            "the old client's stream numbered the next write gapped");
+    }
+    equal(unframed(old_client), "pushed");
+    std::cout << "entity.client.versions mixed: projected streams gapless on one entity [PASS]\n";
+}
 void sproto_golden() {
     // Fixture-only canonical TLV vectors. These intentionally are NOT sproto
     // wire bytes; retain them as an internal-format fixture independent of the

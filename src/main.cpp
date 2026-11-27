@@ -182,6 +182,7 @@ std::vector<std::pair<std::string, std::string>> config_flags(const std::filesys
         {"COORDINATOR","--coordinator",0,0,0}, {"NAMESPACE","--namespace",0,0,0},
         {"SCOPE","--scope",0,0,0}, {"DATA","--data",0,0,0}, {"JOURNAL","--journal",1,0,0},
         {"SCRIPT","--script",1,0,0}, {"CONTRACT","--contract",1,0,0},
+        {"CLIENT_CONTRACTS","--client-contract",1,1,0},
         {"UPSTREAMS","--upstream",0,1,0}, {"ENTITY_ROUTES","--entity-route",0,1,0}, {"CERT","--cert",1,0,0},
         {"SCENE_DEFS","--scene-def",0,1,0}, {"SCENES","--scene",0,1,0}, {"SCENE_BUDGET","--scene-budget",0,0,0},
         {"KEY","--key",1,0,0}, {"LISTENERS","--listener",0,1,0}, {"REDIS","--redis",0,0,0},
@@ -306,6 +307,10 @@ int main(int argc, char** argv) {
                              "  gameServer/crossServer/apiServer/login/data: --script FILE\n"
                              "  gameServer/crossServer: --contract FILE (entity contract .def; the node\n"
                              "    then hosts the entity runtime and answers MLE1 frames on game sessions)\n"
+                             "    --client-contract LOCKFILE (repeat; published client release locks this\n"
+                             "      host admits at the MLV1 handshake — each lock must be additions-only\n"
+                             "      into the contract or startup refuses; an admitted session's property\n"
+                             "      pushes are projected onto its lock's declared set)\n"
                              "  gameServer/crossServer: --scene-def NAME=FILE (repeat) registers a map\n"
                              "    definition with the file's SHA-256 as its digest; --scene NAME=DEF\n"
                              "    (repeat) creates a resident instance named NAME that prepares from\n"
@@ -402,6 +407,7 @@ int main(int argc, char** argv) {
             else if (key == "--listener") config.listeners.push_back(listener(value));
             else if (key == "--script") config.script = value;
             else if (key == "--contract") config.contract = value;
+            else if (key == "--client-contract") config.client_contracts.push_back(value);
             else if (key == "--entity-save-period") config.entity_save_period_ms = number(value, 1000000000);
             else if (key == "--entity-route") config.entity_routes.push_back(entity_route(value));
             else if (key == "--scene-def") config.scene_defs.push_back(scene_def(value));
@@ -463,6 +469,9 @@ int main(int argc, char** argv) {
         }
         if (!config.contract.empty() && config.role != "gameServer" && config.role != "crossServer")
             throw std::invalid_argument("--contract applies to gameServer/crossServer only");
+        if (!config.client_contracts.empty()
+                && (config.contract.empty() || config.role != "gameServer" && config.role != "crossServer"))
+            throw std::invalid_argument("--client-contract applies to an entity host with --contract");
         // Scene definitions and resident instances are the gameServer/crossServer
         // serving face (docs/scene-lifecycle.md): they host the avatar runtime's
         // scene references, so a role without an avatar runtime would register

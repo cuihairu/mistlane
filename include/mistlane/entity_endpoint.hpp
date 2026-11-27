@@ -2,11 +2,14 @@
 #pragma once
 #include "mistlane/entity_codec_iface.hpp"
 #include "mistlane/entity_envelope.hpp"
+#include "mistlane/entity_handshake.hpp"
 #include "mistlane/entity_runtime.hpp"
+#include "mistlane/entity_version.hpp"
 #include <optional>
 #include <string>
 #include <string_view>
 #include <utility>
+#include <vector>
 
 namespace mistlane {
 
@@ -28,13 +31,35 @@ public:
     explicit EntityEndpoint(const EntityContract& contract, const EntityCodec* codec = nullptr,
                             const SprotoCodec* persist_codec = nullptr,
                             EntityStateBackend* persist_backend = nullptr,
-                            std::uint64_t save_period_ms = 0)
-        : runtime_(contract), codec_(codec) {
+                            std::uint64_t save_period_ms = 0,
+                            std::vector<std::string> client_locks = {})
+        : runtime_(contract), codec_(codec), gate_(contract) {
         // The persistence chain is opt-in: a host that passes the persistent
         // codec enables per-entity forced-save records under the node backend.
         if (persist_codec) runtime_.set_persistence(persist_codec, persist_backend, save_period_ms);
+        // The negotiated client versions are opt-in: a host that lists
+        // published client locks admits their digests at the MLV1 handshake
+        // and projects observers onto their declared property sets. A bad
+        // lock refuses startup here, never mid-session.
+        for (const auto& lock : client_locks) gate_.add_client_lock(lock);
     }
     EntityRuntime& runtime() { return runtime_; }
+    // The host contract digest a successful handshake echoes.
+    std::uint64_t contract_digest() const { return gate_.digest(); }
+    // One MLV1 frame: the verdict (BAD for a malformed digest, VERSION for a
+    // well-formed digest no configured client lock claims) plus, on admission,
+    // the projection the session's observers will be built with. Purity: no
+    // session state lives here, so the same frame always answers the same way.
+    enum class VersionVerdict { Accept, Bad, Incompatible };
+    VersionVerdict negotiate(std::string_view frame, std::uint64_t& host_digest,
+                             const SyncView*& view) const {
+        const auto client = parse_entity_handshake(frame);
+        if (!client) return VersionVerdict::Bad;
+        if (!gate_.admits(*client)) return VersionVerdict::Incompatible;
+        host_digest = gate_.digest();
+        view = gate_.view_for(*client);
+        return VersionVerdict::Accept;
+    }
     // Handles one frame: nullopt for non-entity traffic, an empty string for a
     // handled notify (no reply exists), else the MLE1 reply frame. The result
     // word feeds a bounded result label, one per handled frame.
@@ -133,5 +158,6 @@ private:
     }
     EntityRuntime runtime_;
     const EntityCodec* codec_ = nullptr;
+    EntityVersionGate gate_;
 };
 }

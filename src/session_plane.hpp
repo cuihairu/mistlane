@@ -130,8 +130,21 @@ public:
         const auto found = sessions_.find(id);
         if (found != sessions_.end()) found->second.correlated = true;
     }
+    // The negotiated client contract version of one session (the MLV1
+    // handshake): property pushes to this session are projected onto the view.
+    // Null (the default) is the unfiltered host stream — a session that never
+    // negotiated keeps today's behavior verbatim.
+    void set_client_view(std::uint64_t id, const SyncView* view) {
+        const auto found = sessions_.find(id);
+        if (found != sessions_.end()) found->second.view = view;
+    }
+    const SyncView* client_view(std::uint64_t id) const {
+        const auto found = sessions_.find(id);
+        return found == sessions_.end() ? nullptr : found->second.view;
+    }
 private:
-    struct Entry { std::shared_ptr<Channel> channel; Failure fail; bool correlated = false; };
+    struct Entry { std::shared_ptr<Channel> channel; Failure fail; bool correlated = false;
+                   const SyncView* view = nullptr; };
     std::string session_send(std::uint64_t id, std::string_view payload) override {
         const auto found = sessions_.find(id);
         if (found == sessions_.end()) return "unknown session id";
@@ -571,6 +584,26 @@ private:
             if (!internal_ && !config_.service_token.empty() && !service_ok_)
                 return refuse_service("MLS1", "TOKEN");
             return serve_state(std::move(payload));
+        }
+        // Contract negotiation (docs/entity-contract.md): an entity host on the
+        // session path answers MLV1 with the client lock's admission verdict —
+        // before the first business frame, once per session. A late or repeated
+        // attempt answers LATE rather than being mistaken for script traffic.
+        if (entities_ && !config_.is_cross_gateway() && config_.role != "crossServer"
+                && payload.starts_with("MLV1")) {
+            if (routed_ || negotiated_) return reply(entity_handshake_error("LATE"));
+            std::uint64_t host_digest = 0;
+            const SyncView* view = nullptr;
+            const auto verdict = entities_->negotiate(payload, host_digest, view);
+            if (verdict == EntityEndpoint::VersionVerdict::Bad)
+                return reply(entity_handshake_error("INVALID"));
+            if (verdict == EntityEndpoint::VersionVerdict::Incompatible)
+                return reply(entity_handshake_error("VERSION"));
+            negotiated_ = true;
+            // The view pointer lives in the node's endpoint (stable for the
+            // node's lifetime); the registry hands it to every push drain.
+            if (registry_ && context_.session) registry_->set_client_view(context_.session, view);
+            return reply(entity_handshake_ok(host_digest));
         }
         // Handshake window: MLS1 identifies an internal peer, MLC2 turns on
         // correlation and MLM1 upgrades an identified leg to the shared link,
@@ -1203,6 +1236,11 @@ private:
     // routed_ replaces "first frame": MLS1 and MLC2 stay valid until the first
     // business payload routes, so MLC2 can stack on an accepted MLS1 session.
     bool routed_ = false, correlated_ = false, service_ok_ = false, awaiting_mls1_ = false;
+    // One contract negotiation per session: MLV1 admits or refuses the
+    // client's compiled digest and fixes the property projection (the
+    // registry holds the view under the session id). A second attempt, or
+    // one after the first business frame, answers LATE.
+    bool negotiated_ = false;
     // A peer's MLS1 identity frame seen before a cross gateway joins: it rides
     // ahead of the join so the crossServer's token decides the leg's caller.
     std::string pending_identity_;

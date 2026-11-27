@@ -302,9 +302,15 @@ public:
  std::size_t registered_saves() const { return driver_ ? driver_->registered() : 0; }
  // Observer admission and departure on one entity's property stream: visibility
  // is per property (the channel filters SERVER_ONLY and, for guests, OWN_CLIENT).
+ // The view resolver, when set, projects the stream onto the observer session's
+ // negotiated client contract version (EntityVersionGate): observers on an older
+ // version never see a property their compiled contract cannot decode.
+ using ViewResolver = std::function<const SyncView*(const std::string& observer)>;
+ void set_view_resolver(ViewResolver resolve) { view_resolver_ = std::move(resolve); }
  bool observe(const EntityTarget& ref, const std::string& id, bool is_owner) {
    const auto it = channels_.find(address(ref));
-   return it != channels_.end() && it->second.observe(id, is_owner);
+   return it != channels_.end()
+       && it->second.observe(id, is_owner, view_resolver_ ? view_resolver_(id) : nullptr);
  }
  bool depart(const EntityTarget& ref, const std::string& id) {
    const auto it = channels_.find(address(ref));
@@ -392,6 +398,7 @@ private:
  EntityStateBackend* backend_ = nullptr;
  PropertyPush push_;
  HostRoute host_route_;
+ ViewResolver view_resolver_;
  StateSink state_sink_;
  StateLoader state_loader_;
  // Shared with every load completion: destruction flips it, so a late
