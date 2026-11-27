@@ -27,12 +27,17 @@ Boost.Charconv 等间接依赖由 Boost.MySQL 的 port 和 CMake target 自动�
 
 旧项目使用的 log4cxx、Poco、Pion、jemalloc、自定义 MySQL/Redis/Lua 扩展和渠道 SDK 不进入服务器构建。下文仅为测试用途 vendored 的 sproto/LPeg 源码不代表恢复或升级原游戏构建。
 
-升级流程：
+### 测试用途 vendored 协议源码
+
+协议一致性探针 vendor 了两份上游源码快照，使干净构建与 CTest 无需下载解析器或编解码器源码。`third_party/sproto/` 是 cloudwu/sproto 的 `e93fd5a0653b2bcab38d3b830958bf2e3a901b5f` 提交（MIT；上游[仓库](https://github.com/cloudwu/sproto)）；`third_party/lpeg/` 是 `luvit/lpeg` 镜像的 `55bbd00e53890e50e05018907140f4f3d3e234f4` 提交（LPeg 上游镜像；MIT；[镜像](https://github.com/luvit/lpeg)、[上游项目](https://www.inf.puc-rio.br/~roberto/lpeg/)）。随附的许可证文本是 [sproto-MIT.txt](https://github.com/cuihairu/mistlane/blob/main/licenses/sproto-MIT.txt) 与 [lpeg-MIT.txt](https://github.com/cuihairu/mistlane/blob/main/licenses/lpeg-MIT.txt)。CMake 把这些源码编译进仅用于测试的 `mistlane-sproto-probe`，链接到已固定的 Lua 5.5.1 依赖，不链接进 Mistlane 服务器。LPeg 是 cloudwu 文本 schema 解析器所需。
+
+## 升级流程
 
 1. 在 vcpkg 中选择新的不可变 commit，更新 manifest 的 builtin-baseline。
 2. 核对版本清单与变更说明；需要新的最低版本时更新 `version>=` 和 CMake find_package。
 3. 用干净构建目录配置，检查实际解析结果与间接依赖。
 4. 执行网络 / Lua 集成验证和可用时的临时数据库验证，再更新验证记录。
+5. 文档方面，同步更新固定的 VitePress 版本与 pnpm-lock.yaml，并执行 pnpm install --frozen-lockfile 和文档构建。
 
 使用现有 vcpkg 安装时，建议建立 baseline 对应的独立 checkout，避免其当前版本数据库早于 baseline。不要只修改 builtin-baseline 而保留无法解析新版本的旧 ports 工作树。CI 完整克隆 vcpkg 后检出固定 commit；浅克隆可能缺少版本化 port 引用的历史目录。
 
