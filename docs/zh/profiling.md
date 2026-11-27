@@ -30,6 +30,13 @@ mistlane bot --url tcp://127.0.0.1:7211 \
 `mistlane_event_loop_lag_max_seconds` 和 RSS（轮询 `/proc/PID/status`）。`--join` 每条连接执行一次
 `MLC1` 握手并期望 `MLC1 OK 1`（src/bot.cpp）；`--clients` 要低于启动时打印的准入上限。
 
+留意每会话防洪水参数：每条入站客户端帧消耗其会话桶的一个令牌（突发 200 个令牌，每秒补充 100 个 ——
+`--rate-capacity` / `--rate-refill`；实例文件里是 `RATE_CAPACITY`/`RATE_REFILL`）。会话的管道化快于补充速率
+时会耗尽突发，会话随即停止 —— 除 `mistlane_rate_limit_stops_total` 计数外无其他可见信号。本机按文档写出的
+基准（32 × 500）在默认参数下跑不完（约 275 个请求/连接即中断）；吞吐钻取必须调高防洪水参数
+（`--rate-capacity 1000000 --rate-refill 1000000`），否则测的是参数而非节点。`tools/container_stress.sh`
+先以默认参数探测防洪水，再以调高参数跑参考腿。
+
 可比性纪律：
 
 - 生成器参数、脚本与拓扑必须完全一致，否则数字就是噪声（见[跨服与过载保护](./cross-server)）。

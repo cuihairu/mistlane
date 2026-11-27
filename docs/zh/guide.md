@@ -185,6 +185,10 @@ WSS 在 `config/instances/gateway-wss.env` 中设置 `CERT` 和 `KEY`，可填�
 | `SCOPE` | 可选 | 注册表作用域作为 `--scope` 传入；须与 `COORDINATOR` 同时设置。 |
 | `DATA` | 可选 | 归属 data 的 MLD1 端点作为 `--data` 传入；crossServer（跨服回传发送器）与 login（data 签发的承载 generation，`mistlane.grant`）可用。 |
 | `LISTENERS` | 可选 | 逗号分隔的 `PROTO://IP:PORT` 条目；每个条目展开为一个 `--listener` 参数，一个实例即可同时暴露 TCP、WS、WSS 与 HTTP。`wss`/`https` 条目可追加 `?cert=FILE&key=FILE`；query 路径原样传递，不按项目根目录解析。 |
+| `METRICS_LISTEN`、`PROBE_LISTEN` | 可选 | 端点分别作为 `--metrics-listen` / `--probe-listen` 传入，在实例上暴露 Prometheus 抓取面与存活/就绪探测。容器部署通过发布的端口观察节点即依赖此项。 |
+| `RATE_CAPACITY`、`RATE_REFILL` | 可选 | 每会话防洪水参数，作为 `--rate-capacity` / `--rate-refill` 传入（突发 token 数与每秒补充数，默认 200/100）。会话管道化超出桶容量时停止，并计入 `mistlane_rate_limit_stops_total`。 |
+| `MAX_CONNECTIONS`、`MEMORY_BUDGET_MIB` | 可选 | 准入配额作为 `--max-connections` / `--memory-budget-mib` 传入；启动打印的 `session admission limit` 即该参数经内存预算每会话预留折算后的上限。 |
+| `MAX_ROOM_SESSIONS` | 可选 | 单房间参与者上限，作为 `--max-room-sessions` 传入（默认 64）。 |
 | `CERT`、`KEY` | 仅 wss/https | 证书链与私钥，绝对路径或项目根目录相对路径；启动器先确认两者可读。 |
 
 实例文件随模板仓库一起提交时不要放任何机密：初始化器不生成证书材料，`gateway-wss.env` 只带 `certs/` 占位路径。私钥等文件应放在仓库之外或由部署方管理的 `certs/` 目录；其他凭据通过安装后的 systemd unit（`Environment=`、`LoadCredential=`）或部署工具注入，而不是写进 `config/instances/` 提交。

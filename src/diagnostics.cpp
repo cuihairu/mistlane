@@ -47,6 +47,9 @@ Diagnostics::Diagnostics(const Config& config) {
             .Help("Resident memory reported by procfs.").Labels(labels).Register(*registry_).Add({});
         rejected_ = &prometheus::BuildCounter().Name("mistlane_admission_rejections_total")
             .Help("Sessions rejected by admission control.").Labels(labels).Register(*registry_).Add({});
+        rate_limit_stops_ = &prometheus::BuildCounter().Name("mistlane_rate_limit_stops_total")
+            .Help("Sessions stopped for exceeding the per-session frame-rate guard.")
+            .Labels(labels).Register(*registry_).Add({});
         crashpad_reports_ = &prometheus::BuildGauge().Name("mistlane_crashpad_reports")
             .Help("Local crash dumps kept under the retention cap.")
             .Labels(labels).Register(*registry_).Add({});
@@ -188,6 +191,7 @@ void Diagnostics::set_registry_routes(std::size_t count) {
     if (registry_routes_) registry_routes_->Set(static_cast<double>(count));
 }
 void Diagnostics::reject(std::string_view) { if (rejected_) rejected_->Increment(); }
+void Diagnostics::rate_limit_stop() { if (rate_limit_stops_) rate_limit_stops_->Increment(); }
 void Diagnostics::record_result(std::string_view result) {
     if (auto it = record_results_.find(std::string(result)); it != record_results_.end())
         it->second->Increment();

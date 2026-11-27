@@ -37,6 +37,17 @@ and RSS (poll `/proc/PID/status`) cover the node side. `--join` performs the `ML
 handshake once per connection and expects `MLC1 OK 1` (src/bot.cpp); keep `--clients`
 below the admission limit printed at startup.
 
+Mind the per-session flood guard: every inbound client frame consumes one token from
+its session's bucket (200 burst tokens, refilled at 100 per second — `--rate-capacity`
+/ `--rate-refill` on each node, or `RATE_CAPACITY`/`RATE_REFILL` in an instance file).
+A closed-loop client whose round trip is short pipelines faster than the refill and
+exhausts the burst mid-run: the session is stopped silently except for the
+`mistlane_rate_limit_stops_total` counter. The documented bench as written above hits
+this on this host (32 × 500 dies around ~275 requests per connection); throughput
+drills must raise the guard (`--rate-capacity 1000000 --rate-refill 1000000`) or the
+numbers measure the guard, not the node. `tools/container_stress.sh` probes the
+default guard first and runs the reference legs raised.
+
 Comparability discipline:
 
 - Identical generator flags, script and topology, or the numbers are noise (see

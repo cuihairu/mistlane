@@ -100,6 +100,7 @@ struct Config {
     unsigned route_epoch = 1;
     double overload_ratio = 0.9;   // readiness flips not-ready at this share of max_connections
     unsigned ready_hysteresis = 3; // consecutive over/under-threshold ticks before flipping
+    double rate_capacity = 200, rate_refill = 100; // per-session flood guard: burst tokens, tokens/second
 };
 int run_node(Config config);
 }

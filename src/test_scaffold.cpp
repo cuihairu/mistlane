@@ -34,6 +34,18 @@ void scaffold_init() {
     require(c.command({(root/"ops/run-instance.sh").string(),"login"})==0,"login template launch failed");
     require(read(capture).find("--coordinator\n127.0.0.1:7500\n")!=std::string::npos,"COORDINATOR not forwarded");
     require(read(capture).find("--scope\nmain\n")!=std::string::npos,"SCOPE not forwarded");
+    {
+        const auto config=read(root/"config/instances/login.env");
+        write(root/"config/instances/login.env",config+"METRICS_LISTEN=127.0.0.1:7501\nPROBE_LISTEN=127.0.0.1:7502\nRATE_CAPACITY=4000\nRATE_REFILL=2000\nMAX_CONNECTIONS=4096\nMEMORY_BUDGET_MIB=2048\nMAX_ROOM_SESSIONS=256\n");
+        require(c.command({(root/"ops/run-instance.sh").string(),"login"})==0,"observation listeners failed");
+        require(read(capture).find("--metrics-listen\n127.0.0.1:7501\n")!=std::string::npos,"METRICS_LISTEN not forwarded");
+        require(read(capture).find("--probe-listen\n127.0.0.1:7502\n")!=std::string::npos,"PROBE_LISTEN not forwarded");
+        require(read(capture).find("--rate-capacity\n4000\n")!=std::string::npos,"RATE_CAPACITY not forwarded");
+        require(read(capture).find("--rate-refill\n2000\n")!=std::string::npos,"RATE_REFILL not forwarded");
+        require(read(capture).find("--max-connections\n4096\n")!=std::string::npos,"MAX_CONNECTIONS not forwarded");
+        require(read(capture).find("--memory-budget-mib\n2048\n")!=std::string::npos,"MEMORY_BUDGET_MIB not forwarded");
+        require(read(capture).find("--max-room-sessions\n256\n")!=std::string::npos,"MAX_ROOM_SESSIONS not forwarded");
+    }
     require(c.command({(root/"ops/run-instance.sh").string(),"coordinator"})==0,"coordinator template launch failed");
     require(read(capture).find("--script")==std::string::npos,"the coordinator launched a script");
     require(c.command({(root/"ops/run-instance.sh").string(),"data"})==0,"data template launch failed");

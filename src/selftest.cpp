@@ -118,6 +118,7 @@ void scaffold_init();
 void config_file();
 void cli_bot();
 void business_bot();
+void rate_guard();
 void bots_smoke();
 void crashpad_startup(const fs::path&);
 void crashpad_minidump(const fs::path&);
@@ -282,6 +283,7 @@ int run_tests(int argc, char** argv) {
         {"config.file","config",test::config_file},
         {"cli.bot","cli",test::cli_bot},
         {"business.bot","cli",test::business_bot},
+        {"rate.guard","cli",test::rate_guard},
         {"bots.smoke","cli",test::bots_smoke},
         {"crashpad.startup","crashpad",[&] {test::crashpad_startup(handler);},true},
         {"crashpad.minidump","crashpad",[&] {test::crashpad_minidump(handler);},true},

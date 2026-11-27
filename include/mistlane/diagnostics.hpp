@@ -40,6 +40,9 @@ public:
     void set_registry_members(std::size_t count);
     void set_registry_routes(std::size_t count);
     void reject(std::string_view reason);
+    // A session stopped for pipelining past its per-session flood guard
+    // (--rate-capacity/--rate-refill); the stop itself is otherwise silent.
+    void rate_limit_stop();
     void record_result(std::string_view result);
     void entity_result(std::string_view result);
     void add_message(std::string_view direction);
@@ -70,6 +73,7 @@ private:
     prometheus::Gauge* event_loop_lag_max_ = nullptr;
     prometheus::Gauge* process_rss_ = nullptr;
     prometheus::Counter* rejected_ = nullptr;
+    prometheus::Counter* rate_limit_stops_ = nullptr;
     prometheus::Gauge* crashpad_reports_ = nullptr;
     prometheus::Counter* crashpad_pruned_ = nullptr;
     std::map<std::string, prometheus::Counter*> record_results_;

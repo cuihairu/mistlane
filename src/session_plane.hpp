@@ -421,7 +421,8 @@ public:
         timer_(client_->executor()), config_(config), admission_(admission), diagnostics_(diagnostics),
         registry_(registry), on_close_(std::move(on_close)), mux_upgrade_(std::move(mux_upgrade)),
         internal_(internal), records_(records), ticket_verifier_(tickets), entities_(entities),
-        gateway_(gateway), connection_(connection), states_(states) {
+        gateway_(gateway), connection_(connection), states_(states),
+        bucket_(config.rate_capacity, config.rate_refill) {
         // The mux hub and the route table are borrowed pointers assigned here
         // rather than in the init list: the hub decides the link, so the table
         // is only meaningful on the path that has one. Declaration order already
@@ -538,7 +539,11 @@ private:
         client_->read([self=shared_from_this()](Error ec, std::string payload) {
             self->client_reading_ = false;
             if (self->closed_) return;
-            if (ec || !self->bucket_.consume()) return self->stop();
+            if (ec) return self->stop();
+            if (!self->bucket_.consume()) {
+                self->diagnostics_.rate_limit_stop();
+                return self->stop();
+            }
             self->diagnostics_.add_message("rx");
             self->diagnostics_.add_payload_bytes("rx", payload.size());
             self->request_started_ = std::chrono::steady_clock::now();

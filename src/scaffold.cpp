@@ -306,6 +306,13 @@ fi
 [ -z "$ROUTE_EPOCH" ] || set -- "$@" --route-epoch "$ROUTE_EPOCH"
 [ -z "${COORDINATOR:-}" ] || set -- "$@" --coordinator "$COORDINATOR"
 [ -z "${SCOPE:-}" ] || set -- "$@" --scope "$SCOPE"
+[ -z "${METRICS_LISTEN:-}" ] || set -- "$@" --metrics-listen "$METRICS_LISTEN"
+[ -z "${PROBE_LISTEN:-}" ] || set -- "$@" --probe-listen "$PROBE_LISTEN"
+[ -z "${RATE_CAPACITY:-}" ] || set -- "$@" --rate-capacity "$RATE_CAPACITY"
+[ -z "${RATE_REFILL:-}" ] || set -- "$@" --rate-refill "$RATE_REFILL"
+[ -z "${MAX_CONNECTIONS:-}" ] || set -- "$@" --max-connections "$MAX_CONNECTIONS"
+[ -z "${MEMORY_BUDGET_MIB:-}" ] || set -- "$@" --memory-budget-mib "$MEMORY_BUDGET_MIB"
+[ -z "${MAX_ROOM_SESSIONS:-}" ] || set -- "$@" --max-room-sessions "$MAX_ROOM_SESSIONS"
 if [ -n "${LISTENERS:-}" ]; then
   old_ifs=$IFS; IFS=,
   for listener in $LISTENERS; do set -- "$@" --listener "$listener"; done

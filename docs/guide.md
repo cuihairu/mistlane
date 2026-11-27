@@ -185,6 +185,10 @@ Each `config/instances/<name>.env` file is sourced as shell assignments by `ops/
 | `SCOPE` | optional | Registry scope passed as `--scope`; requires `COORDINATOR` to be set. |
 | `DATA` | optional | Home data MLD1 endpoint passed as `--data`; valid for crossServer (the cross-return sender) and login (the data-issued hosting generation, `mistlane.grant`). |
 | `LISTENERS` | optional | Comma-separated `PROTO://IP:PORT` entries; each becomes one `--listener` flag, so an instance can expose TCP, WS, WSS and HTTP side by side. `wss`/`https` entries may append `?cert=FILE&key=FILE`; those query paths are passed through verbatim, not root-resolved. |
+| `METRICS_LISTEN`, `PROBE_LISTEN` | optional | Endpoint passed as `--metrics-listen` / `--probe-listen`, exposing the Prometheus scrape and liveness/readiness probe on the instance. Used by container deployments to observe nodes through the published port. |
+| `RATE_CAPACITY`, `RATE_REFILL` | optional | Per-session flood guard passed as `--rate-capacity` / `--rate-refill` (burst tokens and refill per second; defaults 200/100). A session that pipelines past its bucket is stopped and counted in `mistlane_rate_limit_stops_total`. |
+| `MAX_CONNECTIONS`, `MEMORY_BUDGET_MIB` | optional | Admission envelope passed as `--max-connections` / `--memory-budget-mib`; the printed `session admission limit` is the flag clamped by the budget's per-session reserve. |
+| `MAX_ROOM_SESSIONS` | optional | Per-room participant cap passed as `--max-room-sessions` (default 64). |
 | `CERT`, `KEY` | `wss`/`https` only | Certificate chain and private key, absolute or project-root relative; the launcher verifies both are readable. |
 
 Keep secrets out of these files when they live in a version-controlled template: the initializer creates no certificate material, and `gateway-wss.env` only ships placeholder `certs/` paths. Provision key files outside the repository or under a deployment-managed `certs/` directory, and inject any other credentials through the installed systemd unit (`Environment=`, `LoadCredential=`) or your deployment tooling instead of committing them to `config/instances/`.

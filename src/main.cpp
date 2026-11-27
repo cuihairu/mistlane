@@ -119,6 +119,14 @@ double ratio(std::string_view text) {
         throw std::invalid_argument("overload ratio must be in (0,1]: "+plain);
     return value;
 }
+double positive(std::string_view text, const char* what) {
+    const std::string plain(text);
+    std::size_t consumed = 0;
+    const double value = std::stod(plain, &consumed);
+    if (consumed != plain.size() || !(value > 0))
+        throw std::invalid_argument(std::string(what)+" must be a positive number: "+plain);
+    return value;
+}
 // Every option takes a value, so on/off switches name their state instead of
 // standing alone: --upstream-multiplex on|off (0/1, true/false, yes/no work).
 bool switch_value(std::string_view text) {
@@ -179,6 +187,7 @@ std::vector<std::pair<std::string, std::string>> config_flags(const std::filesys
         {"KEY","--key",1,0,0}, {"LISTENERS","--listener",0,1,0}, {"REDIS","--redis",0,0,0},
         {"METRICS_LISTEN","--metrics-listen",0,0,0}, {"PROBE_LISTEN","--probe-listen",0,0,0},
         {"OVERLOAD_RATIO","--overload-ratio",0,0,0}, {"READY_HYSTERESIS","--ready-hysteresis",0,0,0},
+        {"RATE_CAPACITY","--rate-capacity",0,0,0}, {"RATE_REFILL","--rate-refill",0,0,0},
         {"MAX_CONNECTIONS","--max-connections",0,0,0}, {"MEMORY_BUDGET_MIB","--memory-budget-mib",0,0,0},
         {"MAX_ROOM_SESSIONS","--max-room-sessions",0,0,0}, {"MAX_GROUP_SESSIONS","--max-group-sessions",0,0,0},
         {"MAX_SHARD_SESSIONS","--max-shard-sessions",0,0,0}, {"ROUTE_EPOCH","--route-epoch",0,0,0},
@@ -347,6 +356,8 @@ int main(int argc, char** argv) {
                              "    --crashpad-retention N (keep N dumps, default 20; 0 disables pruning)\n"
                              "  cross routing/crossServer: --route-epoch N --max-room-sessions N\n"
                              "    --max-group-sessions N --max-shard-sessions N\n"
+                             "  --rate-capacity N --rate-refill N (per-session flood guard, defaults 200/100;\n"
+                             "    a session pipelining past the bucket is stopped and counted)\n"
                              "  --data IP:PORT (home data MLD1 endpoint: crossServer return sender\n"
                              "    retries enqueued changes in a bounded queue until ACK durable;\n"
                              "    login asks it for the data-issued hosting generation, whose\n"
@@ -402,6 +413,8 @@ int main(int argc, char** argv) {
             else if (key == "--probe-listen") { config.probe_listen = endpoint(value); config.probe_enabled = true; }
             else if (key == "--overload-ratio") config.overload_ratio = ratio(value);
             else if (key == "--ready-hysteresis") config.ready_hysteresis = number(value, 100000);
+            else if (key == "--rate-capacity") config.rate_capacity = positive(value, "rate capacity");
+            else if (key == "--rate-refill") config.rate_refill = positive(value, "rate refill");
             else if (key == "--crashpad-handler") config.crashpad_handler = value;
             else if (key == "--crashpad-database") config.crashpad_database = value;
             // 0 is the one deliberate exception to number(): it turns pruning off.

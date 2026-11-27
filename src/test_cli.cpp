@@ -155,4 +155,58 @@ return service)");
     node.signal(SIGTERM);
     require(node.wait() == 0, "business node should stop cleanly");
 }
+
+// The per-session flood guard end to end. At the default bucket (200 burst
+// tokens, 100 per second refill) a closed-loop client whose round trip is
+// short pipelines faster than the refill, exhausts the burst and its session
+// is stopped — silently, before the guard, so the counter is the only
+// observable. The same load sails through a node whose bucket is configured
+// larger, which is how throughput drills run the bench.
+void rate_guard() {
+    Context c; write(c.path("echo.lua"),echo);
+    const auto listen=port(), metrics=port();
+    auto& node=c.node("gameServer",listen,{"--script",c.path("echo.lua").string(),
+        "--metrics-listen",endpoint(metrics)});
+    auto& bot=c.spawn({self().string(),"bot","--url","tcp://"+endpoint(listen),
+        "--clients","4","--count","500"});
+    require(bot.wait()!=0,"the generator should report the guard-stopped sessions");
+    const auto out=bot.output();
+    require(out.find("planned=2000 completed=")!=std::string::npos && out.find("completed=2000")==std::string::npos,
+        "default guard must stop the pipelined flood:\n"+out);
+    require(out.find("failed_clients=4")!=std::string::npos,"every guarded client should fail:\n"+out);
+    const auto value_of = [](const std::string& body, const std::string& name) -> std::string {
+        std::size_t at = body.find(name);
+        while (at != std::string::npos) {
+            const auto start = at ? body.rfind('\n', at - 1) + 1 : 0;
+            const auto end = body.find('\n', at);
+            const auto line = body.substr(start, end == std::string::npos ? std::string::npos : end - start);
+            if (line.rfind("# ", 0) != 0) return line.substr(line.rfind(' ') + 1);
+            at = body.find(name, end);
+        }
+        return {};
+    };
+    const auto dash = http_request({"http://" + endpoint(metrics) + "/metrics"}).body;
+    require(value_of(dash, "mistlane_rate_limit_stops_total") == "4",
+        "guard counter should name every stopped session:\n" + dash);
+    node.signal(SIGTERM);
+    require(node.wait() == 0, "guarded node should stop cleanly");
+
+    Context big; write(big.path("echo.lua"),echo);
+    const auto big_listen=port(), big_metrics=port();
+    auto& big_node=big.node("gameServer",big_listen,{"--script",big.path("echo.lua").string(),
+        "--metrics-listen",endpoint(big_metrics),"--rate-capacity","1000000","--rate-refill","1000000"});
+    auto& big_bot=big.spawn({self().string(),"bot","--url","tcp://"+endpoint(big_listen),
+        "--clients","4","--count","500"});
+    require(big_bot.wait()==0,"the raised bucket should carry the flood");
+    require(big_bot.output().find("completed=2000")!=std::string::npos,
+        "raised guard must complete every request:\n"+big_bot.output());
+    require(value_of(http_request({"http://" + endpoint(big_metrics) + "/metrics"}).body,
+        "mistlane_rate_limit_stops_total") == "0", "no stops expected under the raised bucket");
+    big_node.signal(SIGTERM);
+    require(big_node.wait() == 0, "raised node should stop cleanly");
+    require(c.command({self().string(),"--role","gameServer","--listen",endpoint(port()),
+        "--rate-capacity","0"})!=0,"non-positive rate capacity must be refused");
+    require(c.command({self().string(),"--role","gameServer","--listen",endpoint(port()),
+        "--rate-refill","0"})!=0,"non-positive rate refill must be refused");
+}
 }
