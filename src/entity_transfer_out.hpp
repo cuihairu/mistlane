@@ -199,9 +199,10 @@ private:
                 if (self->done_) return;
                 // PENDING: the destination stopped publishing — the commit
                 // would strand the entity, so the coordinator refuses and the
-                // source re-drives after it is back. ORDER: the FENCE event
-                // has not landed yet.
-                if (!v.applied && v.reason != "PENDING" && v.reason != "ORDER")
+                // source re-drives after it is back (the MIG-form answer
+                // flags `pending`; the ERR-form words the reason). ORDER: the
+                // FENCE event has not landed yet.
+                if (!v.applied && !v.pending && v.reason != "PENDING" && v.reason != "ORDER")
                     return self->finish(v.reason);
                 if (v.applied) self->release();
                 else self->commit_again();

@@ -42,6 +42,7 @@ void entity_state_data();
 void entity_migrate_full();
 void entity_migrate_abort();
 void entity_migrate_inflight();
+void entity_migrate_recover();
 void entity_owner_bind();
 void entity_owner_home();
 void entity_route();
@@ -216,6 +217,7 @@ int run_tests(int argc, char** argv) {
         {"entity.migrate.full","contract",test::entity_migrate_full},
         {"entity.migrate.abort","contract",test::entity_migrate_abort},
         {"entity.migrate.inflight","contract",test::entity_migrate_inflight},
+        {"entity.migrate.recover","contract",test::entity_migrate_recover},
         {"entity.owner.bind","contract",test::entity_owner_bind},
         {"entity.owner.home","contract",test::entity_owner_home},
         {"entity.route","contract",test::entity_route},

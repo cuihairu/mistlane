@@ -1010,24 +1010,45 @@ private:
     // every non-cleaned row, so this callback is the whole terminal machine:
     // prepared/ready -> adopt from the still-unfenced row and READY; fenced ->
     // re-send READY (a replay is idempotent); committed -> unfreeze (this host
-    // is now the single live writer) and CLEANUP; aborted -> destroy the
-    // half-built copy (nothing was dirtied) and CLEANUP. The destination —
-    // never the source — resolves the terminal row so the news cannot be
-    // cleaned up before it is seen.
+    // is now the single live writer) and CLEANUP — or, if a restart lost the
+    // adopted copy, rebuild it from the durable row straight into service —
+    // aborted -> destroy the half-built copy (nothing was dirtied) and
+    // CLEANUP. The destination — never the source — resolves the terminal row
+    // so the news cannot be cleaned up before it is seen.
     void drive_destination_entity(const MigrationClient::Verdict::EntityDestined& row) {
         if (!entity_endpoint_) return;
         auto& runtime = entity_endpoint_->runtime();
         const EntityTarget ref{row.key.scope, row.key.type_id, row.key.incarnation,
                                static_cast<std::int64_t>(row.key.entity_id)};
-        if (row.state == "committed" || row.state == "aborted") {
-            // A terminal row we have not adopted (a destination that joined
-            // late, or a coordinator restart) has no local copy: only the
-            // CLEANUP matters, so the listing stops either way. The pending
-            // entry clears here too — a READY whose answer was lost may have
-            // applied on the coordinator, leaving this key marked in flight.
+        if (row.state == "aborted") {
+            // An aborted handoff built nothing that survives: the frozen
+            // half-copy dies (nothing was dirtied) and the row is cleaned so
+            // the listing stops. The pending entry clears here too — a READY
+            // whose answer was lost may have applied on the coordinator,
+            // leaving this key marked in flight.
             entity_transfer_pending_.erase(row.key);
-            if (row.state == "committed") runtime.unfreeze(ref);
-            else if (runtime.frozen(ref)) runtime.destroy(ref);
+            if (runtime.frozen(ref)) runtime.destroy(ref);
+            entity_cleanup(key_of(ref), row.id, row.generation);
+            return;
+        }
+        if (row.state == "committed" && !runtime.holds(ref)) {
+            // A destination that adopted and then died before the commit's
+            // unfreeze poll restarts with no local copy. The durable row —
+            // fenced at the source's generation, so still the truth — is
+            // rebuilt straight into service: the same fetch-and-adopt as the
+            // prepared branch, but no freeze (this host is already the
+            // single live writer) and no READY (the row is past it); the
+            // script rehydrates its private state through entity_transfer_in
+            // again, and CLEANUP retires the row once the copy is live.
+            if (entity_transfer_pending_.contains(row.key)) return; // rebuild in flight
+            entity_adopt_destined(row, true);
+            return;
+        }
+        if (row.state == "committed") {
+            // The adopted copy survived the window (still frozen mid-window,
+            // or already live): this host is the single live writer now.
+            entity_transfer_pending_.erase(row.key);
+            runtime.unfreeze(ref);
             entity_cleanup(key_of(ref), row.id, row.generation);
             return;
         }
@@ -1039,10 +1060,22 @@ private:
             entity_send_ready(row.key, row.id, row.generation);
             return;
         }
+        entity_adopt_destined(row, false);
+    }
+    // The destination's adoption machine, shared by the prepared window and
+    // the committed rebuild: fetch the durable row, restore it, and advance
+    // past the declared generation. `into_service` distinguishes the two —
+    // a prepared adoption freezes the copy (the source is still the writer)
+    // and readies the row; a committed rebuild leaves the copy live at once
+    // (the fence already named this host) and cleans the row instead.
+    void entity_adopt_destined(const MigrationClient::Verdict::EntityDestined& row,
+                               bool into_service) {
         entity_transfer_pending_.insert(row.key);
+        const EntityTarget ref{row.key.scope, row.key.type_id, row.key.incarnation,
+                               static_cast<std::int64_t>(row.key.entity_id)};
         const std::string identity = config_.upstream_token.empty() ? std::string{} : service_hello(config_);
         EntityStateFetcher::load(io_.get_executor(), config_.data, identity, row.key,
-            [this, row, ref](bool present, std::uint64_t generation, std::uint64_t revision,
+            [this, row, ref, into_service](bool present, std::uint64_t generation, std::uint64_t revision,
                              std::string bytes, std::string reason) {
                 auto it = entity_transfer_pending_.find(row.key);
                 if (it == entity_transfer_pending_.end()) return;
@@ -1058,10 +1091,12 @@ private:
                 const auto adopted = runtime.adopt_migration(ref, row.generation,
                     present ? generation : 0, present ? revision : 0, std::move(bytes));
                 if (!adopted.ok) { entity_transfer_pending_.erase(it); return; }
-                // Hold the new copy until the source's fence commits: a script
-                // write at the adopted generation would move the data row past
-                // the fence the source is about to raise.
-                runtime.freeze(ref);
+                if (!into_service) {
+                    // Hold the new copy until the source's fence commits: a script
+                    // write at the adopted generation would move the data row past
+                    // the fence the source is about to raise.
+                    runtime.freeze(ref);
+                }
                 // The opaque bundle state is the source script's own format —
                 // the framework only decodes the wire hex and hands the bytes
                 // to the destination script's entity_transfer_in hook.
@@ -1079,7 +1114,12 @@ private:
                     entity_transfer_pending_.erase(it);
                     return;
                 }
-                entity_send_ready(row.key, row.id, row.generation);
+                if (into_service) {
+                    entity_transfer_pending_.erase(it);
+                    entity_cleanup(key_of(ref), row.id, row.generation);
+                } else {
+                    entity_send_ready(row.key, row.id, row.generation);
+                }
             });
     }
     void entity_send_ready(EntityStateKey key, std::string id, std::uint64_t generation) {

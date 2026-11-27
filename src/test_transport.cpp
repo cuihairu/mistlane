@@ -2853,4 +2853,257 @@ return service)");
         "exactly one owner answers after the commit [PASS]\n";
 }
 
+// The recovery half of the migration matrix (docs/entity-contract.md
+// acceptance item 5), on four real processes. Phase 1: a destination that
+// dies before the commit leaves the row parked and the source honestly
+// frozen — the coordinator's commit would strand the entity, so nothing
+// advances a dead destination's handoff — and the restarted destination's
+// adoption (READY) plus the source's pending drive complete it. Phase 2:
+// the commit lands while the destination is merely unreachable (SIGSTOP
+// keeps the member leg, so membership holds), the row is committed to a
+// host that then loses its in-memory copy, and the restart rebuilds the
+// entity from the durable row straight into service — no freeze, no READY,
+// the script rehydrates through entity_transfer_in — with CLEANUP retiring
+// the row. Every gate reads the coordinator's state; a Lua print rides a
+// block-buffered child stdout and is never trusted for timing. Without the
+// pending drive or the rebuild the entity strands UNROUTED forever.
+void entity_migrate_recover() {
+    const std::string xml =
+        "<Contracts><Entity name=\"Avatar\" id=\"1\"><Properties>"
+        "<gold id=\"1\" type=\"INT32\" default=\"0\" persistent=\"true\"/>"
+        "</Properties>"
+        "<ServerMethods>"
+        "<Method name=\"get\" id=\"2\" mode=\"request\" caller=\"server\">"
+        "<Returns><Field name=\"gold\" id=\"1\" type=\"INT32\"/></Returns>"
+        "</Method></ServerMethods></Entity></Contracts>";
+    Context c;
+    const auto def = c.path("avatar.def");
+    write(def, xml);
+    const auto source = c.path("source.lua");
+    write(source, R"(local service = {}
+local calls = {}
+function service.message(payload)
+  local verb, id = payload:match("^(%a+) (%d+)$")
+  if verb == "spawn" then
+    return mistlane.entity.spawn(1, 1, 3, tonumber(id), 1) and "spawned" or "duplicate"
+  end
+  if verb == "write" then
+    mistlane.entity.properties(1, 1, 3, tonumber(id)).gold = 5
+    return "written"
+  end
+  if verb == "transfer" then
+    mistlane.entity.transfer(1, 1, 3, tonumber(id), "new-host", "token=abc", function(err)
+      calls[id] = err and ("err:" .. tostring(err)) or "ok"
+    end)
+    return "issued"
+  end
+  if payload == "read" then
+    local out = {}
+    for k, v in pairs(calls) do out[#out+1] = k .. "=" .. v end
+    return table.concat(out, "|")
+  end
+  return payload
+end
+service.entities = {
+  Avatar = {
+    get = function(args, ctx) return { gold = 5 } end,
+  },
+}
+return service)");
+    const auto destination = c.path("destination.lua");
+    write(destination, R"(local service = {}
+function service.message(payload) return payload end
+function service.entity_transfer_in(target, state)
+  print("transfer_in:" .. target.entity .. ":" .. state)
+end
+service.entities = {
+  Avatar = {
+    get = function(args, ctx) return { gold = 7 } end,
+  },
+}
+return service)");
+    const auto registry = port(), data_port = port(), source_port = port(), dest_port = port();
+    c.node("coordinator", registry, {"--journal", c.path("recover-registry.sqlite").string(),
+        "--service-token", "d5cret"});
+    write(c.path("echo.lua"), echo);
+    c.node("data", data_port, {"--script", c.path("echo.lua").string(),
+        "--journal", c.path("recover-data.sqlite").string(), "--service-token", "d5cret"});
+    c.node("gameServer", source_port, {"--script", source.string(), "--contract", def.string(),
+        "--data", endpoint(data_port), "--coordinator", endpoint(registry),
+        "--upstream-token", "d5cret", "--service-token", "s3cret", "--service-name", "old-host",
+        "--scope", "g1", "--entity-save-period", "200"});
+    const auto dest_argv = std::vector<std::string>{
+        "--script", destination.string(), "--contract", def.string(),
+        "--data", endpoint(data_port), "--coordinator", endpoint(registry),
+        "--upstream-token", "d5cret", "--service-token", "s3cret",
+        "--service-name", "new-host", "--scope", "g1"};
+    auto& dest = c.node("gameServer", dest_port, dest_argv);
+
+    const auto send_frame = [](RawSocket& raw, std::string_view payload) {
+        std::string frame(4, '\0');
+        auto length = static_cast<std::uint32_t>(payload.size());
+        for (int i = 3; i >= 0; --i) { frame[i] = static_cast<char>(length & 255); length >>= 8; }
+        raw.send(frame + std::string(payload));
+    };
+    const auto read_frame = [](RawSocket& raw) {
+        std::size_t length = 0;
+        for (unsigned char ch : raw.receive(4)) length = (length << 8) | ch;
+        return raw.receive(length);
+    };
+    const auto ask = [&](unsigned listen, const std::string& line) {
+        RawSocket raw(listen);
+        if (line.starts_with("MLR1 ")) {
+            send_frame(raw, "MLS1 gameServer probe d5cret");
+            if (read_frame(raw) != "MLS1 OK") return std::string("MLS1 refused");
+        } else if (line.starts_with("MLD2 ")) {
+            send_frame(raw, "MLS1 probe p1 d5cret");
+            if (read_frame(raw) != "MLS1 OK") return read_frame(raw);
+        }
+        send_frame(raw, line);
+        return read_frame(raw);
+    };
+
+    EntityContract contract(xml);
+    SprotoCodec codec(contract);
+    const ContractMethod* get = nullptr;
+    for (const auto& e : contract.entities())
+        for (const auto& m : e.server_methods)
+            if (m.name == "get") get = &m;
+    require(get != nullptr, "test contract lost the get method");
+    std::string get_payload;
+    {
+        const auto encoded = codec.encode_returns(get->args, {});
+        require(encoded.has_value(), "empty arg encode failed");
+        get_payload = *encoded;
+    }
+    const auto frame = [](std::uint64_t correlation, std::uint32_t generation,
+                          std::int64_t entity, const std::string& body) {
+        return "MLE1" + encode_entity_envelope({1, 1, 3, entity, kEntitySideServer,
+            2, correlation, generation, 0, body});
+    };
+    const auto reply_of = [](const std::string& body) -> EntityReply {
+        require(body.size() >= 12 && body.starts_with("MLE1"), "expected an MLE1 reply frame");
+        const auto decoded = decode_entity_reply(std::string_view(body).substr(12));
+        require(decoded.has_value(), "reply body did not decode");
+        return *decoded;
+    };
+    const auto gold_of = [&](const EntityReply& reply) -> std::int64_t {
+        require(!reply.is_error, "expected a typed gold reply");
+        EntityValues got;
+        std::string reason;
+        require(codec.decode_args(get->returns, reply.payload, got, reason) && reason.empty(),
+                "typed gold return did not decode");
+        return std::get<std::int64_t>(got.at("gold").data);
+    };
+    const auto estate_is = [&](std::int64_t entity, const char* word) {
+        const auto status = ask(registry, "MLR1 MIG ESTATUS 1 1 3 "
+            + std::to_string(entity));
+        return status.starts_with("MLR1 MIG ESTATE ") && status.find(" "+std::string(word)+" ")
+            != std::string::npos;
+    };
+
+    eventually([&] {
+        const auto listing = ask(registry, "MLR1 QUERY gameServer - g1");
+        return listing.find("old-host") != std::string::npos
+            && listing.find("new-host") != std::string::npos;
+    }, 10s, "the hosts never registered");
+    auto peer = tcp(source_port);
+    equal(peer->request("MLS1 gameServer old-host s3cret"), "MLS1 OK");
+
+    // ---- Phase 1: the destination dies before the commit. The handoff
+    // parks on "prepared" — a dead destination's row must not advance — and
+    // the source's copy stays honestly frozen until the restart completes
+    // the adoption and the commit lands.
+    dest.signal(SIGSTOP); // frozen before its DESTINED poll: adoption cannot race the kill
+    equal(peer->request("spawn 42"), "spawned");
+    equal(peer->request("write 42"), "written");
+    eventually([&] {
+        return ask(data_port, "MLD2 LOAD 1 1 3 42")
+            .starts_with("MLD2 STATE 1 1 3 42 gen 1 rev 1 ");
+    }, 10s, "the write never reached data before the transfer");
+    equal(peer->request("transfer 42"), "issued");
+    eventually([&] { return estate_is(42, "prepared"); }, 10s,
+               "the handoff never parked on prepared");
+    equal(peer->request("read"), "");
+    const auto frozen = reply_of(peer->request(frame(60, 1, 42, get_payload)));
+    require(frozen.is_error && frozen.error == EntityError::NOT_READY,
+            "the source copy was not held frozen while the handoff parked");
+    dest.signal(SIGKILL);
+    // A dead destination must not advance the row: hold the parked state
+    // under observation before the recovery joins.
+    for (int i = 0; i < 20; ++i) {
+        require(estate_is(42, "prepared"), "the dead destination's row was advanced");
+        std::this_thread::sleep_for(50ms);
+    }
+    // Recovery: the restarted destination adopts, READY lets the source
+    // fence and commit, and the entity lives at the adopted generation.
+    auto& dest2 = c.node("gameServer", dest_port, dest_argv);
+    eventually([&] {
+        return peer->request("read").find("42=ok") != std::string::npos;
+    }, 20s, "the handoff never completed after the destination returned");
+    auto dest_peer = tcp(dest_port);
+    equal(dest_peer->request("MLS1 gameServer new-host s3cret"), "MLS1 OK");
+    std::uint64_t correlation = 70;
+    eventually([&] {
+        const auto probe = reply_of(dest_peer->request(frame(++correlation, 2, 42, get_payload)));
+        return !probe.is_error && gold_of(probe) == 7;
+    }, 15s, "the recovered entity never answered from the destination's handler");
+    // The adoption advances past the declared generation exactly like a
+    // live adoption: the pre-transfer generation is refused.
+    const auto stale42 = reply_of(dest_peer->request(frame(++correlation, 1, 42, get_payload)));
+    require(stale42.is_error && stale42.error == EntityError::STALE,
+            "the recovered entity answered a pre-transfer generation");
+    eventually([&] {
+        return ask(registry, "MLR1 HOST LIST").find("1 1 3 42 "+endpoint(dest_port)) != std::string::npos;
+    }, 15s, "the recovered entity's route did not name the restarted host");
+    eventually([&] { return estate_is(42, "cleanup"); }, 15s,
+               "the restarted destination never cleaned the recovered row");
+
+    // ---- Phase 2: the commit lands while the destination is merely
+    // unreachable — SIGSTOP keeps the member leg up, so membership holds and
+    // the coordinator correctly commits to the registered destination — and
+    // the committed row then names a host that lost its in-memory copy. The
+    // restart rebuilds straight into service from the durable row.
+    equal(peer->request("spawn 43"), "spawned");
+    equal(peer->request("write 43"), "written");
+    eventually([&] {
+        return ask(data_port, "MLD2 LOAD 1 1 3 43")
+            .starts_with("MLD2 STATE 1 1 3 43 gen 1 rev 1 ");
+    }, 10s, "the second write never reached data before the transfer");
+    equal(peer->request("transfer 43"), "issued");
+    // Stop at the first sighting of ready or committed: either way the
+    // destination holds the adopted copy unfrozen-by-poll, and its unfreeze
+    // poll (a full DESTINED cycle past the commit) cannot have run.
+    eventually([&] {
+        return estate_is(43, "ready") || estate_is(43, "committed");
+    }, 15s, "entity 43 never reached the destination's adoption");
+    dest2.signal(SIGSTOP);
+    eventually([&] {
+        return peer->request("read").find("43=ok") != std::string::npos;
+    }, 20s, "the commit never landed past the stopped destination");
+    eventually([&] { return estate_is(43, "committed"); }, 10s,
+               "entity 43's committed row was not left for the destination");
+    const auto released = reply_of(peer->request(frame(++correlation, 1, 43, get_payload)));
+    require(released.is_error && released.error == EntityError::UNROUTED,
+            "the destroyed source copy of entity 43 still answered");
+    dest2.signal(SIGKILL);
+    auto& dest3 = c.node("gameServer", dest_port, dest_argv);
+    auto dest_peer2 = tcp(dest_port); // the old socket died with dest2
+    equal(dest_peer2->request("MLS1 gameServer new-host s3cret"), "MLS1 OK");
+    eventually([&] {
+        const auto probe = reply_of(dest_peer2->request(frame(++correlation, 2, 43, get_payload)));
+        return !probe.is_error && gold_of(probe) == 7;
+    }, 15s, "the restarted destination never rebuilt the committed entity");
+    const auto stale43 = reply_of(dest_peer2->request(frame(++correlation, 1, 43, get_payload)));
+    require(stale43.is_error && stale43.error == EntityError::STALE,
+            "the rebuilt entity answered a pre-transfer generation");
+    eventually([&] {
+        return ask(registry, "MLR1 HOST LIST").find("1 1 3 43 "+endpoint(dest_port)) != std::string::npos;
+    }, 15s, "the rebuilt entity's route did not name the restarted host");
+    eventually([&] { return estate_is(43, "cleanup"); }, 15s,
+               "the restarted destination never cleaned the rebuilt row");
+    std::cout << "entity.migrate.recover: a dead destination's handoff stays parked and "
+        "completes on its return; a committed entity is rebuilt on restart — "
+        "one live writer again [PASS]\n";
+}
 }

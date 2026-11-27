@@ -210,6 +210,10 @@ public:
  bool freeze(EntityTarget ref) { return frozen_.insert(address(ref)).second; }
  bool unfreeze(EntityTarget ref) { return frozen_.erase(address(ref)) > 0; }
  bool frozen(EntityTarget ref) const { return frozen_.contains(address(ref)); }
+ // Whether a live entity — frozen or not — is held at the target: the
+ // committed-row branch uses it to tell a surviving adopted copy from one a
+ // destination restart lost.
+ bool holds(EntityTarget ref) const { return entities_.contains(address(ref)); }
  // The migration destination's admission: the entity lands here on the
  // source's durable snapshot and leaves holding a strictly higher hosting
  // generation than anything the superseded writer may still save, so the
