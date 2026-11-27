@@ -92,6 +92,7 @@ if(BUILD_TESTING)
       entity.route
       entity.cross.correlation
       avatar.lifecycle avatar.lua avatar.session avatar.home avatar.home.record avatar.return avatar.settle avatar.transfer.source avatar.transfer.destination avatar.transfer.full avatar.scene.switch scene.serving scene.lifecycle
+      entity.migrate.inflight
       entity.perf
       coordinator.placement coordinator.routes coordinator.placement.schema coordinator.placement.journal coordinator.migration.commit coordinator.migration.abort
       coordinator.migration.recover coordinator.migration.stale coordinator.migration.order

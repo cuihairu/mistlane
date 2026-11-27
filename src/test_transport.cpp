@@ -2637,4 +2637,220 @@ return service)");
         "the source stays the single live writer [PASS]\n";
 }
 
+// The in-flight half of the old/new-client matrix (docs/entity-contract.md
+// acceptance item 5): every request that races a transfer resolves exactly
+// once. Requests issued before the freeze are answered by the source; the
+// freeze gate answers NOT_READY for the whole window the destination is away
+// (EPREPARE does not check destination membership, so the window is
+// deterministic — the entity parks "prepared" until the destination's poll
+// adopts it); after the commit the source answers UNROUTED, the destination
+// refuses the old generation as STALE, answers the adopted generation, and
+// the destination's CLEANUP retires the coordinator row, leaving one owner.
+void entity_migrate_inflight() {
+    const std::string xml =
+        "<Contracts><Entity name=\"Avatar\" id=\"1\"><Properties>"
+        "<gold id=\"1\" type=\"INT32\" default=\"0\" persistent=\"true\"/>"
+        "</Properties>"
+        "<ServerMethods>"
+        "<Method name=\"get\" id=\"2\" mode=\"request\" caller=\"server\">"
+        "<Returns><Field name=\"gold\" id=\"1\" type=\"INT32\"/></Returns>"
+        "</Method></ServerMethods></Entity></Contracts>";
+    Context c;
+    const auto def = c.path("avatar.def");
+    write(def, xml);
+    const auto source = c.path("source.lua");
+    write(source, R"(local service = {}
+local calls = {}
+function service.message(payload)
+  if payload == "spawn" then
+    return mistlane.entity.spawn(1, 1, 3, 42, 1) and "spawned" or "duplicate"
+  end
+  if payload == "write" then
+    mistlane.entity.properties(1, 1, 3, 42).gold = 5
+    return "written"
+  end
+  if payload == "transfer" then
+    mistlane.entity.transfer(1, 1, 3, 42, "new-host", "token=abc", function(err)
+      calls[#calls+1] = err and ("err:" .. tostring(err)) or "ok"
+    end)
+    return "issued"
+  end
+  if payload == "read" then return table.concat(calls, "|") end
+  if payload == "state" then
+    local st = mistlane.entity.state(1, 1, 3, 42)
+    return st and (st.generation .. "," .. tostring(st.dirty)) or "gone"
+  end
+  return payload
+end
+service.entities = {
+  Avatar = {
+    get = function(args, ctx) return { gold = 5 } end,
+  },
+}
+return service)");
+    const auto destination = c.path("destination.lua");
+    write(destination, R"(local service = {}
+function service.message(payload) return payload end
+function service.entity_transfer_in(target, state)
+  print("transfer_in:" .. target.entity .. ":" .. state)
+end
+service.entities = {
+  Avatar = {
+    get = function(args, ctx) return { gold = 7 } end,
+  },
+}
+return service)");
+    const auto registry = port(), data_port = port(), source_port = port(), dest_port = port();
+    c.node("coordinator", registry, {"--journal", c.path("inflight-registry.sqlite").string(),
+        "--service-token", "d5cret"});
+    write(c.path("echo.lua"), echo);
+    c.node("data", data_port, {"--script", c.path("echo.lua").string(),
+        "--journal", c.path("inflight-data.sqlite").string(), "--service-token", "d5cret"});
+    c.node("gameServer", source_port, {"--script", source.string(), "--contract", def.string(),
+        "--data", endpoint(data_port), "--coordinator", endpoint(registry),
+        "--upstream-token", "d5cret", "--service-token", "s3cret", "--service-name", "old-host",
+        "--scope", "g1", "--entity-save-period", "200"});
+    // The destination is deliberately absent through the whole frozen window:
+    // it joins only after the transfer has parked on "prepared".
+
+    const auto send_frame = [](RawSocket& raw, std::string_view payload) {
+        std::string frame(4, '\0');
+        auto length = static_cast<std::uint32_t>(payload.size());
+        for (int i = 3; i >= 0; --i) { frame[i] = static_cast<char>(length & 255); length >>= 8; }
+        raw.send(frame + std::string(payload));
+    };
+    const auto read_frame = [](RawSocket& raw) {
+        std::size_t length = 0;
+        for (unsigned char ch : raw.receive(4)) length = (length << 8) | ch;
+        return raw.receive(length);
+    };
+    const auto ask = [&](unsigned listen, const std::string& line) {
+        RawSocket raw(listen);
+        if (line.starts_with("MLR1 ")) {
+            send_frame(raw, "MLS1 gameServer probe d5cret");
+            if (read_frame(raw) != "MLS1 OK") return std::string("MLS1 refused");
+        } else if (line.starts_with("MLD2 ")) {
+            send_frame(raw, "MLS1 probe p1 d5cret");
+            if (read_frame(raw) != "MLS1 OK") return read_frame(raw);
+        }
+        send_frame(raw, line);
+        return read_frame(raw);
+    };
+
+    EntityContract contract(xml);
+    SprotoCodec codec(contract);
+    const ContractMethod* get = nullptr;
+    for (const auto& e : contract.entities())
+        for (const auto& m : e.server_methods)
+            if (m.name == "get") get = &m;
+    require(get != nullptr, "test contract lost the get method");
+    std::string get_payload;
+    {
+        const auto encoded = codec.encode_returns(get->args, {});
+        require(encoded.has_value(), "empty arg encode failed");
+        get_payload = *encoded;
+    }
+    const auto frame = [](std::uint64_t correlation, std::uint32_t generation, const std::string& body) {
+        return "MLE1" + encode_entity_envelope({1, 1, 3, 42, kEntitySideServer,
+            2, correlation, generation, 0, body});
+    };
+    const auto reply_of = [](const std::string& body) -> EntityReply {
+        require(body.size() >= 12 && body.starts_with("MLE1"), "expected an MLE1 reply frame");
+        const auto decoded = decode_entity_reply(std::string_view(body).substr(12));
+        require(decoded.has_value(), "reply body did not decode");
+        return *decoded;
+    };
+    const auto gold_of = [&](const EntityReply& reply) -> std::int64_t {
+        require(!reply.is_error, "expected a typed gold reply");
+        EntityValues got;
+        std::string reason;
+        require(codec.decode_args(get->returns, reply.payload, got, reason) && reason.empty(),
+                "typed gold return did not decode");
+        return std::get<std::int64_t>(got.at("gold").data);
+    };
+
+    eventually([&] {
+        return ask(registry, "MLR1 QUERY gameServer - g1").find("old-host") != std::string::npos;
+    }, 10s, "the source never registered");
+    auto peer = tcp(source_port);
+    equal(peer->request("MLS1 gameServer old-host s3cret"), "MLS1 OK");
+    equal(peer->request("spawn"), "spawned");
+    equal(peer->request("write"), "written");
+    // The write lands on data before the transfer, so the flush at the freeze
+    // is a clean no-op and the declared generation is exactly 1.
+    eventually([&] {
+        return ask(data_port, "MLD2 LOAD 1 1 3 42")
+            .starts_with("MLD2 STATE 1 1 3 42 gen 1 rev 1 ");
+    }, 10s, "the write never reached data before the transfer");
+    // In flight before the freeze: the source answers, typed.
+    require(gold_of(reply_of(peer->request(frame(70, 1, get_payload)))) == 5,
+            "the pre-freeze request did not come back typed from the source");
+    equal(peer->request("transfer"), "issued");
+    // In flight inside the window: the freeze gate refuses with NOT_READY —
+    // the request resolves honestly instead of hanging or answering twice.
+    const auto frozen = reply_of(peer->request(frame(71, 1, get_payload)));
+    require(frozen.is_error && frozen.error == EntityError::NOT_READY,
+            "a request inside the freeze window was not refused NOT_READY");
+    // The window holds while the destination is away: the coordinator parks
+    // the handoff on "prepared" and the source keeps refusing.
+    eventually([&] {
+        const auto status = ask(registry, "MLR1 MIG ESTATUS 1 1 3 42");
+        return status.starts_with("MLR1 MIG ESTATE ") && status.find(" prepared ") != std::string::npos
+            && status.rfind(" 1") == status.size() - 2;
+    }, 10s, "the handoff never parked on prepared while the destination was absent");
+    const auto still_frozen = reply_of(peer->request(frame(72, 1, get_payload)));
+    require(still_frozen.is_error && still_frozen.error == EntityError::NOT_READY,
+            "the freeze gate opened before the destination adopted");
+
+    // Recovery: the destination joins, its DESTINED poll adopts the parked row
+    // at g+1, readies, and the source completes fence -> commit -> destroy.
+    auto& dest = c.node("gameServer", dest_port, {"--script", destination.string(),
+        "--contract", def.string(), "--data", endpoint(data_port),
+        "--coordinator", endpoint(registry), "--upstream-token", "d5cret",
+        "--service-token", "s3cret", "--service-name", "new-host", "--scope", "g1"});
+    eventually([&] {
+        return dest.output().find("transfer_in:42:token=abc") != std::string::npos;
+    }, 15s, "the destination never adopted the parked entity");
+    eventually([&] {
+        return peer->request("read").find("ok") != std::string::npos;
+    }, 15s, "the source never completed the recovered handoff");
+    eventually([&] { return peer->request("state") == "gone"; }, 10s,
+               "the released entity stayed live on the source");
+    // In flight after the commit: the source no longer answers at all...
+    const auto released = reply_of(peer->request(frame(73, 1, get_payload)));
+    require(released.is_error && released.error == EntityError::UNROUTED,
+            "the destroyed source copy still answered");
+    // ...and the destination answers the adopted generation with its own
+    // handler's view once its poll unfroze the adopted copy (until then the
+    // freeze gate refuses, which is the honest answer while the commit is
+    // still propagating). The probes ride their own MLS1 leg on the
+    // destination node; fresh correlations per retry, since a repeated one
+    // would hit the duplicate-reply suppression instead of the gate.
+    auto dest_peer = tcp(dest_port);
+    equal(dest_peer->request("MLS1 gameServer new-host s3cret"), "MLS1 OK");
+    std::uint64_t correlation = 80;
+    eventually([&] {
+        const auto probe = reply_of(dest_peer->request(frame(++correlation, 2, get_payload)));
+        return !probe.is_error && gold_of(probe) == 7;
+    }, 15s, "the adopted generation never answered from the destination's handler");
+    // Now the old generation is refused: the hosting fence floors pre-transfer
+    // callers exactly like the data fence floors pre-transfer writers.
+    const auto stale = reply_of(dest_peer->request(frame(++correlation, 1, get_payload)));
+    require(stale.is_error && stale.error == EntityError::STALE,
+            "the destination answered a pre-transfer generation");
+    // One owner at the end: the route names the destination and the
+    // destination's CLEANUP retired the coordinator row.
+    eventually([&] {
+        return ask(registry, "MLR1 HOST LIST").find("1 1 3 42 "+endpoint(dest_port)) != std::string::npos;
+    }, 15s, "the committed route did not follow the entity to the new host");
+    eventually([&] {
+        const auto status = ask(registry, "MLR1 MIG ESTATUS 1 1 3 42");
+        return status.starts_with("MLR1 MIG ESTATE ") && status.find(" cleanup ") != std::string::npos
+            && status.rfind(" 1") == status.size() - 2;
+    }, 15s,
+               "the destination's cleanup never resolved the terminal row");
+    std::cout << "entity.migrate.inflight: freeze window refuses NOT_READY, recovery completes, "
+        "exactly one owner answers after the commit [PASS]\n";
+}
+
 }
