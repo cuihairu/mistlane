@@ -8,6 +8,7 @@
 namespace mistlane::test {
 void core_contracts();
 void contract_tool();
+void contract_versions();
 void sproto_golden();
 void rpc_lifecycle();
 void avatar_lifecycle();
@@ -173,6 +174,7 @@ int run_tests(int argc, char** argv) {
     const std::vector<Case> cases{
         {"core.contracts","core",test::core_contracts},
         {"contract.tool","contract",test::contract_tool},
+        {"entity.versions","contract",test::contract_versions},
         {"sproto.golden","contract",test::sproto_golden},
         {"rpc.lifecycle","contract",test::rpc_lifecycle},
         {"avatar.lifecycle","contract",test::avatar_lifecycle},

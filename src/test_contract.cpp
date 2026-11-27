@@ -2540,6 +2540,138 @@ void contract_tool() {
     require(c.command({self().string(), "contract", "build", good.string()}) != 0,
             "build without --out accepted");
 }
+
+// Acceptance item 6 (docs/entity-contract.md "No server rebuild"): two
+// contract versions on processes with the exact same executable. v2 adds one
+// property and one server method; the publication gate passes pure additions;
+// the same binary serves both bundles on separate processes — v1 answers the
+// old method and refuses the new method id as INVALID, v2 answers both, and
+// the new method reads the new property's descriptor default through the live
+// property store. Old-client compatibility is not claimed here (unknown
+// methods stay incompatible; client negotiation remains open).
+void contract_versions() {
+    Context c;
+    const std::string v1 =
+        "<Contracts><Entity name=\"Avatar\" id=\"1\">"
+        "<Properties><gold id=\"2\" type=\"INT64\" default=\"-5\"/></Properties>"
+        "<ServerMethods><Method name=\"getLevel\" id=\"2\" mode=\"request\" caller=\"server\">"
+        "<Returns><Field name=\"level\" id=\"1\" type=\"UINT16\"/></Returns>"
+        "</Method></ServerMethods></Entity></Contracts>";
+    const std::string v2 =
+        "<Contracts><Entity name=\"Avatar\" id=\"1\">"
+        "<Properties><gold id=\"2\" type=\"INT64\" default=\"-5\"/>"
+        "<nickname id=\"6\" type=\"STRING\" default=\"anon\"/></Properties>"
+        "<ServerMethods><Method name=\"getLevel\" id=\"2\" mode=\"request\" caller=\"server\">"
+        "<Returns><Field name=\"level\" id=\"1\" type=\"UINT16\"/></Returns>"
+        "</Method>"
+        "<Method name=\"getNick\" id=\"3\" mode=\"request\" caller=\"server\">"
+        "<Returns><Field name=\"nick\" id=\"1\" type=\"STRING\"/></Returns>"
+        "</Method></ServerMethods></Entity></Contracts>";
+    const auto def1 = c.path("v1.def"), def2 = c.path("v2.def");
+    write(def1, v1);
+    write(def2, v2);
+    const auto bundle1 = c.path("bundle-v1"), bundle2 = c.path("bundle-v2");
+    require(c.command({self().string(), "contract", "build", "--out", bundle1.string(), def1.string()}) == 0,
+            "v1 bundle build failed");
+    require(c.command({self().string(), "contract", "build", "--out", bundle2.string(), def2.string()}) == 0,
+            "v2 bundle build failed");
+    auto& compatible = c.spawn({self().string(), "contract", "compat",
+        (bundle1/"v1.lock").string(), (bundle2/"v2.lock").string()});
+    require(compatible.wait() == 0, "publication gate refused pure additions: "+compatible.output());
+    const auto script1 = c.path("service-v1.lua"), script2 = c.path("service-v2.lua");
+    write(script1, R"(local service = {}
+function service.message(payload)
+  if payload == "spawn" then
+    return mistlane.entity.spawn(1, 1, 3, 42) and "spawned" or "duplicate"
+  end
+  return "echo:"..payload
+end
+service.entities = {
+  Avatar = {
+    getLevel = function(args, ctx) return { level = 7 } end,
+  },
+}
+return service)");
+    write(script2, R"(local service = {}
+function service.message(payload)
+  if payload == "spawn" then
+    return mistlane.entity.spawn(1, 1, 3, 42) and "spawned" or "duplicate"
+  end
+  return "echo:"..payload
+end
+service.entities = {
+  Avatar = {
+    getLevel = function(args, ctx) return { level = 7 } end,
+    getNick = function(args, ctx)
+      local props = mistlane.entity.properties(ctx.scope, ctx.type_id, ctx.incarnation, ctx.entity_id)
+      return { nick = props.nickname }
+    end,
+  },
+}
+return service)");
+    EntityContract contract1(v1), contract2(v2);
+    SprotoCodec codec1(contract1), codec2(contract2);
+    // Envelope fields in declaration order: scope, type, entity, incarnation,
+    // side, method, correlation, hosting generation (spawned at 1), deadline.
+    const auto frame = [](unsigned method, std::uint64_t correlation) {
+        return "MLE1" + encode_entity_envelope({1, 1, 3, 42, kEntitySideServer,
+            static_cast<std::uint16_t>(method), correlation, 1, 0, std::string{}});
+    };
+    const auto reply_of = [](const std::string& body) -> EntityReply {
+        require(body.size() >= 12 && body.starts_with("MLE1"), "expected an MLE1 reply");
+        const auto decoded = decode_entity_reply(std::string_view(body).substr(12));
+        require(decoded.has_value(), "reply did not decode");
+        return *decoded;
+    };
+    // v1 process: the old method answers; the new method id does not exist in
+    // this contract and is refused, not answered by accident.
+    const auto listen1 = port();
+    auto& node1 = c.node("gameServer", listen1,
+        {"--script", script1.string(), "--contract", def1.string(), "--service-token", "s3cret"});
+    auto peer1 = tcp(listen1);
+    equal(peer1->request("MLS1 gameServer inst-1 s3cret"), "MLS1 OK");
+    equal(peer1->request("spawn"), "spawned");
+    auto reply = reply_of(peer1->request(frame(2, 1)));
+    require(!reply.is_error, "v1 getLevel was refused: "+reply.reason);
+    EntityValues got;
+    std::string reason;
+    require(codec1.decode_args(contract1.entities()[0].server_methods[0].returns, reply.payload, got, reason)
+            && reason.empty() && std::get<std::int64_t>(got.at("level").data) == 7,
+        "v1 getLevel returned the wrong shape");
+    reply = reply_of(peer1->request(frame(3, 2)));
+    // The authorized gate resolves the method before dispatch: an id the
+    // contract does not declare is refused as FORBIDDEN (never answered).
+    require(reply.is_error && reply.error == EntityError::FORBIDDEN,
+        "v1 answered the method its contract does not declare");
+    peer1.reset();
+    node1.signal(SIGTERM);
+    require(node1.wait() == 0, "v1 gameServer shutdown failed");
+    // v2 process, same executable: the old method still answers, the new
+    // method exists, and its reply carries the new property's descriptor
+    // default read through the live property store.
+    const auto listen2 = port();
+    auto& node2 = c.node("gameServer", listen2,
+        {"--script", script2.string(), "--contract", def2.string(), "--service-token", "s3cret"});
+    auto peer2 = tcp(listen2);
+    equal(peer2->request("MLS1 gameServer inst-1 s3cret"), "MLS1 OK");
+    equal(peer2->request("spawn"), "spawned");
+    reply = reply_of(peer2->request(frame(2, 3)));
+    require(!reply.is_error, "v2 getLevel was refused: "+reply.reason);
+    require(codec1.decode_args(contract1.entities()[0].server_methods[0].returns, reply.payload, got, reason)
+            && reason.empty() && std::get<std::int64_t>(got.at("level").data) == 7,
+        "v2 changed the old method's shape");
+    reply = reply_of(peer2->request(frame(3, 4)));
+    require(!reply.is_error, "v2 getNick was refused: "+reply.reason);
+    const auto& nick_method = contract2.entities()[0].server_methods[1];
+    require(nick_method.name == "getNick", "v2 fixture lost the new method");
+    require(codec2.decode_args(nick_method.returns, reply.payload, got, reason)
+            && reason.empty() && std::get<std::string>(got.at("nick").data) == "anon",
+        "v2 getNick did not return the new property's descriptor default");
+    peer2.reset();
+    node2.signal(SIGTERM);
+    require(node2.wait() == 0, "v2 gameServer shutdown failed");
+    std::cout << "entity.versions: same binary, two bundles, additions-only compat green [PASS]\n";
+}
 void sproto_golden() {
     // Fixture-only canonical TLV vectors. These intentionally are NOT sproto
     // wire bytes; retain them as an internal-format fixture independent of the
