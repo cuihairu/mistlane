@@ -135,7 +135,11 @@ scrapes `mistlane_request_seconds`, `mistlane_messages_total`,
 `mistlane_event_loop_lag_max_seconds`, `mistlane_active_sessions`,
 `mistlane_admission_rejections_total`,
 `mistlane_process_resident_memory_bytes` and `mistlane_rate_limit_stops_total`
-from each published metrics port. Both legs stop with SIGTERM and assert exit
+from each published metrics port. A final leg runs two bots concurrently with
+distinct room names (`room-a` / `room-b`) and checks the per-shard rx deltas:
+one group/room pins every join to one crossServer, so the single-room legs
+above leave the other shard idle, while two different room names must spread
+across the ordered upstream list. Both legs stop with SIGTERM and assert exit
 0. Comparability flags (script, epoch, generator flags, topology) are fixed in
 the drill; see [Cross-server and overload](./cross-server.md) and
 [Profiling](./profiling.md) for how to read the numbers.

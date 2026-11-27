@@ -11,9 +11,12 @@
 # compose service name, guard raised by the mounted instance files), drives
 # the bundled bot through the published gateway port at three load levels
 # (documented bench, near the generator's connection ceiling, and a 1 MiB
-# payload round-trip), and scrapes each node's published metrics face. Both
-# legs end with the graceful SIGTERM stop. Every assertion prints its own
-# line; a FAIL line exits nonzero.
+# payload round-trip), and scrapes each node's published metrics face. A
+# final two-room leg runs two bots with distinct room names concurrently and
+# checks the rx deltas: one room name pins every join to one crossServer, so
+# only rooms with different names demonstrate the hash spreading rooms over
+# the upstream list. Both legs end with the graceful SIGTERM stop. Every
+# assertion prints its own line; a FAIL line exits nonzero.
 #
 # Exits 0 (with a SKIP note) when docker, the daemon or the binary is missing.
 set -eu
@@ -70,6 +73,17 @@ scrape() { # name port -> one line with the observed families
   rx=$(grep -E 'mistlane_messages_total\{.*direction="rx"\}' "$work/$name.metrics" | awk '$1 !~ /^#/ {print $2; exit}')
   stops=$(grep -F 'mistlane_rate_limit_stops_total' "$work/$name.metrics" | awk '$1 !~ /^#/ {print $2; exit}')
   echo "metrics: $name lag_max=${lag:-?} rss_bytes=${rss:-?} rx=${rx:-?} guard_stops=${stops:-?}"
+}
+
+rx_of() { # name port -> the rx message counter as an integer
+  name=$1; port=$2
+  body=$(curl -sf "http://127.0.0.1:$port/metrics") || { echo "FAIL: $name metrics scrape failed"; exit 1; }
+  rx=$(printf '%s' "$body" | grep -E 'mistlane_messages_total\{.*direction="rx"\}' \
+    | awk '$1 !~ /^#/ {print $2; exit}')
+  case "$rx" in
+    ''|*[!0-9]*) echo "FAIL: $name reported no rx counter ($rx)"; exit 1 ;;
+  esac
+  printf '%s' "$rx"
 }
 
 wait_ready() { # logfile marker timeout_seconds process_description
@@ -195,6 +209,38 @@ docker stats --no-stream --format '{{.Name}} {{.MemUsage}}' \
   mistlane-stress-cross-a-1 mistlane-stress-cross-b-1 mistlane-stress-gateway-cross-1 \
   > "$work/b-stats" || { echo "FAIL: docker stats failed"; exit 1; }
 cat "$work/b-stats"
+
+echo "== leg B2: room-hash distribution across both crossServers =="
+# Every join above uses the room name "bench", and one group/room pins to one
+# crossServer, so those legs leave the other shard idle. Two concurrent bots
+# with distinct room names show the FNV-1a room hash spreading rooms over the
+# ordered upstream list: each bot should land entirely on one shard, and the
+# two shards should each take one room. The names are pinned because their
+# hashes differ modulo the two upstreams (verified against this topology);
+# another name pair may legally collide on a single shard.
+before_a=$(rx_of cross-a 7203)
+before_b=$(rx_of cross-b 7204)
+"$binary" bot --url tcp://127.0.0.1:7300 --join "MLC1 1 realm g room-a" \
+  --clients 32 --count 150 >"$work/b-room-a.bot" 2>&1 &
+pa=$!
+"$binary" bot --url tcp://127.0.0.1:7300 --join "MLC1 1 realm g room-b" \
+  --clients 32 --count 150 >"$work/b-room-b.bot" 2>&1 &
+pb=$!
+wait "$pa" || { echo "FAIL: room-a bot exited $?"; cat "$work/b-room-a.bot"; exit 1; }
+wait "$pb" || { echo "FAIL: room-b bot exited $?"; cat "$work/b-room-b.bot"; exit 1; }
+for room in room-a room-b; do
+  cat "$work/b-$room.bot"
+  grep -Fq "planned=4800 completed=4800 failed_clients=0" "$work/b-$room.bot" \
+    || { echo "FAIL: $room did not complete every request"; exit 1; }
+done
+delta_a=$(($(rx_of cross-a 7203) - before_a))
+delta_b=$(($(rx_of cross-b 7204) - before_b))
+echo "distribution: cross-a rx +$delta_a, cross-b rx +$delta_b"
+# Each bots' 32 sessions hand over 32 MLC1 joins plus 32x150 frames, so a
+# shard that took one whole room gained 4832 rx messages; requiring both
+# deltas above the per-room frame count proves both shards took real load.
+[ "$delta_a" -ge 4800 ] && [ "$delta_b" -ge 4800 ] \
+  || { echo "FAIL: one crossServer stayed idle (rx +$delta_a/+$delta_b)"; exit 1; }
 
 $compose stop -t 30 >/dev/null
 for name in mistlane-stress-cross-a-1 mistlane-stress-cross-b-1 mistlane-stress-gateway-cross-1; do
