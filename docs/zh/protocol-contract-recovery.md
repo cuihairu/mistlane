@@ -1,6 +1,6 @@
 # 协议契约恢复
 
-状态：2026-11-21 从已提交的 game-fogs schema 二进制 `game-fogs/game/proto/sproto.spb`（game-fogs commit `37b640a`）恢复。本页恢复的是旧业务协议的**定义**，不声称原始生成流程；原始文本源、生成脚本与正式客户端绑定仍缺失。英文页：[Protocol contract recovery](../protocol-contract-recovery.md)；恢复产物：`contracts/fogs-sproto-schema.txt`；复现工具：`tools/sproto_dump.c`。
+状态：2026-11-21 从已提交的 game-fogs schema 二进制 `game-fogs/game/proto/sproto.spb`（game-fogs commit `37b640a`）恢复。本页恢复的是旧业务协议的**定义**，不声称原始生成流程。2026-11-28 起**再生的文本源**（`contracts/fogs-sproto.sproto`）重编译后与已提交二进制逐字节一致；原始作者文本、生成脚本与正式客户端绑定仍缺失。英文页：[Protocol contract recovery](../protocol-contract-recovery.md)；恢复产物：`contracts/fogs-sproto-schema.txt`，再生源：`contracts/fogs-sproto.sproto`；复现工具：`tools/sproto_dump.c`，再生器：sproto probe 的 `regen` 模式（`mistlane-sproto-probe regen contracts/fogs-sproto.spb`）。
 
 ## 恢复了什么
 
@@ -31,12 +31,24 @@ OmAuth (30001) request:OmAuth.request response:OmAuth.response
 - **类型引用：** 0 个未解析的请求/响应类型引用；0 个未解析的 struct 字段类型引用（剥离 `*` 数组与 `[key]` map 标记后）；所有字段解析为已声明类型或原语（`integer`、`boolean`、`string`、`double`）。
 - **形态：** 646 协议 / 1421 类型 / 4245 字段；69 个协议无请求类型（推送），151 个无响应类型；638 个字段为数组类型，152 个为 map 键控。
 
+## 文本源再生（2026-11-28）
+
+`contracts/fogs-sproto-schema.txt` 里的 dump 虽权威，但作为生成输入是**有损的**：它把 decimal 整数字段渲染成裸 `decimal`（丢失 extra 标签集数值）、无法区分 `string` 与 `binary`（两者都编译为 string 基类型）、map 键显示为 tag 数字还需映射回字段名。因此再生源不走 dump，而是由 probe 的 `regen` 模式**直接遍历 `.spb` 线格式**——逐字节解码编译后的 group/type/field/protocol 块（长度前缀 blob、奇偶属性字），毫无损失，并产出 `.sproto` 文本：
+
+- 共享类型输出为顶层 `.Name { ... }` 声明，嵌套子类型重新嵌回父类型体内（点分名只有这种写法可解析）；
+- `<Proto>.request` / `<Proto>.response` 类型内联在所属协议下（sprotoparser 的内联 struct 命名），其余引用一律输出完整点分类型名；
+- map 字段输出为 `*Type(keyField)`（本 schema 无泛型 `*Type()` map），decimal 输出为 `integer(N)`，带 binary extra 的字符串输出为 `binary`，无响应类型的协议输出为仅 request 块。
+
+同一运行内完成保真证明：产出的文本用 vendored `sprotoparser` 重新编译，必须与输入 `.spb` **逐字节相等**——对完整 game-fogs schema 即 `646 协议 / 1421 类型 / 4245 字段 / 152 map → 176308 字节, compile=IDENTICAL`。守门是 CTest `mistlane_sproto_fogs_regen`：从已提交夹具 `contracts/fogs-sproto.spb`（与 game-fogs `37b640a` 文件 sha256 一致）再生，并断言已提交的 `contracts/fogs-sproto.sproto` 与产出文本相等。
+
+**恢复了什么、没恢复什么：** schema 再次拥有可用的文本源与可用的生成步骤（regen 模式 + vendored sprotoparser 可把文本编译为 `.spb`/绑定形态）——管线可以重跑、可以 diff。但**没有**恢复原始作者文本：注释、排版、`string`/`binary` 命名选择（本 schema 无任何 `binary` 字段存留）、内联与共享的位置取舍均为规范化结果而非原貌；产生 `Protocol.lua` 的原始 `sprotodump` 调用与客户端绑定仍缺失。按 todo 账本，这仍是定义恢复——不得把二进制 schema 等同于完整生成流程。
+
 ## 来源与缺失项
 
 - **产物来源：** `sproto.spb` 与 `Protocol.lua` **已提交**到 game-fogs `37b640a`；`game/Data/Data.lua` 在启动时把该二进制装载进 sproto loader 槽。`Protocol.lua` 头部标明其生成器为 **`sprotodump`**。
-- **缺失——原始文本源：** game-fogs 中不存在任何 `.sproto` 文本文件；schema 仅以编译形式存续。
-- **缺失——生成脚本：** game-fogs 中不存在运行 `sprotodump`/sproto 编译器的构建规则或脚本；生成工具已识别，但调用它的构建步骤缺失。
-- **缺失——正式客户端绑定：** 客户端侧生成的协议绑定属于独立客户端代码库，不在恢复 schema 的服务端仓库内。
+- **缺失——原始文本源（已有再生等价物）：** game-fogs 中不存在任何 `.sproto` 文本文件；schema 仅以编译形式存续。2026-11-28 起再生文本源位于 `contracts/fogs-sproto.sproto`——重编译逐字节一致，但不是原始作者文本（见上文再生一节）。
+- **缺失——生成脚本：** game-fogs 中不存在运行 `sprotodump`/sproto 编译器的构建规则或脚本；生成工具已识别，但调用它的原始构建步骤缺失。regen probe 模式加 vendored sprotoparser 现已为 schema 本身提供等价的可用管线。
+- **缺失——正式客户端绑定：** 客户端侧生成的协议绑定属于独立客户端代码库，不在恢复 schema 的服务端仓库内。（mistlane 的 contract 工具链可以从恢复的文本生成自己的 JS/C#/HPP 绑定，但那是 mistlane 的形态，不是原客户端的。）
 
 ## 范围警示
 

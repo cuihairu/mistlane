@@ -136,6 +136,10 @@ if(BUILD_TESTING)
     "${CMAKE_CURRENT_BINARY_DIR}/sproto-fixture/avatar.sproto")
   add_test(NAME mistlane_sproto_dispatch COMMAND mistlane-sproto-probe dispatch
     "${CMAKE_CURRENT_BINARY_DIR}/sproto-fixture/avatar.sproto")
+  add_test(NAME mistlane_sproto_fogs_regen COMMAND mistlane-sproto-probe regen
+    "${CMAKE_CURRENT_SOURCE_DIR}/contracts/fogs-sproto.spb")
+  set_tests_properties(mistlane_sproto_fogs_regen PROPERTIES
+    ENVIRONMENT "MISTLANE_REGEN_GOLDEN=${CMAKE_CURRENT_SOURCE_DIR}/contracts/fogs-sproto.sproto")
   if(EXISTS "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/tools/crashpad_handler")
     # The suite filter runs every crashpad case, retention included.
     add_test(NAME mistlane_crashpad_startup COMMAND mistlane test --suite crashpad

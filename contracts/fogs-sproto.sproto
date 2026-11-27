@@ -1,0 +1,9380 @@
+# Recovered .sproto text for the game-fogs business protocol schema.
+# Regenerated from the committed binary schema (sproto.spb, game-fogs
+# commit 37b640a) by the vendored sproto toolchain; byte-identity of
+# recompile verified by the regen probe mode. The original text source,
+# generation script and official client bindings remain absent (see
+# docs/protocol-contract-recovery.md): string/binary naming, inline vs
+# shared type placement and comments are canonicalized, not original.
+.Achievement {
+	records 0 : *Kval(key)
+}
+
+.ActData {
+	data 0 : *OneActData(aid)
+}
+
+.ActGuildBoss {
+	index 0 : integer
+	datas 1 : *GuildBoss(index)
+}
+
+.ActShowCharData {
+	index 0 : string
+	showChar 1 : ShowCharData
+}
+
+.ActivityStDt {
+	id 0 : string
+	stTime 1 : integer
+	edTime 2 : integer
+}
+
+.Actscore {
+	fb 0 : integer
+	honor 1 : integer
+	guildDevote 2 : integer
+	iq 3 : integer
+}
+
+.Allmail {
+	aid 0 : integer
+	receraid 1 : integer
+	mailp 2 : Mailp
+	time 3 : integer
+	attachment 4 : Attachment
+	flag 5 : integer
+	slots 6 : integer
+	logType 7 : integer
+}
+
+.Analytics {
+	forever 0 : *Kval(key)
+	day 1 : *Kval(key)
+	week 2 : *Kval(key)
+	month 3 : *Kval(key)
+	lastDay 4 : *Kval(key)
+	operations 5 : *Operation(opId)
+}
+
+.Arena {
+	cdStTime 0 : integer
+	history 1 : *string
+	winNum 2 : integer
+	buyTimes 3 : integer
+	lastBuyTime 4 : integer
+	times 5 : integer
+}
+
+.ArenaData {
+	aid 0 : integer
+	isReal 1 : integer
+	gs 2 : integer
+	name 3 : string
+	realAid 4 : integer
+	dress 5 : Dress
+	tempId 6 : integer
+}
+
+.Artifact {
+	key 0 : string
+	tempId 1 : integer
+	lv 2 : integer
+	tlv 3 : integer
+	sllv 4 : integer
+	slexp 5 : integer
+	sltp 6 : integer
+	jjlv 7 : integer
+	jjexp 8 : integer
+	jjtp 9 : integer
+	clquench 10 : *integer
+	cllv 11 : integer
+	exp 12 : integer
+	texp 13 : integer
+	skill 14 : integer
+}
+
+.Artifacts {
+	artifacts 0 : *Artifact(key)
+}
+
+.Attachment {
+	data 0 : *RewardItem
+}
+
+.Auction {
+	idx 0 : integer
+	it 1 : integer
+	ii 2 : integer
+	num 3 : integer
+	price 4 : integer
+	buyPrice 5 : integer
+	grow 6 : integer
+	aid 7 : integer
+	aidsid 8 : integer
+	curnum 9 : integer
+	name 10 : string
+	et1 11 : integer
+	et2 12 : integer
+	et3 13 : integer
+	groupId 14 : integer
+	groupName 15 : string
+	sid 16 : integer
+	getType 17 : integer
+	getst 18 : integer
+	addst 19 : integer
+}
+
+.AuctionDay {
+	aid 0 : integer
+	num 1 : integer
+	st 2 : integer
+}
+
+.AuctionWorld {
+	index 0 : integer
+	record 1 : *Auction
+	list 2 : *Auction(idx)
+	awardGroup 3 : *AwardGroup(gid)
+	awardAid 4 : *AwardAid(aid)
+	awardSt 5 : integer
+	curId 6 : integer
+}
+
+.AwardAid {
+	aid 0 : integer
+	num 1 : integer
+}
+
+.AwardGroup {
+	gid 0 : integer
+	ids 1 : *integer
+	total 2 : integer
+}
+
+.Bag {
+	itemBag 0 : *ItemData(vid)
+	equipBag 1 : EquipBag
+	faBaobag 2 : *FaBaoData
+}
+
+.BatBoss {
+	star 0 : integer
+	tid 1 : integer
+	currentSection 2 : integer
+	batIndex 3 : integer
+	mapAwards 4 : *MapAward(smid)
+	hNum 5 : integer
+	shNum 6 : integer
+	lastTime 7 : integer
+	lastReqTime 8 : integer
+}
+
+.BatListContant {
+	bid 0 : integer
+	battleInfoList 1 : *BattleRoundActionData
+	isEnd 2 : integer
+}
+
+.BatSkillList {
+	skills 0 : *SkillData
+	hms 1 : *HeartLaw
+}
+
+.BattleActionData {
+	type 0 : integer
+	selfList 1 : *BattleObjData
+	targetList 2 : *BattleObjData
+	skillId 3 : integer
+	cot 4 : integer
+	batNum 5 : integer
+	chase 6 : integer
+	joinObj 7 : BattleJoinObj
+	isFlow 8 : integer
+}
+
+.BattleAwardList {
+	aid 0 : integer
+	list 1 : BattleOnePlayerAwardList
+}
+
+.BattleBuffData {
+	bid 0 : integer
+	round 1 : integer
+}
+
+.BattleDamageInfo {
+	hurt 0 : integer
+	isEnemy 1 : integer
+	tempId 2 : integer
+	lv 3 : integer
+	star 4 : integer
+	recHp 5 : integer
+	cn 6 : string
+	wxhurt 7 : integer
+	wx 8 : *integer
+}
+
+.BattleJoinObj {
+	px 0 : integer
+	py 1 : integer
+	resId 2 : integer
+	hejiType 3 : string
+	tempIds 4 : *integer
+	gp 5 : integer
+}
+
+.BattleObjData {
+	px 0 : integer
+	py 1 : integer
+	hp 2 : integer
+	hpMax 3 : integer
+	hurtHp 4 : integer
+	recHp 5 : integer
+	crit 6 : integer
+	immune 7 : integer
+	reborn 8 : integer
+	dodge 9 : integer
+	summonObj 10 : BattlePosObjData
+	addbuffList 11 : *BattleBuffData
+	delbuffList 12 : *integer
+	hx 13 : integer
+	clear 14 : integer
+	fanTan 15 : integer
+	fanZhen 16 : integer
+	wxhurtHps 17 : *integer
+	wxhurtRes 18 : *integer
+	joinhurt 19 : integer
+}
+
+.BattleOnePlayerAwardList {
+	msgs 0 : *PROMPTMESSGAE
+}
+
+.BattlePosObjData {
+	aid 0 : integer
+	charname 1 : string
+	type 2 : integer
+	px 3 : integer
+	py 4 : integer
+	hp 5 : integer
+	hpMax 6 : integer
+	dress 7 : Dress
+	tempId 8 : integer
+	dressColor 9 : DressColor
+	flowerObj 10 : FlowerBatObj
+	sidnum 11 : integer
+}
+
+.BattleProp {
+	attack 0 : integer
+	defence 1 : integer
+	hpMax 2 : integer
+	speed 3 : integer
+	critPt 4 : integer
+	resiCritPt 5 : integer
+	dodgePt 6 : integer
+	hitPt 7 : integer
+	skillId 8 : integer
+	skillLv 9 : integer
+}
+
+.BattleResultData {
+	bid 0 : integer
+	maxRound 1 : integer
+	battleType 2 : integer
+	posList 3 : *BattlePosObjData
+	battleInfoList 4 : *BattleRoundActionData
+	battleEndType 5 : integer
+	awardShow 6 : integer
+	awardList 7 : *BattleAwardList(aid)
+	type 8 : integer
+	star 9 : integer
+	extObj 10 : *Kval(key)
+	result 11 : integer
+	shareBoss 12 : integer
+	currentHp 13 : integer
+	maxHp 14 : integer
+	sectype 15 : integer
+	selfaids 16 : *integer
+	taids 17 : *integer
+	isEnd 18 : integer
+	extData 19 : *integer
+	rounds 20 : integer
+	cgs 21 : integer
+	top2DamageInfo 22 : *BattleDamageInfo
+}
+
+.BattleRoundActionData {
+	round 0 : integer
+	actionList 1 : *BattleActionData
+}
+
+.BattleTestProp {
+	roleProper 0 : BattleProp
+	bossProper 1 : BattleProp
+	monsterProper 2 : BattleProp
+}
+
+.BenisonLog {
+	aid 0 : integer
+	tm 1 : integer
+	tp 2 : integer
+	charname 3 : string
+	tempId 4 : integer
+}
+
+.Bet {
+	key 0 : string
+	list 1 : *BetPlayer(aid)
+}
+
+.BetAid {
+	aid 0 : string
+	list 1 : *BetPlayer(key)
+}
+
+.BetPlayer {
+	aid 0 : string
+	btype 1 : integer
+	gsArea 2 : integer
+	bindex 3 : integer
+	winaid 4 : integer
+	time 5 : integer
+	key 6 : string
+	state 7 : integer
+	sid 8 : integer
+}
+
+.BookEnemy {
+	data 0 : *OneBookEnemy
+}
+
+.BookHit {
+	data 0 : *OneBookEnemy
+}
+
+.Booker {
+	avtime 0 : integer
+	avcolor 1 : integer
+	state 2 : integer
+	beKills 3 : *integer
+	beKillNum 4 : integer
+	rate 5 : integer
+}
+
+.BookerBattleData {
+	color 0 : integer
+	etime 1 : integer
+}
+
+.BookerData {
+	aid 0 : integer
+	rcolor 1 : integer
+	rtime 2 : integer
+	bookTime 3 : integer
+	bookKillTime 4 : integer
+	booker 5 : Booker
+	bookEnemy 6 : BookEnemy
+	bookHit 7 : BookHit
+}
+
+.BookerDetail {
+	aid 0 : integer
+	guildName 1 : string
+	gs 2 : integer
+	name 3 : string
+	color 4 : integer
+	tempId 5 : integer
+	etime 6 : integer
+}
+
+.BossHp {
+	curHp 0 : string
+	proHp 1 : string
+	hpMax 2 : string
+	proHpMax 3 : string
+}
+
+.Bosss {
+	vipBoss 0 : *VipBoss(stid)
+}
+
+.Budokai {
+	inittime 0 : integer
+	idx 1 : integer
+	oldidx 2 : integer
+	challengeNum 3 : integer
+	oldChallengeNum 4 : integer
+	betList 5 : *BetPlayer
+	oldBetList 6 : *BetPlayer
+}
+
+.BudokaiArea {
+	gsArea 0 : string
+	round 1 : integer
+	state 2 : integer
+	matchMap 3 : *BudokaiPlayer(spos)
+	videoList 4 : *BudokaiVideo(bindex)
+}
+
+.BudokaiAward {
+	aid 0 : integer
+	sid 1 : integer
+	intps 2 : *Kval(key)
+}
+
+.BudokaiPlayer {
+	aid 0 : integer
+	gs 1 : integer
+	sid 2 : integer
+	level 3 : integer
+	charname 4 : string
+	pos 5 : integer
+	active 6 : integer
+	lastround 7 : integer
+	gsArea 8 : integer
+	challengeNum 9 : integer
+	dress 10 : Dress
+	spos 11 : string
+	tempId 12 : integer
+}
+
+.BudokaiVideo {
+	bindex 0 : string
+	battleResult 1 : BattleResultData
+}
+
+.Cbt_Floor {
+	fd 0 : *integer
+	wa 1 : *integer
+	n 2 : integer
+}
+
+.ChallengeData {
+	key 0 : string
+	val 1 : *integer
+	tid 2 : integer
+	kt 3 : integer
+}
+
+.ChallengeGift {
+	sign 0 : *ChallengeData(key)
+}
+
+.CharBaseData {
+	aid 0 : integer
+	name 1 : string
+	career 2 : integer
+	level 3 : integer
+	logintime 4 : integer
+	deltime 5 : integer
+	gs 6 : integer
+	weapon 7 : integer
+	equip 8 : integer
+	wingId 9 : integer
+	guild 10 : string
+	fashion 11 : *integer
+	weaponSuitEff 12 : integer
+	armorSuitEff 13 : integer
+	vipLevel 14 : integer
+	blocktime 15 : integer
+	createtime 16 : integer
+}
+
+.CharData {
+	aid 0 : integer
+	accname 1 : string
+	charname 2 : string
+	level 3 : integer
+	gs 4 : integer
+	exp 5 : integer
+	tempId 6 : integer
+	logouttime 7 : integer
+	logintime 8 : integer
+	createtime 9 : integer
+	loginip 10 : string
+	logincount 11 : integer
+	vipLevel 12 : integer
+	onlineTime 13 : integer
+	gold 14 : integer
+	bagmoney 15 : integer
+	bindgold 16 : integer
+	aucscore 17 : integer
+	guid 18 : integer
+	gujob 19 : integer
+	guildLv 20 : integer
+	pmap 21 : Pmap
+	equipon 22 : Equipon
+	skill 23 : Skill
+	achievement 24 : Achievement
+	forge 25 : Forge
+	bag 26 : Bag
+	modules 27 : Modules
+	batBoss 28 : BatBoss
+	dress 29 : Dress
+	quest 30 : Quest
+	shopBuy 31 : ShopBuy
+	pets 32 : Pets
+	partners 33 : Partners
+	xuanNvs 34 : XuanNvs
+	skyGods 35 : SkyGods
+	peractives 41 : Peractives
+	shareboss 42 : Shareboss
+	bosss 43 : Bosss
+	arena 44 : Arena
+	fb 45 : Fb
+	growprop 46 : Growprop
+	guildrecord 47 : Guildrecord
+	skins 48 : Skins
+	dailytask 49 : Dailytask
+	paydata 50 : Paydata
+	teamfbs 51 : Teamfbs
+	dailyactivity 52 : Dailyactivity
+	share 53 : Share
+	analytics 54 : Analytics
+	growsys 55 : Growsys
+	serverId 56 : integer
+	sidnum 57 : integer
+	platsid 58 : integer
+	sid 59 : integer
+	platform 60 : integer
+	marriage 61 : Marriage
+	guname 62 : string
+	godclass 63 : Godclass
+	faBao 64 : FaBao
+	totems 65 : Totems
+	daydrop 66 : Daydrop
+	kingwar 67 : Kingwar
+	catchPetTimes 68 : integer
+	logRec 69 : LogRec
+	gametimes 70 : Gametimes
+	hejiData 71 : HejiData
+	budokai 72 : Budokai
+	charPvp 73 : CharPvp
+	giftpush 74 : Giftpush
+	runeBag 75 : RuneBag
+	serverFirstAward 77 : ServerFirstAward
+	actData 78 : ActData
+	soulRoot 79 : SoulRoot
+	soulRootbag 80 : SoulRootbag
+	perOps 81 : PerOps
+	opActionLog 82 : OpActionLog
+	moBaiData 83 : MoBaiData
+	heavenBook 85 : HeavenBook
+	artifacts 88 : Artifacts
+	csArena 89 : CsArena
+	myGuildFb 91 : MyGuildFb
+	heartMagic 93 : HeartMagic
+	pvpPropScore 95 : PvpPropScore
+	maxDataLen 99 : integer
+	bbRank 100 : integer
+	jxtzRank 101 : integer
+	hmsRank 102 : integer
+	wxslRank 103 : integer
+	hhsjRank 104 : integer
+	fsslRank 105 : integer
+	wxRank 106 : integer
+	jxtzStar 107 : integer
+	monthCard 108 : integer
+	foreverCard 109 : integer
+	faBaoGs 110 : integer
+	runeGs 111 : integer
+	soulRootGs 112 : integer
+	heavenBookGs 113 : integer
+	zinvGs 114 : integer
+	gEquipon 115 : GEquipon
+	petGs 116 : integer
+	partnerGs 117 : integer
+	xnGs 118 : integer
+	godEquipGs 119 : integer
+	tsGs 120 : integer
+	artifactGs 121 : integer
+	totemGs 122 : integer
+	legend 125 : Legend
+	combines 126 : Combines
+	godRing 127 : GodRing
+	challengeGift 128 : ChallengeGift
+}
+
+.CharOfflineData {
+	aid 0 : integer
+	uid 1 : string
+	level 2 : integer
+	charname 3 : string
+	sex 4 : integer
+	gs 5 : integer
+	logintime 6 : integer
+	logouttime 7 : integer
+	dress 8 : Dress
+	tempId 9 : integer
+	guid 10 : integer
+	gujob 11 : integer
+	bbRank 12 : integer
+	wxslRank 13 : integer
+	hmsRank 14 : integer
+	jxtzRank 15 : integer
+	vipLevel 16 : integer
+	contributionExp 17 : integer
+	dayContributionExp 18 : integer
+	marriage 19 : Marriage
+	wingGs 20 : integer
+	rideGs 21 : integer
+	shouhuGs 22 : integer
+	shenhunGs 23 : integer
+	shenbingGs 24 : integer
+	par_titleGs 25 : integer
+	par_shenhunGs 26 : integer
+	par_guanghuanGs 27 : integer
+	par_shouhuGs 28 : integer
+	ts_titleGs 29 : integer
+	ts_shenhunGs 30 : integer
+	ts_guanghuanGs 31 : integer
+	ts_shouhuGs 32 : integer
+	pet_titleGs 33 : integer
+	pet_shenhunGs 34 : integer
+	pet_guanghuanGs 35 : integer
+	pet_shouhuGs 36 : integer
+	petGs 37 : integer
+	partnerGs 38 : integer
+	xnGs 39 : integer
+	xn_titleGs 40 : integer
+	xn_shenhunGs 41 : integer
+	xn_guanghuanGs 42 : integer
+	xn_shouhuGs 43 : integer
+	jxtzStar 44 : integer
+	monthCard 45 : integer
+	foreverCard 46 : integer
+	hhsjRank 47 : integer
+	uid_ex 54 : string
+}
+
+.CharPvp {
+	cd 0 : integer
+	times 1 : integer
+	buyTimes 2 : integer
+	lastBuyTime 3 : integer
+	titleLv 4 : integer
+	buyEmyTimes 5 : integer
+	lastEmyTime 6 : integer
+}
+
+.CharSimpleDataUpdate {
+	aid 0 : integer
+	name 1 : string
+	level 2 : integer
+	exp 3 : integer
+	bagmoney 4 : integer
+	bindgold 5 : integer
+	gold 6 : integer
+	gs 7 : integer
+	guid 8 : integer
+	gujob 9 : integer
+	petCurrency 10 : integer
+	bbRank 11 : integer
+	jxtzRank 12 : integer
+	hmsRank 13 : integer
+	wxslRank 14 : integer
+	aucscore 15 : integer
+	catchPetTimes 16 : integer
+	jxtzStar 17 : integer
+	hhsjRank 18 : integer
+	logintime 19 : integer
+	onlineTime 20 : integer
+	fsslRank 21 : integer
+	wxRank 22 : integer
+}
+
+.CharSimpleRankData {
+	aid 0 : integer
+	charname 1 : string
+	gs 2 : integer
+	level 3 : integer
+	icon 4 : integer
+	score 5 : integer
+	hurtHp 6 : integer
+}
+
+.ChatExtData {
+	fabao 0 : FaBaoData
+	pet 1 : Pet
+	skill 2 : integer
+	skygod 3 : SkyGod
+	partner 4 : Partner
+	item 5 : ItemData
+	equip 6 : EquipData
+	artifact 9 : Artifact
+}
+
+.ChatItemNew {
+	id 0 : integer
+	time 1 : integer
+	channel 2 : integer
+	send 3 : integer
+	sname 4 : string
+	sparam 5 : string
+	receive 6 : integer
+	rname 7 : string
+	rparam 8 : string
+	strtype 9 : integer
+	displace 10 : integer
+	content 11 : string
+	strlist 12 : *string
+	lnList 13 : *string
+	lpList 14 : *string
+	ldList 15 : *ChatExtData
+	sysp 16 : string
+	ldjsonList 17 : *string
+	vipLevel 18 : integer
+	monthCard 19 : integer
+	foreverCard 20 : integer
+	guid 21 : integer
+	sidnum 22 : integer
+}
+
+.ChatPopDt {
+	id 0 : integer
+	chance 1 : integer
+	tarType 2 : integer
+	str 3 : string
+	pow 4 : integer
+}
+
+.ChatPopDts {
+	cid 0 : string
+	chatPopDts 1 : *ChatPopDt
+}
+
+.Combines {
+	pets 0 : PetCombines
+}
+
+.CrossRankList {
+	score 0 : string
+	sidnum 1 : integer
+	name 2 : string
+	tempId 3 : integer
+	num 4 : integer
+	guname 5 : string
+	camp 6 : integer
+}
+
+.CrossRankTitle {
+	cId 0 : integer
+	tid 1 : integer
+	ct 2 : integer
+}
+
+.CrossRankVec {
+	list 0 : *CrossRankList
+	title 1 : CrossRankTitle
+	myscore 2 : string
+	myrank 3 : integer
+}
+
+.CsArena {
+	batTimes 0 : integer
+	cdStTime 1 : integer
+	buyTimes 2 : integer
+	lastRefTime 3 : integer
+	winNum 4 : integer
+	isPromotion 5 : integer
+	history 6 : *string
+	clgTask 7 : *Kval(key)
+	segTask 8 : *Kval(key)
+	enemyList 9 : *integer
+	timeStamp 10 : integer
+}
+
+.CsArenaPlayer {
+	aid 0 : integer
+	serverId 1 : integer
+	tempId 2 : integer
+	level 3 : integer
+	gs 4 : integer
+	dScore 5 : integer
+	sScore 6 : integer
+	segLv 7 : integer
+	charname 8 : string
+	dress 9 : Dress
+	timeStamp 10 : integer
+	isRobot 11 : integer
+}
+
+.CsArenaPlayerList {
+	data 0 : *CsArenaPlayer
+}
+
+.CsArenaRankDt {
+	aid 0 : integer
+	rank 1 : integer
+	segLv 2 : integer
+	score 3 : integer
+}
+
+.DailyDt {
+	lastTime 0 : integer
+	cdStTime 1 : integer
+	getRwdTime 2 : integer
+	stars 3 : *integer
+	resIds 4 : *integer
+}
+
+.Dailyactivity {
+	getResSign 0 : *Kval(key)
+	getExpSign 1 : *Kval(key)
+	lastTime 2 : integer
+}
+
+.Dailyfb {
+	fbList 0 : *Kval(key)
+}
+
+.Dailytask {
+	boss 0 : DailyDt
+	hangup 1 : DailyDt
+}
+
+.DayDrops {
+	id 0 : integer
+	num 1 : integer
+}
+
+.DayQuest {
+	id 0 : integer
+	judge 1 : integer
+	num 2 : integer
+}
+
+.Dayclg {
+	comNum 0 : integer
+	lastFreeTime 1 : integer
+	score 2 : integer
+	quests 3 : *DayQuest
+	timeStamp 4 : integer
+	todayFirst 5 : integer
+}
+
+.Daydrop {
+	st 0 : integer
+	drops 1 : *DayDrops(id)
+}
+
+.Dress {
+	resId 0 : integer
+	titleId 1 : integer
+	weaponId 2 : integer
+	rideId 3 : integer
+	wingId 4 : integer
+	shouhuId 5 : integer
+	shenhunId 6 : integer
+	shenbingId 7 : integer
+	par_titleId 8 : integer
+	par_shenhunId 9 : integer
+	par_guanghuanId 10 : integer
+	par_shouhuId 11 : integer
+	ts_titleId 12 : integer
+	ts_shenhunId 13 : integer
+	ts_guanghuanId 14 : integer
+	ts_shouhuId 15 : integer
+	pet_titleId 16 : integer
+	pet_shenhunId 17 : integer
+	pet_guanghuanId 18 : integer
+	pet_shouhuId 19 : integer
+	xn_resId 20 : integer
+	xn_titleId 21 : integer
+	xn_shenhunId 22 : integer
+	xn_guanghuanId 23 : integer
+	xn_shouhuId 24 : integer
+	ts_resId 25 : integer
+	pet_resId 26 : integer
+	par_resId 27 : integer
+}
+
+.DressColor {
+	resColor 0 : integer
+}
+
+.EquipBag {
+	mm 0 : integer
+	m 1 : integer
+	equips 2 : *EquipData(vid)
+	autoRecycle 3 : integer
+}
+
+.EquipData {
+	num 0 : integer
+	vid 1 : string
+	itemId 2 : integer
+}
+
+.Equipon {
+	equips 0 : *EquipData(vid)
+	weapons 1 : *FaBaoData(sid)
+	runes 2 : *RuneSlot(vid)
+}
+
+.FaBao {
+	open 0 : integer
+	mnum 1 : integer
+	slotLv 2 : *FaBaoSlotLv(key)
+	mnum1 3 : integer
+	mnum2 4 : integer
+}
+
+.FaBaoData {
+	num 0 : integer
+	itemId 1 : integer
+	itemType 2 : integer
+	slotType 3 : integer
+	skill 4 : *SkillData
+	id 5 : string
+	sid 6 : string
+	lock 7 : integer
+}
+
+.FaBaoSlotLv {
+	key 0 : string
+	level 1 : integer
+}
+
+.Fb {
+	dailyfb 0 : Dailyfb
+	day 1 : integer
+	fight 2 : Cbt_Floor
+	trial 3 : integer
+	mountain 4 : Mountain
+	hhsj 5 : Hhsj
+	fstrial 6 : integer
+}
+
+.FbkBetList {
+	data 0 : *Bet(key)
+}
+
+.FbkGsAreaList {
+	data 0 : *BudokaiArea(gsArea)
+}
+
+.FbkPrePlayerList {
+	data 0 : *BudokaiPlayer(aid)
+}
+
+.FightBoss {
+	star 0 : integer
+	tid 1 : integer
+	bt 2 : integer
+}
+
+.FirstBudokai {
+	aid 0 : integer
+	idx 1 : integer
+	areaId 2 : integer
+	state 3 : integer
+	gsAreaList 4 : *BudokaiArea(gsArea)
+	betList 5 : *Bet(key)
+	prePlayerList 6 : *BudokaiPlayer(aid)
+	playerList 7 : *BudokaiPlayer(aid)
+	lastChampion 8 : BudokaiPlayer
+	betListByAid 9 : *BetAid(aid)
+	myBetList 10 : *BetPlayer(key)
+	myGsArea 11 : integer
+	sids 12 : string
+}
+
+.Flower {
+	itemid 0 : integer
+	itemnum 1 : integer
+	time 2 : integer
+	name 3 : string
+	aid 4 : integer
+}
+
+.FlowerBatObj {
+	tempId 0 : integer
+	type 1 : integer
+}
+
+.Flowerlog {
+	data 0 : *Flower
+}
+
+.Forge {
+	data 0 : *ForgeDatas(key)
+}
+
+.ForgeData {
+	level 0 : integer
+	key 1 : string
+	part 2 : integer
+	stype 3 : integer
+}
+
+.ForgeDatas {
+	data 0 : *ForgeData(key)
+	key 1 : string
+}
+
+.GEquipon {
+	data 0 : *GEquiponData(sid)
+}
+
+.GEquiponData {
+	sid 0 : string
+	tt 1 : *integer
+	ts 2 : *integer
+	sq 3 : *integer
+}
+
+.GU_GuildFbFloorPro {
+	floor 0 : string
+	names 1 : *string
+}
+
+.GU_GuildFbRank {
+	aid 0 : integer
+	rank 1 : integer
+	val 2 : integer
+	name 3 : string
+}
+
+.GactRecord {
+	gdboss 0 : integer
+	gdbat 1 : integer
+	csboss 2 : integer
+}
+
+.Gametimes {
+	ninesky 0 : integer
+}
+
+.Gift {
+	key 0 : string
+	receiveTime 1 : integer
+	expireTime 2 : integer
+}
+
+.GiftItem {
+	itemType 0 : integer
+	id 1 : integer
+	num 2 : integer
+}
+
+.Giftinfo {
+	data 0 : *string
+}
+
+.Giftpush {
+	gifts 0 : *Gift(key)
+}
+
+.GodRing {
+	godRing0 0 : integer
+	godRing1 1 : integer
+}
+
+.GodSlProp {
+	t 0 : integer
+	v 1 : integer
+}
+
+.Godclass {
+	godslots 0 : *Godslot(vid)
+}
+
+.Godslot {
+	vid 0 : string
+	spiritLv 1 : integer
+	spiritExp 2 : integer
+	quench 3 : *integer
+	lastQuench 4 : *integer
+	soldierLv 5 : integer
+	suitLv 6 : integer
+	num 7 : integer
+	num2 8 : integer
+	lhLv 9 : integer
+	lhState 10 : integer
+	slProps 11 : *GodSlProp
+	nslProps 12 : *GodSlProp
+	time 13 : integer
+}
+
+.Grecord {
+	day 0 : integer
+	benison 1 : integer
+	benisonExp 2 : integer
+	benisonLog 3 : *BenisonLog
+}
+
+.GrowSysDt {
+	level 0 : integer
+	exp 1 : integer
+}
+
+.Growprop {
+	ride 0 : GrowpropData
+	wing 1 : GrowpropData
+	shouhu 2 : GrowpropData
+	shenhun 3 : GrowpropData
+	shenbing 4 : GrowpropData
+	par_title 5 : GrowpropData
+	par_shenhun 6 : GrowpropData
+	par_guanghuan 7 : GrowpropData
+	par_shouhu 8 : GrowpropData
+	ts_title 9 : GrowpropData
+	ts_shenhun 10 : GrowpropData
+	ts_guanghuan 11 : GrowpropData
+	ts_shouhu 12 : GrowpropData
+	pet_title 13 : GrowpropData
+	pet_shenhun 14 : GrowpropData
+	pet_guanghuan 15 : GrowpropData
+	pet_shouhu 16 : GrowpropData
+	xn 17 : GrowpropData
+	xn_title 18 : GrowpropData
+	xn_shenhun 19 : GrowpropData
+	xn_guanghuan 20 : GrowpropData
+	xn_shouhu 21 : GrowpropData
+	ts 22 : GrowpropData
+}
+
+.GrowpropData {
+	curState 0 : integer
+	exp 1 : integer
+	propDan 2 : integer
+	skills 3 : *integer
+}
+
+.Growsys {
+	propDans 0 : *integer
+	guildSkills 1 : *integer
+	jingmai 2 : *integer
+	furnace 3 : GrowSysDt
+	dailyAct 4 : GrowSysDt
+	guildShouHu 5 : GrowSysDt
+	QiangHuaTarget 6 : *integer
+	JingLianTarget 7 : *integer
+	DuanZaoTarget 8 : *integer
+	BaoShiTarget 9 : *integer
+	QiYuanTarget 11 : *integer
+	SkinTarget 12 : *integer
+	GodSpiritTarget 13 : *integer
+	GodEquTarget 14 : *integer
+	GodSuit_One 15 : *integer
+	GodSuit_Two 16 : *integer
+	GodSuit_Four 17 : *integer
+	GodSuit_Six 18 : *integer
+	GodSuit_Eight 19 : *integer
+	GodSuit_Ten 20 : *integer
+	EquipTarget 21 : *integer
+	GongMingTarget 22 : *integer
+	wildclgLv 23 : GrowSysDt
+	RuneTarget 24 : *integer
+	BookTarget 25 : *integer
+	XianYuanTarget 26 : *integer
+	ArtifactLevel 29 : *integer
+	GodLhTarget 30 : *integer
+	SkyGodTp 31 : *integer
+	PetCombine 32 : *integer
+	PetLevel 33 : *integer
+	PartnerLevel 34 : *integer
+	SkygodLevel 35 : *integer
+}
+
+.Gset {
+	isAuto 0 : integer
+	mings 1 : string
+}
+
+.GuildApplicantInfo {
+	aid 0 : integer
+	charname 1 : string
+	level 2 : integer
+	tempId 3 : integer
+	gs 4 : integer
+	app_tm 5 : integer
+}
+
+.GuildBoss {
+	index 0 : integer
+	fac 1 : integer
+	last 2 : string
+	dmgFst 3 : string
+	tempId 4 : integer
+}
+
+.GuildChar {
+	aid 0 : integer
+	guid 1 : integer
+	contribution 2 : integer
+	contributionExp 3 : integer
+	dayContributionExp 4 : integer
+}
+
+.GuildFb {
+	floor 0 : integer
+	currentHp 1 : integer
+	time 2 : integer
+	ftime 3 : integer
+	afloor 4 : integer
+	log 5 : *GuildFb_Log
+	gw 6 : integer
+	msg 7 : integer
+	oafloor 8 : integer
+}
+
+.GuildFbDtCorss {
+	aid 0 : integer
+	name 1 : string
+	fb 2 : GuildFb
+	sid 3 : integer
+}
+
+.GuildFbPlayerCorss {
+	aid 0 : integer
+	name 1 : string
+	dress 2 : Dress
+	gs 3 : integer
+	damg 4 : integer
+	sid 5 : integer
+	tempId 6 : integer
+}
+
+.GuildFbRankDT {
+	name 0 : string
+	pt 1 : integer
+	rank 2 : integer
+	gname 3 : string
+}
+
+.GuildFb_Log {
+	aid 0 : integer
+	strs 1 : *string
+}
+
+.GuildGift {
+	lv 0 : integer
+	exp 1 : integer
+}
+
+.GuildGiftData {
+	tpId 0 : integer
+	name 1 : string
+	ct 2 : integer
+	iid 3 : string
+	tid 4 : integer
+}
+
+.GuildGiftItems {
+	id 0 : integer
+	num 1 : integer
+}
+
+.GuildInfo {
+	aid 0 : integer
+	name 1 : string
+	chmname 2 : string
+	level 3 : integer
+	exp 4 : integer
+	gs 5 : integer
+	notice 6 : string
+	member_sz 7 : integer
+	rank 8 : integer
+	app 9 : integer
+	membernum 10 : integer
+	tempId 11 : integer
+	giftLv 12 : integer
+}
+
+.GuildLevel {
+	gid 0 : integer
+	level 1 : integer
+	name 2 : string
+	member_sz 3 : integer
+}
+
+.GuildMemberInfo {
+	aid 0 : integer
+	charname 1 : string
+	level 2 : integer
+	gujob 3 : integer
+	online 4 : integer
+	logouttime 5 : integer
+	joingutm 6 : integer
+	gs 7 : integer
+	tempId 8 : integer
+	contributionExp 9 : integer
+	dayContributionExp 10 : integer
+	dress 11 : Dress
+	vipLevel 12 : integer
+	monthCard 13 : integer
+	foreverCard 14 : integer
+}
+
+.GuildMyInfo {
+	aid 0 : integer
+	name 1 : string
+	chmname 2 : string
+	level 3 : integer
+	exp 4 : integer
+	gs 5 : integer
+	notice 6 : string
+	member_sz 7 : integer
+	rank 8 : integer
+	grecord 9 : Grecord
+	gset 10 : Gset
+	applicants 11 : *GuildApplicantInfo
+	thjob 12 : integer
+	giftLv 13 : integer
+	gactRecord 14 : GactRecord
+	guildFb 15 : GuildFb
+}
+
+.GuildQuest {
+	quest 0 : *OneGuildQuest
+	cleart 1 : integer
+}
+
+.GuildbossGuilds {
+	data 0 : *GuildFbDtCorss(aid)
+}
+
+.GuildbossPlayers {
+	data 0 : *GuildFbPlayerCorss(aid)
+}
+
+.GuildbossShowChar {
+	data 0 : ShowCharData
+}
+
+.GuildbossSids {
+	data 0 : *integer
+}
+
+.Guildrecord {
+	contribution 0 : integer
+	day 1 : integer
+	skill 2 : *integer
+	benison 3 : integer
+	benisonlist 4 : *integer
+	quest 5 : GuildQuest
+	benisons 6 : *integer
+}
+
+.HeartLaw {
+	exp 0 : integer
+	lv 1 : integer
+	prop 2 : *integer
+	nprop 3 : *integer
+}
+
+.HeartMagic {
+	hms 0 : *HeartLaw
+	lockTime 1 : integer
+	comTime 2 : integer
+	topTime 3 : integer
+}
+
+.HeavenBook {
+	books 0 : *HeavenBookItem(key)
+}
+
+.HeavenBookItem {
+	key 0 : string
+	level 1 : integer
+	lvExp 2 : integer
+	star 3 : integer
+	starExp 4 : integer
+	skill 5 : integer
+}
+
+.HejiData {
+	data 1 : *HejiDataOne(key)
+}
+
+.HejiDataOne {
+	key 0 : string
+	jxs 1 : *integer
+	gs 2 : integer
+}
+
+.Hhsj {
+	max 0 : integer
+	cur 1 : integer
+}
+
+.Inviteds {
+	data 0 : *MentorInviteMember
+}
+
+.Inviters {
+	data 0 : *MentorInviteMember
+}
+
+.ItemData {
+	num 0 : integer
+	vid 1 : string
+	limitObj 2 : *Kval(key)
+}
+
+.KingWarAward {
+	aid 0 : integer
+	type 1 : integer
+	dropId 2 : integer
+	param 3 : integer
+}
+
+.KingWarAwardList {
+	sid 0 : integer
+	list 1 : *KingWarAward
+}
+
+.KingWarPlayer {
+	aid 0 : integer
+	sid 1 : integer
+	level 2 : integer
+	gs 4 : integer
+	charname 5 : string
+	tempId 6 : integer
+	segment 7 : integer
+	klevel 8 : integer
+	star 9 : integer
+	rankfactor 10 : integer
+	rank 11 : integer
+	winnum 12 : integer
+	contwin 13 : integer
+	dress 14 : Dress
+}
+
+.Kingwar {
+	aid 0 : integer
+	times 1 : integer
+	buytimes 2 : integer
+	buydate 3 : integer
+	lastaddtime 4 : integer
+	worshiptime 5 : integer
+	segment 6 : integer
+	klevel 7 : integer
+	star 8 : integer
+	winnum 9 : integer
+	inittime 10 : integer
+	contwin 11 : integer
+	sids 12 : string
+}
+
+.Kval {
+	key 0 : string
+	val 1 : integer
+	tid 2 : integer
+	kt 3 : integer
+}
+
+.LastPlayerList {
+	data 0 : *KingWarPlayer
+}
+
+.Legend {
+	signKey 0 : integer
+	ownArr 1 : *integer
+}
+
+.LogRec {
+	tPay 0 : integer
+	online 1 : integer
+	tcgold 2 : integer
+	tcbgold 3 : integer
+	gs 4 : integer
+	tgold 5 : integer
+	tbgold 6 : integer
+	gold 7 : integer
+	bgold 8 : integer
+	vip 9 : integer
+	zx 10 : integer
+	ll 11 : integer
+	hy 12 : integer
+	fy 13 : integer
+	yg 14 : integer
+	qj1 16 : integer
+	qj2 17 : integer
+	jct 18 : integer
+	cl1 19 : integer
+	cl2 20 : integer
+	cbt 21 : integer
+	llt 22 : integer
+	yctt 23 : integer
+	jj1 24 : integer
+	jj2 25 : integer
+	jj3 26 : integer
+	wz1 27 : integer
+	wz2 28 : integer
+	wz3 29 : integer
+	wz4 30 : integer
+	grb 31 : integer
+	qm1 32 : integer
+	qm2 33 : integer
+	wb 34 : integer
+	vb 35 : integer
+	kfzd 36 : integer
+	kfb 37 : integer
+	bsy1 38 : integer
+	bsy2 39 : integer
+	bpb 40 : integer
+	bpm1 41 : integer
+	bpm2 42 : integer
+	bpm3 43 : integer
+	bhfb 44 : integer
+	petGs 45 : integer
+	partnerGs 46 : integer
+	wingGs 47 : integer
+	rideGs 48 : integer
+	shouhuGs 49 : integer
+	shenhunGs 50 : integer
+	shenbingGs 51 : integer
+	xnGs 52 : integer
+	tsGs 53 : integer
+	par_titleGs 54 : integer
+	par_shenhunGs 55 : integer
+	par_guanghuanGs 56 : integer
+	par_shouhuGs 57 : integer
+	ts_titleGs 58 : integer
+	ts_shenhunGs 59 : integer
+	ts_guanghuanGs 60 : integer
+	ts_shouhuGs 61 : integer
+	pet_titleGs 62 : integer
+	pet_shenhunGs 63 : integer
+	pet_guanghuanGs 64 : integer
+	pet_shouhuGs 65 : integer
+	xn_titleGs 66 : integer
+	xn_shenhunGs 67 : integer
+	xn_guanghuanGs 68 : integer
+	xn_shouhuGs 69 : integer
+	baseEquip 70 : string
+	godEquip 71 : string
+	skillAvgLv 72 : string
+	petcolor 73 : string
+	ride_grow 74 : string
+	wing_grow 75 : string
+	shouhu_grow 76 : string
+	shenhun_grow 77 : string
+	shenbing_grow 78 : string
+	par_title_grow 79 : string
+	par_shenhun_grow 80 : string
+	par_guanghuan_grow 81 : string
+	par_shouhu_grow 82 : string
+	ts_title_grow 83 : string
+	ts_shenhun_grow 84 : string
+	ts_guanghuan_grow 85 : string
+	ts_shouhu_grow 86 : string
+	pet_title_grow 87 : string
+	pet_shenhun_grow 88 : string
+	pet_guanghuan_grow 89 : string
+	pet_shouhu_grow 90 : string
+	xn_title_grow 91 : string
+	xn_shenhun_grow 92 : string
+	xn_guanghuan_grow 93 : string
+	xn_shouhu_grow 94 : string
+	xianhun_grow 95 : string
+	title_skins 96 : string
+	res_skins 97 : string
+	shouhu_skins 98 : string
+	shenbing_skins 99 : string
+	wing_skins 100 : string
+	xd 101 : string
+	jm 102 : integer
+	fbdz 103 : string
+	fbsj 104 : string
+	fbfj 105 : string
+	xnfq 106 : string
+	tsjs 107 : string
+	tslv 108 : string
+	tstf1 109 : string
+	tstf2 110 : string
+	tstp 111 : string
+	tsbq 112 : string
+	ttjh 113 : integer
+	tttp 114 : integer
+	zw1 115 : integer
+	zw2 116 : integer
+	ttzl 117 : string
+	ttzq1 118 : string
+	ttzq2 119 : string
+	ts 120 : integer
+	act 121 : *LogRecAct(id)
+	vipFree 122 : string
+	vipPay 123 : string
+	pet_title_skins 124 : string
+	pet_shenhun_skins 125 : string
+	pet_guanghuan_skins 126 : string
+	pet_shouhu_skins 127 : string
+	par_title_skins 128 : string
+	par_shenhun_skins 129 : string
+	par_guanghuan_skins 130 : string
+	par_shouhu_skins 131 : string
+	xn_title_skins 132 : string
+	xn_shenhun_skins 133 : string
+	xn_guanghuan_skins 134 : string
+	xn_shouhu_skins 135 : string
+	xn_skins 136 : string
+	totemGs 137 : integer
+	godEquipGs 138 : integer
+	hhsj 139 : integer
+	forgeGs 140 : integer
+	shenhun_skins 141 : string
+	equGs 142 : integer
+	titleGs 143 : integer
+	fbsl 144 : string
+	forgeAvgLv 145 : string
+	titlenum 146 : integer
+	fashionnum 147 : integer
+	ghjn 148 : string
+	parcolor 149 : string
+	xndan 150 : integer
+	tsdan 151 : integer
+	runeStr 152 : string
+	artifactGs 164 : integer
+	artifactcolor 166 : string
+	soulRootStr 167 : string
+	tianShuStr 168 : string
+	csArenaStr 170 : string
+	parcolorjx 171 : string
+	heartMagicStr 173 : string
+	godclasslh 182 : string
+	godclassll 183 : string
+	petCsArenaStr 185 : string
+}
+
+.LogRecAct {
+	id 0 : string
+	name 1 : string
+	type 2 : integer
+	value 3 : string
+}
+
+.LotteryRecord {
+	charname 0 : string
+	item 1 : ItemData
+	record 2 : integer
+	aid 3 : integer
+	tempId 4 : integer
+}
+
+.Mail {
+	aid 0 : integer
+	receraid 1 : integer
+	mailp 2 : Mailp
+	time 3 : integer
+	attachment 4 : Attachment
+	flag 5 : integer
+	slots 6 : integer
+	logType 7 : integer
+}
+
+.Mailp {
+	id 0 : integer
+	p 1 : *string
+}
+
+.MapAward {
+	smid 0 : string
+	sts 1 : *integer
+}
+
+.Marriage {
+	aid 0 : integer
+	relation 1 : integer
+	houseType 2 : integer
+	houseLevel 3 : integer
+	houseExp 4 : integer
+	loveValue 5 : integer
+}
+
+.MarriageShar {
+	aid 0 : integer
+	pid 1 : integer
+	mtime 2 : integer
+	mtype 3 : integer
+	relation 4 : integer
+	exp 5 : integer
+	proposelog 6 : *Propose
+	flowerlog 7 : *Flower
+	name 8 : string
+	pname 9 : string
+	tempId 10 : integer
+	ptempId 11 : integer
+	dress 12 : Dress
+	pdress 13 : Dress
+	eventLv 14 : integer
+}
+
+.MentorInfo {
+	aid 0 : integer
+	teacher 1 : MentorMember
+	students 2 : *MentorMember
+	inviters 3 : *MentorInviteMember
+	inviteds 4 : *MentorInviteMember
+	suggestlist 5 : *MentorInviteMember
+	delitemnum 6 : integer
+}
+
+.MentorInviteMember {
+	aid 0 : integer
+	name 1 : string
+	level 2 : integer
+	time 3 : integer
+	state 4 : integer
+	online 5 : integer
+	active 6 : integer
+}
+
+.MentorMember {
+	aid 0 : integer
+	jointime 1 : integer
+	transfertime 2 : integer
+	transfernum 3 : integer
+	complete 4 : integer
+	tasks 5 : *MentorTask
+	refreshtime 6 : integer
+	name 7 : string
+	online 8 : integer
+	logoutime 9 : integer
+	tempId 10 : integer
+	level 11 : integer
+	dress 12 : Dress
+}
+
+.MentorTask {
+	id 0 : integer
+	now 1 : integer
+	total 2 : integer
+	awardsend 3 : integer
+	award 4 : integer
+}
+
+.MoBaiData {
+	data 0 : *OneMoBaiData(key)
+}
+
+.Mob {
+	id 0 : integer
+	cId 1 : string
+	pos 2 : UnitPosition
+	tp 3 : integer
+	subType 4 : integer
+	num 5 : integer
+	cd 6 : integer
+	endt 7 : integer
+	tid 8 : integer
+}
+
+.MobRemain {
+	tid 0 : integer
+	r 1 : integer
+}
+
+.Module {
+	name 0 : string
+	time 1 : integer
+}
+
+.Modules {
+	list 0 : *Module(name)
+}
+
+.Mountain {
+	floor 0 : integer
+	current 1 : integer
+	rewards 2 : *Mountain_Award(key)
+}
+
+.Mountain_Award {
+	key 0 : string
+	val 1 : integer
+}
+
+.Mrecord {
+	records 0 : *MrecordOne
+}
+
+.MrecordOne {
+	ts 0 : integer
+	args 1 : *string
+	tp 2 : integer
+}
+
+.Multicast {
+	aids 0 : *integer
+}
+
+.MyGuildFb {
+	buyTimes 0 : integer
+	times 1 : integer
+	award 2 : *integer
+	taward 3 : *integer
+	damg 4 : integer
+	day 5 : integer
+	gw 6 : integer
+	count 7 : integer
+}
+
+.NextWave {
+	t 0 : integer
+	subType 1 : integer
+	tp 2 : integer
+}
+
+.OmAllBan {
+	aid 0 : integer
+	uid 1 : string
+	chattime 2 : integer
+	blocktime 3 : integer
+}
+
+.OmBlockArr {
+	type 0 : integer
+	time 1 : integer
+	aid 2 : integer
+	uid 3 : string
+}
+
+.OmKey {
+	aid 0 : integer
+	name 1 : string
+	sname 2 : string
+	suid 3 : string
+}
+
+.OmKeyRst {
+	aid 0 : integer
+	charname 1 : string
+	accname 2 : string
+	tempId 3 : integer
+	exp 4 : integer
+	level 5 : integer
+	vipLevel 6 : integer
+	isonline 7 : integer
+}
+
+.OmUnBanArr {
+	aid 0 : integer
+	uid 1 : string
+	type 2 : integer
+}
+
+.OmUserMailArr {
+	receraid 0 : integer
+	type 1 : integer
+	head 2 : string
+	flag 3 : integer
+	body 4 : string
+	sender 5 : string
+	aid 6 : integer
+	time 7 : integer
+	attachment 8 : Attachment
+}
+
+.OneActData {
+	aid 0 : integer
+	life 1 : integer
+	actStart 2 : integer
+}
+
+.OneBookEnemy {
+	aid 0 : integer
+	ecolor 1 : integer
+	state 2 : integer
+	gs 3 : integer
+	name 4 : string
+	etime 5 : integer
+	tempId 6 : integer
+}
+
+.OneGuildQuest {
+	tp 0 : integer
+	count 1 : integer
+	state 2 : integer
+	reset 3 : integer
+}
+
+.OneMoBaiData {
+	key 0 : string
+	value 1 : integer
+}
+
+.OpActionLog {
+	record 0 : *OpActionLogOne(key)
+}
+
+.OpActionLogOne {
+	key 0 : string
+	value 1 : string
+}
+
+.OpCommonRank {
+	rankList 0 : *OpCommonRankItem
+	opId 1 : string
+	timeStamp 2 : integer
+	rwdTime 3 : integer
+	serverStTime 4 : integer
+}
+
+.OpCommonRankItem {
+	aid 0 : integer
+	charname 1 : string
+	tempId 2 : integer
+	val1 3 : integer
+	val2 4 : integer
+	val3 5 : integer
+}
+
+.OpRank {
+	rankList 0 : *OpRankItem
+	opId 1 : string
+	timeStamp 2 : integer
+	rwdTime 3 : integer
+	rwdItems 4 : *OpRankRwdItem
+	extStr 5 : string
+}
+
+.OpRankItem {
+	aid 0 : integer
+	val 1 : integer
+	charname 2 : string
+}
+
+.OpRankRwdItem {
+	aid 0 : integer
+	rwds 1 : *RewardItem
+}
+
+.OpRecordItem {
+	charname 0 : string
+	item 1 : ItemData
+	record 2 : integer
+	aid 3 : integer
+	tempId 4 : integer
+}
+
+.OpRecordList {
+	records 0 : *OpRecordItem
+	opId 1 : integer
+	timeStamp 2 : integer
+}
+
+.Operation {
+	opId 0 : string
+	sign 1 : *Kval(key)
+	timeStamp 2 : integer
+	serverStTime 3 : integer
+}
+
+.PROMPTMESSGAE {
+	sid 0 : integer
+	ss 1 : *string
+	tp 2 : integer
+	s 3 : integer
+}
+
+.Partner {
+	aid 0 : integer
+	dress 1 : Dress
+	level 2 : integer
+	star 3 : integer
+	exp 4 : integer
+	key 5 : string
+	tempId 6 : integer
+	jxExp 7 : integer
+	jxstar 8 : integer
+}
+
+.Partners {
+	aids 0 : *integer
+	partners 1 : *Partner(key)
+}
+
+.PatchTemp {
+	name 0 : string
+	id 1 : integer
+	kval 2 : *ValName
+}
+
+.PayItem {
+	id 0 : integer
+	lastTm 1 : integer
+	timesDay 2 : integer
+	timesTot 3 : integer
+	firstChed 4 : integer
+}
+
+.PayItemMeta {
+	id 0 : integer
+	productId 1 : integer
+	desc 3 : string
+	name 4 : string
+	money 5 : integer
+	isShow 6 : integer
+	sort 7 : integer
+	icon 8 : string
+	bg 9 : string
+	type 10 : integer
+	gold 11 : integer
+	five 12 : integer
+	firstGold 13 : integer
+	otherGold 14 : integer
+	dayGold 15 : integer
+	award 16 : integer
+	times 17 : integer
+}
+
+.Paydata {
+	payItems 1 : *PayItem(id)
+	firstPay 2 : integer
+	payAward 3 : integer
+	firstShow 4 : integer
+	charing 5 : integer
+	startChargTm 6 : integer
+	todayPay 7 : integer
+	count 8 : integer
+	totalPay 9 : integer
+}
+
+.PerOps {
+	activeOps 0 : *Kval(key)
+	operations 1 : *Operation(opId)
+}
+
+.Peractives {
+	perboss 0 : Perboss
+}
+
+.Perboss {
+	bossList 0 : *integer
+	ktList 1 : *integer
+}
+
+.Pet {
+	aid 0 : integer
+	dress 1 : Dress
+	level 2 : integer
+	star 3 : integer
+	exp 4 : integer
+	bSkills 5 : *integer
+	varExp 6 : integer
+	key 7 : string
+	tempId 8 : integer
+	skillBaptize 9 : SkillBaptize
+	name 10 : string
+	n1 11 : integer
+	n2 12 : integer
+	n3 13 : integer
+}
+
+.PetCombines {
+	times 0 : *integer
+	level 1 : integer
+	exp 2 : integer
+	redTimes 3 : integer
+}
+
+.PetCs {
+	tid 0 : integer
+	star 1 : integer
+}
+
+.PetCsArena {
+	batTimes 0 : integer
+	cdStTime 1 : integer
+	buyTimes 2 : integer
+	lastRefTime 3 : integer
+	winNum 4 : integer
+	isPromotion 5 : integer
+	history 6 : *string
+	clgTask 7 : *Kval(key)
+	segTask 8 : *Kval(key)
+	enemyList 9 : *integer
+	pets 10 : *PetCs
+	timeStamp 11 : integer
+	rscore 12 : integer
+	rseglv 13 : integer
+	rwinnum 14 : integer
+	rlosenum 15 : integer
+}
+
+.PetCsArenaPlayer {
+	aid 0 : integer
+	serverId 1 : integer
+	tempId 2 : integer
+	level 3 : integer
+	gs 4 : integer
+	dScore 5 : integer
+	sScore 6 : integer
+	segLv 7 : integer
+	charname 8 : string
+	dress 9 : Dress
+	timeStamp 10 : integer
+	isRobot 11 : integer
+	pets 12 : *PetCs
+}
+
+.PetCsArenaPlayerList {
+	data 0 : *PetCsArenaPlayer
+}
+
+.PetCsArenaRankDt {
+	aid 0 : integer
+	rank 1 : integer
+	segLv 2 : integer
+	score 3 : integer
+}
+
+.Pets {
+	aids 0 : *integer
+	pets 1 : *Pet(key)
+	op 2 : *integer
+	pe1 3 : integer
+	pe2 4 : integer
+	pe3 5 : integer
+}
+
+.PlayerDetailInfo {
+	aid 0 : integer
+	level 1 : integer
+	charname 2 : string
+	sex 3 : integer
+	gs 4 : integer
+	online 5 : integer
+	dress 6 : Dress
+	guildName 7 : string
+	isConcern 8 : integer
+	isBlack 9 : integer
+	vipLevel 10 : integer
+	rankMainVal 11 : integer
+	tempId 12 : integer
+	spouse 13 : string
+	monthCard 14 : integer
+	foreverCard 15 : integer
+}
+
+.PlayerList {
+	data 0 : *KingWarPlayer
+}
+
+.Pmap {
+	scene 0 : integer
+	tid 1 : integer
+	pos 2 : UnitPosition
+	bktid 3 : integer
+}
+
+.PrivateChat {
+	aid 0 : integer
+	name 1 : string
+	online 2 : integer
+	tempId 3 : integer
+	time 4 : integer
+	new 5 : integer
+	chatList 6 : *ChatItemNew
+}
+
+.Property {
+	key 0 : integer
+	val 1 : string
+}
+
+.Propose {
+	aid 0 : integer
+	ptime 1 : integer
+	mtype 2 : integer
+	relation 3 : integer
+	name 4 : string
+	isDiscount 5 : integer
+	extStr 6 : string
+}
+
+.ProposeChar {
+	aid 0 : integer
+	name 1 : string
+	gs 2 : integer
+	level 3 : integer
+	tempId 4 : integer
+}
+
+.Proposelog {
+	data 0 : *Propose
+}
+
+.PsBlacks {
+	aids 0 : *integer
+}
+
+.PsConcerns {
+	aids 0 : *integer
+}
+
+.PsFans {
+	aids 0 : *integer
+}
+
+.PsGiveData {
+	said 0 : string
+	tm 1 : integer
+}
+
+.PsGivers {
+	data 0 : *PsGiveData(said)
+	count 1 : integer
+	tm 2 : integer
+}
+
+.PsRecipientData {
+	said 0 : string
+	tm 1 : integer
+	rtm 2 : integer
+}
+
+.PsRecipients {
+	data 0 : *PsRecipientData(said)
+	count 1 : integer
+	tm 2 : integer
+}
+
+.PvpPropScore {
+	scoreStr 0 : string
+	times 1 : integer
+}
+
+.Quest {
+	id 0 : integer
+	questLog 1 : *QuestLog
+}
+
+.QuestLog {
+	key 0 : integer
+	val 1 : string
+}
+
+.Question {
+	questionId 0 : integer
+	answers 1 : *integer
+}
+
+.RList {
+	aids 0 : *integer
+}
+
+.RankDetail {
+	aid 0 : integer
+	charname 1 : string
+	gs 2 : integer
+	vipLevel 3 : integer
+	level 4 : integer
+	ogs 5 : integer
+}
+
+.RankDress {
+	dress 0 : Dress
+	tempId 1 : integer
+	name 2 : string
+}
+
+.Receraids {
+	aids 0 : *integer
+}
+
+.Record {
+	mtime 0 : integer
+}
+
+.RecordItem {
+	aid 0 : integer
+	tempId 1 : integer
+	charname 2 : string
+	param 3 : string
+	timeStamp 4 : integer
+}
+
+.RecordList {
+	list 0 : *RecordItem
+	id 1 : integer
+}
+
+.RedPacketDt {
+	senderId 0 : integer
+	senderName 1 : string
+	leftNum 2 : integer
+	timeStamp 3 : integer
+	id 4 : integer
+	type 5 : integer
+}
+
+.RelationBaseInfo {
+	aid 0 : integer
+	level 1 : integer
+	charname 2 : string
+	sex 3 : integer
+	gs 4 : integer
+	vipLevel 5 : integer
+	online 6 : integer
+	tempId 7 : integer
+	logouttime 8 : integer
+}
+
+.ResourceLog {
+	tempId 0 : integer
+	strs 1 : *string
+	time 2 : integer
+}
+
+.ResourceRank {
+	aid 0 : integer
+	charname 1 : string
+	point 2 : integer
+	rank 3 : integer
+}
+
+.ResourceRankAndLog {
+	aid 0 : integer
+	rank 1 : integer
+	logData 2 : ResourcewarPlayer
+}
+
+.ResourceRankList {
+	rank 0 : *ResourceRank
+	myRank 1 : integer
+	point 2 : integer
+}
+
+.ResourceShowChar {
+	data 0 : ShowCharData
+}
+
+.ResourceSlotData {
+	index 0 : integer
+	chars 1 : *ResourceSlotSimpleChar
+	inTime 2 : integer
+}
+
+.ResourceSlotSimpleChar {
+	charname 0 : string
+	gs 1 : integer
+	index 2 : integer
+	sid 3 : integer
+	tempId 4 : integer
+}
+
+.Resourcewar {
+	aid 0 : integer
+	resourcewarPlayers 1 : ResourcewarPlayers
+	resourcewarSlots 2 : ResourcewarSlots
+	resourceShowChar 3 : ResourceShowChar
+	resourcewarLogs 4 : ResourcewarLogs
+}
+
+.ResourcewarLog {
+	aid 0 : integer
+	logs 1 : *ResourceLog
+}
+
+.ResourcewarLogs {
+	data 0 : *ResourcewarLog(aid)
+}
+
+.ResourcewarPlayer {
+	aid 0 : integer
+	inTime 1 : integer
+	usdTime 2 : integer
+	rob 3 : integer
+	sid 4 : integer
+	areaId 5 : integer
+	dayP 6 : integer
+	weekP 7 : integer
+	money 8 : integer
+	pt 9 : integer
+	rid 10 : integer
+	charname 11 : string
+	eventType 12 : integer
+	robMax 13 : integer
+	costTime 14 : integer
+	moneyAdd 15 : integer
+	ptAdd 16 : integer
+	pvpC 17 : integer
+}
+
+.ResourcewarPlayers {
+	data 0 : *ResourcewarPlayer(aid)
+}
+
+.ResourcewarSlot {
+	index 0 : integer
+	aids 1 : *integer
+	t 2 : integer
+}
+
+.ResourcewarSlots {
+	data 0 : *ResourcewarSlot(index)
+}
+
+.RewardItem {
+	id 0 : integer
+	num 1 : integer
+	itemType 2 : integer
+	logType 3 : integer
+	cateType 4 : integer
+	special 5 : string
+}
+
+.Room {
+	idx 0 : integer
+	tp 1 : integer
+	index 2 : integer
+	members 3 : *CharData
+}
+
+.RoomData {
+	first 0 : RoomOneData
+	round 1 : RoomOneData
+}
+
+.RoomIndex {
+	index 0 : integer
+	data 1 : RoomData
+}
+
+.RoomOneData {
+	names 0 : *string
+	round 1 : integer
+	t 2 : integer
+	tempIds 3 : *integer
+	sidnums 4 : *integer
+	aids 5 : *integer
+}
+
+.RoomRecord {
+	tp 0 : string
+	data 1 : *RoomIndex(index)
+}
+
+.RuneBag {
+	bag 0 : *RuneData(vid)
+}
+
+.RuneData {
+	vid 0 : string
+	num 1 : integer
+	itemId 2 : integer
+}
+
+.RuneSlot {
+	vid 0 : string
+	runeIds 1 : *integer
+}
+
+.SB_SHAREBOSS_DATA {
+	sid 0 : integer
+	currentHp 1 : integer
+	maxHp 2 : integer
+	dead 3 : integer
+}
+
+.STab {
+	st 0 : integer
+	tp 1 : integer
+	fac 2 : integer
+}
+
+.SendMailAidArr {
+	aid 0 : integer
+}
+
+.ServerFirstAward {
+	team2 0 : *ServerFirstAwardData(key)
+	team4 1 : *ServerFirstAwardData(key)
+	team5 2 : *ServerFirstAwardData(key)
+}
+
+.ServerFirstAwardData {
+	key 0 : string
+	val 1 : integer
+}
+
+.ServerInfo {
+	sidx 0 : integer
+	name 1 : string
+	idx 2 : integer
+	ip 3 : string
+	port 4 : integer
+}
+
+.Share {
+	rwdTimes 0 : integer
+	lastShareTime 1 : integer
+	lastRwdTime 2 : integer
+}
+
+.Shareboss {
+	cdStTime 0 : integer
+	buyTimes 1 : integer
+	lastBuyTime 2 : integer
+	times 3 : integer
+}
+
+.Shop {
+	vid 0 : string
+	items 1 : *ItemData(vid)
+}
+
+.ShopBuy {
+	history 0 : *ShopHistory(shopId)
+}
+
+.ShopHistory {
+	shopId 0 : string
+	history 1 : *Kval(key)
+	expireTime 2 : integer
+	refTimes 3 : integer
+}
+
+.ShowBooker {
+	aid 0 : integer
+	avcolor 1 : integer
+	avtime 2 : integer
+	gs 3 : integer
+	name 4 : string
+}
+
+.ShowCharData {
+	aid 0 : integer
+	tempId 1 : integer
+	charname 2 : string
+	dress 3 : Dress
+	sidnum 4 : integer
+	gs 5 : integer
+	sid 6 : integer
+}
+
+.SimpleMail {
+	aid 0 : integer
+	mailp 1 : Mailp
+	flag 2 : integer
+	time 3 : integer
+	slots 4 : integer
+	logType 5 : integer
+	hasItem 6 : integer
+}
+
+.SimpleMailHegel {
+	aid 0 : integer
+	attachment 1 : Attachment
+	slots 2 : integer
+	logType 3 : integer
+}
+
+.SimpleUnitInfo {
+	aid 0 : integer
+	accname 1 : string
+	charname 2 : string
+	sex 3 : integer
+	level 4 : integer
+	gs 5 : integer
+}
+
+.Skill {
+	list 0 : *SkillData
+	blist 1 : *SkillData
+	queue 2 : *integer
+}
+
+.SkillBaptize {
+	exp 0 : integer
+	lv 1 : integer
+	skill 2 : *integer
+	skills 3 : *SkillBaptizeList
+	lockArr 4 : *integer
+}
+
+.SkillBaptizeList {
+	skills 0 : *integer
+}
+
+.SkillData {
+	skillId 0 : integer
+	level 1 : integer
+}
+
+.Skins {
+	res 0 : *Kval(key)
+	title 1 : *Kval(key)
+	ride 2 : *Kval(key)
+	wing 3 : *Kval(key)
+	shouhu 4 : *Kval(key)
+	shenhun 5 : *Kval(key)
+	shenbing 6 : *Kval(key)
+	xn 7 : *Kval(key)
+	ts 8 : *Kval(key)
+	pet_title 9 : *Kval(key)
+	pet_shenhun 10 : *Kval(key)
+	pet_guanghuan 11 : *Kval(key)
+	pet_shouhu 12 : *Kval(key)
+	par_title 13 : *Kval(key)
+	par_shenhun 14 : *Kval(key)
+	par_guanghuan 15 : *Kval(key)
+	par_shouhu 16 : *Kval(key)
+	xn_title 17 : *Kval(key)
+	xn_shenhun 18 : *Kval(key)
+	xn_guanghuan 19 : *Kval(key)
+	xn_shouhu 20 : *Kval(key)
+	ts_title 25 : *Kval(key)
+	ts_shenhun 26 : *Kval(key)
+	ts_guanghuan 27 : *Kval(key)
+	ts_shouhu 28 : *Kval(key)
+}
+
+.SkyGod {
+	aid 0 : integer
+	dress 1 : Dress
+	level 2 : integer
+	exp 3 : integer
+	key 4 : string
+	tempId 5 : integer
+	tpLevel 6 : integer
+	tfData 7 : SkyGodTFTM
+	tmData 8 : SkyGodTFTM
+	skyGodJX 9 : SkyGodJX
+}
+
+.SkyGodEle {
+	level 0 : integer
+	exp 1 : integer
+	key 2 : string
+}
+
+.SkyGodJX {
+	level 0 : integer
+	skyGodEles 1 : *SkyGodEle(key)
+}
+
+.SkyGodSS {
+	level 0 : integer
+	exp 1 : integer
+	key 2 : string
+}
+
+.SkyGodTFTM {
+	level 0 : integer
+	exp 1 : integer
+}
+
+.SkyGodWeapon {
+	key 0 : string
+	level 1 : integer
+	exp 2 : integer
+}
+
+.SkyGods {
+	aids 0 : *integer
+	skyGods 1 : *SkyGod(key)
+	skyWeapons 2 : *SkyGodWeapon(key)
+	skySS 3 : *SkyGodSS(key)
+}
+
+.Snatch {
+	aid 0 : integer
+	rwdDt 1 : integer
+	charname 2 : string
+	inTime 3 : integer
+}
+
+.SnatchData {
+	openTime 0 : integer
+	players 1 : *Snatch
+	round 2 : integer
+	charname 3 : string
+}
+
+.SoulRoot {
+	slotLv 0 : *integer
+	slotEquip 1 : *integer
+	goldSlotLv 2 : *integer
+	goldEquip 3 : *integer
+	luck 4 : integer
+}
+
+.SoulRootData {
+	num 0 : integer
+	vid 1 : string
+}
+
+.SoulRootbag {
+	bag 0 : *SoulRootData(vid)
+	num 1 : integer
+}
+
+.StarTreasure {
+	stars 0 : *integer
+}
+
+.Staymob {
+	cid 0 : integer
+	camp 1 : integer
+	chars 2 : *teamMem
+}
+
+.Students {
+	data 0 : *MentorMember
+}
+
+.SynRankList {
+	key 0 : string
+	rankList 1 : *RankDetail
+}
+
+.Teacher {
+	data 0 : MentorMember
+}
+
+.Team {
+	idx 0 : string
+	mings 1 : string
+	members 2 : *teamMem
+}
+
+.TeamFbPass {
+	idx 0 : integer
+	num 1 : integer
+	box 2 : integer
+}
+
+.Teamfb {
+	type 0 : string
+	hasComFb 1 : *TeamFbPass(idx)
+	lastGetRwdTime 2 : integer
+	helpTimes 3 : integer
+}
+
+.Teamfbs {
+	teamfbs 0 : *Teamfb(type)
+}
+
+.TjResourceRank {
+	aid 0 : integer
+	charname 1 : string
+	point 2 : integer
+	rank 3 : integer
+	camp 4 : integer
+}
+
+.TjResourceRankAndLog {
+	aid 0 : integer
+	rank 1 : integer
+	logData 2 : TjResourcewarPlayer
+}
+
+.TjResourceRankList {
+	rank 0 : *TjResourceRank
+	myRank 1 : integer
+	point 2 : integer
+}
+
+.TjResourceShowChar {
+	data 0 : ShowCharData
+}
+
+.TjResourcewarCamp {
+	camp 0 : integer
+	gs 1 : integer
+}
+
+.TjResourcewarGss {
+	data 0 : *TjResourcewarCamp
+}
+
+.TjResourcewarLog {
+	aid 0 : integer
+	logs 1 : *ResourceLog
+}
+
+.TjResourcewarLogs {
+	data 0 : *TjResourcewarLog(aid)
+}
+
+.TjResourcewarPlayer {
+	aid 0 : integer
+	inTime 1 : integer
+	usdTime 2 : integer
+	rob 3 : integer
+	sid 4 : integer
+	dayP 5 : integer
+	weekP 6 : integer
+	money 7 : integer
+	pt 8 : integer
+	rid 9 : integer
+	charname 10 : string
+	eventType 11 : integer
+	robMax 12 : integer
+	costTime 13 : integer
+	moneyAdd 14 : integer
+	ptAdd 15 : integer
+	pvpC 16 : integer
+	camp 17 : integer
+	pveC 18 : integer
+	awards 19 : *integer
+	last 20 : integer
+	usdWeekTime 21 : integer
+}
+
+.TjResourcewarPlayers {
+	data 0 : *TjResourcewarPlayer(aid)
+}
+
+.TjResourcewarSids {
+	data 0 : *integer
+}
+
+.Totem {
+	tempId 0 : integer
+	level 1 : integer
+	exp 2 : integer
+	tpgpId 3 : integer
+	zlLevel 4 : integer
+	zlExp 5 : integer
+	zqLevel 6 : integer
+	zqExp 7 : integer
+	zqTpgpId 8 : integer
+	key 9 : string
+	skills 10 : *integer
+}
+
+.TotemSlot {
+	totemId 0 : integer
+	sid 1 : string
+}
+
+.Totems {
+	totems 0 : *Totem(key)
+	slots 1 : *TotemSlot(sid)
+	open 2 : integer
+	on 3 : integer
+}
+
+.TowerDetail {
+	aid 0 : integer
+	charname 1 : string
+	gs 2 : integer
+	tower 3 : integer
+	star 4 : integer
+	sid 5 : integer
+	time 6 : integer
+}
+
+.TowerRank {
+	bbRank 0 : integer
+	wxslRank 1 : integer
+	jxtzRank 2 : integer
+	hmsRank 3 : integer
+	hhsjRank 4 : integer
+}
+
+.UnitPosition {
+	x 0 : integer
+	y 1 : integer
+}
+
+.UserRouter {
+	aid 0 : integer
+	gw 1 : integer
+	hid 2 : integer
+	state 3 : integer
+	ts 4 : integer
+	cid 5 : integer
+	uid 6 : string
+	scenetid 7 : integer
+	reconnect 8 : integer
+	proIp 9 : integer
+	sid 10 : integer
+	ip 11 : string
+}
+
+.ValName {
+	key 0 : string
+	val 1 : string
+}
+
+.VipBoss {
+	stid 0 : string
+	count 1 : integer
+	ftime 2 : integer
+}
+
+.WildBossDt {
+	bossId 0 : integer
+	currentHp 1 : integer
+	maxHp 2 : integer
+	owner 3 : WildOwner
+	escapeTime 4 : integer
+	refTime 5 : integer
+}
+
+.WildOwner {
+	aid 0 : integer
+	timeStamp 1 : integer
+	tempId 2 : integer
+	charname 3 : string
+}
+
+.Wildpvp {
+	attList 0 : *WildpvpAttList
+	counterattList 1 : *WildpvpAttList
+	nextst 2 : integer
+	clearst 3 : integer
+	mIdx 4 : integer
+}
+
+.WildpvpAttList {
+	aid 0 : integer
+	charname 1 : string
+	level 2 : integer
+	gs 3 : integer
+	diff 4 : integer
+	tempId 5 : integer
+	event 6 : integer
+	isRob 7 : integer
+}
+
+.WorldChar {
+	aid 0 : integer
+	uid 1 : string
+	charname 2 : string
+	sex 3 : integer
+	level 4 : integer
+	gs 5 : integer
+	logintime 6 : integer
+	dress 7 : Dress
+	gold 8 : integer
+	guid 9 : integer
+	gujob 10 : integer
+	mtime 11 : integer
+	outgutm 12 : integer
+	mapId 13 : integer
+	petId 14 : integer
+	petSkin 15 : integer
+	partnerId 16 : integer
+	partnerSkin 17 : integer
+	bbRank 18 : integer
+	wxslRank 19 : integer
+	hmsRank 20 : integer
+	jxtzRank 21 : integer
+	vipLevel 22 : integer
+	tempId 23 : integer
+	leader 24 : integer
+	pos 25 : UnitPosition
+	ptime 26 : integer
+	charBaseGs 27 : integer
+	wingGs 28 : integer
+	rideGs 29 : integer
+	shouhuGs 30 : integer
+	shenhunGs 31 : integer
+	shenbingGs 32 : integer
+	par_titleGs 33 : integer
+	par_shenhunGs 34 : integer
+	par_guanghuanGs 35 : integer
+	par_shouhuGs 36 : integer
+	ts_titleGs 37 : integer
+	ts_shenhunGs 38 : integer
+	ts_guanghuanGs 39 : integer
+	ts_shouhuGs 40 : integer
+	pet_titleGs 41 : integer
+	pet_shenhunGs 42 : integer
+	pet_guanghuanGs 43 : integer
+	pet_shouhuGs 44 : integer
+	petGs 45 : integer
+	partnerGs 46 : integer
+	xnGs 47 : integer
+	xn_titleGs 48 : integer
+	xn_shenhunGs 49 : integer
+	xn_guanghuanGs 50 : integer
+	xn_shouhuGs 51 : integer
+	camp 52 : integer
+	inCity 53 : integer
+	tsGs 54 : integer
+	skyGodId 55 : integer
+	skyGodSkin 56 : integer
+	xuanNvId 57 : integer
+	xuanNvSkin 58 : integer
+	teamId 59 : integer
+	teamIdx 60 : integer
+	isRevive 61 : integer
+	pmap 62 : Pmap
+	jxtzStar 63 : integer
+	totemGs 64 : integer
+	godEquipGs 65 : integer
+	monthCard 66 : integer
+	foreverCard 67 : integer
+	sidnum 68 : integer
+	hhsjRank 69 : integer
+	serverId 70 : integer
+	runeGs 71 : integer
+	soulRootGs 72 : integer
+	faBaoGs 73 : integer
+	heavenBookGs 74 : integer
+	artifactGs 82 : integer
+	uid_ex 86 : string
+}
+
+.WorldPayDt {
+	aids 0 : *integer
+	lastTime 1 : integer
+	totalPay 2 : integer
+	totalNum 3 : integer
+}
+
+.Worlddata {
+	payDt 0 : WorldPayDt
+	room 1 : *RoomRecord(tp)
+	guildboss 2 : *GuildBoss(index)
+	oprank 3 : *OpRank(opId)
+	auction 4 : *AuctionWorld(index)
+	aucday 5 : *AuctionDay(aid)
+	chatPopDt 6 : *ChatPopDts(cid)
+	guildbattle 7 : *GuildBoss(index)
+	recordLists 8 : *RecordList(id)
+	opRecords 9 : *OpRecordList(opId)
+	actShowChar 10 : *ActShowCharData(index)
+	opCommonRank 11 : *OpCommonRank(opId)
+	actshadeBoss 12 : *ActGuildBoss(index)
+}
+
+.XuanNv {
+	aid 0 : integer
+	dress 1 : Dress
+	name 2 : string
+	itemType 3 : integer
+	level 4 : integer
+	exp 5 : integer
+	bSkills 6 : *integer
+	key 7 : string
+	tempId 8 : integer
+}
+
+.XuanNvFaQi {
+	exp 0 : integer
+	lv 1 : integer
+	prop 2 : *XuanNvFaQiProp
+	nprop 3 : *XuanNvFaQiProp
+	time 4 : integer
+}
+
+.XuanNvFaQiProp {
+	t 0 : integer
+	v 1 : integer
+}
+
+.XuanNvs {
+	xuanNv 0 : XuanNv
+	faqi 1 : *XuanNvFaQi
+	n1 2 : integer
+	n2 3 : integer
+}
+
+.ZLXPlayerDt {
+	aid 0 : integer
+	data 1 : *integer
+}
+
+.package {
+	type 0 : integer
+	aid 1 : integer
+	tag 2 : integer
+	cid 3 : integer
+	gmname 4 : string
+}
+
+.rollMsg {
+	id 0 : integer
+	starttime 1 : integer
+	endtime 2 : integer
+	content 3 : string
+	interval 4 : integer
+	serverId 5 : string
+}
+
+.serversArr {
+	sid 0 : integer
+}
+
+.teamMem {
+	aid 0 : integer
+	charname 1 : string
+	tempId 2 : integer
+	guid 3 : integer
+	guname 4 : string
+	sidnum 5 : integer
+	curHp 6 : integer
+	maxHp 7 : integer
+	level 8 : integer
+	gs 9 : integer
+	camp 10 : integer
+}
+
+HandShake 101 {
+	request {
+		name 0 : string
+		sidx 1 : integer
+		tarName 2 : string
+		idx 4 : integer
+		ip 5 : string
+		port 6 : integer
+	}
+	response {
+		result 0 : integer
+		sidx 1 : integer
+		name 2 : string
+		idx 4 : integer
+		ip 5 : string
+		port 6 : integer
+	}
+}
+
+PING 102 {
+	request {
+		ping 0 : integer
+	}
+	response {
+		time 0 : integer
+		pong 1 : integer
+	}
+}
+
+ByeHandShake 103 {
+	request {
+		name 0 : string
+		sidx 1 : integer
+	}
+	response {
+		name 0 : string
+		sidx 1 : integer
+	}
+}
+
+ServerAuth 104 {
+	response {
+		cid 0 : integer
+		auth 1 : string
+	}
+}
+
+ServerStandBy 105 {
+	response {
+		id 0 : integer
+		tag 1 : string
+	}
+}
+
+SyncCrossHegelConn 106 {
+	request {
+	}
+	response {
+		crossHegels 0 : *ServerInfo(sidx)
+	}
+}
+
+FetchRow 201 {
+	request {
+		table 0 : string
+		aid 1 : integer
+		param 2 : *integer
+		reqId 3 : integer
+	}
+	response {
+		result 0 : integer
+		aid 1 : integer
+		ik 2 : *string
+		sk 3 : *string
+		iv 4 : *integer
+		sv 5 : *string
+		param 6 : *integer
+		reqId 7 : integer
+	}
+}
+
+CacheRow 202 {
+	request {
+		table 0 : string
+		aid 1 : integer
+		ik 2 : *string
+		sk 3 : *string
+		iv 4 : *integer
+		sv 5 : *string
+		param 6 : *integer
+	}
+	response {
+		result 0 : integer
+		aid 1 : integer
+		param 2 : *integer
+	}
+}
+
+InsertRow 203 {
+	request {
+		table 0 : string
+		aid 1 : integer
+		ik 2 : *string
+		sk 3 : *string
+		iv 4 : *integer
+		sv 5 : *string
+		param 6 : *integer
+	}
+	response {
+		result 0 : integer
+		table 1 : string
+		aid 2 : integer
+		param 3 : *integer
+	}
+}
+
+SaveRow 204 {
+	request {
+		name 0 : string
+		aid 1 : integer
+	}
+}
+
+FetchChar 205 {
+	request {
+		table 0 : string
+		aid 1 : integer
+		param 2 : *integer
+		reqId 3 : integer
+		cid 4 : integer
+		way 5 : integer
+	}
+	response {
+		result 0 : integer
+		aid 1 : integer
+		ik 2 : *string
+		sk 3 : *string
+		iv 4 : *integer
+		sv 5 : *string
+		param 6 : *integer
+		reqId 7 : integer
+		cid 8 : integer
+		way 9 : integer
+	}
+}
+
+GetUserOfflineData 206 {
+	request {
+		reqId 0 : integer
+		aids 1 : *integer
+		names 2 : *string
+	}
+	response {
+		result 0 : integer
+		reqId 1 : integer
+		userOffDatas 2 : *CharOfflineData
+	}
+}
+
+L_Login 1001 {
+	request {
+		uid 0 : string
+		ip 1 : string
+		force 2 : integer
+		imei 3 : string
+		pid 4 : string
+		t 5 : integer
+		sign 6 : string
+	}
+	response {
+		result 0 : integer
+	}
+}
+
+L_CreateChar 1002 {
+	request {
+		name 0 : string
+		ip 1 : string
+		sex 2 : integer
+		career 3 : integer
+		uid_ex 4 : string
+	}
+	response {
+		result 0 : integer
+	}
+}
+
+L_SelectChar 1003 {
+	response {
+		result 0 : integer
+		charData 1 : CharData
+		curTimeStamp 2 : integer
+		serverStTime 3 : integer
+		version 4 : string
+	}
+}
+
+L_ClientOff 1004 {
+}
+
+AddRouter 1005 {
+	request {
+		router 0 : UserRouter
+	}
+}
+
+SysRouter 1006 {
+	request {
+		router 0 : UserRouter
+	}
+}
+
+RemoveRouter 1007 {
+	request {
+		aid 0 : integer
+	}
+}
+
+L_KickChar 1008 {
+	request {
+		result 0 : integer
+	}
+	response {
+		result 0 : integer
+	}
+}
+
+L_GetUserData 1009 {
+	response {
+		result 0 : integer
+		charlist 1 : *CharBaseData
+	}
+}
+
+C_GetGift 2040 {
+	request {
+		code 0 : string
+		pid 1 : string
+	}
+}
+
+C_OnGetGift 2041 {
+	request {
+		awardStr 0 : string
+		code 1 : string
+		giftName 2 : string
+	}
+	response {
+	}
+}
+
+C_GiftBack 2044 {
+	request {
+		aid 0 : integer
+		code 1 : string
+	}
+}
+
+C_DoMoBai 2045 {
+	request {
+		index 0 : integer
+		aid 1 : integer
+		mbname 2 : string
+	}
+	response {
+		mobai 0 : MoBaiData
+	}
+}
+
+C_CHECKLOGIN 2046 {
+	request {
+	}
+}
+
+C_GetCharDetail 2047 {
+	request {
+		aid 0 : integer
+	}
+	response {
+		player 0 : PlayerDetailInfo
+	}
+}
+
+C_ChangeName 2048 {
+	request {
+		name 0 : string
+	}
+	response {
+		name 0 : string
+	}
+}
+
+C_GetShowChar 2049 {
+	request {
+		index 0 : integer
+	}
+	response {
+		actShowChar 0 : *ActShowCharData(index)
+	}
+}
+
+M_ExtractMail 2100 {
+	request {
+		aid 0 : integer
+		mails 1 : *SimpleMailHegel
+	}
+}
+
+M_SetExtractFlag 2101 {
+	request {
+		aid 0 : integer
+		list 1 : *integer
+	}
+}
+
+M_NewMail 2102 {
+	request {
+		aid 0 : integer
+		mail 1 : Mail
+		sid 2 : integer
+	}
+	response {
+		mail 0 : SimpleMail
+	}
+}
+
+M_GetSimpleMail 2103 {
+	request {
+	}
+	response {
+		data 0 : *SimpleMail
+	}
+}
+
+M_GetOneMail 2104 {
+	request {
+		aid 0 : integer
+	}
+	response {
+		data 0 : Mail
+	}
+}
+
+M_DelMail 2105 {
+	request {
+	}
+	response {
+		list 0 : *integer
+	}
+}
+
+M_RedPoint 2106 {
+	response {
+		red 0 : integer
+	}
+}
+
+GU_CreateGuild 2201 {
+	request {
+		guildName 0 : string
+	}
+	response {
+		result 0 : integer
+		guild 1 : GuildInfo
+	}
+}
+
+GU_GetGuildList 2202 {
+	request {
+		index 0 : integer
+		guildName 1 : string
+	}
+	response {
+		result 0 : integer
+		guilds 1 : *GuildInfo
+		index 2 : integer
+		totalNum 3 : integer
+	}
+}
+
+GU_GetGuildMembers 2203 {
+	request {
+	}
+	response {
+		result 0 : integer
+		members 1 : *GuildMemberInfo
+		membernum 2 : integer
+	}
+}
+
+GU_ApplyJoin 2204 {
+	request {
+		guildIds 0 : *integer
+	}
+	response {
+		result 0 : integer
+		guildId 1 : integer
+		enter 2 : integer
+	}
+}
+
+GU_DealApply 2205 {
+	request {
+		applyerAid 0 : integer
+		agreed 1 : integer
+	}
+	response {
+		result 0 : integer
+		applyerAid 1 : integer
+		gumyinfo 2 : GuildMyInfo
+	}
+}
+
+GU_GetGuildApplylist 2206 {
+	request {
+	}
+	response {
+		result 0 : integer
+		applicants 1 : *GuildApplicantInfo
+	}
+}
+
+GU_GetGuildMyInfo 2207 {
+	request {
+	}
+	response {
+		result 0 : integer
+		gumyinfo 1 : GuildMyInfo
+	}
+}
+
+GU_QuitGuild 2208 {
+	request {
+		quitAid 0 : integer
+	}
+	response {
+		result 0 : integer
+		quitAid 1 : integer
+		aid 2 : integer
+		gumyinfo 3 : GuildMyInfo
+	}
+}
+
+GU_UpGuildJob 2209 {
+	request {
+		aid 0 : integer
+		job 1 : integer
+	}
+	response {
+		result 0 : integer
+		upmember 1 : GuildMemberInfo
+	}
+}
+
+GU_GetGuildManagers 2210 {
+	request {
+	}
+	response {
+		result 0 : integer
+		managers 1 : *GuildMemberInfo
+	}
+}
+
+GU_UpGuildChair 2211 {
+	request {
+		aid 0 : integer
+	}
+	response {
+		result 0 : integer
+		gumyinfo 1 : GuildMyInfo
+		upmembers 2 : *GuildMemberInfo
+	}
+}
+
+GU_ShowRedPoint 2212 {
+	response {
+		result 0 : integer
+	}
+}
+
+GU_UpdateGuildNotice 2213 {
+	request {
+		notice 0 : string
+	}
+	response {
+		result 0 : integer
+		gumyinfo 1 : GuildMyInfo
+	}
+}
+
+GU_ChangeSet 2214 {
+	request {
+		isAuto 0 : integer
+		mings 1 : string
+	}
+	response {
+		isAuto 0 : integer
+		mings 1 : string
+	}
+}
+
+GU_GetMrecord 2215 {
+	request {
+	}
+	response {
+		mrecord 0 : *MrecordOne
+	}
+}
+
+GU_ThGuildChair 2216 {
+	request {
+	}
+	response {
+		result 0 : integer
+		gumyinfo 1 : GuildMyInfo
+		upmembers 2 : *GuildMemberInfo
+	}
+}
+
+GU_GetGuildGift 2217 {
+	request {
+	}
+	response {
+		result 0 : integer
+		gift 1 : GuildGift
+		data 2 : *GuildGiftData
+		spData 3 : *GuildGiftData
+	}
+}
+
+GU_OpenGuildGift 2218 {
+	request {
+		iid 0 : string
+		tp 1 : integer
+	}
+}
+
+GU_BatFb 2219 {
+	request {
+		fid 0 : integer
+	}
+	response {
+		myGuildFb 0 : MyGuildFb
+	}
+}
+
+GU_GetFbGaward 2220 {
+	request {
+		fid 0 : integer
+	}
+	response {
+		myGuildFb 0 : MyGuildFb
+	}
+}
+
+GU_GetFbData 2221 {
+	request {
+	}
+	response {
+		guildFb 0 : GuildFb
+	}
+}
+
+GU_GetFbTaward 2222 {
+	request {
+		apt 0 : integer
+	}
+	response {
+		myGuildFb 0 : MyGuildFb
+	}
+}
+
+GU_UpGuildGw 2223 {
+	request {
+	}
+	response {
+		guildFb 0 : GuildFb
+	}
+}
+
+GU_sendChairMsg 2224 {
+	request {
+	}
+	response {
+		guildFb 0 : GuildFb
+	}
+}
+
+GU_GetMemDetail 2225 {
+	request {
+		aid 0 : integer
+	}
+	response {
+		result 0 : integer
+		data 1 : GuildMemberInfo
+	}
+}
+
+ST_TakePartIn 2240 {
+	request {
+	}
+	response {
+		mySnatch 0 : Snatch
+		snatchDt 1 : SnatchData
+	}
+}
+
+ST_GetRwd 2241 {
+	request {
+		type 0 : integer
+	}
+	response {
+		mySnatch 0 : Snatch
+		snatchDt 1 : SnatchData
+	}
+}
+
+ST_GetStDt 2242 {
+	request {
+	}
+	response {
+		mySnatch 0 : Snatch
+		snatchDt 1 : SnatchData
+	}
+}
+
+GB_GET_BOOK_INFO 2250 {
+	request {
+	}
+	response {
+		myBooker 0 : BookerData
+		bookers 1 : *ShowBooker
+	}
+}
+
+GB_UP_BOOKER 2251 {
+	request {
+		type 0 : integer
+		isItem 1 : integer
+	}
+	response {
+		myBooker 0 : BookerData
+		rtype 1 : integer
+	}
+}
+
+GB_START 2252 {
+	request {
+	}
+	response {
+		myBooker 0 : BookerData
+		bookers 1 : *ShowBooker
+	}
+}
+
+GB_SHOW_BOOKDETAIL 2253 {
+	request {
+		aid 0 : integer
+		bType 1 : integer
+		etime 2 : integer
+	}
+	response {
+		bookDetail 0 : BookerDetail
+		bType 1 : integer
+	}
+}
+
+GB_FIGHT 2254 {
+	request {
+		aid 0 : integer
+		bType 1 : integer
+		etime 2 : integer
+	}
+	response {
+		myBooker 0 : BookerData
+	}
+}
+
+GB_GET_ENEMYLIST 2255 {
+	request {
+	}
+	response {
+		enemyList 0 : *OneBookEnemy
+		hitList 1 : *OneBookEnemy
+	}
+}
+
+GB_GET_AWARD_INFO 2256 {
+	request {
+	}
+	response {
+		myBooker 0 : BookerData
+		enemyList 1 : *OneBookEnemy
+	}
+}
+
+GB_GET_AWARD 2257 {
+	request {
+	}
+	response {
+		myBooker 0 : BookerData
+		result 1 : integer
+	}
+}
+
+GB_QUICK_FINISH 2258 {
+	request {
+	}
+	response {
+		myBooker 0 : BookerData
+		result 1 : integer
+		bookers 2 : *ShowBooker
+	}
+}
+
+GB_GET_MYBOOK 2259 {
+	response {
+		myBooker 0 : BookerData
+	}
+}
+
+GB_BE_FIGHT 2260 {
+	response {
+		result 0 : integer
+	}
+}
+
+PA_PATCH_TEMP 2301 {
+	request {
+	}
+	response {
+		patchTemp 0 : *PatchTemp
+	}
+}
+
+AC_GetQuestions 2402 {
+	request {
+	}
+	response {
+		questions 0 : *Question
+		id 1 : integer
+		stTime 2 : integer
+	}
+}
+
+AC_CommitAnswer 2403 {
+	request {
+		index 0 : integer
+	}
+	response {
+		index 0 : integer
+	}
+}
+
+AC_GetAnswerRank 2404 {
+	request {
+	}
+	response {
+		rankList 0 : *CharSimpleRankData
+	}
+}
+
+AC_BroadResult 2405 {
+	request {
+	}
+	response {
+		rank 0 : integer
+		score 1 : integer
+	}
+}
+
+AC_GetWildBossDt 2411 {
+	request {
+	}
+	response {
+		wildBossArr 0 : *WildBossDt
+	}
+}
+
+AC_DoWildBossBat 2412 {
+	request {
+		index 0 : integer
+	}
+}
+
+AC_GetActivityList 2430 {
+	request {
+		timeStamp 0 : integer
+	}
+	response {
+		list 0 : *ActivityStDt(id)
+		timeStamp 1 : integer
+	}
+}
+
+AC_GetActState 2431 {
+	request {
+		actid 0 : integer
+		aid 1 : integer
+		sid 2 : integer
+	}
+	response {
+		actid 0 : integer
+		state 1 : integer
+	}
+}
+
+OP_GetLotteryRecord 2450 {
+	request {
+		opId 0 : integer
+		timeStamp 1 : integer
+	}
+	response {
+		opId 0 : integer
+		timeStamp 1 : integer
+		records 2 : *LotteryRecord
+	}
+}
+
+OP_GetOpRankList 2451 {
+	request {
+		opId 0 : integer
+	}
+	response {
+		rankList 0 : *OpRankItem
+		myDt 1 : OpRankItem
+		opId 2 : integer
+		myRank 3 : integer
+		firstDress 4 : Dress
+		firstTempId 5 : integer
+	}
+}
+
+OP_GetOpCommonRankList 2452 {
+	request {
+		opId 0 : integer
+	}
+	response {
+		rankList 0 : *OpCommonRankItem
+		myDt 1 : OpCommonRankItem
+		opId 2 : integer
+		myRank 3 : integer
+		firstDress 4 : Dress
+	}
+}
+
+RP_OpenRedPack 2501 {
+	request {
+		id 0 : integer
+	}
+	response {
+		id 0 : integer
+		suc 1 : integer
+	}
+}
+
+RP_NewRedPack 2502 {
+	response {
+		redpackDt 0 : RedPacketDt
+	}
+}
+
+RP_OpenRedPackRain 2503 {
+	request {
+		type 0 : integer
+	}
+}
+
+RP_NewRedPackRain 2504 {
+	response {
+		state 0 : integer
+	}
+}
+
+RL_GetRecord 2511 {
+	request {
+		id 0 : integer
+	}
+	response {
+		data 0 : RecordList
+	}
+}
+
+T_RefTeamUserDt 2748 {
+	response {
+		teamfb 0 : Teamfb
+		isRef 1 : integer
+	}
+}
+
+AUC_GetData 2750 {
+	request {
+		tp 0 : integer
+		aid 1 : integer
+	}
+}
+
+AUC_GetRecord 2751 {
+	request {
+		tp 0 : integer
+		aid 1 : integer
+	}
+}
+
+AUC_SendShareAward 2752 {
+	request {
+		gid 0 : integer
+		total 1 : integer
+	}
+}
+
+RK_GET_SIMPLETOWERRANK 2780 {
+	request {
+		key 0 : string
+	}
+	response {
+		key 0 : string
+		towers 1 : *TowerDetail
+	}
+}
+
+RK_GET_TOWERRANK 2781 {
+	request {
+		key 0 : string
+	}
+	response {
+		key 0 : string
+		towers 1 : *TowerDetail
+		tower 2 : integer
+	}
+}
+
+RK_GET_RANKLIST 2782 {
+	request {
+		key 0 : string
+		page 1 : integer
+		pageNum 2 : integer
+	}
+	response {
+		key 0 : string
+		ranks 1 : *RankDetail
+		val 2 : integer
+		rankDress 3 : *RankDress
+		page 4 : integer
+		pageMax 5 : integer
+		myRank 6 : integer
+	}
+}
+
+RK_GET_SIMPLERANKLIST 2783 {
+	request {
+		type 0 : integer
+	}
+	response {
+		type 0 : integer
+		players 1 : *PlayerDetailInfo
+	}
+}
+
+PS_GetRelatinList 2800 {
+	request {
+		ver 0 : integer
+	}
+	response {
+		result 0 : integer
+		concerns 1 : *RelationBaseInfo
+		fans 2 : *RelationBaseInfo
+		blacks 3 : *RelationBaseInfo
+		givers 4 : PsGivers
+		recipients 5 : PsRecipients
+		ver 6 : integer
+	}
+}
+
+PS_UpRelationList 2801 {
+	request {
+		aid 0 : integer
+		type 1 : integer
+	}
+	response {
+		result 0 : integer
+		addConcern 1 : RelationBaseInfo
+		addFan 2 : RelationBaseInfo
+		addBlack 3 : RelationBaseInfo
+		delConcern 4 : integer
+		delFan 5 : integer
+		delBlack 6 : integer
+		delReferee 7 : integer
+	}
+}
+
+PS_GetRefreeList 2802 {
+	request {
+	}
+	response {
+		result 0 : integer
+		referees 1 : *RelationBaseInfo
+	}
+}
+
+PS_GiveAndRec 2803 {
+	request {
+	}
+	response {
+		result 0 : integer
+		give 1 : PsGiveData
+		rec 2 : PsRecipientData
+		count 3 : integer
+		tm 4 : integer
+		type 5 : integer
+	}
+}
+
+PS_UpRelationLists 2804 {
+	request {
+		aids 0 : *integer
+		type 1 : integer
+	}
+}
+
+PS_SendEvent 2805 {
+	request {
+		aid 0 : integer
+		type 1 : integer
+	}
+	response {
+		tempId 0 : integer
+		aid 1 : integer
+		charname 2 : string
+		type 3 : integer
+		args 4 : *string
+		sidnum 5 : integer
+	}
+}
+
+SC_GETSCENE_PLAYERS 2850 {
+	request {
+		scene 0 : integer
+	}
+	response {
+		players 0 : *WorldChar
+	}
+}
+
+SC_StartBattle 2851 {
+	request {
+		taid 0 : integer
+		tp 1 : integer
+		aid 2 : integer
+		diff 3 : integer
+		charData 4 : CharData
+		isRob 5 : integer
+	}
+}
+
+PVESB_BattleStart 2900 {
+	request {
+		sid 0 : integer
+		reborn 1 : integer
+		aid 2 : integer
+	}
+	response {
+		result 0 : integer
+	}
+}
+
+PVESB_GetBossHp 2901 {
+	request {
+	}
+	response {
+		bosss 0 : *SB_SHAREBOSS_DATA
+		playerNums 1 : *integer
+	}
+}
+
+PVESB_GetBossHurtRank 2902 {
+	request {
+		sid 0 : integer
+	}
+	response {
+		hurtHps 0 : *integer
+		charnames 1 : *string
+		aids 2 : *integer
+	}
+}
+
+PAY_DeliverGoods 3090 {
+	request {
+		oid 0 : string
+		doid 1 : string
+		uid 2 : string
+		drid 3 : integer
+		money 4 : string
+		coin 5 : integer
+		time 6 : integer
+		realUid 7 : string
+		pid 8 : string
+		remark 9 : string
+	}
+	response {
+		oid 0 : string
+	}
+}
+
+PAY_DeliverGoodsSucc 3091 {
+	response {
+		oid 0 : string
+		money 1 : integer
+		aid 2 : integer
+		isTest 3 : integer
+	}
+}
+
+PAY_CharLogined 3092 {
+	request {
+		aid 0 : integer
+		sid 1 : integer
+		uid 2 : string
+	}
+}
+
+PAY_ReloadPayMeta 3093 {
+	request {
+	}
+}
+
+PAY_CheckCanPay 3094 {
+	request {
+	}
+	response {
+		cid 0 : integer
+		ret 1 : integer
+	}
+}
+
+PAY_Supplement 3095 {
+	response {
+		channelId 0 : integer
+		orderId 1 : string
+		productId 2 : string
+		sid 3 : integer
+		uid 4 : string
+		aid 5 : integer
+		money 6 : string
+		state 7 : integer
+		logType 8 : integer
+	}
+}
+
+PAY_GetPayHistory 3096 {
+	request {
+	}
+	response {
+		aidNum 0 : integer
+		totalPay 1 : integer
+		lastTime 2 : integer
+	}
+}
+
+RM_LeaveRoom 3150 {
+	request {
+		tp 0 : integer
+		aid 1 : integer
+	}
+	response {
+		tp 0 : integer
+		index 1 : integer
+		isKick 2 : integer
+	}
+}
+
+RM_KickMem 3151 {
+	request {
+		tid 0 : integer
+		aid 1 : integer
+	}
+}
+
+RM_GetRoomList 3152 {
+	request {
+		tp 0 : integer
+		index 1 : integer
+		aid 2 : integer
+	}
+	response {
+		tp 0 : integer
+		index 1 : integer
+		rooms 2 : *Room
+	}
+}
+
+RM_RoomStart 3153 {
+	request {
+		aid 0 : integer
+	}
+	response {
+		room 0 : Room
+	}
+}
+
+RM_Fill 3154 {
+	request {
+		tp 0 : integer
+		index 1 : integer
+		roomId 2 : integer
+		num 3 : integer
+	}
+}
+
+RM_GetRecord 3155 {
+	request {
+		tp 0 : integer
+		index 1 : integer
+	}
+	response {
+		tp 0 : integer
+		index 1 : integer
+		r 2 : RoomData
+	}
+}
+
+AR_GET_ENEMY 3156 {
+	request {
+	}
+	response {
+		arenaDts 0 : *ArenaData
+		myRank 1 : integer
+	}
+}
+
+AR_GET_RANKLIST 3157 {
+	request {
+		len 0 : integer
+	}
+	response {
+		arenaDts 0 : *ArenaData
+		myRank 1 : integer
+	}
+}
+
+RM_GetRoomNum 3158 {
+	request {
+		chapter 0 : integer
+		aid 1 : integer
+		tp 2 : integer
+	}
+	response {
+		nums 0 : *integer
+	}
+}
+
+RM_GetRecords 3161 {
+	request {
+		tp 0 : integer
+		idxs 1 : *integer
+	}
+	response {
+		tp 0 : integer
+		rs 1 : *RoomData
+		idxs 2 : *integer
+	}
+}
+
+RM_GetTopRecord 3162 {
+	request {
+		tp 0 : integer
+	}
+	response {
+		tp 0 : integer
+		top 1 : integer
+	}
+}
+
+SF_GetAward 3181 {
+	request {
+		tp 0 : integer
+		idx 1 : integer
+	}
+	response {
+		tp 0 : integer
+		idx 1 : integer
+	}
+}
+
+MTR_GetMentorInfo 3200 {
+	request {
+	}
+	response {
+		result 0 : integer
+		mentor 1 : MentorInfo
+	}
+}
+
+MTR_MentorInvite 3201 {
+	request {
+		aid 0 : integer
+		invitetype 1 : integer
+	}
+	response {
+		result 0 : integer
+		mentor 1 : MentorInfo
+	}
+}
+
+MTR_MentorPromise 3202 {
+	request {
+		aid 0 : integer
+		invitetype 1 : integer
+		accept 2 : integer
+	}
+	response {
+		result 0 : integer
+		mentor 1 : MentorInfo
+	}
+}
+
+MTR_MentorTransferExp 3203 {
+	request {
+		aid 0 : integer
+	}
+	response {
+		result 0 : integer
+		mentor 1 : MentorInfo
+	}
+}
+
+MTR_MentorAcceptExp 3204 {
+	request {
+	}
+	response {
+		result 0 : integer
+		mentor 1 : MentorInfo
+	}
+}
+
+MTR_MentorTaskAward 3205 {
+	request {
+		tid 0 : integer
+	}
+	response {
+		result 0 : integer
+		mentor 1 : MentorInfo
+	}
+}
+
+MTR_MentorLeave 3206 {
+	request {
+		isperfect 0 : integer
+	}
+	response {
+		result 0 : integer
+		mentor 1 : MentorInfo
+	}
+}
+
+MTR_MentorRelease 3207 {
+	request {
+		aid 0 : integer
+	}
+}
+
+MTR_GetInviterList 3208 {
+	request {
+		invitetype 0 : integer
+	}
+	response {
+		invitetype 0 : integer
+		list 1 : *MentorInviteMember
+	}
+}
+
+MAR_GetMarriageInfoShared 3220 {
+	request {
+	}
+	response {
+		result 0 : integer
+		marriage 1 : MarriageShar
+	}
+}
+
+MAR_GetCanProposeList 3225 {
+	request {
+	}
+	response {
+		result 0 : integer
+		pList 1 : *ProposeChar
+	}
+}
+
+MAR_Propose 3226 {
+	request {
+		aid 0 : integer
+		mtype 1 : integer
+		relation 2 : string
+	}
+	response {
+		result 0 : integer
+	}
+}
+
+MAR_AcceptProposal 3227 {
+	request {
+		aid 0 : integer
+		reply 1 : integer
+	}
+	response {
+		result 0 : integer
+	}
+}
+
+MAR_Divorce 3228 {
+	request {
+	}
+	response {
+		result 0 : integer
+	}
+}
+
+MAR_Beproposed 3229 {
+	request {
+	}
+	response {
+		result 0 : integer
+		propose 1 : Propose
+	}
+}
+
+MAR_RemindEvent 3230 {
+	request {
+	}
+	response {
+		result 0 : integer
+		exp 1 : integer
+		mtype 2 : integer
+		flowerlog 3 : *Flower
+		marry 4 : MarriageShar
+		eventLv 5 : integer
+		aid 6 : integer
+		pid 7 : integer
+	}
+}
+
+MAR_ReqBless 3231 {
+	request {
+	}
+}
+
+MAR_OneKeyPropose 3232 {
+	request {
+		conditions 0 : string
+		mtype 1 : integer
+		relation 2 : string
+	}
+}
+
+MAR_ApplyOneKeyProposal 3233 {
+	request {
+		conditions 0 : string
+		aid 1 : integer
+	}
+}
+
+FBK_GetFirstBudokaiInfo 3251 {
+	request {
+	}
+	response {
+		result 0 : integer
+		budokai 1 : FirstBudokai
+		name 2 : string
+	}
+}
+
+FBK_Challenge 3252 {
+	request {
+		pos 0 : integer
+	}
+	response {
+		result 0 : integer
+		budokai 1 : FirstBudokai
+	}
+}
+
+FBK_PlayBattleVideo 3254 {
+	request {
+		gsArea 0 : integer
+		bindex 1 : integer
+		aid 2 : integer
+		areaId 3 : integer
+		hegelId 4 : integer
+	}
+	response {
+		battleResult 0 : BattleResultData
+		aid 1 : integer
+	}
+}
+
+CHT_GetRumors 3261 {
+	request {
+	}
+	response {
+		chatPopDts 0 : *ChatPopDts(cid)
+	}
+}
+
+CHT_GetHrefData 3262 {
+	request {
+		index 0 : integer
+	}
+	response {
+		ldatatype 0 : integer
+		jsonstr 1 : string
+	}
+}
+
+C_ErrorRst 4001 {
+	response {
+		result 0 : integer
+		value 1 : *string
+	}
+}
+
+SC_EnterScene 4002 {
+	request {
+		scene 0 : integer
+	}
+	response {
+		scene 0 : integer
+		pos 1 : UnitPosition
+		mobs 2 : *Mob
+		bossHp 3 : BossHp
+		gametp 4 : integer
+		remain 5 : integer
+		chars 6 : *WorldChar
+		selfmob 7 : *Mob
+		staymob 8 : *Staymob
+		nextwaves 9 : *NextWave
+		remainmobdata 10 : *MobRemain
+		camp 11 : integer
+	}
+}
+
+SC_CharEnter 4003 {
+	response {
+		chardata 0 : WorldChar
+	}
+}
+
+SC_CharLeave 4004 {
+	response {
+		aid 0 : integer
+		scene 1 : integer
+	}
+}
+
+SC_CharDataUpdate 4005 {
+	response {
+		simpledata 0 : CharSimpleDataUpdate
+	}
+}
+
+SC_CharDressUpdate 4006 {
+	response {
+		aid 0 : integer
+		dress 1 : Dress
+	}
+}
+
+SC_CHANGE 4007 {
+	request {
+	}
+	response {
+		pmap 0 : Pmap
+	}
+}
+
+SC_LeaveScene 4008 {
+	request {
+	}
+}
+
+SC_EnterSpecial 4009 {
+	request {
+		tp 0 : integer
+	}
+}
+
+SC_GetRank 4010 {
+	request {
+		tp 0 : integer
+	}
+	response {
+		gametp 0 : integer
+		tp 1 : integer
+		list 2 : *CrossRankList
+		myRank 3 : integer
+		myDmg 4 : string
+		num 5 : integer
+	}
+}
+
+SC_PlayerInScene 4011 {
+	request {
+	}
+	response {
+		players 0 : *WorldChar
+		scene 1 : integer
+	}
+}
+
+SC_Revive 4012 {
+	request {
+	}
+	response {
+	}
+}
+
+SC_ClickMob 4013 {
+	request {
+		id 0 : integer
+		tp 1 : integer
+		subType 2 : integer
+	}
+	response {
+		id 0 : integer
+		tp 1 : integer
+		subType 2 : integer
+	}
+}
+
+SC_GatherDone 4014 {
+	request {
+		id 0 : integer
+		cancel 1 : integer
+	}
+	response {
+		aid 0 : integer
+		id 1 : integer
+		num 2 : integer
+	}
+}
+
+SC_Sync 4015 {
+	request {
+		pos 0 : UnitPosition
+		scene 1 : integer
+	}
+	response {
+		chars 0 : *WorldChar
+	}
+}
+
+SC_SpecialChange 4016 {
+	request {
+		upScene 0 : integer
+	}
+}
+
+SC_SelfMobRevive 4017 {
+	response {
+		id 0 : integer
+		endt 1 : integer
+	}
+}
+
+SC_ActNotice 4018 {
+	request {
+	}
+	response {
+		guid 0 : integer
+		gujob 1 : integer
+		charname 2 : string
+		actid 3 : integer
+		gametp 4 : integer
+		index 5 : integer
+		ignoreAids 6 : *integer
+	}
+}
+
+SC_GetPvpData 4019 {
+	request {
+		aid 0 : integer
+		mapId 1 : integer
+	}
+	response {
+		attList 0 : *WildpvpAttList
+		counterattList 1 : *WildpvpAttList
+		nextst 2 : integer
+		clearst 3 : integer
+	}
+}
+
+SC_RefPvpData 4020 {
+	response {
+		charPvp 0 : CharPvp
+	}
+}
+
+SC_BuyBatTimes 4021 {
+	request {
+	}
+}
+
+SC_SearchPvpData 4022 {
+	request {
+		aid 0 : integer
+		mapId 1 : integer
+		money 2 : integer
+	}
+}
+
+SC_UpTitle 4023 {
+	request {
+	}
+}
+
+SC_ActBulletScreen 4024 {
+	request {
+		id 0 : integer
+		color 1 : integer
+	}
+	response {
+		charname 0 : string
+		id 1 : integer
+		vipLevel 2 : integer
+		actId 3 : integer
+		color 4 : integer
+	}
+}
+
+SC_GetNewRank 4025 {
+	request {
+		tp 0 : integer
+	}
+	response {
+		gametp 0 : integer
+		tp 1 : integer
+		list 2 : *CrossRankVec
+	}
+}
+
+SC_BuyLife 4026 {
+	request {
+	}
+}
+
+SC_BuyGW 4027 {
+	request {
+		tp 0 : integer
+	}
+}
+
+SC_ES_SELFMOBS 4028 {
+	request {
+	}
+	response {
+		selfmob 0 : *Mob
+	}
+}
+
+SC_ES_STAYMOBS 4029 {
+	request {
+	}
+	response {
+		staymob 0 : *Staymob
+	}
+}
+
+SC_ES_NEXTWAVES 4030 {
+	request {
+	}
+	response {
+		nextwaves 0 : *NextWave
+	}
+}
+
+SC_ES_REMAIN 4031 {
+	request {
+	}
+	response {
+		remainmobdata 0 : *MobRemain
+	}
+}
+
+C_SyncDataFromCross 4050 {
+	request {
+		aid 0 : integer
+		chardata 1 : CharData
+	}
+	response {
+		aid 0 : integer
+		chardata 1 : CharData
+	}
+}
+
+C_CharPropShow 4051 {
+	request {
+	}
+	response {
+		prop 0 : *Property
+	}
+}
+
+C_ChangeHegel 4052 {
+	request {
+	}
+	response {
+	}
+}
+
+C_ExitHegel 4053 {
+	request {
+	}
+	response {
+	}
+}
+
+C_CharLevelUpdate 4054 {
+	request {
+	}
+	response {
+	}
+}
+
+C_CharChangeUpdate 4056 {
+	response {
+		cdress 0 : Dress
+	}
+}
+
+C_CharModuleOpen 4057 {
+	request {
+		id 0 : integer
+	}
+	response {
+		module 0 : Module
+	}
+}
+
+C_SyncDataFromHegelToWorld 4058 {
+	request {
+		aid 0 : integer
+		key 1 : string
+		intv 2 : integer
+		strv 3 : string
+	}
+}
+
+C_SyncDressFromHegelToWorld 4059 {
+	request {
+		aid 0 : integer
+		key 1 : string
+		val 2 : integer
+	}
+}
+
+C_GetOfflineRwd 4060 {
+	request {
+		type 0 : integer
+	}
+	response {
+		offMin 0 : integer
+		realMin 1 : integer
+	}
+}
+
+C_SyncDataFromWorld 4061 {
+	request {
+		aid 0 : integer
+		inc_gold 1 : integer
+		guid 2 : integer
+		gujob 3 : integer
+		mtime 4 : integer
+		contributionExp 5 : integer
+		dayContributionExp 6 : integer
+		guildName 7 : string
+		benisonTime 8 : integer
+		qjTimes 9 : integer
+		kjTimes 10 : integer
+		chatTimes 11 : integer
+		temRank 12 : integer
+	}
+}
+
+C_RefActScore 4062 {
+	response {
+		actscore 0 : Actscore
+	}
+}
+
+C_ACTIVESKIN 4063 {
+	request {
+		funcKey 0 : string
+		id 1 : integer
+	}
+	response {
+		funcKey 0 : string
+		skin 1 : Kval
+	}
+}
+
+C_SHOWSKIN 4064 {
+	request {
+		funcKey 0 : string
+		id 1 : integer
+		pid 2 : integer
+	}
+	response {
+		funcKey 0 : string
+		skin 1 : integer
+		pid 2 : integer
+	}
+}
+
+C_CHECKSKIN 4065 {
+	request {
+	}
+}
+
+C_SyncGuildSucFromHegel 4066 {
+	request {
+		aid 0 : integer
+		guildName 1 : string
+	}
+}
+
+C_SyncMoneyFromWorld 4067 {
+	request {
+		result 0 : integer
+		aid 1 : integer
+		inc_gold 2 : integer
+		reqId 3 : integer
+		sk 4 : *string
+		ik 5 : *string
+		sv 6 : *string
+		iv 7 : *integer
+		inc_bindgold 8 : integer
+		logtype 9 : integer
+	}
+}
+
+C_SyncMoneyFromHegelToWorld 4068 {
+	request {
+		result 0 : integer
+		aid 1 : integer
+		inc_gold 2 : integer
+		reqId 3 : integer
+		sk 4 : *string
+		ik 5 : *string
+		sv 6 : *string
+		iv 7 : *integer
+		inc_bindgold 8 : integer
+	}
+}
+
+C_SHOW_ACTIVESKIN 4069 {
+	response {
+		skin 0 : integer
+		funcKey 1 : string
+		achId 2 : integer
+	}
+}
+
+C_ZeroRefresh 4070 {
+	request {
+	}
+}
+
+C_GetVipRwd 4071 {
+	request {
+		vipIndex 0 : integer
+		type 1 : integer
+	}
+	response {
+	}
+}
+
+C_RefCurTime 4072 {
+	request {
+	}
+	response {
+		curTimeStamp 0 : integer
+	}
+}
+
+C_ComposeItem 4073 {
+	request {
+		id 0 : integer
+		num 1 : integer
+	}
+	response {
+	}
+}
+
+NS_GetStepAward 4074 {
+	request {
+	}
+}
+
+C_GetGuildBossLast 4075 {
+	request {
+		tp 0 : integer
+		aid 1 : integer
+	}
+	response {
+		tp 0 : integer
+		last 1 : string
+		dmgFst 2 : string
+		tempId 3 : integer
+	}
+}
+
+SC_GetSelfData 4076 {
+	request {
+	}
+	response {
+		gametp 0 : integer
+		score 1 : integer
+		awardIndex 2 : integer
+		camp 3 : integer
+		inCity 4 : integer
+		teamId 5 : integer
+		dmgBuff 6 : integer
+		isTimer 7 : integer
+		wavenum 8 : integer
+		life 9 : integer
+		blfnum 10 : integer
+		dmgDeBuff 11 : integer
+		sm 12 : integer
+		gw 13 : integer
+	}
+}
+
+SC_RespCharBag 4077 {
+	response {
+		result 0 : integer
+		bag 1 : Bag
+	}
+}
+
+C_RankMoBai 4078 {
+	request {
+	}
+	response {
+		result 0 : integer
+	}
+}
+
+C_ChangeNameFromWorld 4079 {
+	request {
+		aid 0 : integer
+		name 1 : string
+	}
+	response {
+		aid 0 : integer
+		name 1 : string
+	}
+}
+
+C_SyncCharDataFromWorld 4080 {
+	request {
+		aid 0 : integer
+		chardata 1 : CharData
+	}
+}
+
+C_GetCharData 4082 {
+	request {
+		step 0 : integer
+	}
+	response {
+		result 0 : integer
+		charData 1 : CharData
+		curTimeStamp 2 : integer
+		serverStTime 3 : integer
+		step 4 : integer
+	}
+}
+
+C_GetStartRwd 4083 {
+	request {
+	}
+}
+
+C_DoFreeTry 4084 {
+	request {
+		type 0 : integer
+		var1 1 : integer
+	}
+}
+
+C_ActGodRing 4085 {
+	request {
+		type 0 : integer
+		timeType 1 : integer
+	}
+	response {
+		godRing 0 : GodRing
+	}
+}
+
+C_CheckGodRing 4086 {
+	request {
+		type 0 : integer
+	}
+	response {
+		type 0 : integer
+	}
+}
+
+C_ActStarTreasure 4087 {
+	request {
+		idx 0 : integer
+	}
+	response {
+		stars 0 : *integer
+	}
+}
+
+SC_NoLife 4088 {
+	response {
+		result 0 : integer
+	}
+}
+
+C_OpenModule 4089 {
+	response {
+		charData 0 : CharData
+	}
+}
+
+C_GetSplitData 4090 {
+	request {
+	}
+	response {
+		bag 0 : Bag
+	}
+}
+
+C_GetBatCompareDt 4091 {
+	request {
+		bid 0 : integer
+		type 1 : integer
+	}
+	response {
+		myProper 0 : *Property
+		enemyProper 1 : *Property
+		batSkillList 2 : *BatSkillList
+		damageRank 3 : *BattleDamageInfo
+		isPvp 4 : integer
+	}
+}
+
+C_RefPvpPropScore 4092 {
+	request {
+	}
+	response {
+		pvpPropScore 0 : PvpPropScore
+	}
+}
+
+C_SyncIntDatasFromHegelToWorld 4093 {
+	request {
+		aid 0 : integer
+		keys 1 : *string
+		intvs 2 : *integer
+	}
+}
+
+ST_TeamControl 4200 {
+	request {
+		tp 0 : integer
+		tid 1 : integer
+		idx 2 : integer
+		mings 3 : string
+	}
+	response {
+		aid 0 : integer
+		tp 1 : integer
+		team 2 : Team
+		name 3 : string
+		checkvalue 4 : integer
+		tid 5 : integer
+	}
+}
+
+ST_GetTeamList 4201 {
+	request {
+	}
+	response {
+		myIdx 0 : integer
+		teams 1 : *Team
+		oteams 2 : *Team
+	}
+}
+
+ST_GetSelfTeam 4203 {
+	request {
+	}
+	response {
+		team 0 : Team
+	}
+}
+
+RP_openRedPackToHegel 4341 {
+	request {
+		id 0 : integer
+		aid 1 : integer
+		type 2 : integer
+	}
+}
+
+RP_sendRedPackToWorld 4342 {
+	request {
+		id 0 : integer
+		aid 1 : integer
+	}
+}
+
+RP_onGetRedPack 4343 {
+	response {
+		num 0 : integer
+		type 1 : integer
+	}
+}
+
+RP_openRedPackRainToHegel 4344 {
+	request {
+		getTimes 0 : integer
+		aid 1 : integer
+		state 2 : integer
+		type 3 : integer
+		isFirst 4 : integer
+	}
+}
+
+RP_onGetRedPackRain 4345 {
+	response {
+		num 0 : integer
+		getTimes 1 : integer
+		state 2 : integer
+		type 3 : integer
+	}
+}
+
+EQU_AutoEquip 4402 {
+	request {
+		type 0 : integer
+	}
+	response {
+		equs 0 : *EquipData(vid)
+		equipType 1 : integer
+		faBaos 2 : *FaBaoData(sid)
+	}
+}
+
+EQU_RecyleEqu 4403 {
+	request {
+		equList 0 : *integer
+		isAutoRecycle 1 : integer
+	}
+	response {
+	}
+}
+
+EQU_DECOMPOSE 4404 {
+	request {
+		itemId 0 : integer
+		num 1 : integer
+	}
+	response {
+	}
+}
+
+EQU_ADDBAGNUM 4405 {
+	request {
+	}
+	response {
+		mm 0 : integer
+	}
+}
+
+EQU_SetAutoRecycle 4406 {
+	request {
+		autoRecycle 0 : integer
+	}
+	response {
+		autoRecycle 0 : integer
+	}
+}
+
+EQU_QuickExchangeEqu 4407 {
+	request {
+		ids 0 : *integer
+	}
+}
+
+QUEST_COMPLTEE 4451 {
+	request {
+	}
+	response {
+		teskId 0 : integer
+		success 1 : integer
+	}
+}
+
+QUEST_UP_MESSAGER 4452 {
+	request {
+	}
+	response {
+		type 0 : integer
+		value 1 : integer
+	}
+}
+
+GOD_AwakeEquip 4501 {
+	request {
+		index 0 : integer
+	}
+}
+
+GOD_Operate 4502 {
+	request {
+		index 0 : integer
+		type 1 : integer
+		auto 2 : integer
+		lockArr 3 : *integer
+	}
+	response {
+		godslot 0 : Godslot
+	}
+}
+
+GROWSYS_UpSysLv 4551 {
+	request {
+		funcKey 0 : string
+		param 1 : string
+	}
+	response {
+		growsys 0 : Growsys
+	}
+}
+
+SKILL_AUTOSKILL 4561 {
+	request {
+		skillId 0 : integer
+	}
+	response {
+		skill 0 : Skill
+	}
+}
+
+SKILL_MOVEUP 4562 {
+	request {
+		upPoint 0 : integer
+	}
+	response {
+		queue 0 : *integer
+		upPoint 1 : integer
+	}
+}
+
+PROMPT_MESSAGE 4571 {
+	request {
+	}
+	response {
+		msgs 0 : *PROMPTMESSGAE
+	}
+}
+
+SHOP_BUY 4581 {
+	request {
+		id 0 : integer
+		num 1 : integer
+	}
+	response {
+		id 0 : integer
+		num 1 : integer
+		historyKey 2 : string
+		expireTime 3 : integer
+	}
+}
+
+SHOP_REF_ITEMS 4582 {
+	request {
+		id 0 : integer
+	}
+	response {
+		history 0 : ShopHistory
+	}
+}
+
+SHOP_REF_BUY 4583 {
+	request {
+		id 0 : integer
+		num 1 : integer
+	}
+}
+
+PAR_ACTIVATE 4611 {
+	request {
+		pid 0 : integer
+	}
+	response {
+		partner 0 : Partner
+	}
+}
+
+PAR_ADVANCED 4612 {
+	request {
+		pid 0 : integer
+		selected 1 : integer
+	}
+	response {
+		pid 0 : integer
+		exp 1 : integer
+		level 2 : integer
+		gs 3 : integer
+	}
+}
+
+PAR_OUT_BATTLE 4613 {
+	request {
+		pid 0 : integer
+		index 1 : integer
+	}
+	response {
+		aids 0 : *integer
+		pid 1 : integer
+	}
+}
+
+PAR_UP_STAR 4614 {
+	request {
+		pid 0 : integer
+	}
+	response {
+		pid 0 : integer
+		star 1 : integer
+	}
+}
+
+PAR_JXACT 4616 {
+	request {
+		pid 0 : integer
+	}
+	response {
+		pid 0 : integer
+		partner 1 : Partner
+	}
+}
+
+PAR_SysncSkill 4617 {
+	response {
+		pid 0 : integer
+		jxSkill 1 : *SkillData
+	}
+}
+
+PAR_JXStarUp 4618 {
+	request {
+		pid 0 : integer
+		selected 1 : integer
+	}
+	response {
+		pid 0 : integer
+		jxstar 1 : integer
+		jxExp 2 : integer
+	}
+}
+
+PET_ACTIVATE 4621 {
+	request {
+		pid 0 : integer
+	}
+	response {
+		pet 0 : Pet
+	}
+}
+
+PET_LEVELUP 4622 {
+	request {
+		pid 0 : integer
+		selected 1 : integer
+	}
+	response {
+		pid 0 : integer
+		exp 1 : integer
+		level 2 : integer
+		gs 3 : integer
+	}
+}
+
+PET_SET_BATTLE 4623 {
+	request {
+		pid 0 : integer
+		index 1 : integer
+		type 2 : integer
+	}
+	response {
+		aids 0 : *integer
+		pid 1 : integer
+	}
+}
+
+PET_StarUp 4624 {
+	request {
+		pid 0 : integer
+	}
+	response {
+		pid 0 : integer
+		star 1 : integer
+	}
+}
+
+PET_DoTalentUp 4625 {
+	request {
+		pid 0 : integer
+		selected 1 : integer
+	}
+	response {
+		pid 0 : integer
+		varExp 1 : integer
+		star 2 : integer
+		gs 3 : integer
+	}
+}
+
+PET_BAPTIZE 4627 {
+	request {
+		pid 0 : integer
+		isTop 1 : integer
+		selected 2 : integer
+		lockArr 3 : *integer
+	}
+	response {
+		pid 0 : integer
+		skillBaptize 1 : SkillBaptize
+	}
+}
+
+PET_SKILLCHANGE 4628 {
+	request {
+		pid 0 : integer
+	}
+	response {
+		pid 0 : integer
+		bSkills 1 : *integer
+	}
+}
+
+PET_CATCH 4629 {
+	request {
+		useGold 0 : integer
+	}
+	response {
+		times 0 : integer
+		catchRepeatTimes 1 : integer
+		success 2 : integer
+		catchPetId 3 : integer
+	}
+}
+
+PET_CHANGENAME 4630 {
+	request {
+		pid 0 : integer
+		name 1 : string
+	}
+	response {
+		pid 0 : integer
+		name 1 : string
+	}
+}
+
+PET_SysncSkill 4631 {
+	response {
+		pid 0 : integer
+		skill 1 : Skill
+		jxSkill 2 : *SkillData
+	}
+}
+
+PET_BAPTIZENEW 4632 {
+	request {
+		pid 0 : integer
+		isTop 1 : integer
+		selected 2 : integer
+		lockArr 3 : *integer
+		ani 4 : string
+		selected2 5 : integer
+	}
+	response {
+		pid 0 : integer
+		skillBaptize 1 : SkillBaptize
+	}
+}
+
+PET_SKILLCHANGENEW 4633 {
+	request {
+		pid 0 : integer
+		index 1 : integer
+	}
+	response {
+		pid 0 : integer
+		bSkills 1 : *integer
+	}
+}
+
+PET_Combine 4634 {
+	request {
+		id 0 : integer
+		items 1 : *integer
+	}
+	response {
+		level 0 : integer
+		exp 1 : integer
+		times 2 : *integer
+		redTimes 3 : integer
+		itemid 4 : integer
+	}
+}
+
+AR_GET_ARENA 4643 {
+	request {
+	}
+	response {
+		arena 0 : Arena
+	}
+}
+
+AR_BuyBatTimes 4644 {
+	request {
+	}
+}
+
+AR_ExtractEnemyFromWorld 4650 {
+	request {
+		aid 0 : integer
+	}
+}
+
+AR_ExtractEnemyToHegel 4651 {
+	request {
+		arenaDts 0 : *ArenaData
+		aid 1 : integer
+		myRank 2 : integer
+	}
+}
+
+AR_GetRankListFromWorld 4652 {
+	request {
+		aid 0 : integer
+		len 1 : integer
+	}
+}
+
+AR_BattleResultFromHegel 4654 {
+	request {
+		aid 0 : integer
+		tarAid 1 : integer
+		isReal 2 : integer
+		result 3 : integer
+		time 4 : integer
+	}
+}
+
+AR_ReqEnemyDtFromWorld 4655 {
+	request {
+		aid 0 : integer
+		tarRank 1 : integer
+	}
+}
+
+AR_StartBattleArena_Robot 4656 {
+	request {
+		aid 0 : integer
+		tarRank 1 : integer
+		battleId 2 : integer
+	}
+}
+
+AR_StartBattleArena_Real 4657 {
+	request {
+		aid 0 : integer
+		tarAid 1 : integer
+	}
+}
+
+AR_DoRecord 4658 {
+	request {
+		aid 0 : integer
+		history 1 : string
+	}
+}
+
+AR_DoRwd 4659 {
+	request {
+		aid 0 : integer
+		rank 1 : integer
+	}
+}
+
+PER_BossData 4671 {
+	request {
+	}
+	response {
+		bdata 0 : string
+		bossList 1 : *integer
+	}
+}
+
+FB_DailyFBData 4691 {
+	request {
+	}
+	response {
+		day 0 : integer
+	}
+}
+
+FB_FightStarReward 4692 {
+	request {
+		index 0 : integer
+		floor 1 : integer
+	}
+	response {
+		award 0 : integer
+	}
+}
+
+FB_FightOneKeyMoppingUp 4693 {
+	request {
+	}
+	response {
+		fd 0 : *integer
+	}
+}
+
+FB_MountainAuto 4694 {
+	request {
+	}
+	response {
+		current 0 : integer
+	}
+}
+
+FB_MountainReward 4695 {
+	request {
+		layers 0 : integer
+	}
+	response {
+		rewards 0 : *Mountain_Award(key)
+	}
+}
+
+FB_StarRewardAll 4696 {
+	request {
+	}
+	response {
+		wa 0 : *integer
+	}
+}
+
+FB_HhsjAuto 4697 {
+	request {
+	}
+	response {
+		cur 0 : integer
+	}
+}
+
+GU_UpGuildSkill 4711 {
+	request {
+	}
+	response {
+		contribution 0 : integer
+		skill 1 : *integer
+	}
+}
+
+GU_GuildBenison 4712 {
+	request {
+		index 0 : integer
+	}
+	response {
+		benisons 0 : *integer
+		contribution 1 : integer
+	}
+}
+
+GU_GetBenisonDtFromHegel 4713 {
+	request {
+		aid 0 : integer
+		index 1 : integer
+	}
+	response {
+	}
+}
+
+GU_GetGuildBenison 4714 {
+	request {
+	}
+	response {
+		result 0 : integer
+		gumyinfo 1 : GuildMyInfo
+	}
+}
+
+GU_GuildBenisonReward 4715 {
+	request {
+		index 0 : integer
+	}
+	response {
+		benisonlist 0 : *integer
+	}
+}
+
+GU_GetBenisonRewardFromHegel 4716 {
+	request {
+		aid 0 : integer
+		index 1 : integer
+	}
+	response {
+	}
+}
+
+GU_GetBenisonRewardFromWorld 4717 {
+	request {
+		aid 0 : integer
+		index 1 : integer
+		benisonExp 2 : integer
+	}
+	response {
+	}
+}
+
+GU_GuildQuestRing 4718 {
+	request {
+		index 0 : integer
+	}
+	response {
+		quest 0 : GuildQuest
+	}
+}
+
+GU_GuildQuestRingEnd 4719 {
+	request {
+	}
+	response {
+		quest 0 : GuildQuest
+	}
+}
+
+GU_SyncGuildsLevelToHegel 4720 {
+	request {
+		guilds 0 : *GuildLevel
+	}
+	response {
+	}
+}
+
+GU_GetGuildPerData 4721 {
+	request {
+	}
+	response {
+		guildrecord 0 : Guildrecord
+	}
+}
+
+GU_ClentGetGuildLevel 4722 {
+	request {
+	}
+	response {
+		lv 0 : integer
+	}
+}
+
+GU_GuildQuestRingStart 4723 {
+	request {
+	}
+}
+
+GU_GetShouhuPointReward 4724 {
+	request {
+		id 0 : integer
+	}
+	response {
+		id 0 : integer
+	}
+}
+
+GU_UpdateGuildName 4725 {
+	request {
+		guildName 0 : string
+		aid 1 : integer
+	}
+	response {
+		result 0 : integer
+		gumyinfo 1 : GuildMyInfo
+	}
+}
+
+GU_GuildJuanXian 4726 {
+	request {
+		itemid 0 : integer
+		num 1 : integer
+		addExp 2 : integer
+		aid 3 : integer
+	}
+	response {
+		result 0 : integer
+		gumyinfo 1 : GuildMyInfo
+	}
+}
+
+GMAP_UpQuest 4727 {
+	response {
+		guildquest 0 : GuildQuest
+	}
+}
+
+GMAP_GetAward 4728 {
+	request {
+		tp 0 : integer
+	}
+}
+
+GMAP_AutoDone 4729 {
+	request {
+		tp 0 : integer
+	}
+}
+
+GMAP_Reset 4730 {
+	request {
+		tp 0 : integer
+	}
+}
+
+GMAP_ChangeState 4731 {
+	response {
+		tp 0 : integer
+		state 1 : integer
+		count 2 : integer
+	}
+}
+
+GU_ActGuidGift 4732 {
+	request {
+		aid 0 : integer
+		action 1 : integer
+	}
+}
+
+GU_ReceiveGuidGift 4733 {
+	request {
+		items 0 : *GuildGiftItems
+		aid 1 : integer
+	}
+}
+
+GU_AddGuildActRecord 4734 {
+	request {
+		aid 0 : integer
+		type 1 : string
+		num 2 : integer
+	}
+}
+
+GU_AddGuildMRecord 4735 {
+	request {
+		aid 0 : integer
+		gid 1 : integer
+		args 2 : *string
+		tp 3 : integer
+		serverId 4 : integer
+	}
+	response {
+		aid 0 : integer
+		gid 1 : integer
+		args 2 : *string
+		tp 3 : integer
+	}
+}
+
+GU_GetGFbSimpleRank 4736 {
+	request {
+	}
+	response {
+		ranks 0 : *GU_GuildFbRank
+		granks 1 : *GU_GuildFbRank
+		myRank 2 : integer
+		myVal 3 : integer
+		myGuidRank 4 : integer
+		myGuidVal 5 : integer
+		batInfo 6 : *GU_GuildFbFloorPro(floor)
+	}
+}
+
+GU_BuyFbTime 4737 {
+	request {
+	}
+	response {
+		myGuildFb 0 : MyGuildFb
+	}
+}
+
+GU_GetGFbTotalRank 4738 {
+	request {
+	}
+	response {
+		ranks 0 : *GU_GuildFbRank
+		granks 1 : *GU_GuildFbRank
+		myRank 2 : integer
+		myVal 3 : integer
+		myGuidRank 4 : integer
+		myGuidVal 5 : integer
+	}
+}
+
+GU_SysMyGuildFb 4739 {
+	request {
+	}
+	response {
+		myGuildFb 0 : MyGuildFb
+	}
+}
+
+GU_UpMyGuildGw 4740 {
+	request {
+	}
+	response {
+		myGuildFb 0 : MyGuildFb
+	}
+}
+
+BAT_DispatchProp 5000 {
+	request {
+	}
+	response {
+		testDt 0 : BattleTestProp
+	}
+}
+
+BAT_BattleEnd 5001 {
+	request {
+	}
+	response {
+		battleResult 0 : BattleResultData
+	}
+}
+
+BAT_BattleWalk 5002 {
+	request {
+	}
+	response {
+		batBoss 0 : BatBoss
+	}
+}
+
+BAT_BattleBoss 5003 {
+	request {
+		bid 0 : integer
+	}
+	response {
+		batBoss 0 : BatBoss
+		isAissist 1 : integer
+	}
+}
+
+BAT_STAGE_REWARD 5004 {
+	request {
+	}
+	response {
+		stageReward 0 : integer
+	}
+}
+
+BAT_BattleBoss_Per 5005 {
+	request {
+		index 0 : integer
+	}
+	response {
+		bossList 0 : *integer
+		ktList 1 : *integer
+		ref 2 : integer
+	}
+}
+
+BAT_BattleArena 5006 {
+	request {
+		tarRank 0 : integer
+		isReal 1 : integer
+	}
+	response {
+		battleResult 0 : BattleResultData
+	}
+}
+
+BAT_BattleEndAward 5007 {
+	request {
+		bid 0 : integer
+	}
+	response {
+		awardList 0 : BattleOnePlayerAwardList
+		type 1 : integer
+		itemList 2 : *RewardItem
+		kingwar 3 : KingWarPlayer
+		temRank 4 : integer
+		bid 5 : integer
+	}
+}
+
+BAT_BattleBoss_FB 5008 {
+	request {
+		index 0 : integer
+	}
+	response {
+		dailyfb 0 : Dailyfb
+		ref 1 : integer
+	}
+}
+
+BAT_BattleFight_FB 5009 {
+	request {
+		tid 0 : integer
+	}
+	response {
+		tid 0 : integer
+		fightBoss 1 : integer
+	}
+}
+
+BAT_BattleTrial_FB 5010 {
+	request {
+	}
+	response {
+		trial 0 : integer
+	}
+}
+
+BAT_BattleMountain_FB 5011 {
+	request {
+	}
+	response {
+		floor 0 : integer
+		current 1 : integer
+	}
+}
+
+BAT_BattleVipBoss 5012 {
+	request {
+		tid 0 : integer
+	}
+	response {
+		vipBoss 0 : VipBoss
+	}
+}
+
+BAT_BattleSpecial 5013 {
+	request {
+		id 0 : integer
+	}
+}
+
+BAT_BookeFight 5014 {
+	request {
+		aid 0 : integer
+		did 1 : integer
+		pType 2 : integer
+		booker 3 : BookerBattleData
+	}
+	response {
+		aid 0 : integer
+		did 1 : integer
+		pType 2 : integer
+		booker 3 : BookerBattleData
+		isWin 4 : integer
+	}
+}
+
+BAT_BattlePvp 5015 {
+	request {
+		tid 0 : integer
+		cid 1 : integer
+	}
+}
+
+BAT_AfterBattle 5016 {
+	request {
+	}
+}
+
+BAT_GBTopBattle 5017 {
+	request {
+	}
+}
+
+BAT_ResultPanel 5018 {
+	response {
+		tp 0 : integer
+		myRank 1 : integer
+		item 2 : *RewardItem
+		win 3 : string
+		aid 4 : integer
+		charData 5 : WorldChar
+		aucitem 6 : *RewardItem
+		campRank 7 : integer
+	}
+}
+
+BAT_BattleEndAdd 5019 {
+	request {
+		bid 0 : integer
+	}
+	response {
+		battleInfoList 0 : *BattleRoundActionData
+		isEnd 1 : integer
+		bid 2 : integer
+	}
+}
+
+BAT_DirectReward 5020 {
+	response {
+		battleResult 0 : BattleResultData
+	}
+}
+
+BAT_reqAssist 5021 {
+	request {
+		tid 0 : integer
+		curIndex 1 : integer
+		aid 2 : integer
+	}
+}
+
+BAT_AssistBoss 5022 {
+	request {
+		tarAid 0 : integer
+		tid 1 : integer
+		curIndex 2 : integer
+		aid 3 : integer
+		charData 4 : CharData
+	}
+	response {
+		aid 0 : integer
+		tarAid 1 : integer
+		charData 2 : CharData
+	}
+}
+
+BAT_AssistCallBack 5023 {
+	request {
+		aid 0 : integer
+		tarAid 1 : integer
+		result 2 : integer
+		tid 3 : integer
+		curIndex 4 : integer
+		bid 5 : integer
+	}
+}
+
+BAT_BattleByWorld 5024 {
+	request {
+		aid 0 : integer
+		battleResult 1 : BattleResultData
+	}
+}
+
+BAT_BattleCLBS 5025 {
+	request {
+		sid 0 : integer
+		reborn 1 : integer
+	}
+}
+
+BAT_ResultPanelNew 5026 {
+	response {
+		tp 0 : integer
+		myRank 1 : integer
+		item 2 : *RewardItem
+		aid 3 : integer
+		charData 4 : WorldChar
+		mbid 5 : integer
+		isOk 6 : integer
+	}
+}
+
+BAT_BattleHhsj_FB 5027 {
+	request {
+	}
+	response {
+		max 0 : integer
+		cur 1 : integer
+	}
+}
+
+GW_SKILLUPLV 5501 {
+	request {
+		funcKey 0 : string
+		index 1 : integer
+	}
+	response {
+		funcKey 0 : string
+		index 1 : integer
+	}
+}
+
+GW_PROPUPLV 5502 {
+	request {
+		funcKey 0 : string
+		autoBuy 1 : integer
+	}
+	response {
+		funcKey 0 : string
+		data 1 : GrowpropData
+	}
+}
+
+GW_SHOWPROP 5503 {
+	request {
+		funcKey 0 : string
+		resId 1 : integer
+	}
+	response {
+		funcKey 0 : string
+		resId 1 : integer
+	}
+}
+
+GW_AUTOEQUIP 5504 {
+	request {
+		funcKey 0 : string
+	}
+}
+
+GW_UsePropDan 5505 {
+	request {
+		funcKey 0 : string
+		num 1 : integer
+	}
+}
+
+LE_ActivePiece 5521 {
+	request {
+		id 0 : integer
+	}
+	response {
+		legend 0 : Legend
+	}
+}
+
+LE_ActiveToNext 5522 {
+	request {
+	}
+}
+
+RUNE_AutoEquip 5526 {
+	request {
+		pos 0 : integer
+	}
+	response {
+		runes 1 : *RuneSlot(vid)
+	}
+}
+
+RUNE_AutoCompose 5527 {
+	request {
+		composeId 0 : integer
+		num 1 : integer
+	}
+	response {
+	}
+}
+
+RUNE_OneKeyUp 5528 {
+	request {
+		pos 0 : integer
+	}
+	response {
+		runes 1 : *RuneSlot(vid)
+	}
+}
+
+SOULROOT_RANDOM 5531 {
+	request {
+		type 0 : integer
+	}
+	response {
+		newSoulRoots 0 : *SoulRootData(vid)
+		luck 1 : integer
+	}
+}
+
+SOULROOT_COMPOSE 5532 {
+	request {
+		id 0 : integer
+	}
+	response {
+	}
+}
+
+SOULROOT_CHANGE_LUCK 5533 {
+	request {
+		luck 0 : integer
+	}
+	response {
+		luck 0 : integer
+	}
+}
+
+SOULROOT_LEVELUP 5534 {
+	request {
+		type 0 : integer
+		index 1 : integer
+	}
+	response {
+	}
+}
+
+SOULROOT_BREAK 5535 {
+	request {
+		soulRootData 0 : *SoulRootData
+	}
+	response {
+	}
+}
+
+SOULROOT_AUTOEQUIP 5536 {
+	request {
+		ids 0 : *integer
+	}
+	response {
+	}
+}
+
+SOULROOT_DATACHANGE 5537 {
+	response {
+		soulRoot 0 : SoulRoot
+	}
+}
+
+ANALY_REFDATA 5541 {
+	response {
+		analytics 0 : Analytics
+	}
+}
+
+OP_GetRwd 5551 {
+	request {
+		opId 0 : integer
+		ids 1 : *integer
+	}
+}
+
+OP_BattleOpBoss 5552 {
+	request {
+		opId 0 : integer
+		id 1 : integer
+	}
+}
+
+OP_BuyFinance 5553 {
+	request {
+		opId 0 : integer
+	}
+}
+
+OP_GetWelfareTopList 5554 {
+	request {
+	}
+	response {
+		rankList 0 : *OpRankItem
+		dresses 1 : *Dress
+		tempIds 2 : *integer
+	}
+}
+
+OP_CommonRwd 5555 {
+	response {
+		awardList 0 : BattleOnePlayerAwardList
+		extObj 1 : *Kval(key)
+	}
+}
+
+OP_ActiveOp 5556 {
+	response {
+		act 0 : Kval
+	}
+}
+
+HB_CommonOperate 5561 {
+	request {
+		type 0 : integer
+		id 1 : integer
+		auto 2 : integer
+	}
+	response {
+		book 0 : HeavenBookItem
+	}
+}
+
+OP_SelectSelfLottery 5566 {
+	request {
+		opId 0 : integer
+		award 1 : string
+	}
+	response {
+		suc 0 : integer
+	}
+}
+
+AC_GetAchieveRwd 5571 {
+	request {
+		id 0 : integer
+	}
+	response {
+		record 0 : Kval
+	}
+}
+
+AC_DoShare 5572 {
+	request {
+		id 0 : integer
+		type 1 : integer
+	}
+	response {
+		share 0 : Share
+	}
+}
+
+AC_GetShareRwd 5573 {
+	request {
+		id 0 : integer
+	}
+}
+
+AC_GetAccRwd 5574 {
+	request {
+	}
+}
+
+DT_getRwd 5581 {
+	request {
+		type 0 : integer
+	}
+	response {
+		dailytask 0 : Dailytask
+	}
+}
+
+DT_operateBoss 5582 {
+	request {
+		type 0 : integer
+		index 1 : integer
+	}
+	response {
+		dailytask 0 : Dailytask
+	}
+}
+
+DC_operate 5591 {
+	request {
+		type 0 : integer
+		param 1 : integer
+	}
+	response {
+		dayclg 0 : Dayclg
+		type 1 : integer
+	}
+}
+
+GP_Operate 5596 {
+	request {
+		id 0 : integer
+		param 1 : string
+	}
+	response {
+		item 0 : Gift
+		com 1 : integer
+	}
+}
+
+GP_CheckType 5597 {
+	request {
+		tp 0 : integer
+	}
+}
+
+ITEM_AddItemList 5611 {
+	request {
+	}
+	response {
+		items 0 : *ItemData(vid)
+		equips 1 : *EquipData(vid)
+		faBaos 2 : *FaBaoData
+		runes 3 : *RuneData(vid)
+		soulroots 4 : *SoulRootData(vid)
+	}
+}
+
+ITEM_DelItemList 5612 {
+	request {
+	}
+	response {
+		items 0 : *ItemData
+		equips 1 : *EquipData
+		faBaos 2 : *FaBaoData
+		runes 3 : *RuneData
+		soulroots 4 : *SoulRootData
+	}
+}
+
+ITEM_UseItem 5613 {
+	request {
+		itemId 0 : integer
+		num 1 : integer
+		extObj 2 : *Kval(key)
+	}
+}
+
+ITEM_TAKEGIFT 5614 {
+	request {
+		sts 0 : *STab
+		logType 1 : integer
+		aid 2 : integer
+	}
+}
+
+ITEM_Compound 5615 {
+	request {
+		tid 0 : integer
+	}
+}
+
+ITEM_TAKEGIFT_ITEMS 5616 {
+	request {
+		aid 0 : integer
+		rwds 1 : *GiftItem
+		logType 2 : integer
+	}
+}
+
+ITEM_UpItemList 5617 {
+	response {
+		faBao 0 : FaBaoData
+	}
+}
+
+ITEM_Compounds 5618 {
+	request {
+		tid 0 : integer
+		num 1 : integer
+	}
+}
+
+ITEM_UseItems 5619 {
+	request {
+		items 0 : *GiftItem
+	}
+}
+
+BatBoss_getAward 5621 {
+	request {
+		mid 0 : integer
+	}
+	response {
+		mid 0 : integer
+		sts 1 : *integer
+	}
+}
+
+FABAO_Make 5630 {
+	request {
+		isTop 0 : integer
+		selected 1 : integer
+	}
+	response {
+		faBao 0 : FaBao
+	}
+}
+
+FABAO_EquipOn 5631 {
+	request {
+		id 0 : string
+		sid 1 : integer
+	}
+}
+
+FABAO_Break 5632 {
+	request {
+		ids 0 : string
+	}
+}
+
+FABAO_LevelUp 5633 {
+	request {
+		sid 0 : integer
+		selected 1 : integer
+	}
+	response {
+		faBao 0 : FaBao
+	}
+}
+
+FABAO_Lock 5634 {
+	request {
+		id 0 : string
+	}
+}
+
+FABAO_MakeOneKey 5635 {
+	request {
+		isTop 0 : integer
+		selected 1 : integer
+	}
+	response {
+		faBao 0 : FaBao
+	}
+}
+
+XN_ActiveXuanNv 5641 {
+	response {
+		xuanNvs 0 : XuanNvs
+	}
+}
+
+XN_LevelUp 5642 {
+	request {
+		selected 0 : integer
+	}
+	response {
+		result 0 : integer
+		xuanNv 1 : XuanNv
+	}
+}
+
+XN_ActiveFaQi 5643 {
+	response {
+		xnfaqi 0 : XuanNvFaQi
+	}
+}
+
+XN_FaQiBaptize 5644 {
+	request {
+		index 0 : integer
+		isTop 1 : integer
+		lockArr 2 : *integer
+		selected 3 : integer
+		skillLv 4 : *integer
+	}
+	response {
+		index 0 : integer
+		xnfaqi 1 : XuanNvFaQi
+	}
+}
+
+XN_FaQiPropChange 5645 {
+	request {
+		index 0 : integer
+	}
+	response {
+		index 0 : integer
+		xnfaqi 1 : XuanNvFaQi
+	}
+}
+
+TTM_ActiveTotem 5656 {
+	request {
+		tid 0 : integer
+	}
+	response {
+		totem 0 : Totem
+	}
+}
+
+TTM_UpTotem 5657 {
+	request {
+		tid 0 : integer
+		index 1 : integer
+	}
+	response {
+		totem 0 : Totem
+		critSum 1 : integer
+		critExp 2 : integer
+	}
+}
+
+TTM_TpTotem 5658 {
+	request {
+		tid 0 : integer
+	}
+	response {
+		totem 0 : Totem
+	}
+}
+
+TTM_UpZlTotem 5659 {
+	request {
+		tid 0 : integer
+		selected 1 : integer
+	}
+	response {
+		totem 0 : Totem
+	}
+}
+
+TTM_UpZQTotem 5660 {
+	request {
+		tid 0 : integer
+		selected 1 : integer
+	}
+	response {
+		totem 0 : Totem
+	}
+}
+
+TTM_TpZQTotem 5661 {
+	request {
+		tid 0 : integer
+		selected 1 : integer
+	}
+	response {
+		totem 0 : Totem
+	}
+}
+
+TTM_TotemOn 5662 {
+	request {
+		tid 0 : integer
+		pos 1 : integer
+	}
+	response {
+		slots 0 : *TotemSlot(sid)
+		on 1 : integer
+	}
+}
+
+TTM_TotemOpen 5663 {
+	request {
+	}
+	response {
+		open 0 : integer
+	}
+}
+
+SGOD_OpenModule 5666 {
+	response {
+		skyGods 0 : SkyGods
+	}
+}
+
+SGOD_Active 5667 {
+	request {
+		pid 0 : integer
+	}
+	response {
+		skyGod 0 : SkyGod
+	}
+}
+
+SGOD_UpLevel 5668 {
+	request {
+		pid 0 : integer
+		selected 1 : integer
+	}
+	response {
+		pid 0 : integer
+		exp 1 : integer
+		level 2 : integer
+	}
+}
+
+SGOD_SetBattle 5669 {
+	request {
+		pid 0 : integer
+		index 1 : integer
+	}
+	response {
+		aids 0 : *integer
+		pid 1 : integer
+	}
+}
+
+SGOD_TpLevel 5670 {
+	request {
+		pid 0 : integer
+	}
+	response {
+		tpLevel 0 : integer
+		pid 1 : integer
+	}
+}
+
+SGOD_UpWeaponLv 5671 {
+	request {
+		key 0 : string
+		selected 1 : integer
+	}
+	response {
+		key 0 : string
+		level 1 : integer
+		exp 2 : integer
+	}
+}
+
+SGOD_UpTfLv 5672 {
+	request {
+		pid 0 : integer
+	}
+	response {
+		pid 0 : integer
+		tfData 1 : SkyGodTFTM
+	}
+}
+
+SGOD_TpTfLv 5674 {
+	request {
+		pid 0 : integer
+	}
+	response {
+		pid 0 : integer
+		tfData 1 : SkyGodTFTM
+	}
+}
+
+SGOD_UpTmLv 5675 {
+	request {
+		pid 0 : integer
+	}
+	response {
+		pid 0 : integer
+		tmData 1 : SkyGodTFTM
+	}
+}
+
+SGOD_UpELv 5676 {
+	request {
+		pid 0 : integer
+		key 1 : string
+		isTop 2 : integer
+	}
+	response {
+		pid 0 : integer
+		key 1 : string
+		exp 2 : integer
+	}
+}
+
+SGOD_TpEJx 5677 {
+	request {
+		pid 0 : integer
+	}
+	response {
+		pid 0 : integer
+		skyGodJX 1 : SkyGodJX
+	}
+}
+
+SGOD_UpAllELv 5678 {
+	request {
+		pid 0 : integer
+	}
+	response {
+		pid 0 : integer
+		skyGodJX 1 : SkyGodJX
+	}
+}
+
+SGOD_UpSS 5679 {
+	request {
+		pid 0 : integer
+		isAuto 1 : integer
+		type 2 : integer
+	}
+	response {
+		skySS 0 : SkyGodSS
+	}
+}
+
+HJ_ActiveHj 5691 {
+	response {
+		hejiData 0 : HejiData
+	}
+}
+
+HJ_ActiveGroup 5692 {
+	request {
+		group 0 : integer
+		itemId 1 : integer
+	}
+	response {
+		hejiDataOne 0 : HejiDataOne
+	}
+}
+
+RM_CreateRoom 5800 {
+	request {
+		tp 0 : integer
+		index 1 : integer
+		charData 2 : CharData
+		aid 3 : integer
+		sid 4 : integer
+	}
+	response {
+		room 0 : Room
+	}
+}
+
+RM_JoinRoom 5801 {
+	request {
+		tp 0 : integer
+		index 1 : integer
+		roomId 2 : integer
+		charData 3 : CharData
+		aid 4 : integer
+		sid 5 : integer
+		isRob 6 : integer
+	}
+}
+
+RM_AutoJoin 5802 {
+	request {
+		tp 0 : integer
+		index 1 : integer
+		charData 2 : CharData
+		aid 3 : integer
+		sid 4 : integer
+	}
+}
+
+RM_QuickAtt 5803 {
+	request {
+		tp 0 : integer
+		index 1 : integer
+	}
+}
+
+RM_OpenBox 5804 {
+	request {
+		tp 0 : integer
+		index 1 : integer
+	}
+}
+
+GB_GetSecNum 5815 {
+	request {
+	}
+	response {
+		num 0 : integer
+	}
+}
+
+GB_GetTopData 5816 {
+	request {
+	}
+	response {
+		data 0 : *CharData
+	}
+}
+
+GB_TopProtect 5817 {
+	request {
+	}
+	response {
+	}
+}
+
+FG_UP 5831 {
+	request {
+		ftype 0 : integer
+	}
+	response {
+		ftype 0 : integer
+		forgeDatas 1 : ForgeDatas
+	}
+}
+
+MAR_SendGift 5851 {
+	request {
+		aid 0 : integer
+		gtype 1 : integer
+		eventLv 2 : integer
+	}
+	response {
+	}
+}
+
+MAR_SendFlower 5852 {
+	request {
+		itemid 0 : integer
+		itemnum 1 : integer
+		autobuy 2 : integer
+	}
+	response {
+	}
+}
+
+MAR_HouseRenovation 5853 {
+	request {
+		rtype 0 : integer
+	}
+	response {
+	}
+}
+
+MAR_HouseUpgrade 5854 {
+	request {
+	}
+	response {
+	}
+}
+
+MAR_GetMarriageInfoSingle 5855 {
+	request {
+	}
+	response {
+		marriage 0 : Marriage
+	}
+}
+
+CC_GetCityInfo 5870 {
+	request {
+		cid 0 : integer
+	}
+	response {
+		cid 0 : integer
+		chars 1 : *teamMem
+	}
+}
+
+CC_LeaveCity 5872 {
+	request {
+	}
+}
+
+CC_OccupyCity 5873 {
+	response {
+		cid 0 : integer
+		camp 1 : integer
+		chars 2 : *teamMem
+		removeaids 3 : *integer
+	}
+}
+
+KW_GetKingWarInfo 5880 {
+	request {
+	}
+	response {
+		kingwar 0 : Kingwar
+	}
+}
+
+KW_MATCH 5881 {
+	request {
+	}
+	response {
+		battleResult 0 : BattleResultData
+		list 1 : *KingWarPlayer
+	}
+}
+
+KW_Worship 5882 {
+	request {
+	}
+	response {
+		worshiptime 0 : integer
+	}
+}
+
+KW_BuyMatchTimes 5883 {
+	request {
+	}
+	response {
+		times 0 : integer
+		buytimes 1 : integer
+	}
+}
+
+KW_GetRankList 5884 {
+	request {
+	}
+	response {
+		myinfo 0 : KingWarPlayer
+		ranklist 1 : *KingWarPlayer
+	}
+}
+
+KW_GetLastRankList 5885 {
+	request {
+	}
+	response {
+		mobaiCount 0 : integer
+		awardId 1 : integer
+		myinfo 2 : KingWarPlayer
+		king 3 : KingWarPlayer
+		ranklist 4 : *KingWarPlayer
+	}
+}
+
+KW_GetWorshipAward 5886 {
+	request {
+		aid 0 : integer
+		sid 1 : integer
+	}
+	response {
+		aid 0 : integer
+		awardId 1 : integer
+		mobaiCount 2 : integer
+	}
+}
+
+FBK_Bet 5900 {
+	request {
+		gsArea 0 : integer
+		bindex 1 : integer
+		winaid 2 : integer
+		btype 3 : integer
+	}
+	response {
+		result 0 : integer
+		myBetList 1 : *BetPlayer(key)
+	}
+}
+
+FBK_BeKill 5901 {
+	response {
+		name 0 : string
+	}
+}
+
+AUC_UpdateData 5910 {
+	response {
+		tp 0 : integer
+		auctp 1 : integer
+		aid 2 : integer
+		datas 3 : *Auction
+		ids 4 : *integer
+	}
+}
+
+AUC_AddData 5911 {
+	request {
+		sid 0 : integer
+		data 1 : *Auction
+	}
+}
+
+AUC_Bidding 5912 {
+	request {
+		tp 0 : integer
+		auctp 1 : integer
+		idx 2 : integer
+		sid 3 : integer
+		aid 4 : integer
+		name 5 : string
+		gold 6 : integer
+		aucscore 7 : integer
+	}
+	response {
+		aid 0 : integer
+		gold 1 : integer
+	}
+}
+
+RW_RobHegel 5930 {
+	request {
+		pos 0 : integer
+	}
+}
+
+RW_GetRwInfoHegel 5931 {
+	request {
+		index 0 : integer
+	}
+	response {
+		myInfo 0 : ResourcewarPlayer
+		slots 1 : *ResourceSlotData
+		charname 2 : string
+		point 3 : integer
+		aid 4 : integer
+		index 5 : integer
+		pageMax 6 : integer
+		myAdd 7 : integer
+		fk 8 : integer
+		result 9 : integer
+	}
+}
+
+RW_InSlotHegel 5932 {
+	request {
+		pos 0 : integer
+		index 1 : integer
+	}
+}
+
+RW_GetRwRankHegel 5933 {
+	request {
+	}
+	response {
+		dayRank 0 : ResourceRankList
+		weekRank 1 : ResourceRankList
+		weekPRank 2 : ResourceRankList
+	}
+}
+
+RW_ClearRwBatCDHegel 5934 {
+	request {
+	}
+	response {
+		batCD 0 : integer
+		result 1 : integer
+	}
+}
+
+RW_GetRwLogHegel 5935 {
+	request {
+	}
+	response {
+		aid 0 : integer
+		logs 1 : *ResourceLog
+	}
+}
+
+RW_GetPointHegel 5936 {
+	request {
+	}
+	response {
+		result 0 : integer
+		myInfo 1 : ResourcewarPlayer
+	}
+}
+
+RW_SendGWEventHegel 5937 {
+	request {
+	}
+	response {
+		aid 0 : integer
+		eventType 1 : integer
+	}
+}
+
+RW_AddBatTimeHegel 5938 {
+	request {
+	}
+	response {
+		result 0 : integer
+		myInfo 1 : ResourcewarPlayer
+	}
+}
+
+CSA_CommonOperate 5976 {
+	request {
+		type 0 : integer
+		param 1 : string
+	}
+	response {
+		type 0 : integer
+		season 1 : integer
+		myDRank 2 : integer
+		mySRank 3 : integer
+		csArena 4 : CsArena
+		myCsDt 5 : CsArenaPlayer
+		enemyList 6 : *CsArenaPlayer
+		dRankList 7 : *CsArenaPlayer
+		sRankList 8 : *CsArenaPlayer
+	}
+}
+
+PETCSA_CommonOperate 5978 {
+	request {
+		type 0 : integer
+		param 1 : string
+	}
+	response {
+		type 0 : integer
+		season 1 : integer
+		myDRank 2 : integer
+		mySRank 3 : integer
+		csArena 4 : PetCsArena
+		myCsDt 5 : PetCsArenaPlayer
+		enemyList 6 : *PetCsArenaPlayer
+		dRankList 7 : *PetCsArenaPlayer
+		sRankList 8 : *PetCsArenaPlayer
+		bResult 9 : *integer
+	}
+}
+
+AFT_Act 5981 {
+	request {
+		pid 0 : integer
+	}
+	response {
+		artifact 0 : Artifact
+	}
+}
+
+AFT_LevelUp 5982 {
+	request {
+		pid 0 : integer
+		selected 1 : integer
+	}
+	response {
+		artifact 0 : Artifact
+	}
+}
+
+AFT_JL 5983 {
+	request {
+		pid 0 : integer
+	}
+	response {
+		artifact 0 : Artifact
+	}
+}
+
+AFT_QlLevelUp 5984 {
+	request {
+		pid 0 : integer
+		selected 1 : integer
+	}
+	response {
+		artifact 0 : Artifact
+	}
+}
+
+AFT_QlTp 5985 {
+	request {
+		pid 0 : integer
+	}
+	response {
+		artifact 0 : Artifact
+	}
+}
+
+AFT_JJLevelUp 5986 {
+	request {
+		pid 0 : integer
+		selected 1 : integer
+	}
+	response {
+		artifact 0 : Artifact
+	}
+}
+
+AFT_JJTp 5987 {
+	request {
+		pid 0 : integer
+	}
+	response {
+		artifact 0 : Artifact
+	}
+}
+
+AFT_ClLevelUp 5988 {
+	request {
+		pid 0 : integer
+		index 1 : integer
+	}
+	response {
+		artifact 0 : Artifact
+	}
+}
+
+AFT_ClTp 5989 {
+	request {
+		pid 0 : integer
+	}
+	response {
+		artifact 0 : Artifact
+	}
+}
+
+HM_BAPTIZE 6011 {
+	request {
+		index 0 : integer
+		isTop 1 : integer
+		selected 2 : integer
+		lockArr 3 : *integer
+	}
+	response {
+		index 0 : integer
+		heartLaw 1 : HeartLaw
+	}
+}
+
+HM_CHANGE 6012 {
+	request {
+		index 0 : integer
+	}
+	response {
+		index 0 : integer
+		heartLaw 1 : HeartLaw
+	}
+}
+
+HM_Active 6013 {
+	response {
+		hms 0 : *HeartLaw
+	}
+}
+
+ZLX_RobHegel 6041 {
+	request {
+		pos 0 : integer
+	}
+}
+
+ZLX_GetInfo 6042 {
+	request {
+		sid 0 : integer
+		aid 1 : integer
+		index 2 : integer
+		charData 3 : CharData
+	}
+	response {
+		myInfo 0 : TjResourcewarPlayer
+		slots 1 : *ResourceSlotData
+		charname 2 : string
+		point 3 : integer
+		aid 4 : integer
+		index 5 : integer
+		pageMax 6 : integer
+		myAdd 7 : integer
+		result 8 : integer
+	}
+}
+
+ZLX_GetRwRank 6043 {
+	request {
+		sid 0 : integer
+		aid 1 : integer
+	}
+	response {
+		dayRank 0 : TjResourceRankList
+		weekRank 1 : TjResourceRankList
+		weekPRank 2 : TjResourceRankList
+	}
+}
+
+ZLX_GetRwLog 6044 {
+	request {
+		sid 0 : integer
+		aid 1 : integer
+	}
+	response {
+		aid 0 : integer
+		logs 1 : *ResourceLog
+	}
+}
+
+ZLX_GetPoint 6045 {
+	request {
+		sid 0 : integer
+		aid 1 : integer
+	}
+	response {
+		point 0 : integer
+		money 1 : integer
+		myInfo 2 : TjResourcewarPlayer
+		aid 3 : integer
+	}
+}
+
+ZLX_AddBatTimeHegel 6046 {
+	request {
+	}
+	response {
+		result 0 : integer
+		myInfo 1 : TjResourcewarPlayer
+	}
+}
+
+ZLX_GetCostTimeAward 6047 {
+	request {
+		adid 0 : integer
+	}
+	response {
+		result 0 : integer
+		adid 1 : integer
+		myInfo 2 : TjResourcewarPlayer
+	}
+}
+
+GE_On 6066 {
+	request {
+		sid 0 : integer
+		tp 1 : string
+		index 2 : integer
+		tid 3 : integer
+	}
+	response {
+		data 0 : *GEquiponData(sid)
+	}
+}
+
+AC_getRwd 10001 {
+	request {
+		id 0 : integer
+	}
+	response {
+		dailyactivity 0 : Dailyactivity
+	}
+}
+
+AC_getBackRwd 10002 {
+	request {
+		id 0 : integer
+		type 1 : integer
+		times 2 : integer
+	}
+}
+
+AC_oneKeyCom 10003 {
+	request {
+		id 0 : integer
+	}
+}
+
+SF_GetAwardFromWorld 10021 {
+	request {
+		aid 0 : integer
+		tp 1 : integer
+		idx 2 : integer
+	}
+}
+
+SDK_Sign 12500 {
+	request {
+		pid 0 : string
+		func 1 : string
+		signJson 2 : string
+	}
+	response {
+		pid 0 : string
+		func 1 : string
+		signJson 2 : string
+		sign 3 : string
+	}
+}
+
+CHT_ChatSendNew 12600 {
+	request {
+		chatItem 0 : ChatItemNew
+		gfid 1 : integer
+	}
+	response {
+		chatItem 0 : ChatItemNew
+	}
+}
+
+CHT_SendToWorld 12601 {
+	request {
+		chatItem 0 : ChatItemNew
+		index 1 : integer
+		tp 2 : integer
+	}
+	response {
+	}
+}
+
+CHT_Show 12602 {
+	request {
+		showtype 0 : integer
+		param 1 : string
+	}
+	response {
+		result 0 : integer
+	}
+}
+
+CHT_GetPrivateChatList 12603 {
+	request {
+	}
+	response {
+		list 0 : *PrivateChat
+	}
+}
+
+CHT_SendRumorToWorld 12604 {
+	request {
+		dt 0 : ChatPopDt
+		limitNum 1 : integer
+		areaTp 2 : integer
+		index 3 : integer
+	}
+}
+
+C_GetExchange 12651 {
+	request {
+	}
+	response {
+	}
+}
+
+C_UpCareer 12652 {
+	request {
+		career 0 : integer
+		sex 1 : integer
+	}
+	response {
+		skill 0 : Skill
+		tempId 1 : integer
+		career 2 : integer
+		sex 3 : integer
+	}
+}
+
+C_SaveOpActLog 12653 {
+	request {
+		key 0 : string
+		value 1 : string
+	}
+	response {
+		opActionLog 0 : OpActionLog
+	}
+}
+
+C_DoLoginMd5Check 12654 {
+	request {
+		pid 0 : string
+		ocheckstr 1 : string
+		checkstr 2 : string
+	}
+	response {
+		pid 0 : string
+		ocheckstr 1 : string
+		checkstr 2 : string
+		sign 3 : string
+	}
+}
+
+C_CreReset 12655 {
+	request {
+		pid 0 : integer
+		tp 1 : integer
+	}
+	response {
+		pid 0 : integer
+		tp 1 : integer
+	}
+}
+
+C_GsChange 12656 {
+	request {
+	}
+	response {
+		key 0 : *string
+		val 1 : *integer
+	}
+}
+
+C_CHALLENGEGIFT 12657 {
+	request {
+		id 0 : integer
+	}
+	response {
+		challengeGift 0 : ChallengeData
+	}
+}
+
+C_DOREFRESH 12658 {
+	response {
+	}
+}
+
+VRH_UpdateMetaList 13190 {
+	request {
+	}
+	response {
+		metas 0 : *PayItemMeta(productId)
+		paydata 1 : Paydata
+	}
+}
+
+VRH_DoMd5Check 13191 {
+	request {
+		pid 0 : string
+		feeid 1 : integer
+		opId 2 : integer
+		id 3 : integer
+		checkstr 4 : string
+		ext 5 : string
+	}
+	response {
+		check 0 : string
+		feeid 1 : integer
+		fee 2 : integer
+		serverid 3 : integer
+		uid 4 : string
+		checkstr 5 : string
+		ext 6 : string
+	}
+}
+
+PVESB_BattleStartToHegel 13201 {
+	request {
+		sid 0 : integer
+		currentHp 1 : integer
+		maxHp 2 : integer
+		battleId 3 : integer
+		aid 4 : integer
+	}
+	response {
+		sid 0 : integer
+		hurtHp 1 : integer
+		aid 2 : integer
+	}
+}
+
+PVESB_ReqRebornBossToHegel 13202 {
+	request {
+		sid 0 : integer
+		aid 1 : integer
+	}
+	response {
+		sid 0 : integer
+		aid 1 : integer
+	}
+}
+
+PVESB_RefShareBossUserDt 13203 {
+	response {
+		shareboss 0 : Shareboss
+	}
+}
+
+PVESB_BuyChallengeBossTimes 13204 {
+	request {
+	}
+}
+
+PVESB_SynRankList 13205 {
+	request {
+		rankLists 0 : *SynRankList(key)
+	}
+}
+
+AC_WildBattleToHegel 13217 {
+	request {
+		aid 0 : integer
+		ownerId 1 : integer
+		bossId 2 : integer
+		currentHp 3 : integer
+		maxHp 4 : integer
+		level 5 : integer
+		totalPay 6 : integer
+	}
+	response {
+		aid 0 : integer
+		bossId 1 : integer
+		currentHp 2 : integer
+		maxHp 3 : integer
+	}
+}
+
+BAT_SynBattleResultToWorld 13251 {
+	request {
+		aid 0 : integer
+		type 1 : integer
+		fbid 2 : integer
+		gs 3 : integer
+		result 4 : integer
+	}
+}
+
+OP_SyncLotteryRecordToWorld 13300 {
+	request {
+		opId 0 : integer
+		records 1 : *LotteryRecord
+	}
+}
+
+OP_SyncRankRecordToWorld 13301 {
+	request {
+		aid 0 : integer
+		val 1 : integer
+		rankKey 2 : string
+	}
+}
+
+OP_SyncWelfareTopListToHegel 13302 {
+	request {
+		rankList 0 : *OpRankItem
+		dresses 1 : *Dress
+		tempIds 2 : *integer
+	}
+}
+
+OP_SyncCommonRecToWorld 13303 {
+	request {
+		aid 0 : integer
+		vals 1 : *integer
+		opIds 2 : *integer
+	}
+}
+
+RL_SyncRecordToWorld 13310 {
+	request {
+		aid 0 : integer
+		param 1 : string
+		id 2 : integer
+	}
+}
+
+ANALY_DoRecord 13320 {
+	request {
+		aid 0 : integer
+		ids 1 : *integer
+		vals 2 : *integer
+		isCovers 3 : *integer
+		types 4 : *string
+	}
+}
+
+C_CharLogined 20001 {
+	request {
+		wchar 0 : WorldChar
+		guildchar 1 : GuildChar
+	}
+}
+
+C_CharMapChanged 20002 {
+	request {
+		wchar 0 : WorldChar
+	}
+}
+
+VRH_UpdateMetaListWH 20003 {
+	request {
+		metas 0 : *PayItemMeta
+	}
+}
+
+PAY_GetPayHistoryWH 20004 {
+	request {
+		aidNum 0 : integer
+		totalPay 1 : integer
+		lastTime 2 : integer
+	}
+}
+
+RM_UpdateRoom 20005 {
+	response {
+		room 0 : Room
+	}
+}
+
+RM_RoomEnd 20006 {
+	response {
+		battleResult 0 : BattleResultData
+		aid 1 : integer
+		fbId 2 : integer
+		leader 3 : integer
+		tempIds 4 : *integer
+		myProper 5 : *Property
+		enemyProper 6 : *Property
+		batSkillList 7 : *BatSkillList
+		damageRank 8 : *BattleDamageInfo
+		isPvp 9 : integer
+	}
+}
+
+C_CharPartDataUpdate 20007 {
+	response {
+		des 0 : string
+		keyList 1 : *string
+		charData 2 : CharData
+	}
+}
+
+RM_FirstCross 20008 {
+	response {
+		aids 0 : *integer
+		charname 1 : string
+		tempIds 2 : *integer
+		index 3 : integer
+		tp 4 : integer
+	}
+}
+
+InitServerTime 20010 {
+	request {
+		year 0 : integer
+		month 1 : integer
+		day 2 : integer
+		hour 3 : integer
+	}
+}
+
+C_SyncDataToCrossWorld 20038 {
+	request {
+		aid 0 : integer
+		key 1 : string
+		intv 2 : integer
+	}
+}
+
+SC_OnChangeScene 20039 {
+	request {
+		aid 0 : integer
+		sceneId 1 : integer
+		scenetid 2 : integer
+	}
+}
+
+SC_ChangeScene 20040 {
+	request {
+		aid 0 : integer
+		scene 1 : integer
+		from 3 : integer
+		intp 4 : *integer
+		strp 5 : *string
+	}
+	response {
+		aid 0 : integer
+		scene 1 : integer
+		scenei 2 : integer
+		hid 3 : integer
+		pos 4 : UnitPosition
+		intp 5 : *integer
+		strp 6 : *string
+		avgLv 7 : integer
+		leaderLv 8 : integer
+	}
+}
+
+SC_SwitchHegelCross 20041 {
+	request {
+		aid 0 : integer
+		hid 1 : integer
+		type 2 : integer
+	}
+}
+
+SC_SwitchHegel 20042 {
+	request {
+		aid 0 : integer
+		hid 1 : integer
+		type 2 : integer
+		charData 3 : CharData
+		intp 4 : *integer
+		strp 5 : *string
+	}
+}
+
+SC_SpecialBack 20043 {
+	request {
+		aid 0 : integer
+		clear 1 : integer
+	}
+}
+
+SC_MobInScene 20044 {
+	request {
+	}
+	response {
+		mobs 0 : *Mob
+	}
+}
+
+SC_MobDie 20045 {
+	response {
+		id 0 : integer
+	}
+}
+
+SC_BroadHp 20046 {
+	response {
+		bossHp 0 : BossHp
+	}
+}
+
+SC_SetRevive 20047 {
+	response {
+		remain 0 : integer
+	}
+}
+
+SC_RemoveMob 20048 {
+	response {
+		mobids 0 : *integer
+	}
+}
+
+NS_BeLeader 20049 {
+	response {
+		aid 0 : integer
+	}
+}
+
+C_LogRecFromWorld 20050 {
+	request {
+		aid 0 : integer
+		key 1 : string
+		value 2 : integer
+		incr 3 : integer
+	}
+}
+
+SC_NextWave 20051 {
+	response {
+		nextwave 0 : NextWave
+	}
+}
+
+SC_NextBossHp 20052 {
+	response {
+		bossHp 0 : BossHp
+	}
+}
+
+MAR_CommonCall 21000 {
+	request {
+		funcname 0 : string
+		jsondata 1 : string
+	}
+	response {
+		funcname 0 : string
+		jsondata 1 : string
+	}
+}
+
+MAR_HegelCallWorld 21001 {
+	request {
+		aid 0 : integer
+		pid 1 : integer
+		ctype 2 : integer
+		intp1 3 : integer
+		intp2 4 : integer
+		intp3 5 : integer
+		strp1 6 : string
+		isDiscount 7 : integer
+	}
+	response {
+	}
+}
+
+MAR_ProposeStep1FromWorld 21002 {
+	request {
+		aid 0 : integer
+		pid 1 : integer
+		mtype 2 : integer
+		relation 3 : integer
+		conditions 4 : string
+	}
+	response {
+	}
+}
+
+MAR_SyncMarriageDataFromWorld 21003 {
+	request {
+		aid 0 : integer
+		pid 1 : integer
+		mtype 2 : integer
+		loveValue 3 : integer
+		exp 4 : integer
+		payaid 5 : integer
+	}
+	response {
+	}
+}
+
+MAR_ProposeStep3FromWorld 21004 {
+	request {
+		aid 0 : integer
+		isDiscount 1 : integer
+		mtype 2 : integer
+	}
+}
+
+FBK_NoticeUploadPlayers 21010 {
+	request {
+		aidList 0 : *integer
+	}
+	response {
+		sid 0 : integer
+		rankList 1 : *CharSimpleRankData
+	}
+}
+
+FBK_UploadPlayersBattleData 21011 {
+	request {
+		aidList 0 : *integer
+	}
+	response {
+		sid 0 : integer
+		charList 1 : *CharData
+	}
+}
+
+FBK_SycMatchesInfo 21012 {
+	request {
+		sid 0 : integer
+		budokai 1 : FirstBudokai
+		posLoseAid 3 : integer
+		posGetAid 4 : integer
+		betLog 5 : BetAid
+	}
+	response {
+	}
+}
+
+FBK_GetSingleBudokai 21013 {
+	request {
+	}
+	response {
+		budokai 0 : Budokai
+	}
+}
+
+FBK_BetCross 21014 {
+	request {
+		sid 0 : integer
+		aid 1 : integer
+		gsArea 2 : integer
+		bindex 3 : integer
+		winaid 4 : integer
+		btype 5 : integer
+	}
+	response {
+		sid 0 : integer
+		aid 1 : integer
+		gsArea 2 : integer
+		bindex 3 : integer
+		winaid 4 : integer
+		btype 5 : integer
+	}
+}
+
+FBK_ChallengeHegel 21015 {
+	request {
+		sid 0 : integer
+		aid 1 : integer
+		pos 2 : integer
+		consum 3 : integer
+	}
+	response {
+	}
+}
+
+FBK_ChallengeCross 21016 {
+	request {
+		sid 0 : integer
+		aid 1 : integer
+		pos 2 : integer
+		charData 3 : CharData
+	}
+	response {
+		areaId 0 : integer
+		gsArea 1 : integer
+		aid 2 : integer
+		pos 3 : integer
+		charData 4 : CharData
+	}
+}
+
+FBK_ChallengeBattleEnd 21017 {
+	request {
+		areaId 0 : integer
+		gsArea 1 : integer
+		aid 2 : integer
+		aid2 3 : integer
+		pos 4 : integer
+		result 5 : integer
+	}
+	response {
+	}
+}
+
+FBK_BATTLE_PVP 21018 {
+	request {
+		areaId 0 : integer
+		gsArea 1 : integer
+		player1 2 : CharData
+		player2 3 : CharData
+		paramtype 4 : integer
+		param1 5 : integer
+	}
+	response {
+		areaId 0 : integer
+		gsArea 1 : integer
+		aid 2 : integer
+		aid2 3 : integer
+		paramtype 4 : integer
+		param1 5 : integer
+		isWin 6 : integer
+	}
+}
+
+FBK_BATTLE_PVP_GROUP 21019 {
+	request {
+		areaId 0 : integer
+		gsArea 1 : integer
+		round 2 : integer
+		player1List 3 : *CharData
+		player2List 4 : *CharData
+		pos1List 5 : *integer
+		pos2List 6 : *integer
+		bindexList 7 : *integer
+	}
+	response {
+		areaId 0 : integer
+		gsArea 1 : integer
+		round 2 : integer
+		pos1List 3 : *integer
+		pos2List 4 : *integer
+		bindexList 5 : *integer
+		resultList 6 : *integer
+		battleList 7 : *BattleResultData
+	}
+}
+
+FBK_SEND_AWARD 21020 {
+	request {
+		awardList 0 : *BudokaiAward
+	}
+	response {
+	}
+}
+
+FBK_SycBudokaiToHegel 21022 {
+	request {
+		budokai 0 : FirstBudokai
+	}
+	response {
+	}
+}
+
+KW_NoticeUploadPlayers 21029 {
+	request {
+		aidList 0 : *integer
+	}
+	response {
+	}
+}
+
+KW_UploadPlayersCross 21030 {
+	request {
+		sid 0 : integer
+		charList 1 : *CharData
+		robotList 2 : *CharData
+	}
+	response {
+	}
+}
+
+KW_MatchCross 21031 {
+	request {
+		aid 0 : integer
+		sid 1 : integer
+		charData 2 : CharData
+	}
+	response {
+		areaId 0 : integer
+		aid 1 : integer
+		aid2 2 : integer
+		charData 3 : CharData
+		charlist 4 : *KingWarPlayer
+	}
+}
+
+KW_BattleEndCross 21032 {
+	request {
+		areaId 0 : integer
+		aid 1 : integer
+		aid2 2 : integer
+		result 3 : integer
+	}
+	response {
+		aid 0 : integer
+		player 1 : KingWarPlayer
+	}
+}
+
+KW_WorshipCross 21033 {
+	request {
+		aid 0 : integer
+		sid 1 : integer
+	}
+	response {
+	}
+}
+
+KW_GetRankListCross 21034 {
+	request {
+		aid 0 : integer
+		sid 1 : integer
+	}
+	response {
+		myinfo 0 : KingWarPlayer
+		ranklist 1 : *KingWarPlayer
+	}
+}
+
+KW_GetLastRankListCross 21035 {
+	request {
+		aid 0 : integer
+		sid 1 : integer
+	}
+	response {
+		mobaiCount 0 : integer
+		awardId 1 : integer
+		myinfo 2 : KingWarPlayer
+		king 3 : KingWarPlayer
+		ranklist 4 : *KingWarPlayer
+	}
+}
+
+KW_AwardSend 21036 {
+	request {
+		award 0 : *KingWarAwardList(sid)
+	}
+	response {
+	}
+}
+
+KW_GetLastRankListCrossFromWorld 21037 {
+	request {
+		sid 0 : integer
+	}
+	response {
+		mobaiCount 0 : integer
+		awardId 1 : integer
+		myinfo 2 : KingWarPlayer
+		king 3 : KingWarPlayer
+		ranklist 4 : *KingWarPlayer
+	}
+}
+
+MTR_CommonCall 21050 {
+	request {
+		funcname 0 : string
+		intklist 1 : *string
+		intplist 2 : *integer
+		strklist 3 : *string
+		strplist 4 : *string
+	}
+	response {
+		funcname 0 : string
+		intklist 1 : *string
+		intplist 2 : *integer
+		strklist 3 : *string
+		strplist 4 : *string
+	}
+}
+
+ST_CommonCall 21051 {
+	request {
+		funcname 0 : string
+		type 1 : integer
+	}
+	response {
+		funcname 0 : string
+		type 1 : integer
+	}
+}
+
+CSA_UpLoadCharList 21071 {
+	request {
+	}
+	response {
+		sid 0 : integer
+		charlist 1 : *CsArenaPlayer
+	}
+}
+
+CSA_UploadPlayer 21072 {
+	request {
+		taid 0 : integer
+		hid 1 : integer
+		aid 2 : integer
+		ext 3 : string
+	}
+	response {
+		aid 0 : integer
+		sid 1 : integer
+		hid 2 : integer
+		charData 3 : CharData
+		ext 4 : string
+	}
+}
+
+CSA_CommonOperateFromHegel 21073 {
+	request {
+		aid 0 : integer
+		sid 1 : integer
+		charData 2 : CharData
+		type 3 : integer
+		param 4 : string
+	}
+	response {
+		aid 0 : integer
+		type 1 : integer
+		param 2 : string
+		season 3 : integer
+		myDRank 4 : integer
+		mySRank 5 : integer
+		myCsDt 6 : CsArenaPlayer
+		enemyList 7 : *CsArenaPlayer
+		dRankList 8 : *CsArenaPlayer
+		sRankList 9 : *CsArenaPlayer
+		charData 10 : CharData
+	}
+}
+
+CSA_SendAward 21074 {
+	request {
+		type 0 : integer
+		season 1 : integer
+		ranks 2 : *CsArenaRankDt
+	}
+}
+
+PETCSA_UploadPlayer 21075 {
+	request {
+		taid 0 : integer
+		hid 1 : integer
+		aid 2 : integer
+		ext 3 : string
+		pets 4 : *PetCs
+	}
+	response {
+		aid 0 : integer
+		sid 1 : integer
+		hid 2 : integer
+		charData 3 : CharData
+		ext 4 : string
+		pets 5 : *PetCs
+	}
+}
+
+PETCSA_CommonOperateFromHegel 21076 {
+	request {
+		aid 0 : integer
+		sid 1 : integer
+		charData 2 : CharData
+		type 3 : integer
+		param 4 : string
+		pets 5 : *PetCs
+	}
+	response {
+		aid 0 : integer
+		type 1 : integer
+		param 2 : string
+		season 3 : integer
+		myDRank 4 : integer
+		mySRank 5 : integer
+		myCsDt 6 : PetCsArenaPlayer
+		enemyList 7 : *PetCsArenaPlayer
+		dRankList 8 : *PetCsArenaPlayer
+		sRankList 9 : *PetCsArenaPlayer
+		charData 10 : CharData
+	}
+}
+
+PETCSA_SendAward 21077 {
+	request {
+		type 0 : integer
+		season 1 : integer
+		ranks 2 : *PetCsArenaRankDt
+	}
+}
+
+PS_SendEventCorss 21100 {
+	response {
+		tempId 0 : integer
+		aid 1 : integer
+		charname 2 : string
+		type 3 : integer
+		args 4 : *string
+		oaid 5 : integer
+		sidnum 6 : integer
+	}
+}
+
+CLD_GetMarriageChild 21110 {
+	request {
+		aid 0 : integer
+	}
+	response {
+		aid 0 : integer
+		result 1 : integer
+	}
+}
+
+GU_batFbFromWorldToHegel 21120 {
+	request {
+		fid 0 : integer
+		currentHp 1 : integer
+		time 2 : integer
+		guid 3 : integer
+		aid 4 : integer
+		gw 5 : integer
+		oafloor 6 : integer
+	}
+	response {
+		fid 0 : integer
+		currentHp 1 : integer
+		time 2 : integer
+		guid 3 : integer
+		aid 4 : integer
+		damg 5 : integer
+	}
+}
+
+GU_GetFbGawardFromWorldToHegel 21121 {
+	request {
+		fid 0 : integer
+		type 1 : integer
+		aid 2 : integer
+	}
+}
+
+GU_SysResultFromWorldToCross 21122 {
+	request {
+		aid 0 : integer
+		sid 1 : integer
+		guild 2 : GuildFbDtCorss
+		charData 3 : GuildFbPlayerCorss
+	}
+}
+
+GU_SendGuildFbWeekAwardCross 21123 {
+	response {
+		ranks 0 : *GU_GuildFbRank
+		type 1 : integer
+	}
+}
+
+GU_GetGFbSimpleRankCross 21124 {
+	request {
+		aid 0 : integer
+		sid 1 : integer
+		guid 2 : integer
+	}
+	response {
+		ranks 0 : *GU_GuildFbRank
+		granks 1 : *GU_GuildFbRank
+		myRank 2 : integer
+		myVal 3 : integer
+		myGuidRank 4 : integer
+		myGuidVal 5 : integer
+		batInfo 6 : *GU_GuildFbFloorPro(floor)
+		aid 7 : integer
+	}
+}
+
+GU_GetGFbTotalRankCross 21125 {
+	request {
+		aid 0 : integer
+		sid 1 : integer
+		guid 2 : integer
+	}
+	response {
+		ranks 0 : *GU_GuildFbRank
+		granks 1 : *GU_GuildFbRank
+		myRank 2 : integer
+		myVal 3 : integer
+		myGuidRank 4 : integer
+		myGuidVal 5 : integer
+		aid 6 : integer
+	}
+}
+
+GU_SysGFStateCross 21126 {
+	request {
+	}
+	response {
+	}
+}
+
+GU_GetFbTawardFromWorldToHegel 21127 {
+	request {
+		aid 0 : integer
+		apt 1 : integer
+	}
+}
+
+WorldToHegel 29000 {
+	request {
+		sid 0 : integer
+		mergeTime 1 : integer
+	}
+}
+
+WD_SetWorldData 29001 {
+	request {
+		key 0 : integer
+		worlddata 1 : Worlddata
+	}
+	response {
+	}
+}
+
+AC_Broadcast 29002 {
+	request {
+		tp 0 : integer
+		actid 1 : integer
+		edTime 2 : integer
+	}
+}
+
+AC_SyncState 29003 {
+	request {
+		index 0 : integer
+		actid 1 : integer
+		state 2 : integer
+	}
+}
+
+RPC_ToCrossHegel 29004 {
+	request {
+		tag 0 : integer
+		type 1 : integer
+		p 2 : string
+		aid 3 : integer
+	}
+}
+
+RPC_ToBaseWorld 29005 {
+	request {
+		tag 0 : integer
+		type 1 : integer
+		p 2 : string
+		aid 3 : integer
+		sid 4 : integer
+	}
+}
+
+C_OpLog 29006 {
+	request {
+		aid 0 : integer
+		logType 1 : integer
+		logDesc 2 : string
+	}
+}
+
+WD_SetWorldDataSelf 29007 {
+	request {
+		key 0 : integer
+		worlddata 1 : Worlddata
+		serverId 2 : integer
+		areaTP 3 : integer
+	}
+	response {
+	}
+}
+
+WD_NoticeCommon 29008 {
+	request {
+		aid 0 : integer
+		type 1 : integer
+		param 2 : string
+	}
+}
+
+RW_RobCross 29050 {
+	request {
+		sid 0 : integer
+		aid 1 : integer
+		pos 2 : integer
+		charData 3 : CharData
+	}
+	response {
+		aid 0 : integer
+		pos 1 : integer
+		charData 2 : CharData
+		areaId 3 : integer
+		sid 4 : integer
+	}
+}
+
+RW_BattleEndCross 29051 {
+	request {
+		aid 0 : integer
+		pos 1 : integer
+		result 2 : integer
+		areaId 3 : integer
+		btype 4 : integer
+		sid 5 : integer
+		charData 6 : CharData
+	}
+	response {
+		aid 0 : integer
+		sid 1 : integer
+	}
+}
+
+RW_InSlotCross 29052 {
+	request {
+		sid 0 : integer
+		aid 1 : integer
+		pos 2 : integer
+		charData 3 : CharData
+		index 4 : integer
+	}
+}
+
+RW_GetRwInfoCross 29053 {
+	request {
+		sid 0 : integer
+		aid 1 : integer
+		index 2 : integer
+		charData 3 : CharData
+	}
+	response {
+		myInfo 0 : ResourcewarPlayer
+		slots 1 : *ResourceSlotData
+		charname 2 : string
+		point 3 : integer
+		aid 4 : integer
+		index 5 : integer
+		pageMax 6 : integer
+		myAdd 7 : integer
+		fk 8 : integer
+		result 9 : integer
+	}
+}
+
+RW_GetRwRankCross 29054 {
+	request {
+		sid 0 : integer
+		aid 1 : integer
+	}
+	response {
+		dayRank 0 : ResourceRankList
+		weekRank 1 : ResourceRankList
+		aid 2 : integer
+		weekPRank 3 : ResourceRankList
+	}
+}
+
+RW_ClearRwBatCDCross 29055 {
+	request {
+		sid 0 : integer
+		aid 1 : integer
+	}
+	response {
+		aid 0 : integer
+		result 1 : integer
+	}
+}
+
+RW_ClearRwBatCDCrossSuccess 29056 {
+	request {
+		sid 0 : integer
+		aid 1 : integer
+	}
+}
+
+RW_GetRwLogCross 29057 {
+	request {
+		sid 0 : integer
+		aid 1 : integer
+	}
+	response {
+		aid 0 : integer
+		logs 1 : *ResourceLog
+	}
+}
+
+RW_SendDayAwardCross 29058 {
+	response {
+		type 0 : integer
+		ranks 1 : *ResourceRankAndLog
+	}
+}
+
+RW_SendWeekAwardCross 29059 {
+	response {
+		rank 0 : integer
+		aids 1 : *integer
+	}
+}
+
+RW_GetPointCross 29060 {
+	request {
+		sid 0 : integer
+		aid 1 : integer
+	}
+	response {
+		point 0 : integer
+		money 1 : integer
+		myInfo 2 : ResourcewarPlayer
+		aid 3 : integer
+	}
+}
+
+RW_SendGWEventCross 29061 {
+	request {
+	}
+	response {
+		aid 0 : integer
+		eventType 1 : integer
+	}
+}
+
+RW_AddBatTimeCross 29062 {
+	request {
+		sid 0 : integer
+		aid 1 : integer
+	}
+	response {
+		aid 0 : integer
+		myInfo 1 : ResourcewarPlayer
+	}
+}
+
+RW_AddBatTimeCrossSuccess 29063 {
+	request {
+		sid 0 : integer
+		aid 1 : integer
+	}
+}
+
+ZLX_RobCross 29065 {
+	request {
+		sid 0 : integer
+		aid 1 : integer
+		pos 2 : integer
+		charData 3 : CharData
+	}
+	response {
+		sid 0 : integer
+		aid 1 : integer
+		pos 2 : integer
+		charData 3 : CharData
+		areaId 4 : integer
+	}
+}
+
+ZLX_BattleEndCross 29066 {
+	request {
+		aid 0 : integer
+		pos 1 : integer
+		result 2 : integer
+		areaId 3 : integer
+		btype 4 : integer
+		sid 5 : integer
+		charData 6 : CharData
+	}
+	response {
+		aid 0 : integer
+		sid 1 : integer
+	}
+}
+
+ZLX_SendDayAwardCross 29067 {
+	response {
+		type 0 : integer
+		ranks 1 : *TjResourceRankAndLog
+	}
+}
+
+ZLX_SendWeekAwardCross 29068 {
+	response {
+		rank 0 : integer
+		aids 1 : *integer
+	}
+}
+
+ZLX_SendGWEventCross 29069 {
+	request {
+	}
+	response {
+		aid 0 : integer
+		eventType 1 : integer
+	}
+}
+
+ZLX_AddBatTimeCross 29070 {
+	request {
+		sid 0 : integer
+		aid 1 : integer
+	}
+	response {
+		aid 0 : integer
+		myInfo 1 : TjResourcewarPlayer
+	}
+}
+
+ZLX_AddBatTimeCrossSuccess 29071 {
+	request {
+		sid 0 : integer
+		aid 1 : integer
+	}
+}
+
+ZLX_GetCostTimeAwardCross 29072 {
+	request {
+		adid 0 : integer
+		sid 1 : integer
+		aid 2 : integer
+		val 3 : integer
+	}
+	response {
+		result 0 : integer
+		adid 1 : integer
+		myInfo 2 : TjResourcewarPlayer
+		aid 3 : integer
+	}
+}
+
+ZLX_SendPlayerPtCross 29073 {
+	request {
+	}
+	response {
+		datas 0 : *ZLXPlayerDt
+	}
+}
+
+GB_RefreshItem 29080 {
+	request {
+		aid 0 : integer
+		rtype 1 : integer
+	}
+}
+
+OmAuth 30001 {
+	request {
+		user 0 : string
+		pass 1 : string
+	}
+	response {
+		result 0 : integer
+		name 1 : string
+		level 2 : string
+	}
+}
+
+OmQueryChar 30002 {
+	request {
+		ok 0 : OmKey
+	}
+	response {
+		okRst 0 : OmKeyRst
+	}
+}
+
+OmBackMsg 30004 {
+	response {
+		result 0 : integer
+		msg 1 : string
+	}
+}
+
+OmHotfix 30005 {
+	request {
+		script 0 : string
+		type 1 : integer
+		aid 2 : integer
+		sid 3 : integer
+		platform 4 : integer
+	}
+}
+
+OmChangePlayer 30006 {
+	request {
+		ok 0 : OmKey
+		type 1 : integer
+		value 2 : integer
+		isadd 3 : integer
+		aid 4 : integer
+	}
+	response {
+		aid 0 : integer
+		charname 1 : string
+		accname 2 : string
+		exp 3 : string
+		gold 4 : integer
+		bindgold 5 : integer
+		bagmoney 6 : integer
+	}
+}
+
+OmAddItem 30007 {
+	request {
+		ok 0 : OmKey
+		item 1 : ItemData
+		type 2 : integer
+	}
+	response {
+		type 1 : integer
+	}
+}
+
+OmQueryCharBySnameSuid 30008 {
+	request {
+		ok 0 : OmKey
+	}
+	response {
+		okRst 0 : *OmKeyRst
+	}
+}
+
+OmServerState 30009 {
+	request {
+		state 0 : integer
+	}
+}
+
+OmPay 30010 {
+	request {
+		aid 0 : integer
+		doid 1 : integer
+		remark 2 : string
+	}
+}
+
+OmBlock 30011 {
+	request {
+		sid 0 : integer
+		ok 1 : *OmBlockArr
+	}
+	response {
+		result 0 : integer
+	}
+}
+
+OmUserBan 30012 {
+	request {
+		aid 0 : integer
+		uid 1 : string
+		sid 2 : integer
+		type 3 : integer
+	}
+	response {
+		aid 0 : integer
+		uid 1 : string
+		chattime 2 : integer
+		blocktime 3 : integer
+	}
+}
+
+OmAllAidBan 30013 {
+	request {
+		sid 0 : integer
+	}
+	response {
+		sp 0 : *OmAllBan
+	}
+}
+
+OmModifyOpenTime 30014 {
+	request {
+		state 0 : integer
+		openTime 1 : integer
+	}
+}
+
+OmUnBan 30015 {
+	request {
+		sid 0 : integer
+		ok 1 : *OmUnBanArr
+		platform 2 : integer
+	}
+	response {
+		ok 0 : *OmUnBanArr
+		result 1 : integer
+	}
+}
+
+OmNotice 30016 {
+	request {
+		sid 0 : integer
+		platform 1 : integer
+		id 2 : integer
+		type 3 : integer
+		str 4 : string
+		color 5 : string
+		stime 6 : integer
+		etime 7 : integer
+		ltime 8 : integer
+		urlAdd 9 : string
+		urlName 10 : string
+	}
+	response {
+		result 0 : integer
+	}
+}
+
+OmSendMail 30017 {
+	request {
+		aids 0 : *integer
+		mailData 1 : OmUserMailArr
+		sidArr 2 : *serversArr
+	}
+	response {
+		result 0 : integer
+	}
+}
+
+OmQueryAnouncement 30020 {
+	request {
+		sid 0 : integer
+	}
+	response {
+		result 0 : integer
+		msg 1 : *rollMsg
+	}
+}
+
+OmSaveAnouncement 30021 {
+	request {
+		type 0 : integer
+		obj 1 : rollMsg
+		id 2 : integer
+	}
+	response {
+		result 0 : integer
+		msg 1 : string
+	}
+}
+
+OmReleaseAnouncement 30022 {
+	request {
+		type 0 : integer
+		obj 1 : rollMsg
+		sidArr 2 : *serversArr
+	}
+	response {
+		result 0 : integer
+		id 1 : string
+	}
+}
+
+OmQueryAnouncementById 30023 {
+	request {
+		type 0 : integer
+		id 1 : integer
+	}
+	response {
+		result 0 : integer
+		msg 1 : *rollMsg
+	}
+}
+
+OmKickClient 30197 {
+	request {
+		sid 0 : integer
+		val 1 : string
+	}
+	response {
+		result 0 : integer
+		msg 1 : string
+	}
+}
+
+OmKickAllClient 30198 {
+	request {
+		sid 0 : integer
+		isAll 2 : integer
+	}
+	response {
+		result 0 : integer
+		msg 1 : string
+	}
+}
+
+OmUpatePayMetas 30211 {
+	request {
+		sidArr 0 : *serversArr
+	}
+	response {
+		id 0 : integer
+	}
+}

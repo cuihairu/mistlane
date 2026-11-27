@@ -2,15 +2,17 @@
 -- Exercise the vendored upstream cloudwu/sproto Lua API against generated schema.
 -- Run after CMake build:
 --   build/debug/mistlane-sproto-probe roundtrip build/debug/sproto-fixture/avatar.sproto
-local file = assert(io.open(MISTLANE_SPROTO_SCHEMA, "rb"))
-local schema_text = file:read("*a")
-file:close()
-
 local parser = require "sprotoparser"
 local sproto = require "sproto"
-local packed_schema = parser.parse(schema_text)
-local sp = sproto.new(packed_schema)
-assert(sp:exist_type("Avatar"), "generated Avatar type missing")
+local packed_schema, sp
+if MISTLANE_SPROTO_MODE ~= "regen" then
+  local file = assert(io.open(MISTLANE_SPROTO_SCHEMA, "rb"))
+  local schema_text = file:read("*a")
+  file:close()
+  packed_schema = parser.parse(schema_text)
+  sp = sproto.new(packed_schema)
+  assert(sp:exist_type("Avatar"), "generated Avatar type missing")
+end
 
 local function hex(bytes)
   return (bytes:gsub(".", function(c) return string.format("%02x", c:byte()) end))
@@ -217,6 +219,269 @@ elseif MISTLANE_SPROTO_MODE == "dispatch" then
   _G.MISTLANE_DECODED_ACCOUNT = decoded.account
   _G.MISTLANE_DECODE_OK = true
   print("UPSTREAM_SPROTO_REQUEST_DECODE_OK E1_Server_2 account=" .. decoded.account .. " bytes=" .. #bytes)
+elseif MISTLANE_SPROTO_MODE == "regen" then
+  -- Recover a .sproto text source from a compiled .spb schema (the game-fogs
+  -- business protocol contract, whose original text source is absent; see
+  -- docs/protocol-contract-recovery.md). Walks the .spb wire form directly —
+  -- schema.txt-style dumps lose the decimal extra and map shape — and proves
+  -- fidelity by recompiling the emitted text with the vendored sprotoparser
+  -- and requiring byte identity with the input. MISTLANE_REGEN_GOLDEN (if
+  -- set) must equal the emitted text; MISTLANE_REGEN_OUT (if set) receives it.
+  local file = assert(io.open(MISTLANE_SPROTO_SCHEMA, "rb"))
+  local bin = file:read("*a")
+  file:close()
+
+  local function word16(b, p) return b:byte(p) + b:byte(p + 1) * 256 end
+  local function u32(b, p)
+    return b:byte(p) + b:byte(p + 1) * 256 + b:byte(p + 2) * 65536 + b:byte(p + 3) * 16777216
+  end
+  -- packbytes: u32 little-endian length + bytes (sprotoparser.lua <s4).
+  local function blob(b, p)
+    local n = u32(b, p)
+    return b:sub(p + 4, p + 3 + n), p + 4 + n
+  end
+  -- Schema attribute word: odd = absent ("\1\0" skip), even v = value v/2-1
+  -- (packvalue encodes (id+1)*2).
+  local function attr(b, p)
+    local v = word16(b, p)
+    if v % 2 == 1 then return nil, p + 2 end
+    return math.floor(v / 2) - 1, p + 2
+  end
+
+  -- Group: u16 count(=2), two u16 placeholder words, then packbytes types
+  -- blob, packbytes protocols blob.
+  assert(word16(bin, 1) == 2, "group header is not the two-member form")
+  local types_blob, gpos = blob(bin, 7)
+  local protos_blob, gend = blob(bin, gpos)
+  assert(gend == #bin + 1, "trailing bytes after the schema group")
+
+  -- Types: per-type block = u16 field-count-word (1 = name only, 2 = name +
+  -- fields), that many u16 words (name ref placeholder), packbytes name, and
+  -- for fielded types packbytes fields blob. Each field block = u16 attr word
+  -- count (4 scalar / 5 array / 6 keyed map / 7 generic map), a name-ref
+  -- placeholder, the attribute words, then packbytes field name. Attribute
+  -- words in order: buildin (absent for struct refs), extra (buildin) or type
+  -- id (struct), tag, array flag, key tag, map flag.
+  local names = {}  -- spb array order = the serializer's sorted order; id = index-1
+  local types = {}  -- name -> field list (filled after the walk, sorted by tag)
+  local pos = 1
+  while pos <= #types_blob do
+    local block; block, pos = blob(types_blob, pos)
+    local n = word16(block, 1)
+    local off = 3 + 2 * n
+    local name; name, off = blob(block, off)
+    local fields = {}
+    if n >= 2 then
+      local fblob; fblob, off = blob(block, off)
+      local fpos = 1
+      while fpos <= #fblob do
+        local fb; fb, fpos = blob(fblob, fpos)
+        local na = word16(fb, 1)
+        local o = 5
+        local buildin; buildin, o = attr(fb, o)
+        local ref; ref, o = attr(fb, o)      -- extra for buildin, type id for struct
+        local tag; tag, o = attr(fb, o)
+        local array, key, map
+        if na >= 5 then array, o = attr(fb, o) end
+        if na >= 6 then key, o = attr(fb, o) end
+        if na >= 7 then map, o = attr(fb, o) end
+        local fname; fname, o = blob(fb, o)
+        fields[#fields + 1] = { name = fname, tag = tag, buildin = buildin,
+          extra = ref, refid = ref, array = array, key = key, map = map }
+      end
+    end
+    table.sort(fields, function(a, b) return a.tag < b.tag end)
+    names[#names + 1] = name
+    types[name] = fields
+  end
+  local name_of = {}
+  for i, n in ipairs(names) do name_of[i - 1] = n end
+
+  -- Protocols: block = u16 attr word count (2 tag only / 3 no response /
+  -- 4 request + response / 5 confirm), name-ref placeholder, tag, request id,
+  -- response id, confirm flag, then packbytes name.
+  local protocols = {}
+  pos = 1
+  while pos <= #protos_blob do
+    local block; block, pos = blob(protos_blob, pos)
+    local na = word16(block, 1)
+    local o = 5
+    local tag; tag, o = attr(block, o)
+    local request, response, confirm
+    if na >= 3 then request, o = attr(block, o) end
+    if na >= 4 then response, o = attr(block, o) end
+    if na >= 5 then confirm, o = attr(block, o) end
+    local pname; pname, o = blob(block, o)
+    protocols[#protocols + 1] = { name = pname, tag = tag,
+      request = request and name_of[request] or nil,
+      response = response and name_of[response] or nil,
+      confirm = confirm ~= nil }
+  end
+
+  -- Render. References must survive sprotoparser's scope walk (checktype:
+  -- innermost dotted prefix first, bare name last), so the emitter tries the
+  -- full dotted name and then progressively shorter suffixes until the
+  -- simulation resolves to the exact intended type — the spb holds the
+  -- already-resolved name, and a shorter form that shadow-resolves elsewhere
+  -- would mistranscribe it.
+  local function resolves_to(context, textname)
+    local scope = context
+    while scope do
+      local full = scope .. "." .. textname
+      if types[full] then return full end
+      scope = scope:match "(.+)%..+$"
+    end
+    if types[textname] then return textname end
+    return nil
+  end
+  local function emit_ref(context, intended)
+    local comps = {}
+    for c in intended:gmatch "[^.]+" do comps[#comps + 1] = c end
+    for i = 1, #comps do
+      local suffix = table.concat(comps, ".", i)
+      if resolves_to(context, suffix) == intended then return suffix end
+    end
+    error("no expressible reference from " .. context .. " to " .. intended)
+  end
+
+  local buildin_text = { [0] = "integer", [1] = "boolean", [2] = "string", [3] = "double" }
+  -- A type named <Proto>.request / <Proto>.response whose protocol exists is
+  -- rendered inline under that protocol (the original parser's inline-struct
+  -- naming); identical IR either way, inline is the canonical shape.
+  local owned = {}
+  for _, pr in ipairs(protocols) do
+    if pr.request == pr.name .. ".request" then owned[pr.request] = true end
+    if pr.response == pr.name .. ".response" then owned[pr.response] = true end
+  end
+  -- Type name -> nested child full names. A child's dotted parent must be a
+  -- real type or a protocol-owned inline struct — the only ways the original
+  -- parser could have produced the dotted name.
+  local children = {}
+  for _, n in ipairs(names) do
+    local parent = n:match "(.+)%.[^.]+$"
+    if parent then
+      if not types[parent] then
+        assert(owned[n], "type " .. n .. " has no expressible parent declaration")
+      end
+      children[parent] = children[parent] or {}
+      table.insert(children[parent], n)
+    end
+  end
+
+  local function key_field_name(reftype, keytag)
+    for _, f in ipairs(types[reftype]) do
+      if f.tag == keytag then return f.name end
+    end
+    error("map key tag " .. keytag .. " not found in " .. reftype)
+  end
+  local function field_line(context, f)
+    local base
+    if f.buildin ~= nil then
+      base = buildin_text[f.buildin]
+      if f.buildin == 0 and f.extra and f.extra > 0 then
+        base = base .. "(" .. f.extra .. ")"       -- decimal: explicit tag set
+      elseif f.buildin == 2 and f.extra == 1 then
+        base = "binary"
+      end
+    else
+      base = emit_ref(context, name_of[f.refid])
+    end
+    if f.array then base = "*" .. base end
+    if f.key then base = base .. "(" .. key_field_name(name_of[f.refid], f.key) .. ")" end
+    return f.name .. " " .. f.tag .. " : " .. base
+  end
+  local function render_body(name, indent, lines)
+    for _, f in ipairs(types[name]) do
+      lines[#lines + 1] = indent .. field_line(name, f)
+    end
+    for _, child in ipairs(children[name] or {}) do
+      lines[#lines + 1] = indent .. "." .. child:match "[^.]+$" .. " {"
+      render_body(child, indent .. "\t", lines)
+      lines[#lines + 1] = indent .. "}"
+    end
+  end
+
+  local lines = {
+    "# Recovered .sproto text for the game-fogs business protocol schema.",
+    "# Regenerated from the committed binary schema (sproto.spb, game-fogs",
+    "# commit 37b640a) by the vendored sproto toolchain; byte-identity of",
+    "# recompile verified by the regen probe mode. The original text source,",
+    "# generation script and official client bindings remain absent (see",
+    "# docs/protocol-contract-recovery.md): string/binary naming, inline vs",
+    "# shared type placement and comments are canonicalized, not original.",
+  }
+  for _, n in ipairs(names) do
+    if not owned[n] then
+      local parent = n:match "(.+)%.[^.]+$"
+      if not parent then
+        lines[#lines + 1] = "." .. n .. " {"
+        render_body(n, "\t", lines)
+        lines[#lines + 1] = "}"
+        lines[#lines + 1] = ""
+      end
+    end
+  end
+  for _, pr in ipairs(protocols) do
+    lines[#lines + 1] = pr.name .. " " .. pr.tag .. " {"
+    if pr.request then
+      if owned[pr.request] then
+        lines[#lines + 1] = "\trequest {"
+        render_body(pr.request, "\t\t", lines)
+        lines[#lines + 1] = "\t}"
+      else
+        lines[#lines + 1] = "\trequest " .. pr.request
+      end
+    end
+    if pr.response then
+      if owned[pr.response] then
+        lines[#lines + 1] = "\tresponse {"
+        render_body(pr.response, "\t\t", lines)
+        lines[#lines + 1] = "\t}"
+      else
+        lines[#lines + 1] = "\tresponse " .. pr.response
+      end
+    elseif pr.confirm then
+      lines[#lines + 1] = "\tresponse nil"
+    end
+    lines[#lines + 1] = "}"
+    lines[#lines + 1] = ""
+  end
+  local text = table.concat(lines, "\n")
+
+  -- Fidelity proof: the emitted text must recompile to the exact input bytes.
+  local repacked = parser.parse(text)
+  if repacked ~= bin then
+    local at = 1
+    while at <= math.max(#repacked, #bin) and repacked:byte(at) == bin:byte(at) do at = at + 1 end
+    error("regenerated schema diverges from the compiled input at byte " .. at
+      .. string.format(" (text %d bytes, input %d bytes)", #repacked, #bin))
+  end
+  local fields_n, maps_n = 0, 0
+  for _, t in pairs(types) do
+    for _, f in ipairs(t) do
+      fields_n = fields_n + 1
+      if f.key then maps_n = maps_n + 1 end
+    end
+  end
+  print("FOGS_SPROTO_REGEN types=" .. #names .. " protocols=" .. #protocols
+    .. " fields=" .. fields_n .. " maps=" .. maps_n
+    .. " bytes=" .. #bin .. " compile=IDENTICAL")
+  local golden = os.getenv("MISTLANE_REGEN_GOLDEN")
+  if golden then
+    local g = assert(io.open(golden, "rb"))
+    local golden_text = g:read("*a")
+    g:close()
+    assert(golden_text == text, "committed regeneration golden differs from the emitted text")
+    print("FOGS_SPROTO_REGEN golden=" .. golden .. " [MATCH]")
+  end
+  local out = os.getenv("MISTLANE_REGEN_OUT")
+  if out then
+    local f = assert(io.open(out, "wb"))
+    f:write(text)
+    f:close()
+    print("FOGS_SPROTO_REGEN wrote " .. out .. " (" .. #text .. " bytes)")
+  end
+  print("FOGS_SPROTO_REGEN spb→sproto→spb byte identity [PASS]")
 else
   error("unknown probe mode: " .. tostring(MISTLANE_SPROTO_MODE))
 end

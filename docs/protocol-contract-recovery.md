@@ -1,6 +1,6 @@
 # Protocol contract recovery
 
-Status: recovered on 2026-11-21 from the committed game-fogs schema binary `game-fogs/game/proto/sproto.spb` (game-fogs commit `37b640a`). This recovers the **definitions** of the legacy business protocol; it does not claim the original generation flow, and the original text source, generation script and official client bindings remain absent. Cross-language page: [简体中文](./zh/protocol-contract-recovery.md); recovery evidence: `contracts/fogs-sproto-schema.txt`; reproducer: `tools/sproto_dump.c`.
+Status: recovered on 2026-11-21 from the committed game-fogs schema binary `game-fogs/game/proto/sproto.spb` (game-fogs commit `37b640a`). This recovers the **definitions** of the legacy business protocol; it does not claim the original generation flow. A **regenerated text source** (`contracts/fogs-sproto.sproto`, 2026-11-28) now recompiles byte-identically to the committed binary; the original authoring text, generation script and official client bindings remain absent. Cross-language page: [简体中文](./zh/protocol-contract-recovery.md); recovery evidence: `contracts/fogs-sproto-schema.txt`, regenerated source: `contracts/fogs-sproto.sproto`; reproducer: `tools/sproto_dump.c`, regenerator: the `regen` mode of the sproto probe (`mistlane-sproto-probe regen contracts/fogs-sproto.spb`).
 
 ## What was recovered
 
@@ -31,12 +31,24 @@ The `.spb` file is a compiled sproto schema (the format defined by `game-fogs/3r
 - **Type references:** 0 unresolved request/response type references; 0 unresolved struct field type references (after stripping `*` array and `[key]` map markers); all fields resolve to a declared type or a primitive (`integer`, `boolean`, `string`, `double`).
 - **Shape:** 646 protocols / 1421 types / 4245 fields; 69 protocols carry no request type (pushes), 151 carry no response type; 638 fields are array-typed, 152 are map-keyed.
 
+## Text source regeneration (2026-11-28)
+
+The dump in `contracts/fogs-sproto-schema.txt` is authoritative but **lossy** as a generation input: it renders decimal-integer fields as bare `decimal` (losing the extra tag-set value), cannot distinguish a plain `string` from `binary` (both compile to the string base type), and shows map keys as tag numbers that must be mapped back to field names. So the regenerated source is produced by walking the `.spb` **wire form directly** — the probe's `regen` mode decodes the compiled group/type/field/protocol blocks byte by byte (length-prefixed blobs, odd/even attribute words), which loses nothing, and emits `.sproto` text:
+
+- shared types as top-level `.Name { ... }` declarations, nested children re-nested inside their parents (the dotted names only parse that way);
+- `<Proto>.request` / `<Proto>.response` types inline under their protocol (the sprotoparser inline-struct naming), other references emitted as full dotted type names;
+- map fields as `*Type(keyField)` (this schema has no generic `*Type()` maps), decimal as `integer(N)`, string-with-binary-extra as `binary`, missing-response protocols as request-only blocks.
+
+Fidelity is proven in the same run: the emitted text is recompiled with the vendored `sprotoparser` and must equal the input `.spb` **byte for byte** — for the full game-fogs schema that is `646 protocols / 1421 types / 4245 fields / 152 maps → 176308 bytes, compile=IDENTICAL`. The gate is CTest `mistlane_sproto_fogs_regen`, which regenerates from the committed fixture `contracts/fogs-sproto.spb` (sha256-identical to the game-fogs `37b640a` file) and asserts the committed `contracts/fogs-sproto.sproto` equals the emitted text.
+
+**What this restores and what it does not:** the schema again has a working text source and a working generation step (regen mode + the vendored sprotoparser, which compiles text to the `.spb`/bindings forms) — the pipeline can now be re-run and diffed. It does **not** recover the original authoring text: comments, layout, the `string`/`binary` naming choice (no `binary` field survives in this schema), inline-vs-shared placement and identifier comments are canonicalized, not original; the original `sprotodump` invocation that produced `Protocol.lua` and the client bindings remains absent. Per the todo ledger this stays definition recovery — the binary schema is not equated with the complete generation flow.
+
 ## Provenance and missing items
 
 - **Artifact source:** `sproto.spb` and `Protocol.lua` are **committed** to game-fogs at `37b640a`; `game/Data/Data.lua` loads the binary into the sproto loader slot at startup. `Protocol.lua`'s header names **`sprotodump`** as its generator.
-- **Missing — original text source:** no `.sproto` text file exists anywhere in game-fogs; the schema survives only in compiled form.
-- **Missing — generation script:** no build rule or script that ran `sprotodump`/the sproto compiler is present in game-fogs; the generator tool is identified but the build step that invoked it is not.
-- **Missing — official client bindings:** the client-side generated protocol binding is a separate client codebase, not part of the server repository from which the schema was recovered.
+- **Missing — original text source (regenerated equivalent exists):** no `.sproto` text file exists anywhere in game-fogs; the schema survives only in compiled form. Since 2026-11-28 a regenerated text source lives at `contracts/fogs-sproto.sproto` — byte-identical on recompile, but not the original authoring text (see the regeneration section above).
+- **Missing — generation script:** no build rule or script that ran `sprotodump`/the sproto compiler is present in game-fogs; the generator tool is identified but the original build step that invoked it is not. The regen probe mode plus the vendored sprotoparser now provide an equivalent working pipeline for the schema itself.
+- **Missing — official client bindings:** the client-side generated protocol binding is a separate client codebase, not part of the server repository from which the schema was recovered. (The mistlane contract toolchain can generate its own JS/C#/HPP bindings from the recovered text, but those are mistlane's shape, not the original client's.)
 
 ## Scope caveat
 
