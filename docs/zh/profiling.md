@@ -128,3 +128,35 @@ sudo perf report -i perf.data --stdio --no-children --percent-limit 2 -f
 建议：按 `-F 99 --call-graph=dwarf,4096` 录制；999 Hz DWARF 只用于短脉冲（并预期内核节流）；只有当
 DWARF 展开在目标机上实测过贵时才退到帧指针；共享主机上测采样开销要用成对运行加节点自身 CPU 时间，
 绝不要用顺序的墙上时钟臂。
+
+## 堆剖析工作流
+
+CPU 路线从进程外采样；堆路线需要分配点归属，本机可用的工具是 `valgrind --tool=massif`——以被剖析节点的
+父进程身份启动，因此 `yama.ptrace_scope` 与 `perf_event_paranoid` 均不适用，也不需要任何 capability
+（2026-11-27，valgrind 3.26.0）。进程内分配器（gperftools、tcmalloc 采样）与 CPU 循环内采样器同因出局：
+它们替换的正是被测量的分配器。heaptrack 未安装；massif 已能回答本路线的两个问题——堆停在哪里、是否随负载
+增长——代价是大幅减速，所以负载要小。
+
+```
+valgrind --tool=massif --massif-out-file=mi.out --stacks=no --time-unit=B \
+  --detailed-freq=5 mistlane --role crossServer --listen 127.0.0.1:7210 \
+  --script examples/cross.lua --rate-capacity 1000000 --rate-refill 1000000
+# 另一终端以小负载驱动文档化基准，随后对 valgrind 的 PID 发 SIGTERM；
+# massif 只在进程退出时落盘——硬杀则一无所获。ms_print mi.out 渲染时间线与归属树。
+```
+
+驱动基准前先把拓扑里每个节点的防洪水参数调高：被 massif 拖慢的节点，其客户端一样会撞上默认桶——与
+[跨服与过载保护](./cross-server)的探测腿同因（实际撞过：第一次 16 × 300 跑丢掉全部 16 个客户端，原因是
+网关的默认防洪水，而 crossServer 侧已调高）。
+
+文档化拓扑上的实测（2026-11-27，debug 构建，共租负载 5–8）：
+
+| 运行 | 堆峰值（massif） | 峰值归属 |
+|---|---|---|
+| 4 客户端 × 200 | 765 KB | OpenSSL EVP/DRBG 初始化 ~30%、civetweb 仪表盘 ~26%、libstdc++ 初始化、Lua 状态、prometheus CKMS |
+| 16 客户端 × 300 | 830 KB | 同样的启动期初始化占主导；另有 +18 KB 活跃 `Session` 对象、+11 KB asio 缓冲 |
+
+结论与 `/metrics` 的 RSS 视角（约 17–20 MB）一致：常驻集由映射镜像与运行时主导，而非分配器抖动——该基准下
+节点 malloc 堆峰值不足 1 MB，启动期初始化之后尾部平坦，因此持续负载下任何**增长**的堆在同形 massif 运行里
+都会立刻显形。数字是单机单窗口（与 CPU 一节同一纪律），不构成容量宣称。网关与 gameServer 跑同一套会话机制，
+同一配方按角色适用。

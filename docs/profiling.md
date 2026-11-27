@@ -158,3 +158,43 @@ Guidance: record at `-F 99 --call-graph=dwarf,4096`; keep 999 Hz DWARF to short 
 (and expect the kernel to throttle it); use frame pointers only when DWARF unwinding is
 measurably too costly on the target host; on a shared host, measure sampler cost with
 paired runs and the node's own CPU time, never with sequential wall-clock arms.
+
+## Heap profiling workflow
+
+The CPU route samples from outside the process; the heap route needs allocation-site
+attribution, and the workable tool on this host is `valgrind --tool=massif` — launched
+as the node's parent, so `yama.ptrace_scope` and `perf_event_paranoid` never apply and
+no capability is required (2026-11-27, valgrind 3.26.0). In-process allocators (gperftools,
+tcmalloc sampling) stay out for the same reason as in-loop CPU samplers: they replace the
+allocator being measured. heaptrack is not installed; massif answers the two questions the
+route needs — where the heap sits and whether it grows with load — at the cost of a large
+slowdown, so keep the load small.
+
+```
+valgrind --tool=massif --massif-out-file=mi.out --stacks=no --time-unit=B \
+  --detailed-freq=5 mistlane --role crossServer --listen 127.0.0.1:7210 \
+  --script examples/cross.lua --rate-capacity 1000000 --rate-refill 1000000
+# drive the documented bench (small) from another terminal, then SIGTERM the
+# valgrind PID; massif writes the file only when the process exits — killed
+# hard, nothing is flushed. ms_print mi.out renders the timeline and trees.
+```
+
+Raise the flood guard on every node in the topology before driving the bench: a
+massif-slowed node pipelines clients against the default bucket just like the
+[guard probe](./cross-server.md) (this was hit for real — the first 16 × 300 run lost
+all 16 clients to the gateway's default guard while the crossServer ran raised).
+
+Measured on the documented topology (2026-11-27, debug build, co-tenant load 5–8):
+
+| Run | heap peak (massif) | attribution at peak |
+|---|---|---|
+| 4 clients × 200 | 765 KB | OpenSSL EVP/DRBG init ~30%, civetweb dashboard ~26%, libstdc++ init, Lua state, prometheus CKMS |
+| 16 clients × 300 | 830 KB | same boot-time init dominates; +18 KB live `Session` objects, +11 KB asio buffers |
+
+The finding matches the `/metrics` RSS view (~17–20 MB): the resident set is dominated by
+the mapped image and runtime, not allocator churn — the node's malloc heap peaks under
+1 MB across this bench and the tail stays flat after boot-time init, so a *growing* heap
+under sustained load would stand out immediately in a massif run of the same shape. Treat
+these numbers as one host in one window (same discipline as the CPU section), not as a
+capacity statement. The gateway and gameServer run the same session machinery, so the same
+recipe applies per role.
