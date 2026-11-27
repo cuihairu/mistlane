@@ -7,8 +7,10 @@ Mistlane 以普通进程运行（`mistlane init` 生成的集群脚本与 system
 - `deploy/Dockerfile` —— 运行时镜像。一个容器运行一个节点实例。
 - `deploy/compose.yaml` —— 示例双服务集群（`gameServer` 加其前的会话路由 `gateway`），并挂载一份配置覆盖。
 - `deploy/compose/instances/gateway.env` —— gateway 的容器覆盖（上游按服务名，替代脚手架的环回默认值）。
+- `deploy/compose.stress.yaml` + `deploy/compose/instances/*stress*.env` —— 供压力钻取使用的跨服基准拓扑（两个 crossServer 与一个 cross 网关）。
 - `deploy/healthcheck.sh` —— 镜像存活探针。
 - `tools/container_smoke.sh` —— 部署验证钻取。
+- `tools/container_stress.sh` —— 容器/裸机成对压力钻取。
 - 主机名端点地址（下文）—— 容器面所需的唯一框架改动。
 
 ## 构建镜像
@@ -69,6 +71,12 @@ docker compose -f deploy/compose.yaml up -d
 3. compose 集群两服务均达就绪，gateway 上游经服务名 DNS，两者均干净停止。
 
 `docker` 或 `docker compose` 不可用时输出 SKIP 并跳过，以便在无容器运行时的环境执行。2026-11-21 验证：三条路径全过，全量测试套件绿（81/81）。
+
+## 压力钻取
+
+`tools/container_stress.sh` 在目标容器环境里真实驱动文档化的跨服基准拓扑：leg A 先在默认每会话防洪水参数下探测（文档化基准负载会耗尽令牌桶，`mistlane_rate_limit_stops_total` 必须触发），再以调高的防洪水参数作为裸机参考腿跑同一负载；leg B 运行 `deploy/compose.stress.yaml`（两个 crossServer 加一个 cross 网关，上游按 compose 服务名，实例文件调高防洪水参数）。每条腿经发布的网关端口以文档化的 `--join "MLC1 1 realm g bench"` 握手驱动随仓 bot，覆盖三档负载（32 × 500 文档基准、128 × 781 近生成器上限、1 MiB `--expect-echo` 往返），随后从各节点发布的 metrics 端口抓取 `mistlane_request_seconds`、`mistlane_messages_total`、`mistlane_event_loop_lag_max_seconds`、`mistlane_active_sessions`、`mistlane_admission_rejections_total`、`mistlane_process_resident_memory_bytes` 与 `mistlane_rate_limit_stops_total`。两条腿都以 SIGTERM 收尾并断言 exit 0。可比性参数（脚本、epoch、生成器参数、拓扑）在钻取内固定；数字的解读见[跨服与过载保护](./cross-server.md)与[性能剖析](./profiling.md)。
+
+**2026-11-27 验证**（主机 = Ubuntu 26.04.1 LTS，Docker 29.1.3，14 核，共租负载 5–8）：吞吐、分位数、滞后与 RSS 的实测见[验证记录](./validation.md)。这是部署环境钻取，不是版本发布，也不是编排决策。
 
 ## 尚未覆盖
 

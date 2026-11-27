@@ -1,0 +1,48 @@
+# Target-environment stress topology: one cross-routing gateway in front of two
+# crossServer nodes, identical to the cross bench topology in
+# docs/cross-server.md and docs/profiling.md. The drill drives the bundled bot
+# through the published gateway port and scrapes each node's published metrics
+# port; see tools/container_stress.sh.
+#
+# This is a deployment validation example, not an orchestration decision: the
+# lease/fencing/scaling choices remain open (docs/deployment.md).
+name: mistlane-stress
+
+services:
+  cross-a:
+    image: mistlane:dev
+    command: [crossServer-a]
+    restart: on-failure
+    stop_grace_period: 30s
+    volumes:
+      - ./compose/instances/crossServer-a.env:/opt/mistlane/config/instances/crossServer-a.env:ro
+    ports:
+      - "7201:7201"
+      - "7203:7203"
+
+  cross-b:
+    image: mistlane:dev
+    command: [crossServer-b]
+    restart: on-failure
+    stop_grace_period: 30s
+    volumes:
+      - ./compose/instances/crossServer-b.env:/opt/mistlane/config/instances/crossServer-b.env:ro
+    ports:
+      - "7202:7202"
+      - "7204:7204"
+
+  gateway-cross:
+    image: mistlane:dev
+    command: [gateway-cross-stress]
+    restart: on-failure
+    stop_grace_period: 30s
+    depends_on:
+      cross-a:
+        condition: service_healthy
+      cross-b:
+        condition: service_healthy
+    volumes:
+      - ./compose/instances/gateway-cross-stress.env:/opt/mistlane/config/instances/gateway-cross-stress.env:ro
+    ports:
+      - "7300:7300"
+      - "7301:7301"

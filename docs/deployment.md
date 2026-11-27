@@ -12,8 +12,11 @@ example, the healthcheck semantics, and the drill that validates all of it.
   session-routing `gateway` in front of it), with a config override mounted.
 - `deploy/compose/instances/gateway.env` — the gateway's container override
   (upstream by service name instead of the scaffold's loopback default).
+- `deploy/compose.stress.yaml` + `deploy/compose/instances/*stress*.env` — the
+  cross bench topology (two crossServers and a cross gateway) for the stress drill.
 - `deploy/healthcheck.sh` — the image liveness probe.
 - `tools/container_smoke.sh` — the deployment validation drill.
+- `tools/container_stress.sh` — the paired bare-metal/container stress drill.
 - Hostname endpoint addresses (below) — the one framework change the container
   surface needed.
 
@@ -112,6 +115,35 @@ checks three paths and tears everything down afterwards:
 It skips with a note when `docker` or `docker compose` is unavailable so it
 can run in environments without a container runtime. Verified 2026-11-21: all
 three paths pass, with the full test suite green (81/81).
+
+## Stress drill
+
+`tools/container_stress.sh` exercises the documented cross bench topology in
+the target container environment: leg A runs the same crossServer + cross
+gateway on the host as the paired reference — first at the default per-session
+flood guard, where the documented bench load is expected to exhaust the token
+bucket (the drill asserts all 32 generator clients are stopped and
+`mistlane_rate_limit_stops_total` fires on both nodes), then with the guard
+raised for the bench level (32 × 500) and with the admission envelope and
+per-room cap also raised for the ceiling level (128 × 781); leg B runs
+`deploy/compose.stress.yaml` with two crossServers and a cross gateway whose
+upstreams are compose service names, at the same raised parameters. Each leg
+drives the bundled bot through the published gateway port with the documented
+`--join "MLC1 1 realm g bench"` handshake (leg B covers three levels: the
+bench, the ceiling, and a 1 MiB `--expect-echo` payload round-trip), then
+scrapes `mistlane_request_seconds`, `mistlane_messages_total`,
+`mistlane_event_loop_lag_max_seconds`, `mistlane_active_sessions`,
+`mistlane_admission_rejections_total`,
+`mistlane_process_resident_memory_bytes` and `mistlane_rate_limit_stops_total`
+from each published metrics port. Both legs stop with SIGTERM and assert exit
+0. Comparability flags (script, epoch, generator flags, topology) are fixed in
+the drill; see [Cross-server and overload](./cross-server.md) and
+[Profiling](./profiling.md) for how to read the numbers.
+
+**Verified 2026-11-27** (host = Ubuntu 26.04.1 LTS, Docker 29.1.3, 14 cores,
+co-tenant load 5–8): see [Validation](./validation.md) for the measured
+throughput, percentiles, lag and RSS. This is a deployment-environment drill,
+not a version release and not an orchestration decision.
 
 ## Not covered yet
 
