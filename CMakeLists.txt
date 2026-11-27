@@ -117,6 +117,9 @@ if(BUILD_TESTING)
     add_test(NAME mistlane_sproto_sdk_js_golden COMMAND "${MISTLANE_NODE_EXECUTABLE}"
       "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/sproto_sdk_golden.mjs"
       "${CMAKE_CURRENT_BINARY_DIR}/sproto-fixture/avatar.bindings.js")
+    add_test(NAME mistlane_sproto_sdk_js_client_golden COMMAND "${MISTLANE_NODE_EXECUTABLE}"
+      "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/sproto_sdk_client_golden.mjs"
+      "${CMAKE_CURRENT_BINARY_DIR}/sproto-fixture/avatar.client.js")
     add_test(NAME mistlane_hook_registry COMMAND "${MISTLANE_NODE_EXECUTABLE}"
       "${CMAKE_CURRENT_SOURCE_DIR}/tools/check-hook-registry.mjs")
   endif()

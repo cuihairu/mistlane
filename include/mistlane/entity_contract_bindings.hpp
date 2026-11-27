@@ -986,6 +986,31 @@ inline std::string EntityContract::javascript_bindings(bool client) const {
                "  }\n"
                "  return null;\n"
                "}\n";
+        if (client) {
+            std::ostringstream digest_word;
+            digest_word << std::hex << std::setw(16) << std::setfill('0') << digest();
+            out << "\n"
+                   "// Session negotiation (docs/entity-contract.md): the first bytes a\n"
+                   "// client sends on a new entity-host connection are the MLV1 frame\n"
+                   "// built from this artifact's digest; the host answers MLV1 OK <host\n"
+                   "// digest> (admitted) or MLV1 ERR INVALID|VERSION|LATE. The digest is\n"
+                   "// derived here so a client can never send bytes its compiled\n"
+                   "// contract does not stand behind.\n"
+                   "export const CONTRACT_DIGEST = '" << digest_word.str() << "';\n"
+                   "export function handshakeFrame() {\n"
+                   "  return utf8.encode('MLV1 ' + CONTRACT_DIGEST);\n"
+                   "}\n"
+                   "export function parseHandshakeReply(bytes) {\n"
+                   "  if (!(bytes instanceof Uint8Array)) return null;\n"
+                   "  let text;\n"
+                   "  try { text = utf8Strict.decode(bytes); } catch { return null; }\n"
+                   "  const ok = /^MLV1 OK ([0-9a-f]{16})$/.exec(text);\n"
+                   "  if (ok) return { ok: true, host: ok[1] };\n"
+                   "  const err = /^MLV1 ERR (INVALID|VERSION|LATE)$/.exec(text);\n"
+                   "  if (err) return { ok: false, error: err[1] };\n"
+                   "  return null;\n"
+                   "}\n";
+        }
         return out.str();
     }
 inline std::string EntityContract::csharp_bindings(bool client) const {
@@ -1986,6 +2011,40 @@ inline std::string EntityContract::csharp_bindings(bool client) const {
         out << "public static class ContractSchemas { public static readonly IReadOnlyDictionary<string, IReadOnlyList<SprotoField>> Types = new Dictionary<string, IReadOnlyList<SprotoField>> {";
         for (const auto& name : type_names) out << " [\"" << name << "\"] = " << name << "Schema.Fields,";
         out << " }; }\n";
+        if (client) {
+            std::ostringstream digest_word;
+            digest_word << std::hex << std::setw(16) << std::setfill('0') << digest();
+            out <<
+               "// Session negotiation (docs/entity-contract.md): the first bytes a\n"
+               "// client sends on a new entity-host connection are the MLV1 frame\n"
+               "// built from this artifact's digest; the host answers MLV1 OK <host\n"
+               "// digest> (admitted) or MLV1 ERR INVALID|VERSION|LATE. The digest is\n"
+               "// derived here so a client can never send bytes its compiled\n"
+               "// contract does not stand behind.\n"
+               "public static class Mlv1 {\n"
+               "  public const string ContractDigest = \"" << digest_word.str() << "\";\n"
+               "  public static byte[] HandshakeFrame() => Encoding.UTF8.GetBytes(\"MLV1 \" + ContractDigest);\n"
+               "  public readonly record struct HandshakeReply(bool Ok, string Host, string Error);\n"
+               "  public static HandshakeReply? ParseHandshakeReply(byte[] bytes) {\n"
+               "    if (bytes == null) return null;\n"
+               "    string text;\n"
+               "    try { text = SprotoCodec.StrictUtf8.GetString(bytes); } catch (Exception) { return null; }\n"
+               "    if (text.StartsWith(\"MLV1 OK \", StringComparison.Ordinal)) {\n"
+               "      var host = text.Substring(8);\n"
+               "      if (host.Length != 16) return null;\n"
+               "      foreach (var ch in host)\n"
+               "        if (!((ch >= '0' && ch <= '9') || (ch >= 'a' && ch <= 'f'))) return null;\n"
+               "      return new HandshakeReply(true, host, \"\");\n"
+               "    }\n"
+               "    if (text.StartsWith(\"MLV1 ERR \", StringComparison.Ordinal)) {\n"
+               "      var code = text.Substring(9);\n"
+               "      if (code == \"INVALID\" || code == \"VERSION\" || code == \"LATE\")\n"
+               "        return new HandshakeReply(false, \"\", code);\n"
+               "    }\n"
+               "    return null;\n"
+               "  }\n"
+               "}\n";
+        }
         return out.str();
     }
 
