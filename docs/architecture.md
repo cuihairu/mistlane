@@ -2,7 +2,7 @@
 
 ## Target game-service architecture
 
-This is the **planned responsibility model**, not a completed runtime. Boxes denote service responsibilities, potentially sharing one binary. Solid edges denote intended message/data paths; dashed edges denote placement/route information, not implemented transactions. See [process responsibilities](./process-roles.md). Coordinators operate per region or cross-region group, not as compulsory gameplay relays.
+This is the shipped responsibility model — implemented below the gameplay layer (the coordination, hosting, scene-serving and persistence faces are wired; see the [validation record](./validation.md)). Boxes denote service responsibilities, potentially sharing one binary. Solid edges denote message/data paths; dashed edges denote placement/route information whose transactions are implemented (`MLR1` `PLACE`/`ROUTE`/`MIG`). See [process responsibilities](./process-roles.md). Coordinators operate per region or cross-region group, not as compulsory gameplay relays.
 
 ```mermaid
 flowchart TB
@@ -22,7 +22,7 @@ data denotes ownership-aware service access rather than one shared database for 
 
 ## Current runnable prototype
 
-Current code provides forwarding, Lua execution and static gateway-to-crossServer routing, not the complete legacy coordination/character/scene runtime. The existing cross-routing policy does not implement World coordination.
+The current code runs the framework faces end to end: forwarding, Lua execution, the coordinator registry, the Avatar hosting chain (login entry, home hosting, cross-host transfer, settlement), scene serving and the data role's durable endpoints. What it does not provide is the legacy game's content and coordination policy — gameplay rules, scene content and World coordination. The existing gateway cross-routing policy remains a static forwarding rule, not World coordination.
 
 ```mermaid
 flowchart TB

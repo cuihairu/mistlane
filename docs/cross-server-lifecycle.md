@@ -163,8 +163,14 @@ sequenceDiagram
 - **Mermaid:** the four acceptance diagrams render; `docs:check` covers renderability,
   desktop/mobile, light/dark and expansion.
 - **Runtime acceptance:** partial — the crossServer role, admission, PROBE1 and the MLD1
-  record/ACK path are implemented and validated (validation records); the lease authority,
-  the Avatar scene runtime and the event hooks are not.
+  record/ACK path are implemented and validated (validation records); the Avatar hooks run
+  in the VM (`avatar.lua`, `avatar.session`), the coordinator-driven transfer lease path is
+  driven end to end (`avatar.transfer.source`/`.destination`/`.full`,
+  `coordinator.migration.client`) and the scene runtime hosts avatars on the node
+  (`scene.serving`); the composed normal-login acceptance is pinned (`login.entry`) and the
+  recovery faces are pinned too (`entity.migrate.recover`, `coordinator.migration.recover`,
+  `coordinator.migration.journal.recovery`) — still open: offline takeover when a host dies
+  mid-transfer and broader crash breadth.
 
 Related: [cross return and single-writer protocol](./cross-return-protocol.md),
 [cross-server and overload](./cross-server.md), [Avatar lifecycle](./avatar-lifecycle.md),

@@ -134,6 +134,6 @@ sequenceDiagram
 
 - **机器可查：** `contracts/cross-server-lifecycle.json` 钉住 visiting 阶段、租约面、降级序、事件钩子、四路径与 MLD1 零冲突规则；fixture 断言这些不变量，漂移即测试失败。
 - **Mermaid：** 四张验收图可渲染；`docs:check` 覆盖可渲染性、桌面/移动、亮/暗与展开。
-- **运行时验收：** 部分——crossServer 角色、准入、PROBE1 与 MLD1 记录/ACK 通路已实现并验证（验证记录）；Avatar 事件钩子在 VM 中运行（avatar.lua、avatar.session），协调器协调的移交租约路径端到端驱动（avatar.transfer.source/.destination/.full、coordinator.migration.client），场景运行时在节点上承载 Avatar（scene.serving）——离线接管/恢复场景与组合的正常登录验收仍为后续切片。
+- **运行时验收：** 部分——crossServer 角色、准入、PROBE1 与 MLD1 记录/ACK 通路已实现并验证（验证记录）；Avatar 事件钩子在 VM 中运行（avatar.lua、avatar.session），协调器协调的移交租约路径端到端驱动（avatar.transfer.source/.destination/.full、coordinator.migration.client），场景运行时在节点上承载 Avatar（scene.serving）——组合的正常登录验收已钉住（`login.entry`），恢复面也已钉住（`entity.migrate.recover`、`coordinator.migration.recover`、`coordinator.migration.journal.recovery`）——仍开放：宿主在移交中途死亡时的离线接管与更广的崩溃面。
 
 相关：[跨服回传与唯一写入权协议](./cross-return-protocol.md)、[跨服与过载保护](./cross-server.md)、[Avatar 全生命周期](./avatar-lifecycle.md)、[进程职责与命名](./process-roles.md)。
