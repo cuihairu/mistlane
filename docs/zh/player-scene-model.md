@@ -4,7 +4,7 @@
 
 ## Session、Avatar 与数据归属
 
-Session 管理客户端连接、状态及当前承载路由，位于 gateway。Avatar 表示承载玩家数据与行为的游戏对象，位于当前 gameServer 或 crossServer；旧代码实际叫 Lua Charactor；Mistlane 已实现框架侧 Avatar 运行时模型（include/mistlane/avatar_runtime.hpp，七态预言机，由 avatar.lifecycle 模型测试钉住），但尚无脚本承载的逐角色对象。
+Session 管理客户端连接、状态及当前承载路由，位于 gateway。Avatar 表示承载玩家数据与行为的游戏对象，位于当前 gameServer 或 crossServer；旧代码实际叫 Lua Charactor；Mistlane 已实现框架侧 Avatar 运行时模型（include/mistlane/avatar_runtime.hpp，七态预言机，由 avatar.lifecycle 模型测试钉住）——脚本在 `avatar_load` 返回的表就是脚本侧 Avatar 对象，随每个钩子传回。
 
 ```mermaid
 flowchart TB
@@ -32,7 +32,7 @@ flowchart TB
   data --> db["归属数据库"]
 ```
 
-这是一条旧实现保存路径，不是 Mistlane 当前已接通的服务链。目标采用“运行位置可迁移，长期数据回到归属 data 保存”的原则；跨服执行进程通过归属侧服务回传变更，持久记录/订单不固化承载地址。具体接线、保存确认、版本与幂等、重试/乱序、断线/离线、回服失败已由[跨服回传与唯一写入权协议](./cross-return-protocol.md)定稿（参与者上下文、唯一写入权、MLD1 确认、故障规则）。调用 save 或发送消息仍不能当成数据库提交完成：参与者上下文已进入 `MLC1` 握手，MLD1 记录端点、发送侧重试接线上行与 home 最终序号权威均已实现——仅剩完整角色保存链（Avatar 运行时）。
+这是一条旧实现保存路径，不是 Mistlane 当前已接通的服务链。目标采用“运行位置可迁移，长期数据回到归属 data 保存”的原则；跨服执行进程通过归属侧服务回传变更，持久记录/订单不固化承载地址。具体接线、保存确认、版本与幂等、重试/乱序、断线/离线、回服失败已由[跨服回传与唯一写入权协议](./cross-return-protocol.md)定稿（参与者上下文、唯一写入权、MLD1 确认、故障规则）。调用 save 或发送消息仍不能当成数据库提交完成：参与者上下文已进入 `MLC1` 握手，MLD1 记录端点、发送侧重试接线上行与 home 最终序号权威均已实现——完整角色保存链也已在其上实现（Avatar 运行时：加载、承载、移交、结算——`login.entry`、`avatar.settle`）。
 
 旧源码定位：`game/Hegel/Scene/SceneLogic.lua::doSwitchHegel`、`game/Data/RPC.lua::requesthegel2hegel`、`game/Common/CService/Server/GateService.lua::handleSwitchHegel`、`game/Hegel/Charactor/Charactor.lua::set/setDirty/save`、`game/World/Charactor/CharactorManager.lua::syncDataFromCross/onSyncDataFromCross`。
 
@@ -45,7 +45,7 @@ flowchart TB
 | 角色业务行为、进入条件、战斗奖励、活动与副本规则 | Lua | Lua 业务与生命周期钩子 |
 | 地图/场景运行管理 | Lua SceneManager/Scene；C++ 有空间数据代码 | C++ 管理通用生命周期、空间/同步机制；Lua 提供玩法规则，资源加载接口另行定义 |
 
-Lua 可以申请进入跨服玩法；基础层负责承载分配、状态传输、确认、路由切换和旧承载释放。钩子需明确线程、错误、重入、超时及迁移期间可执行的操作。这是抽取目标，不是当前 message/http 模块已具有的能力。运行时契约——对象拆分、状态、钩子面、迁移与加载保存规则——在 [Avatar 运行时契约](./avatar-runtime.md) 页定义。
+Lua 可以申请进入跨服玩法；基础层负责承载分配、状态传输、确认、路由切换和旧承载释放。钩子需明确线程、错误、重入、超时及迁移期间可执行的操作。这些曾是抽取目标，如今已是接线的 Avatar 运行时——仍不是裸 message/http 模块的能力。运行时契约——对象拆分、状态、钩子面、迁移与加载保存规则——已在 [Avatar 运行时契约](./avatar-runtime.md) 页实现并钉住。
 
 ## 协议、方法定义与抽象前置条件
 
@@ -99,6 +99,6 @@ flowchart TB
 
 ## 当前实现与后续任务
 
-Mistlane 当前有网络通道、串行 message/http 执行及 gateway cross routing/crossServer 路由/准入原型；尚无完整 Avatar 承载/迁移、地图/场景运行层、上述归属保存链或无缝空间分区。已有 SIGHUP 替换 Lua VM 会重置模块状态，不能当作 Avatar 或场景迁移。
+Mistlane 当前已端到端运行框架各面：网络通道、串行 message/http 执行、coordinator 注册表、Avatar 承载链（登录入场、归属承载、跨宿主移交、结算）与场景运行时的服务面（`scene.serving`）；归属保存链即 MLD1 持久端点加结算边。未实现：无缝空间分区（[大地图](./big-map.md) 页）、对客户端的协议暴露（被协议契约恢复条目门控）与玩法内容层。SIGHUP 替换 Lua VM 会重置模块状态，不能当作 Avatar 或场景迁移。
 
-后续任务在根目录 `todo.md`：先整理 C++ 基础契约和 Lua 钩子，再明确地图数据与场景生命周期、跨服变更回传与唯一写入权，最后实现并验证；不能只改运行角色名称就勾选完成。gameServer 逐项评估（进程形态、场景模板/实例、计时、同步、释放）见[能力评估](./gameserver-capabilities.md)。
+根目录 `todo.md` 台账已把上述条目推进到实现与验证；剩余未勾条目等待用户输入（发版版本号、客户端代码库、协议契约拍板）。不能只改运行角色名称就勾选完成。gameServer 逐项评估（进程形态、场景模板/实例、计时、同步、释放）见[能力评估](./gameserver-capabilities.md)。

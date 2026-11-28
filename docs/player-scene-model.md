@@ -4,7 +4,7 @@ This page separates game-fogs source observations, Mistlane's target contracts a
 
 ## Session, Avatar and data ownership
 
-A Session owns the client connection, connection state and current-host route in gateway. Avatar denotes the player data/behavior object in the active gameServer or crossServer. The old type is Lua Charactor; Mistlane implements the framework-side Avatar runtime model (include/mistlane/avatar_runtime.hpp, the seven-state oracle, pinned by the avatar.lifecycle model test) but no script-backed per-avatar object yet.
+A Session owns the client connection, connection state and current-host route in gateway. Avatar denotes the player data/behavior object in the active gameServer or crossServer. The old type is Lua Charactor; Mistlane implements the framework-side Avatar runtime model (include/mistlane/avatar_runtime.hpp, the seven-state oracle, pinned by the avatar.lifecycle model test) — the avatar table the script returns from `avatar_load` is handed to every hook as the script-side avatar object.
 
 ```mermaid
 flowchart TB
@@ -32,7 +32,7 @@ flowchart TB
   data --> db["Home database"]
 ```
 
-This is an observed legacy path, not an already connected Mistlane service chain. The target retains movable execution and home-owned permanent data: cross-region changes return through home-side services. Orders/durable records do not pin execution addresses. Connections, durable acknowledgement, generation/idempotency, retries/reordering, disconnect/offline behavior and failed return are specified by the [cross return protocol](./cross-return-protocol.md) page (participant context, single-writer authority, MLD1 confirmation, failure rules). Calling save or sending a message is not a database commit: the participant context is carried by the `MLC1` handshake, and the MLD1 record endpoint, the sender-side retry wiring and the home final-sequence authority are implemented — only the full character-save chain (Avatar runtime) remains.
+This is an observed legacy path, not an already connected Mistlane service chain. The target retains movable execution and home-owned permanent data: cross-region changes return through home-side services. Orders/durable records do not pin execution addresses. Connections, durable acknowledgement, generation/idempotency, retries/reordering, disconnect/offline behavior and failed return are specified by the [cross return protocol](./cross-return-protocol.md) page (participant context, single-writer authority, MLD1 confirmation, failure rules). Calling save or sending a message is not a database commit: the participant context is carried by the `MLC1` handshake, and the MLD1 record endpoint, the sender-side retry wiring and the home final-sequence authority are implemented — and the full character-save chain is implemented on top of them (the Avatar runtime: load, hosting, transfer, settlement — `login.entry`, `avatar.settle`).
 
 Legacy locations: `game/Hegel/Scene/SceneLogic.lua::doSwitchHegel`, `game/Data/RPC.lua::requesthegel2hegel`, `game/Common/CService/Server/GateService.lua::handleSwitchHegel`, `game/Hegel/Charactor/Charactor.lua::set/setDirty/save`, `game/World/Charactor/CharactorManager.lua::syncDataFromCross/onSyncDataFromCross`.
 
@@ -45,7 +45,7 @@ Legacy locations: `game/Hegel/Scene/SceneLogic.lua::doSwitchHegel`, `game/Data/R
 | Character behavior, entry conditions, combat/rewards and instance rules | Lua | Lua business behavior and lifecycle hooks |
 | Map/scene runtime | Lua SceneManager/Scene plus C++ spatial-data code | C++ common lifecycle/spatial/synchronization mechanisms; Lua gameplay rules; resource interfaces specified separately |
 
-Lua may request entry into cross-region gameplay. The framework handles placement, transfer, acknowledgement, route publication and old-host release. Hooks need thread/error/reentrancy/timeout contracts and rules during transfer. These are extraction targets, not capabilities supplied by the existing message/http module. The runtime contract — object split, states, hook surface, migration and load/save rules — is specified on the [Avatar runtime](./avatar-runtime.md) page.
+Lua may request entry into cross-region gameplay. The framework handles placement, transfer, acknowledgement, route publication and old-host release. Hooks need thread/error/reentrancy/timeout contracts and rules during transfer. These were extraction targets; they are now the wired Avatar runtime — still not capabilities of the bare message/http module. The runtime contract — object split, states, hook surface, migration and load/save rules — is implemented and pinned on the [Avatar runtime](./avatar-runtime.md) page.
 
 ## Protocol and method contracts before abstraction
 
@@ -99,6 +99,6 @@ Combined Base/Cell responsibilities do not rule out large maps. The observed leg
 
 ## Implementation status and follow-up
 
-Mistlane has network channels, serial message/http execution and gateway cross routing/crossServer routing/admission prototypes. Complete Avatar hosting/transfer, map/scene runtime, the home-save chain and seamless partitioning are not implemented. SIGHUP replaces the Lua VM and resets module state; it is not Avatar/scene migration.
+Mistlane runs the framework faces end to end: network channels, serial message/http execution, the coordinator registry, the Avatar hosting chain (login entry, home hosting, cross-host transfer, settlement) and the scene runtime's serving face (`scene.serving`); the home-save chain is the MLD1 durable endpoints with the settle edge. Not implemented: seamless spatial partitioning (the [big map](./big-map.md) page), client-facing protocol exposure (gated on the protocol-contract-recovery item) and the gameplay content layer. SIGHUP replaces the Lua VM and resets module state; it is not Avatar/scene migration.
 
-The root `todo.md` tracks C++ contracts/Lua hooks, map/scene lifetimes, cross-region home updates and single-writer ownership, followed by implementation/verification. Renaming a role alone cannot complete these tasks. The item-by-item gameServer evaluation (process shape, scene templates/instances, timing, sync, release) is recorded in the [capability assessment](./gameserver-capabilities.md).
+The root `todo.md` ledger carried those items through implementation and verification; its remaining unchecked entries await user inputs (release version, the client codebase, protocol-contract decisions). Renaming a role alone cannot complete these tasks. The item-by-item gameServer evaluation (process shape, scene templates/instances, timing, sync, release) is recorded in the [capability assessment](./gameserver-capabilities.md).

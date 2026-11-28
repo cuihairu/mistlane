@@ -161,13 +161,13 @@
 
 ## Mistlane 可直接借鉴的亮点（按优先级）
 
-Mistlane 当前目标划分 `gateway/login/coordinator/gameServer/crossServer/data`，并明确 player/scene、持久化写入权和跨区 ownership 仍有未实现部分（见 [`architecture.md`](./architecture.md)、[`process-roles.md`](./process-roles.md)）。以下是设计建议，不代表已实现：
+Mistlane 当前目标划分 `gateway/login/coordinator/gameServer/crossServer/data`；player/scene、持久化写入权与跨区 ownership 契约此后已实现并钉住（见 [`architecture.md`](./architecture.md)、[`process-roles.md`](./process-roles.md)、[验证记录](./validation.md)）。以下条目仍是设计指引；已实现者在条目内点名：
 
-1. **P0：持久化写入的权威收束点与确认契约**（借 KBEngine Base 收束 Cell 权威态的边界，但不要照搬其仅内存周期备份）。为每个角色定义唯一 writer/generation，保存请求有幂等键、数据库事务边界、成功确认含义、超时后查询/重试路径；跨区返回 home data 时禁止双写。适用人物资产/奖励/支付；不适用于每 tick 位置快照。
-2. **P0：进程转移使用明确的 prepare → snapshot → destination-ack → route-switch → source-release 状态机**（借 RedDwarf 的身份到节点路由与 BigWorld 的 owner handoff）。为每步定义崩溃恢复、重复消息和 fencing epoch；仅靠负载路由或 heartbeat 不足以授予第二个写者。当前 Mistlane transfer handshake 明确未实现，适合先写协议/故障注入测试。
+1. **P0：持久化写入的权威收束点与确认契约**（借 KBEngine Base 收束 Cell 权威态的边界，但不要照搬其仅内存周期备份）。为每个角色定义唯一 writer/generation，保存请求有幂等键、数据库事务边界、成功确认含义、超时后查询/重试路径；跨区返回 home data 时禁止双写。适用人物资产/奖励/支付；不适用于每 tick 位置快照。此后已实现：MLD1 持久端点把 `SUBMIT` 栅栏在 data 签发的 generation 上，耐久 ACK 与幂等重放（[跨服回传协议](./cross-return-protocol.md)）。
+2. **P0：进程转移使用明确的 prepare → snapshot → destination-ack → route-switch → source-release 状态机**（借 RedDwarf 的身份到节点路由与 BigWorld 的 owner handoff）。为每步定义崩溃恢复、重复消息和 fencing epoch；仅靠负载路由或 heartbeat 不足以授予第二个写者。Mistlane 的移交握手现已实现并经故障测试——coordinator 驱动的 prepare → snapshot → destination-ack → route-switch → source-release 链端到端运行（`avatar.transfer.full`、`coordinator.migration.client`）；开放面：死宿主的离线接管。
 3. **P1：按负载与实体容量做 placement，但将调度与 admission 分开**（借 KBEngine CellappMgr 对 load/entity count 的双指标）。对在线 worker 计算有效容量和过载拒绝，避免仅随机分配；大房间单独识别热点，不假设加进程能自动扩容一个房间。
 4. **P1：可插拔 transport、序列化与明确消息契约**（借 Pitaya acceptor/serializer、Pomelo protocol 模块化）。Mistlane 已将 TCP/WS adapter 和内部 payload 边界分离；继续对外协议版本、内部 request id、deadline、错误码和 schema 兼容规则做版本化，不以“能解析”代替兼容性。
-5. **P1：开发/运营现场工具按实体和空间分层**（借 KBEngine Watcher/SpaceViewer、BigWorld Watcher）。先给活跃 session/角色 owner/scene 分布、复制/迁移阶段、持久化任务状态增加只读诊断；内部接口隔离鉴权，输出有界并避免把全实体 dump 放入主 tick。
+5. **P1：开发/运营现场工具按实体和空间分层**（借 KBEngine Watcher/SpaceViewer、BigWorld Watcher）。先给活跃 session/角色 owner/scene 分布、复制/迁移阶段、持久化任务状态增加只读诊断；内部接口隔离鉴权，输出有界并避免把全实体 dump 放入主 tick。Prometheus 抓取端点与压力钻取指标族已存在；实体/空间分层的 watcher 尚无。
 6. **P2：脚本重载只替换行为，状态/契约迁移单独版本化**（借 KBEngine 的 reload/fullReload 区别并规避旧引用问题）。Mistlane 的 Lua VM replacement 要配合 request drain/旧 VM stop、新 VM init、失败保留旧 VM；角色数据升级另用显式 migration，而不是期待重载自动重写玩家态。
 7. **P2：压测与故障演练成为扩容/恢复声明的前置证据**（借 Pomelo/Pitaya 独立 bot/test tools）。对 gateway 断连、服务分区、DB 超时、worker crash、重复支付回调、热点房间做可重复测试，并记录 RPO/RTO、P99、积压和过载拒绝；测试通过不自动等于生产容量承诺。
 

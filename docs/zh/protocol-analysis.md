@@ -78,7 +78,7 @@ home 最终游标/墓碑权威随第三片（2026-10-28）持久化：`HomeGener
 
 ### 成员退役、目标失效与接管（第二片）
 
-2026-10-20 在同一模型内实现，仍未新增 CLI 或线上动词。`retire_member(token, member)` 表示某成员退出注册表而事务仍依赖它，是上文所述接管交换中 home 栅栏前的一半。
+2026-10-20 在同一模型内实现；线上动词此后落地（`MLR1 MIG RETIRE`、`MLR1 MIG TAKEOVER`，由迁移客户端驱动）。`retire_member(token, member)` 表示某成员退出注册表而事务仍依赖它，是上文所述接管交换中 home 栅栏前的一半。
 
 声明先校验再采信：键必须与事务一致、generation 必须与 journal 条目一致（否则 `Stale`），事务必须是当前且非终态（否则 `Conflict`），`member` 必须是本事务真正依赖的合法 owner——预期源 owner 或目标。与事务无关的成员、不可识别的 owner 声明、跨区键一律 `Invalid`。
 
@@ -197,7 +197,7 @@ apiServer 上的 `--journal FILE` 选择持久受理后端（`ApiSqliteAcceptanc
 |---|---|---|
 | crossServer 回传与唯一写入权 | 可恢复发送源（发送方崩溃即丢失其进程内队列）与 Avatar 运行时集成；归属持久事务/ACK/重放、有界队列/只读/最终回服接线与共享租约权威已实现 | 矛盾 4 的恢复部分；缺口 3/4 |
 | login/data/apiServer | 持久凭据声明表；MLA1 回调协议（签名/防重放/受理/归属已建模、HTTP 传输、持久受理与归属事实来源已接线、MLT1 凭据原语已实现并绑定到 `MLC1` 的 `tk` 尾缀、宿主凭据验证与区服秘钥配置已实现、轮换/撤销已决定并测试）的多进程重放声明 | 缺口 2（运行时归 4）、4/6 |
-| coordinator 归属/迁移 | MLS1 之外的对端认证、真实路由/Avatar 运行时接线，以及跨服务崩溃/重复测试 | 缺口 5（类型协议、模型、持久 home 游标/墓碑、注册表链路 `MLR1 MIG` 动词（含注册表驱动退役）、栅栏后接管模型及其线上动词、持久场景/放置归属已实现；运行时证据仍缺） |
+| coordinator 归属/迁移 | MLS1 之外的对端认证，以及更广的跨服务崩溃/重复面（含死宿主的离线接管） | 缺口 5（类型协议、模型、持久 home 游标/墓碑、注册表链路 `MLR1 MIG` 动词（含注册表驱动退役）、栅栏后接管模型及其线上动词、持久场景/放置归属与真实路由/Avatar 运行时集成已实现；运行时证据已钉——`login.entry`、`avatar.transfer.full`、`scene.serving`） |
 | 实体实现链 | Avatar 运行时（持有 socket 与持久化实体的网络运行时）、完整生产级 SDK runtime 与 hosting-generation 内部调用方；完整 envelope/error/EntityRef 向量、bundle-load 闸门、生成的 codec、嵌套复制与运行时持久化已实现 | 缺口 7 |
 
 以上均为保留闸门，不是新增实现声明。每个部分/未解项必须连同上面的原因与解锁条件阅读；历史 todo 叙述不能覆盖当前代码证据。
