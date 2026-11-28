@@ -126,7 +126,7 @@ English pages live at docs/, Chinese pages at docs/zh/. The VitePress language m
 python3 tools/export.py
 ```
 
-Only reviewed files in release-files.txt enter the source archive, with SHA256 checksums. The archive excludes original game files, Git history, private configuration, dependency binaries, and build output.
+Every tracked file enters the source archive (`release-files.txt` is the tracked-tree manifest), with embedded SHA256 checksums. The archive excludes untracked files, original game files, Git history, private configuration, dependency binaries, and build output.
 
 Mistlane is licensed under [Apache License 2.0](LICENSE). The original FOGS-derived utility files retain their provenance and attribution in [NOTICE](NOTICE); third-party dependency and port licenses are listed in [THIRD_PARTY.md](THIRD_PARTY.md). The original meaning of FOGS is unconfirmed.
 
@@ -135,6 +135,10 @@ Mistlane is licensed under [Apache License 2.0](LICENSE). The original FOGS-deri
 - [Lua services and lifecycle](docs/lua.md)
 - [Native cross-server routing and overload protection](docs/cross-server.md)
 - [Drogon and libcurl](docs/http.md)
+- [Entity contracts and code generation](docs/entity-contract.md)
+- [Avatar runtime](docs/avatar-runtime.md)
+- [Deployment](docs/deployment.md) and [profiling](docs/profiling.md)
+- [Protocol analysis](docs/protocol-analysis.md)
 - [Legacy and modern architecture comparison](docs/architecture-comparison.md)
 
 Running mistlane needs the compiled program and its application script/certificates. Python is only used by tests and developer tools; configure with BUILD_TESTING=OFF to build without Python integration tests. Node.js and pnpm are documentation development dependencies.

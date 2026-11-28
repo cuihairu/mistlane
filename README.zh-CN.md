@@ -151,7 +151,7 @@ python3 tests/mysql_integration.py ./build/debug/mistlane-mysql-probe
 python3 tools/export.py
 ```
 
-生成 `dist/mistlane-0.1.0.tar.gz`，只包含 `release-files.txt` 中审核过的文件及 SHA256 清单。包内无父仓库、Git 历史、旧游戏 Lua、原协议、表结构、支付、渠道 SDK、生产配置或预编译产物。解压后可作为新仓库根目录；CI 按这个独立根设计。
+生成 `dist/mistlane-0.1.0.tar.gz`，包含全部跟踪文件（`release-files.txt` 即跟踪文件清单）及内嵌 SHA256 清单。包内不含未跟踪文件、父仓库、Git 历史、旧游戏 Lua、原协议、表结构、支付、渠道 SDK、生产配置或预编译产物。解压后可作为新仓库根目录；CI 按这个独立根设计。
 
 完整能力边界见 [架构与迁移说明](docs/zh/architecture.md)。Mistlane 使用 [Apache License 2.0](LICENSE)；原 FOGS 派生文件的来源与署名见 [NOTICE](NOTICE)，第三方依赖及 vcpkg port 的授权见 [THIRD_PARTY.md](THIRD_PARTY.md)。
 
@@ -180,6 +180,10 @@ pnpm docs:check
 - [Lua 脚本与生命周期](docs/zh/lua.md)
 - [原生跨服与过载保护](docs/zh/cross-server.md)
 - [Drogon 与 libcurl](docs/zh/http.md)
+- [实体契约与代码生成](docs/zh/entity-contract.md)
+- [Avatar 运行时](docs/zh/avatar-runtime.md)
+- [部署](docs/zh/deployment.md)与[性能剖析](docs/zh/profiling.md)
+- [协议分析](docs/zh/protocol-analysis.md)
 - [老架构与现代架构对比](docs/zh/architecture-comparison.md)
 
 运行 mistlane 只需要编译后的程序及相应 Lua 脚本/证书。Python 仅用于开发期 tests 集成验证和 tools 辅助工具；关闭 BUILD_TESTING 可构建不运行 Python 测试的服务端。文档开发依赖 Node.js 与 pnpm。
