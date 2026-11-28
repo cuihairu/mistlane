@@ -49,7 +49,7 @@ Lua 可以申请进入跨服玩法；基础层负责承载分配、状态传输�
 
 ## 协议、方法定义与抽象前置条件
 
-通用 Entity 的 XML 契约、JavaScript/C# 代码生成、属性同步、持久化及服务器不重编更新方案见[实体契约与代码生成](./entity-contract.md)。后续按通用 Entity 设计，Avatar 只是其中一种；该方案尚未实现。
+通用 Entity 的 XML 契约、JavaScript/C# 代码生成、属性同步、持久化及服务器不重编更新方案见[实体契约与代码生成](./entity-contract.md)。后续按通用 Entity 设计，Avatar 只是其中一种；该契约链已实现并钉在[验证记录](./validation.md)。
 
 sproto 同时支持 RPC 协议声明：协议名、编号及 request/response 类型；业务 Lua 函数体及其绑定由应用实现。旧仓库 `3rd/sproto/testrpc.lua` 提供示例，`game/lib/sprotoparser.lua` 支持相应语法。旧游戏 host 层另有 aid/tag/cid 定制，不能照搬上游默认会话行为。恢复契约时必须同时恢复 RPC 声明与消息类型。参见 [sproto 官方 RPC API 与协议语法](https://github.com/cloudwu/sproto#rpc-api)。
 
@@ -59,9 +59,9 @@ sproto 同时支持 RPC 协议声明：协议名、编号及 request/response �
 
 属性变更通知使用 `SC_CharDataUpdate=4005`。旧 set 按条件通知客户端及记录 dirty/跨服回传；setDirty 本身不通知客户端，直接改 self.data 也不等于自动追踪。在线角色每 300000ms 调用 save；save 清空 dirty 后提交 CacheRow，不能解释为数据库持久化成功。
 
-尚未定位原始业务协议文本、生成脚本、正式客户端绑定和完整版本兼容流程。已有生成物不足以证明前后端契约可复现。Mistlane 当前只由 C++ 调用脚本返回表中的 message/http 等回调，尚未实现业务协议生成、完整 Avatar 方法绑定或自动属性机制。
+原始业务协议文本已从编译后的 game-fogs `.spb` 按字节一致再生成（2026-11-28，probe 的 regen 模式）；生成脚本（原 sprotodump 步骤）、正式客户端绑定和完整版本兼容流程仍缺。已有生成物不足以证明前后端契约可复现。Mistlane 现有契约工具链（`contract build`/`compat`）、属性机制（`PropertyStore`/`PropertySync`）与 MLE1/MLV1 网络绑定；完整业务协议生成与 Avatar 方法绑定仍缺。
 
-此前提出的 `self:sync()` 撤回，不作为已确定 API。强制保存方法名、命名空间和防覆盖机制待协议契约设计；客户端属性同步、周期保存与强制持久化确认必须分开定义。先恢复/明确协议来源，列清消息编号与字段类型、方向、处理器、身份与权限、错误和版本兼容，再决定 C++/Lua 抽象。不得为补齐文档直接新增这些运行时接口。
+此前提出的 `self:sync()` 撤回，不作为已确定 API。强制保存方法名、命名空间和防覆盖机制待协议契约设计；客户端属性同步、周期保存与持久化确认此后已落地（进程内与生成物侧的 `PropertySync`、周期/停机保存调用方、MLD2 持久 `ACK`）。先恢复/明确协议来源，列清消息编号与字段类型、方向、处理器、身份与权限、错误和版本兼容，再决定 C++/Lua 抽象。不得为补齐文档直接新增这些运行时接口。
 
 旧源码证据：`game/Hegel/Rpc/PacketHandler.lua`、`game/Common/CService/Server/HegelService.lua::handleClientMsg`、`GateService.lua::onlineMsg`、`game/Hegel/Charactor/Charactor.lua::set/setDirty/save/callClient`、`CharactorManager.lua::refreshChars/saveOnlinePeriodically`。
 

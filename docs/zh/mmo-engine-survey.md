@@ -110,7 +110,7 @@ Unreal 的 Dedicated Server 是 headless、server-authoritative 的游戏进程�
 
 ## 对 Mistlane 的启示
 
-Mistlane 当前文档把目标中的 `gameServer / crossServer / data / coordinator` 划分为服务责任，而非已实现的 MMO runtime；当前代码主要有通用网络转发、Lua 执行、路由与准入，完整 Avatar/Scene/存档链仍未实现。[M1][M2]
+Mistlane 文档把 `gameServer / crossServer / data / coordinator` 划分为服务责任。调查时（2026-10-19）代码主要是通用网络转发、Lua 执行、路由与准入；此后 Avatar/Scene/存档链已在框架内端到端实现，钉在[验证记录](./validation.md)。[M1][M2]
 
 ### 可直接借鉴（作为设计约束，不等于立即实现）
 

@@ -110,7 +110,7 @@ To cover domestic commercial public material, Tencent Game Academy's "game suppo
 
 ## Implications for Mistlane
 
-Mistlane's current docs assign `gameServer / crossServer / data / coordinator` as service responsibilities, not as an implemented MMO runtime; the current code is mainly generic network forwarding, Lua execution, routing and admission, and the full Avatar/Scene/save chain is still unimplemented. [M1][M2]
+Mistlane's docs assign `gameServer / crossServer / data / coordinator` as service responsibilities. At survey time (2026-10-19) the code was mainly generic network forwarding, Lua execution, routing and admission; the Avatar/Scene/save chain has since been implemented end to end in the framework and pinned in the [validation record](./validation.md). [M1][M2]
 
 ### Adopt directly (as design constraints, not immediate implementation)
 

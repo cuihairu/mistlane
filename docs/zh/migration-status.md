@@ -4,9 +4,9 @@
 
 | 老框架能力 | Mistlane 状态 | 当前边界 / 后续决策 |
 |---|---|---|
-| 角色承载、Session/Avatar 与迁移 | 已设计、未抽取 | 旧角色在 Hegel/CrossHegel 间转移，原 Gate 保持连接；框架无端到端 Avatar 运行时（七态预言机模型已实现并经模型测试；会话与传输接线未）。对象拆分、生命周期状态、钩子面、迁移与加载保存规则见[Avatar 运行时契约](./avatar-runtime.md)页；通用 Avatar 生命周期、唯一写入权与可靠移交仍未实现，见[模型说明](./player-scene-model.md)。 |
-| 地图模板、空间数据与场景实例 | 已设计、未迁移 | 旧 SceneManager/Scene 主要为 Lua；C++ 导航调用已注释，框架无场景/地图/实体对象。分层、准备状态、空间缓存引用与释放、清理顺序见[场景生命周期页](./scene-lifecycle.md)；大地图三轴与流式/空间分区需求见[大地图页](./big-map.md)。流式、空间 AOI 与无缝仍只是需求。逐项 gameServer 评估见[能力评估页](./gameserver-capabilities.md)。 |
-| 跨服变更回归属区服保存 | 部分实现 | 旧 set/setDirty 经 CrossWorld 和归属 World 发 Data/Cache。目标保留数据归属：`data` 角色已应答 MLD1 归属侧端点（`LOAD`/`SUBMIT`），带承载版本栅栏、按角色序号纪律、重发去重，并在 `--journal FILE` 下以存储后端的 `ACK durable` 应答（已提交行跨 data 重启保留，提交失败回 `ERR STORAGE`）；无存储时仅作回执应答。coordinator journal 与 MLD1 记录存储共享同一 SQLite 边界（见[协议分析](./protocol-analysis.md)）；crossServer 发送侧有界重试队列与 home 最终序号/墓碑权威已实现，仅剩 Avatar 运行时交接。见[跨服回传与唯一写入权协议](./cross-return-protocol.md)。 |
+| 角色承载、Session/Avatar 与迁移 | 已实现（框架运行时） | 旧角色在 Hegel/CrossHegel 间转移，原 Gate 保持连接；框架现已有端到端 Avatar 运行时：七态预言机模型、会话/传输接线（登录链、跨服访问、宽限回收）、generation 栅栏下的唯一写入权、跨宿主移交（冻结 → 耐久刷盘 → 栅栏 → 提交 → 落地）与结算均已实现并钉在[验证记录](./validation.md)；契约仍在[Avatar 运行时契约](./avatar-runtime.md)页。旧游戏内容仍排除。见[模型说明](./player-scene-model.md)。 |
+| 地图模板、空间数据与场景实例 | 部分实现（场景实例） | 旧 SceneManager/Scene 主要为 Lua；C++ 导航调用已注释。框架现可注册地图定义并承载场景实例——SceneRuntime 模型与 SceneHost 承载面（摘要校验加载、常驻实例、成员关系对齐、切换闸门），由 `scene.lifecycle` 与 `scene.serving` 测试钉住；分层、准备状态、空间缓存引用与释放、清理顺序契约仍在[场景生命周期页](./scene-lifecycle.md)；大地图三轴与流式/空间分区需求见[大地图页](./big-map.md)。流式、空间 AOI 与无缝仍只是需求。逐项 gameServer 评估见[能力评估页](./gameserver-capabilities.md)。 |
+| 跨服变更回归属区服保存 | 已实现 | 旧 set/setDirty 经 CrossWorld 和归属 World 发 Data/Cache。目标保留数据归属：`data` 角色已应答 MLD1 归属侧端点（`LOAD`/`SUBMIT`），带承载版本栅栏、按角色序号纪律、重发去重，并在 `--journal FILE` 下以存储后端的 `ACK durable` 应答（已提交行跨 data 重启保留，提交失败回 `ERR STORAGE`）；无存储时仅作回执应答。coordinator journal 与 MLD1 记录存储共享同一 SQLite 边界（见[协议分析](./protocol-analysis.md)）；crossServer 发送侧有界重试队列与 home 最终序号/墓碑权威已实现，Avatar 运行时交接（移交、结算、恢复）也已端到端接线；发送侧耐久重放仍开放。见[跨服回传与唯一写入权协议](./cross-return-protocol.md)。 |
 | 进程启动、监听器、信号和退出 | 重新实现 | 新生命周期由 `Node` 管理，逐项核对见[旧生命周期核对](#旧生命周期核对)；不保留旧进程 API 或二进制兼容。 |
 | 异步 TCP 传输 | 重新实现 | 使用新的四字节长度头协议，并有会话限制和期限；不支持旧分帧及客户端协议。 |
 | WebSocket / 安全 WebSocket | 替换 | WS/WSS 由 Drogon/Trantor 处理，不迁移手写握手、掩码或控制帧解析。 |
@@ -14,7 +14,7 @@
 | HTTP 客户端 | 替换 | 为 C++ 调用者提供有界同步 libcurl 适配器；不得在事件循环回调中阻塞调用。 |
 | Lua VM 与回调 | 重新实现 | 用模块 table 及明确的 init/start/message/http/tick/stop/shutdown 钩子替代旧全局回调，逐项映射见[Lua 回调核对](#旧-lua-回调核对)；单 VM 单线程执行。 |
 | Lua 死循环检测 | 部分替换 | 指令计数 hook 能发现常见失控脚本，但不是硬 CPU 配额或内存沙箱。 |
-| Gate / World / Hegel 职责 | 部分抽取 | 目前只有通用转发与 Lua 执行；当前运行角色未完整承接 World 协调或 Hegel 角色/场景。目标命名与边界见[进程职责](./process-roles.md)。 |
+| Gate / World / Hegel 职责 | 已实现（框架层） | 通用转发与 Lua 执行、coordinator 分配/迁移面、角色/场景承载（Avatar 运行时、SceneHost）均已实现并钉在[验证记录](./validation.md)；旧 World/Hegel 玩法内容不迁入。目标命名与边界见[进程职责](./process-roles.md)。 |
 | 跨服房间路由 | 新的最小实现 | `gateway --routing cross`/`crossServer` 提供 group/room 固定路由、epoch 检查和本地硬准入；不提供全局配额、服务发现或玩家状态迁移。 |
 | 服务连接注册、重连和排队投递 | 未迁移 | 当前会话直接连接上游。旧握手已于 2026-10-18 追踪：主动方经 `L_FirstMsg`/`ServerService:handShakeToServer` 发送 `sp.pack(Protocol.HandShake, {name, sidx, tarName})`，被动方把首个原始报文交给 `L_Register`，首个回应后连接切换到帧模式（`L_ServerMsg`），握手前的写请求先排队，重连为固定 2 秒定时器加 `proxyOff` 钩子。该报文只做身份声明、无任何认证，重新实现不会带来安全性。维持静态 `UPSTREAMS` 加 MLC1 epoch 握手；只有出现动态发现或跨不可信网络互联的真实需求时，才一并设计注册与认证。旧发送队列也已追踪：实际生产者是 Lua `net_asyncWrite` 与 C++ `pushData`，向每连接的无界发送链表追加（超过 64 KiB 的载荷拆成带序号的分片，仅打告警），消费者是 `async_write` 链；断线直接销毁链表、不重投；握手前的 `pushQueue` 双端队列在旧代码树中无任何调用方；重连以固定 2 秒定时器无限重试。不引入有界可靠投递模块：旧实现本身没有可移植的投递保证，该模块必须依据具体应用需求再定义，且需明确字节/条数上限与溢出策略。 |
 | 旧线程池 | 可复用现有库 | 旧并发点已于 2026-10-18 分类：`FogsProcess` 线程组属于 Asio I/O（`io_service::run` 加各 `IServer` 循环），`HttpRequestService` 是固定 pthread 池跑阻塞 `curl_easy` 调用，`d_push` 的 `TaskScheduler` 用 CPU 核数的 `ThreadPool` 处理阻塞推送任务，`d_world` 内嵌 Poco HTTP 服务线程池（阻塞），`DeadLoopMonitor` 看门狗线程以指令 hook 取代，旧 MySQL 经 libmysqlclient 在 server 线程上同步调用。Mistlane 热路径全部异步（Asio I/O、Boost.MySQL/Boost.Redis 池）；同步 curl 适配器仅供 CLI 使用并注明禁止在事件循环回调中调用，因此当前不实例化任何阻塞工作池。如出现阻塞任务需求，Boost.Asio `thread_pool` 仍是指定载体，并在提交层定义准入/背压，因为线程池本身不替应用决定队列上限和关闭策略。 |

@@ -1,6 +1,6 @@
 # Avatar reconnect and daily cutover contract
 
-Status: decided design (2026-11-22). No end-to-end Avatar runtime exists yet (the seven-state oracle model is implemented and model-tested; session and transport wiring are later slices), so nothing here changes CLI
+Status: decided design (2026-11-22). The end-to-end Avatar runtime now exists (the seven-state oracle model, session wiring, the login chain, transfer, scenes and settlement are implemented and pinned — see [Avatar runtime](./avatar-runtime.md)), so nothing here changes CLI
 behavior and no runtime below is implemented or validated. This page is the ledger's PL-3:
 the reconnect double-lane (detection verdict, grace window, reattach auth, catch-up, timeout
 cleanup chain, kick-on-relogin), the explicit `suspended` sub-states, and the daily cutover

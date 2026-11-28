@@ -53,11 +53,11 @@ The release path is the weakest part of the legacy evidence:
 - `SceneLogic.leaveScene(c, clearCurScene)` calls `SceneManager.delete(curScene)` when asked to clear the current scene — `curScene` is not a local in that function (the resolved variable is `ttid`), so the branch deletes nothing. The one caller path that promises cleanup does not clean up.
 - `GameSceneIndex.afterClose` shows the activity-shaped pattern instead: send rewards, transfer every remaining player out after a 3 s `Timer.setTimeout`, reset bookkeeping; evacuation is per-template code, not a framework service.
 
-Mistlane has no scene objects to release today (SIGTERM drains sessions, not scenes). The release contract — idle detection, player evacuation, timeout, static-data reference counting — must be designed with the scene model (todo item on map/scene lifecycle); the legacy code cannot serve as the specification.
+Mistlane scene objects have lifecycle states and membership bookkeeping (a SIGHUP retirement empties instances that stay resident), but no release contract today (SIGTERM drains sessions, not scenes). The release contract — idle detection, player evacuation, timeout, static-data reference counting — must still be designed (todo item on map/scene lifecycle); the legacy code cannot serve as the specification.
 
 ## What transfers and what does not
 
-**Generic mechanics (candidates, none implemented in Mistlane):** single-driver tick with a bounded, error-isolated task scheduler; template-copy instance creation with independent ids and a persistent flag; per-instance membership with capacity and idle tests; dirty-batching sync on a fixed cadence; bounded chunked initial-state delivery; release that invalidates timers and refuses on persistent instances.
+**Generic mechanics (candidates):** definition-driven instance creation with independent ids and a resident flag, per-instance membership and the single-driver scene tick are implemented on the SceneHost serving face (`scene.serving`); the bounded error-isolated task-scheduler contract, per-instance capacity and idle tests, dirty-batching sync on a fixed cadence, bounded chunked initial-state delivery, and release that invalidates timers and refuses on persistent instances remain candidates.
 
 **Excluded (original gameplay and configuration):** the 60+ gameplay module trees and their template tables, scene type semantics, level and achievement gates, team/camp/revive/battle-state rules, mob waves and stay mobs, rank/reward flows, and every XML/config value quoted above (they are evidence, not defaults).
 
@@ -65,7 +65,7 @@ Mistlane has no scene objects to release today (SIGTERM drains sessions, not sce
 
 ## Role mapping
 
-- **gameServer** hosts scene instances as generic lifecycle/spatial/sync mechanisms plus Lua gameplay rules — the observed C++/Lua split carries forward; the current Mistlane gameServer provides the Lua execution shell and admission, nothing of the scene model yet.
+- **gameServer** hosts scene instances as generic lifecycle/spatial/sync mechanisms plus Lua gameplay rules — the observed C++/Lua split carries forward; the current Mistlane gameServer runs the SceneHost serving face (registered definitions, resident instances, digest-pinned loading, membership reconciliation) on top of the Lua execution shell and admission.
 - **crossServer** shares the same mechanisms with a different template set: the legacy code reuses the same `Scene` classes and gates cross behavior with `ServerUtil.isCrossServer`/`P_SIDX` checks and an `IS_CROSS` table (`GameSceneIndex.setScene`), not a separate runtime.
 - **coordinator** gains nothing from this page: a scene's tid/id pair is a process-local object identity, not an ownership record; scene-level placement and transfer states are governed by the [responsibility contract](./process-roles.md) and remain unimplemented. The character-level coordinator placement (`MLR1 PLACE`/`ROUTE`) and migration transactions (`MLR1 MIG`) are separate and implemented.
 

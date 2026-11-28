@@ -1,6 +1,6 @@
 # 跨服回传与唯一写入权协议
 
-状态：MLD1 语法、发送端 ACK 处理、确定性租约状态机、存储后端 MLD1 记录/ACK 路径、crossServer 发送侧队列接线及 data 签发 generation 授权已实现（2026-10-19 语法、2026-10-27 存储、2026-11-01 发送侧队列、2026-11-23 generation 授权与源侧优雅回服）；运行时租约权威与 Avatar 场景运行时尚未实现。参与者上下文及其可选凭据尾缀、端点和有序队列边界、框架持有的回传发送器已实现；带 `--journal` 的 data 只在 SQLite 提交后答 `ACK durable`，无则仅回易失性回执。目标职责见[进程职责](./process-roles.md)；旧路径的观察与缺口在[模型页](./player-scene-model.md)。
+状态：MLD1 语法、发送端 ACK 处理、确定性租约状态机、存储后端 MLD1 记录/ACK 路径、crossServer 发送侧队列接线及 data 签发 generation 授权已实现（2026-10-19 语法、2026-10-27 存储、2026-11-01 发送侧队列、2026-11-23 generation 授权与源侧优雅回服）；运行时租约权威（generation 授予、归属裁决）与 Avatar 场景运行时此后已落地（2026-11-23 → 2026-11-26）。参与者上下文及其可选凭据尾缀、端点和有序队列边界、框架持有的回传发送器已实现；带 `--journal` 的 data 只在 SQLite 提交后答 `ACK durable`，无则仅回易失性回执。目标职责见[进程职责](./process-roles.md)；旧路径的观察与缺口在[模型页](./player-scene-model.md)。
 
 ## 参与者与返回上下文
 
@@ -69,7 +69,7 @@ MLD1 ERR INVALID | MLD1 ERR STALE gen <n> | MLD1 ERR SEQ seq <n> | MLD1 ERR FULL
 
 已授权的 generation 同时是持久写租约：data 为某键分配 generation 后，`MLD1 SUBMIT` 只在该精确 generation 上获授权。低于租约的提交是被租约取代的写者（`ERR STALE gen <lease>`）；高于租约的提交指名了一个 data 从未签发的 generation（`ERR UNGRANTED gen <lease>`）——宿主不能自行推进越过租约，这正是入场凭据绑定的 `gen` 声明在线路上成立的根据。从未获授权的键保留记录相对栅栏：迁移期记录自带其 generation 作为隐式租约，其旧式接管（严格更新的 generation 从栅栏或已提交游标续写）仍在那里工作。
 
-端点以 `(realm, character)` 为栅栏和序号键，执行 generation 栅栏、已授权租约（低于租约 `STALE`、高于租约 `UNGRANTED`，限已授权键）和严格连续序号。`MLD1 FENCE` 冻结该键的最终有序游标并把旧 generation 墓碑化——同一 generation 幂等、不同 generation 已栅栏为 `ERR STALE`、无已提交游标为 `ERR NOFENCE`、存储失败回 `ERR STORAGE`；栅栏后旧 generation 只能重发冻结游标绝不推进，仅严格更新 generation 从冻结游标续写。发送队列每键最多一个在途提交；`RECEIVED` 释放传输槽，但条目保留到 generation 匹配的 durable ACK。带 `--journal` 时同一个存储支撑每一行已接受数据，重启恢复栅栏、序号、payload、最终游标 pin 与 generation 高水位，重放已丢回执的条目回已提交的 `ACK durable`；无 journal 的记录进程内、重启后答 `EMPTY`。crossServer 发送器（`--data IP:PORT`、`mistlane.returning.seed/enqueue`）持有有序重试队列：先 `MLD1 LOAD` 种入持久游标、按序提交、仅 `ACK durable` 后摘除；连接丢失把在途提交送回有界队列再重连，且参与者最终变更的排空会触发源侧的释放（队列在此之前一直持有回服中的 avatar）。队列满转只读与运行时租约权威仍未实现。
+端点以 `(realm, character)` 为栅栏和序号键，执行 generation 栅栏、已授权租约（低于租约 `STALE`、高于租约 `UNGRANTED`，限已授权键）和严格连续序号。`MLD1 FENCE` 冻结该键的最终有序游标并把旧 generation 墓碑化——同一 generation 幂等、不同 generation 已栅栏为 `ERR STALE`、无已提交游标为 `ERR NOFENCE`、存储失败回 `ERR STORAGE`；栅栏后旧 generation 只能重发冻结游标绝不推进，仅严格更新 generation 从冻结游标续写。发送队列每键最多一个在途提交；`RECEIVED` 释放传输槽，但条目保留到 generation 匹配的 durable ACK。带 `--journal` 时同一个存储支撑每一行已接受数据，重启恢复栅栏、序号、payload、最终游标 pin 与 generation 高水位，重放已丢回执的条目回已提交的 `ACK durable`；无 journal 的记录进程内、重启后答 `EMPTY`。crossServer 发送器（`--data IP:PORT`、`mistlane.returning.seed/enqueue`）持有有序重试队列：先 `MLD1 LOAD` 种入持久游标、按序提交、仅 `ACK durable` 后摘除；连接丢失把在途提交送回有界队列再重连，且参与者最终变更的排空会触发源侧的释放（队列在此之前一直持有回服中的 avatar）。队列满转只读仍未实现；运行时租约权威（generation 授予、归属裁决）此后已落地。
 
 ## 写入租约交接
 

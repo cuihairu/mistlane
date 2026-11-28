@@ -1,6 +1,6 @@
 # Avatar 重连与日切契约
 
-状态：已定设计（2026-11-22）。无端到端 Avatar 运行时（七态预言机模型已实现并经模型测试；会话与传输接线为后续切片），本页不改变任何 CLI 行为，下面描述的运行行为仍未端到端实现、未经验证。本页是账本的 PL-3：重连双泳道（检测判定/宽限期/reattach 鉴权/状态追平/超时清理链/顶号）、`suspended` 子态显式化，以及日切（触发面/三层触碰顺序/写入屏障/失败补偿/`onDailyReset`+`onAvatarDailyReset` 签名与顺序保证）。它是对[生命周期预言机](./avatar-lifecycle.md)的细化——PL-1 的 `suspended` 展开为两个显式子态，日切屏障获得钩子。机器可读形态：`contracts/avatar-reconnect-cutover.json`。英文页：[English](../avatar-reconnect-cutover.md)。
+状态：已定设计（2026-11-22）。端到端 Avatar 运行时现已存在（七态预言机模型、会话接线、登录链、移交、场景与结算均已实现并钉住——见[Avatar 运行时](./avatar-runtime.md)），本页不改变任何 CLI 行为；下面描述的运行行为在已钉切点处验收（宽限重连由 avatar.home 钉住），日切屏障与其余行为保持设计契约。本页是账本的 PL-3：重连双泳道（检测判定/宽限期/reattach 鉴权/状态追平/超时清理链/顶号）、`suspended` 子态显式化，以及日切（触发面/三层触碰顺序/写入屏障/失败补偿/`onDailyReset`+`onAvatarDailyReset` 签名与顺序保证）。它是对[生命周期预言机](./avatar-lifecycle.md)的细化——PL-1 的 `suspended` 展开为两个显式子态，日切屏障获得钩子。机器可读形态：`contracts/avatar-reconnect-cutover.json`。英文页：[English](../avatar-reconnect-cutover.md)。
 
 ## 重连双泳道
 
