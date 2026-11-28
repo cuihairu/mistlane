@@ -18,7 +18,7 @@ flowchart TB
   cross <--> data
 ```
 
-data 表示按角色数据归属寻址的服务职责，不是一台所有区服共享的数据库。crossServer 的长期变更回传原区服 data。[回传协议与确认语义](./cross-return-protocol.md)已定：MLD1 LOAD/SUBMIT、易失性 RECEIVED、有序发送队列、持久 ACK 编解码、租约状态模型、持久记录存储、ACK 发出与 crossServer 发送侧重试接线均已实现；仅剩 coordinator/Avatar 运行时接线。图中的访问边不授予双写权限。apiServer 是可选外部系统接入职责，完整回调链见[HTTP 与 WebSocket](./http.md)。
+data 表示按角色数据归属寻址的服务职责，不是一台所有区服共享的数据库。crossServer 的长期变更回传原区服 data。[回传协议与确认语义](./cross-return-protocol.md)已定并端到端实现：MLD1 LOAD/SUBMIT、易失性 RECEIVED、有序发送队列、持久 ACK 编解码、租约状态模型、持久记录存储、ACK 发出、crossServer 发送侧重试接线、coordinator 迁移事务与 Avatar 运行时集成（移交、结算、恢复）均已接线到各自进程。图中的访问边不授予双写权限。apiServer 是可选外部系统接入职责，完整回调链见[HTTP 与 WebSocket](./http.md)。
 
 ## 当前可运行原型
 
@@ -94,7 +94,7 @@ TCP：`u32 big-endian length | payload`。WS：一条消息即一个 payload，�
 
 ## 当前缺口
 
-本版本适合验证框架与开发应用原型。原游戏已有的登录、账号绑定、迁服、跨服玩法、寻路、数据库缓存和运营能力均不在核心中。也尚未提供：服务发现、基于服务发现的健康路由（cross 节点已按静态配置上游的 PROBE1 就绪状态挡住新加入）、自动重连、持久化重放、分布式一致性、全局背压、生产指标采集与压力容量证据。
+本版本适合验证框架与开发应用原型。原游戏已有的登录、账号绑定、迁服、跨服玩法、寻路、数据库缓存和运营能力均不在核心中。原型面之下已具备：coordinator 成员发现与 cross 加入的 PROBE1 就绪门控、按 generation fencing 的分布式一致性（写入租约、归属裁决、`MLR1 MIG` 迁移事务）、可选 Prometheus 抓取端点与压力钻取中抓到的指标族、容器压力钻取量出的加入上限（单机共租部署环境证据，非生产容量宣称）。本版本仍缺：死宿主在活房间的自动有状态接管、发送方耐久重放、全局协同背压、以及任何生产运维平台。
 
 Lua 脚本属于可信应用代码；指令 hook 仅辅助定位典型死循环，不提供不可绕过的资源控制或内存配额。DB 接入的示例拥有独立 pool，尚无通用 Lua 异步 DB 桥接。网络传输成功也不代表事务已持久化。
 

@@ -18,7 +18,7 @@ flowchart TB
   cross <--> data
 ```
 
-data denotes ownership-aware service access rather than one shared database for every region. Permanent crossServer changes return to home data. The [return protocol and acknowledgement semantics](./cross-return-protocol.md) are decided: MLD1 LOAD/SUBMIT and volatile RECEIVED, the ordered sender queue, durable ACK codec, lease state model, the durable record store, ACK emission and the crossServer sender retry wiring are implemented; only coordinator/Avatar runtime integration remains. The edge does not authorize dual writers. Optional apiServer ingress and its callback flow are described in [HTTP and WebSocket](./http.md).
+data denotes ownership-aware service access rather than one shared database for every region. Permanent crossServer changes return to home data. The [return protocol and acknowledgement semantics](./cross-return-protocol.md) are decided and implemented end to end: MLD1 LOAD/SUBMIT and volatile RECEIVED, the ordered sender queue, durable ACK codec, lease state model, the durable record store, ACK emission, the crossServer sender retry wiring, the coordinator migration transaction and the Avatar runtime integration (transfer, settlement, recovery) are all wired to their processes. The edge does not authorize dual writers. Optional apiServer ingress and its callback flow are described in [HTTP and WebSocket](./http.md).
 
 ## Current runnable prototype
 
@@ -103,7 +103,7 @@ The heap retains the original bounded-selection behavior: when full, smaller inc
 
 ## Current limitations
 
-Original login, account routing, player migration, legacy cross-server gameplay, navigation, caches, and operational features are excluded. This version also lacks service discovery, discovery-based health routing (cross nodes do gate new joins on the static PROBE1 readiness of their configured upstreams), automatic reconnect, durable replay, distributed consistency, global backpressure, production metrics collection, and measured capacity limits.
+Original login, account routing, player migration, legacy cross-server gameplay, navigation, caches, and operational features are excluded. What exists below the prototype face: coordinator membership discovery with PROBE1 readiness gating of cross joins, generation-fenced distributed consistency (writer leases, ownership verdicts, the `MLR1 MIG` migration transaction), an optional Prometheus scrape endpoint with captured metric families, and measured join ceilings from the container stress drill (single-host, co-tenant deployment-environment evidence, not production capacity claims). This version still lacks automatic stateful failover of a dead host's live rooms, sender-side durable replay, globally coordinated backpressure, and any production operations platform.
 
 Scripts are trusted application code. The instruction hook helps with typical infinite loops but is not an unbypassable CPU budget or a memory quota. Database integration is a separate C++ adapter and example; a general asynchronous Lua database bridge is not implemented. Successful network delivery does not imply transaction durability.
 
