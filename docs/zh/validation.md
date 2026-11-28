@@ -107,7 +107,7 @@
 | 主机名端点地址 | `parse_address`（src/node_internal.hpp）在端点文本非地址字面量时回退 `getaddrinfo`，优先取首个 IPv4 答案、仅无 v4 时回退 IPv6，使监听与上游接受容器服务名、`localhost` 与 FQDN；`transport.hostname` 端到端钉住 `--listen localhost:PORT` 与 `--upstream localhost:PORT`（全量套件 81/81 绿，2026-11-21） |
 | 文档站 | 使用 pnpm 10.33.0、VitePress 1.6.4 与修复版 Vite 6.4.4 构建两种语言；两种语言的侧栏页面均检查语言、导航与仓库链接；`docs:build` + `docs:check` 在 HEAD 保持绿 |
 | 文档依赖审计 | Vite 覆盖更新后，pnpm audit 返回零告警 |
-| 源码包 | 白名单与 SHA256 检查通过，无原游戏目录或 Git 历史 |
+| 源码包 | 白名单与 SHA256 检查通过，无原游戏目录或 Git 历史。2026-11-28 重审：白名单已漂移至 353 个跟踪文件中的 60 个（实体/Avatar/API 头文件组、对应源码、vendored `third_party/sproto`+`lpeg`、`ports/trantor` 补丁、ctest fixtures、`contracts/fogs-sproto.*`、`deploy/` 与 RELEASE_NOTES.md 本身全部缺席——归档无法编译、也无法支撑文档化能力面）；白名单现重生成为全量跟踪文件（`tools/export.py` 安全轨不变：拒绝绝对路径/符号链接/覆盖输出/递归添加）。HEAD 上对 `dist/mistlane-0.1.0.tar.gz` 的金验证：内嵌 `SHA256SUMS` 解包校验零不匹配；解包树以既有 vcpkg installed 树（`VCPKG_INSTALLED_DIR` + `VCPKG_MANIFEST_INSTALL=OFF`）配置并编译全部目标——`mistlane`、`mistlane-sproto-probe` 与全部测试二进制；归档二进制跑归档内 fogs regen 门禁 PASS；从解包构建树跑全量 ctest 124/124 绿 |
 
 决策记录（2026-10-18 巡检代决）：对 VitePress 构建中 Mermaid 懒加载产物触发的大 chunk 警告完成评估，维持单 chunk 懒加载布局、不做拆分；该警告不影响构建成败。仅当后续 bundle 审计显示实际加载代价时再复议。
 
