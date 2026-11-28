@@ -1,7 +1,10 @@
 # Third-party dependencies
 
-This source release obtains dependencies through vcpkg. No vendored dependency
-source code or binary is included in this package.
+This source release obtains its build dependencies through vcpkg. Two
+protocol-conformance test-only source snapshots are vendored in the package
+and listed below; they are compiled only into the `mistlane-sproto-probe`
+test target and are not linked into the Mistlane server (see
+docs/dependencies.md for the pinned upstream commits).
 
 | Dependency | License | Upstream |
 |---|---|---|
@@ -14,6 +17,12 @@ source code or binary is included in this package.
 | OpenSSL 3.x | Apache-2.0 | https://www.openssl-library.org/ |
 | VitePress / Vite | MIT | https://vitepress.dev/ / https://vite.dev/ |
 | pnpm | MIT | https://pnpm.io/ |
+| sproto (vendored, test-only) | MIT | https://github.com/cloudwu/sproto |
+| LPeg (vendored, test-only) | MIT | https://www.inf.puc-rio.br/~roberto/lpeg/ |
+
+The vendored snapshots live under `third_party/sproto/` and
+`third_party/lpeg/`; their copied license texts are
+`licenses/sproto-MIT.txt` and `licenses/lpeg-MIT.txt`.
 
 vcpkg installs each port's license/copyright and software bill of materials under
 `vcpkg_installed/<triplet>/share/<port>/`. Preserve the applicable license and

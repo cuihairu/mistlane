@@ -15,8 +15,18 @@ Source provenance:
   FogsProcess, gateway, world, hegel and LuaCallHandler. The implementation
   and public interfaces have been rewritten and are not wire/API compatible.
 
-The release package does not contain the original game, third-party SDKs,
-production configuration, compiled artifacts or repository history.
+The release package does not contain the original game, the original game's
+third-party SDKs, production configuration, compiled artifacts or repository
+history.
+
+Vendored test-only source snapshots (compiled only into the
+`mistlane-sproto-probe` test target, not linked into the Mistlane server):
+- third_party/sproto/: cloudwu/sproto at commit
+  e93fd5a0653b2bcab38d3b830958bf2e3a901b5f, MIT license; copied license text
+  in licenses/sproto-MIT.txt.
+- third_party/lpeg/: the luvit/lpeg mirror at commit
+  55bbd00e53890e50e05018907140f4f3d3e234f4 of LPeg, MIT license; copied
+  license text in licenses/lpeg-MIT.txt.
 
 Drogon overlay port recipes and packaging patches are adapted from microsoft/vcpkg
 at a5f736224e85b32e25a8ffc52562333180396642, under the MIT license
