@@ -36,7 +36,7 @@ Mistlane is a C++20 / Lua framework extracted and reorganized from a **legacy ga
 
 It is an educational framework candidate, not a recommendation for production deployment. The extraction removes the original game's gameplay, content tables, account integration, payment code, channel SDKs, production configuration, and repository history.
 
-The current code is a communication and Lua runtime prototype, not a complete extraction of legacy coordination, characters, maps or instances. Target responsibilities are gateway, login, coordinator, gameServer, crossServer, data and optional apiServer; see [process responsibilities](./process-roles.md).
+The current code extracts the coordination plane, a character (Avatar) runtime with a served scene lifecycle, and an entity-contract toolchain; the original gameplay, content, and spatial AOI/chunk streaming stay out of scope. Target responsibilities are gateway, login, coordinator, gameServer, crossServer, data and optional apiServer; see [process responsibilities](./process-roles.md).
 
 ## What you can study
 
@@ -47,8 +47,10 @@ The current code is a communication and Lua runtime prototype, not a complete ex
 | Database integration | Boost.MySQL's existing connection_pool and parameter binding |
 | Application scripting | Single-threaded Lua module lifecycle and transactional VM replacement |
 | Reproducible dependencies | CMake Presets and a pinned vcpkg manifest baseline |
+| Entity contracts | `.def` contracts compiled to a deterministic sproto schema, C++/JS/C# bindings and a compat publication gate |
+| Avatar and scenes | Seven-state avatar lifecycle, host-served scene instances, cross-host transfer and settlement |
 
-### Target responsibilities — planned
+### Target responsibilities
 
 ```mermaid
 flowchart TB
@@ -64,7 +66,7 @@ flowchart TB
   cross <--> data
 ```
 
-The database adapter is a separate C++ integration, not yet a Lua database bridge. Routing is per connection by default; a gateway may optionally share one upstream connection across its sessions (`MLM1`, `--upstream-multiplex on`). The coordinator migration transaction and the `MLR1 MIG` wire protocol are implemented, and the crossServer return sender (bounded retry queue, home final-sequence authority) answers a store-backed `ACK durable`; what stays outside this version is the live character-transfer handshake — the [Avatar runtime](./avatar-runtime.md) that moves a character between hosts and recovers after a failure.
+The database adapter is a separate C++ integration, not yet a Lua database bridge. Routing is per connection by default; a gateway may optionally share one upstream connection across its sessions (`MLM1`, `--upstream-multiplex on`). The coordinator migration transaction and the `MLR1 MIG` wire protocol are implemented, and the crossServer return sender (bounded retry queue, home final-sequence authority) answers a store-backed `ACK durable`. The [Avatar runtime](./avatar-runtime.md) is wired end to end: the normal login chain (auth → charlist → place/grant/ticket → join), the seven-state lifecycle over host-served scene instances, cross-host transfer (freeze → fence → commit → adopt) and settlement holding the leave-edge final account until the durable ACK drains it. What stays outside this version: durable sender-side replay after a crash, spatial AOI or chunk streaming, and the original gameplay.
 
 Start with the [guide](./guide.md), read the [architecture and limitations](./architecture.md), and check the [validation record](./validation.md).
 

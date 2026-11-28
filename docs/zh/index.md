@@ -12,7 +12,7 @@ Mistlane 是从**老游戏服务端抽取并整理**的 C++20 / Lua 框架，主
 
 当前版本是供学习参考的框架候选，不作为生产环境部署推荐。抽取范围排除了原游戏玩法、数值表、账号接入、支付、渠道 SDK、生产配置和原仓库历史。
 
-当前实现是通用通信与 Lua 运行原型，并没有完整迁入老游戏的协调、角色、地图和副本系统。目标服务职责已经整理为 gateway、login、coordinator、gameServer、crossServer、data 和可选 apiServer，见[进程职责与命名](./process-roles.md)。
+当前实现已迁入协调面、角色（Avatar）运行时与场景生命周期、实体契约工具链；原游戏玩法、内容与空间 AOI/分块流式仍不在范围内。目标服务职责已经整理为 gateway、login、coordinator、gameServer、crossServer、data 和可选 apiServer，见[进程职责与命名](./process-roles.md)。
 
 ## 可以研究什么
 
@@ -23,8 +23,10 @@ Mistlane 是从**老游戏服务端抽取并整理**的 C++20 / Lua 框架，主
 | 数据库接入 | 直接使用 Boost.MySQL connection_pool 和参数绑定 |
 | 应用脚本 | 单线程 Lua 模块生命周期和可回退的 VM 替换 |
 | 依赖复现 | CMake Presets 和固定 baseline 的 vcpkg manifest |
+| 实体契约 | `.def` 契约编译为确定性 sproto schema、C++/JS/C# 绑定与兼容性发布门 |
+| Avatar 与场景 | 七态 Avatar 生命周期、宿主服务场景实例、跨宿主移交与结算 |
 
-### 目标职责图（待实现）
+### 目标职责图
 
 ```mermaid
 flowchart TB
@@ -40,7 +42,7 @@ flowchart TB
   cross <--> data
 ```
 
-数据库适配目前属于独立 C++ 接入，尚未成为 Lua 数据库桥接。默认按连接路由；gateway 可选以 `MLM1`（`--upstream-multiplex on`）让全部会话共享一条上游连接。coordinator 迁移事务与 `MLR1 MIG` 线协议已实现，crossServer 回传发送端（有界重试队列、home 最终序号权威）可在落库后回答 `ACK durable`；本版仍未落地的是角色切换的实时握手——把角色从一个宿主搬到另一个宿主并在失败后恢复的[Avatar 运行时](./avatar-runtime.md)。
+数据库适配目前属于独立 C++ 接入，尚未成为 Lua 数据库桥接。默认按连接路由；gateway 可选以 `MLM1`（`--upstream-multiplex on`）让全部会话共享一条上游连接。coordinator 迁移事务与 `MLR1 MIG` 线协议已实现，crossServer 回传发送端（有界重试队列、home 最终序号权威）可在落库后回答 `ACK durable`。[Avatar 运行时](./avatar-runtime.md)已端到端接线：正常登录链（auth → 角色列表 → place/grant/ticket → 加入）、宿主服务场景实例之上的七态生命周期、跨宿主移交（冻结 → 围栏 → 提交 → 采纳）与结算（离开边最终账目等耐久 ACK 排空后才释放）。本版之外：发送方崩溃后的耐久重放、空间 AOI 与分块流式、以及原游戏玩法。
 
 从[使用指南](./guide.md)开始，再阅读[架构与能力边界](./architecture.md)和[验证记录](./validation.md)。
 
