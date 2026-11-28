@@ -1,6 +1,6 @@
 # 原生跨服与过载保护
 
-目标服务名称与职责见[进程职责](./process-roles.md)。本页命令使用当前实际 CLI，不能把 gateway cross routing/crossServer 或 gameServer 视为已经完成的 coordinator/crossServer/gameServer。
+目标服务名称与职责见[进程职责](./process-roles.md)。本页命令使用当前实际 CLI；角色（Avatar 运行时）、协调（注册表、放置、迁移事务）与持久化（MLD1/MLD2 记录与实体状态端点）均已实现并钉在[验证记录](./validation.md)。
 
 
 ## 旧游戏的设计与风险
@@ -78,7 +78,7 @@ cross 的配额按入口进程计算；crossServer 的准入按其全部入口�
 
 上游顺序和数量属于路由配置；改变它们会重映射房间。必须先停止新加入、排空受影响房间或做状态迁移，再同时升级 route epoch 和各节点配置。epoch 只能拒绝代号不一致的握手，无法自动验证列表内容一致。
 
-crossServer 不可用时关闭受影响会话，不自动转移或重放。其他 crossServer 继续服务。恢复需要应用提供快照、幂等 request ID、玩家重连及补偿策略。跨节点原子事务、租约、服务发现、持久路由表和在线房间迁移未实现。当前原生支持的是通用路由与准入，不包含旧游戏跨服玩法。
+crossServer 不可用时关闭受影响会话，无自动有状态接管：其路由答 `MLR1 ROUTE EMPTY`，重连角色回到进入流程的重放置路径，因此恢复 = 重放置加应用补偿，而非静默重放。其他 crossServer 继续服务。此门面之下已实现：耐久放置（带 `--journal` 的 coordinator 持久化 `MLR1 ROUTE SET` 并在重启后恢复）、带 PROBE1 就绪门控的成员发现、数据腿按 generation fencing（写入租约、归属裁决）、分布式迁移事务（`MLR1 MIG` decide/prepare/ready/fence/commit）、在线角色迁移（冻结 → 围栏 → 提交 → 采纳）。仍未实现：死宿主在活房间的自动接管与发送方耐久重放。当前原生支持的是通用路由与准入，不包含旧游戏跨服玩法。
 
 ## 如何避免再次因人数集中而失稳
 

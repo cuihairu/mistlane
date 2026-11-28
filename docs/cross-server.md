@@ -1,6 +1,6 @@
 # Native cross-server routing and overload protection
 
-See [process responsibilities](./process-roles.md) for target names. Commands use current CLI roles; character, coordination and persistence integration remain unimplemented.
+See [process responsibilities](./process-roles.md) for target names. Commands use current CLI roles; the character (Avatar runtime), coordination (registry, placement, migration transaction) and persistence (MLD1/MLD2 record and entity-state endpoints) integrations are implemented and pinned in the [validation record](./validation.md).
 
 
 ## Legacy design and evidence
@@ -62,7 +62,7 @@ The memory envelope bounds admitted sessions before protocol buffers are allocat
 
 Changing upstream order/count remaps rooms. Stop new joins, drain affected rooms or migrate application state, then update route epoch and configuration together. Epoch rejects differing generation numbers; it does not validate identical upstream lists.
 
-A failed crossServer closes affected sessions without automatic replay or stateful failover. Other shards remain usable. Recovery needs application snapshots, idempotent request IDs, reconnect and compensation. Durable route tables, leases, discovery, distributed transactions and online migration remain unimplemented. Native support means generic routing/admission, not restored legacy gameplay.
+A failed crossServer closes affected sessions without automatic stateful failover: its routes answer `MLR1 ROUTE EMPTY` and reconnecting characters go back through the entry flow's re-placement, so recovery is the re-placement path plus application compensation, not silent replay. Other shards remain usable. What is implemented below this face: durable placements (a `--journal` coordinator persists `MLR1 ROUTE SET` records and restores them after a restart), membership discovery with PROBE1 readiness gating, generation fencing at the data leg (writer leases, ownership verdicts), the distributed migration transaction (`MLR1 MIG` decide/prepare/ready/fence/commit), and online character migration (freeze → fence → commit → adopt). What remains unimplemented: automatic takeover of a dead host's live rooms and sender-side durable replay. Native support means generic routing/admission, not restored legacy gameplay.
 
 ## Capacity plan
 
