@@ -112,7 +112,7 @@ stateDiagram-v2
 ## 本页故意未决定
 
 - 属性 schema、脏追踪、增量同步与快照编码：实体契约链，其取代了更早的 Avatar-only 范围并继续延后。
-- 客户端协议、绑定与方法暴露：被协议契约恢复（账本中的协议契约恢复条目）门控；game-fogs 没有 `.sproto` 文本源，只有编译产物 `sproto.spb` 与 `Protocol.lua` 名字表。
+- 客户端协议、绑定与方法暴露：被协议契约恢复（账本中的协议契约恢复条目）门控。原始 `.sproto` 文本源仍未定位，但其字节等价再生物已入库（`contracts/fogs-sproto.sproto`，2026-11-28，probe 的 regen 模式——重编译与已提交 `.spb` 逐字节相等）；原 sprotodump 构建步骤与正式客户端绑定仍缺。服务端脚本/运行时 API 不属本门控范围——未实现的是对客户端的方法暴露。
 - 钩子名与签名：随服务 VM 钩子桥在代码中固定（上表记录的是已实现形态）。`avatar_load` 的 `state` 参数已为归属加入接线：带 `--data` 端点的 crossServer 把加入回复延后到对归属数据端点的一次性 `MLD1` `LOAD` 之后，并把记录的不透明负载传给 `avatar_load`，`MLD1 EMPTY`（首次登录）到达为 nil，无法应答的数据端点则拒绝加入。仍开放的是 `avatar_transfer_in` 的 `state`——两侧均已接线：源侧 `avatar_transfer_out` 快照是 MLD1 SUBMIT 的最终载荷（由 mistlane.transfer 驱动），目标侧 `load(TransferIn)` 把冻结记录传给 `avatar_load` 并落 active 未绑定，之后 `avatar_transfer_in` 收到构建好的 Avatar。
 - 宽限期、tick 预算与保存节奏：实现时实测。
 - crossServer 发送侧的有界重试队列与只读转换：回传协议切片，等持久化链。
