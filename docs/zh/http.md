@@ -3,7 +3,7 @@
 本页描述协议接入能力，不定义一个名为 http 的进程。旧 World 内嵌 HTTP，另有支付服务；目标独立接入职责如需部署，名称为可选 apiServer，见[职责说明](./process-roles.md)。
 
 
-目标服务名称与职责见[进程职责](./process-roles.md)。本页命令使用当前实际 CLI，不能把 gateway cross routing/crossServer 或 gameServer 视为已经完成的 coordinator/crossServer/gameServer。
+目标服务名称与职责见[进程职责](./process-roles.md)。本页命令使用当前实际 CLI；gateway/crossServer/gameServer 的接入职责已实现并钉在[验证记录](./validation.md)——它们承载的是通用路由、准入与场景能力，不包含旧游戏玩法。
 
 
 旧 World HTTP 服务端用了 Poco。Mistlane 使用 Drogon 处理 HTTP/HTTPS、WS/WSS 及协议解析；TCP 核心仍用 Boost.Asio。Drogon 基于独立的 Trantor 网络库，并非基于 Boost。选型理由是直接使用完整 Web 框架能力，不是未经验证的性能排名。

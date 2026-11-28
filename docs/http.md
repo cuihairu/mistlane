@@ -3,7 +3,7 @@
 This page covers protocols, not a process named http. Legacy World embeds HTTP and separate payment services exist. Optional independent external ingress is named apiServer; see [responsibilities](./process-roles.md).
 
 
-See [process responsibilities](./process-roles.md) for target names. Commands use current CLI roles; character, coordination and persistence integration remain unimplemented.
+See [process responsibilities](./process-roles.md) for target names. Commands use current CLI roles; the optional apiServer serves this HTTP face, and the character (Avatar runtime), coordination and persistence integrations are implemented and pinned in the [validation record](./validation.md).
 
 
 The legacy World HTTP server used Poco. Mistlane uses Drogon for HTTP/HTTPS and WS/WSS, while internal TCP remains on Boost.Asio. Drogon uses the independent Trantor network library, not Boost. The choice provides a complete web framework; it is not an unmeasured performance ranking.
